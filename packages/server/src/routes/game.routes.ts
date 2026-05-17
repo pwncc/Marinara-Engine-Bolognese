@@ -2444,7 +2444,6 @@ function upsertGameNpcAvatarEntries(currentNpcs: GameNpc[], avatarEntries: Scene
       description: entry.description,
       location: "",
       reputation: 0,
-      met: false,
       notes: [],
       avatarUrl: entry.avatarUrl,
       descriptionSource: entry.description ? "narration" : undefined,
@@ -2453,54 +2452,6 @@ function upsertGameNpcAvatarEntries(currentNpcs: GameNpc[], avatarEntries: Scene
   }
 
   return changed ? nextNpcs : currentNpcs;
-}
-
-function locationMatches(candidate: string, aliases: string[]): boolean {
-  const candidateKey = normalizeJournalMatch(candidate);
-  if (!candidateKey) return false;
-
-  return aliases.some((alias) => {
-    const aliasKey = normalizeJournalMatch(alias);
-    if (!aliasKey) return false;
-    const shortest = Math.min(candidateKey.length, aliasKey.length);
-    return (
-      candidateKey === aliasKey ||
-      (shortest >= 4 && (candidateKey.includes(aliasKey) || aliasKey.includes(candidateKey)))
-    );
-  });
-}
-
-function getCurrentMapLocation(map: GameMap | null): { name: string; description: string; aliases: string[] } | null {
-  if (!map) return null;
-
-  if (map.type === "node" && typeof map.partyPosition === "string") {
-    const node = map.nodes?.find((entry) => entry.id === map.partyPosition);
-    if (!node) {
-      return {
-        name: map.partyPosition,
-        description: "",
-        aliases: [map.partyPosition],
-      };
-    }
-    return {
-      name: node.label,
-      description: node.description ?? "",
-      aliases: [node.id, node.label],
-    };
-  }
-
-  if (map.type === "grid" && typeof map.partyPosition === "object" && "x" in map.partyPosition) {
-    const position = map.partyPosition;
-    const cell = map.cells?.find((entry) => entry.x === position.x && entry.y === position.y);
-    if (!cell) return null;
-    return {
-      name: cell.label,
-      description: cell.description ?? "",
-      aliases: [cell.label, `${cell.x},${cell.y}`, `${cell.x}:${cell.y}`],
-    };
-  }
-
-  return null;
 }
 
 function collectDiscoveredMapLocations(map: GameMap | null): Array<{ name: string; description: string }> {
@@ -2517,9 +2468,9 @@ function collectDiscoveredMapLocations(map: GameMap | null): Array<{ name: strin
     .map((cell) => ({ name: cell.label, description: cell.description ?? "" }));
 }
 
-function buildNpcMetInteraction(npc: GameNpc): string {
+function buildNpcTrackedInteraction(npc: GameNpc): string {
   const location = npc.location?.trim();
-  return location && location.toLowerCase() !== "unknown" ? `Met at ${location}.` : "Met.";
+  return location && location.toLowerCase() !== "unknown" ? `Tracked at ${location}.` : "Tracked.";
 }
 
 function extractActiveQuests(playerStatsRaw: unknown): QuestProgress[] {
@@ -2530,43 +2481,6 @@ function extractActiveQuests(playerStatsRaw: unknown): QuestProgress[] {
     (quest): quest is QuestProgress =>
       !!quest && typeof quest === "object" && typeof (quest as QuestProgress).name === "string",
   );
-}
-
-function extractPresentCharacterNames(presentCharactersRaw: unknown): string[] {
-  const presentCharacters = parseStoredJson<Array<{ name?: string }>>(presentCharactersRaw);
-  if (!Array.isArray(presentCharacters)) return [];
-  return presentCharacters.map((entry) => entry?.name?.trim()).filter((name): name is string => !!name);
-}
-
-function markNpcsMetByNames(meta: Record<string, unknown>, names: string[]): Record<string, unknown> {
-  if (names.length === 0) return meta;
-
-  const knownNames = new Set(names.map((name) => normalizeJournalMatch(name)));
-  const npcs = (meta.gameNpcs as GameNpc[]) ?? [];
-  let changed = false;
-  const updatedNpcs = npcs.map((npc) => {
-    if (npc.met || !knownNames.has(normalizeJournalMatch(npc.name))) return npc;
-    changed = true;
-    return { ...npc, met: true };
-  });
-
-  return changed ? { ...meta, gameNpcs: updatedNpcs } : meta;
-}
-
-function markNpcsMetAtCurrentLocation(meta: Record<string, unknown>): Record<string, unknown> {
-  const map = (meta.gameMap as GameMap) ?? null;
-  const location = getCurrentMapLocation(map);
-  if (!location) return meta;
-
-  const npcs = (meta.gameNpcs as GameNpc[]) ?? [];
-  let changed = false;
-  const updatedNpcs = npcs.map((npc) => {
-    if (npc.met || !locationMatches(npc.location, location.aliases)) return npc;
-    changed = true;
-    return { ...npc, met: true };
-  });
-
-  return changed ? { ...meta, gameNpcs: updatedNpcs } : meta;
 }
 
 function reconcileJournal(
@@ -2599,8 +2513,7 @@ function reconcileJournal(
   }
 
   for (const npc of (meta.gameNpcs as GameNpc[]) ?? []) {
-    if (!npc.met) continue;
-    const interaction = buildNpcMetInteraction(npc);
+    const interaction = buildNpcTrackedInteraction(npc);
     const hasInteraction = next.npcLog.some(
       (entry) => entry.npcName === npc.name && entry.interactions.includes(interaction),
     );
@@ -2671,11 +2584,6 @@ export async function gameRoutes(app: FastifyInstance) {
       const sanitizedNpcs = sanitizeGameNpcAvatarUrls(gameNpcs);
       if (sanitizedNpcs !== gameNpcs) hydratedMeta = { ...hydratedMeta, gameNpcs: sanitizedNpcs };
     }
-    const presentCharacterNames = extractPresentCharacterNames(latestState?.presentCharacters);
-    if (presentCharacterNames.length > 0) {
-      hydratedMeta = markNpcsMetByNames(hydratedMeta, presentCharacterNames);
-    }
-
     const activeQuests = extractActiveQuests(latestState?.playerStats);
     // Prefer a caller-supplied explicit location over the most recent snapshot. The snapshot's
     // location field only refreshes after /generate persists a new game state, so callers that
@@ -2843,7 +2751,6 @@ export async function gameRoutes(app: FastifyInstance) {
           pronouns: typeof n.pronouns === "string" ? n.pronouns : null,
           location: (n.location as string) || "Unknown",
           reputation: (n.reputation as number) || 0,
-          met: false,
           notes: [] as string[],
           avatarUrl: charAvatarByName.get(name.toLowerCase()) ?? undefined,
         };
@@ -5251,8 +5158,9 @@ export async function gameRoutes(app: FastifyInstance) {
         ? (updatedMap.nodes?.find((node) => node.id === position)?.label ?? position)
         : (updatedMap.cells?.find((cell) => cell.x === position.x && cell.y === position.y)?.label ?? null);
 
-    const nextMeta = markNpcsMetAtCurrentLocation(withActiveGameMapMeta(meta, updatedMap));
-    const hydratedMeta = await buildHydratedGameMeta(chatId, nextMeta, { explicitLocation });
+    const hydratedMeta = await buildHydratedGameMeta(chatId, withActiveGameMapMeta(meta, updatedMap), {
+      explicitLocation,
+    });
     // syncGameMapMetaPartyPosition matches by label across all maps, so a label collision
     // could leave hydratedMeta.gameMap pointing at a different map than the one the client
     // clicked within. Anchor finalMap to the hydrated copy of the target map (falling back

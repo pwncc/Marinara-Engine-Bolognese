@@ -428,7 +428,7 @@ export function GameCharacterSheet({
                   <button
                     onClick={() => setIsEditing(true)}
                     disabled={isRegenerating}
-                    className="inline-flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)]/90 px-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)] disabled:opacity-60 sm:h-auto sm:min-w-0 sm:px-3 sm:py-1.5"
+                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)]/90 p-0 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)] disabled:opacity-60 sm:h-auto sm:w-auto sm:min-w-0 sm:gap-1.5 sm:px-3 sm:py-1.5"
                     title="Edit Sheet"
                     aria-label="Edit sheet"
                   >
@@ -443,9 +443,11 @@ export function GameCharacterSheet({
 
         <button
           onClick={onClose}
-          className="absolute right-3 top-3 z-10 rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+          className="absolute right-3 top-3 z-10 flex h-7 w-7 items-center justify-center rounded-lg p-0 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)] sm:h-auto sm:w-auto sm:p-1.5"
+          aria-label="Close character sheet"
+          title="Close character sheet"
         >
-          <X size={18} />
+          <X className="h-4 w-4 sm:h-[18px] sm:w-[18px]" />
         </button>
 
         <div className="relative border-b border-[var(--border)] bg-[var(--secondary)]/50 px-4 py-4 sm:px-5">
@@ -491,7 +493,7 @@ export function GameCharacterSheet({
               )}
             </div>
             {card.level != null && (
-              <div className="flex items-center gap-1 rounded border border-[var(--primary)]/20 bg-[var(--primary)]/10 px-1.5 py-0.5">
+              <div className="mr-16 flex items-center gap-1 rounded border border-[var(--primary)]/20 bg-[var(--primary)]/10 px-1.5 py-0.5 sm:mr-0">
                 <span className="text-[0.4375rem] uppercase tracking-wider text-[var(--primary)]/60">LVL</span>
                 <span className="text-xs font-bold leading-none text-[var(--primary)]">{card.level}</span>
               </div>

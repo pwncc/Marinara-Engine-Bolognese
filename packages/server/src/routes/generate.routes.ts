@@ -3993,9 +3993,16 @@ export async function generateRoutes(app: FastifyInstance) {
 
           // LOG_LEVEL=debug or Settings -> Advanced -> Debug mode: log game-mode prompt details.
           if (isDebug || requestDebug) {
+            const gameSystemChars = finalMessages
+              .filter((message) => message.role === "system")
+              .reduce((total, message) => total + message.content.length, 0);
+            const gameHistoryMessages = finalMessages.filter(
+              (message) => message.role === "user" || message.role === "assistant",
+            ).length;
             debugLog(
-              "[debug/game] GM prompt length: %d chars, messages: %d",
-              finalMessages[0]?.content.length ?? 0,
+              "[debug/game] GM prompt assembled before final format reminder: systemChars=%d, historyMessages=%d, messages=%d. Full provider prompt is logged once by [debug] Prompt sent to model.",
+              gameSystemChars,
+              gameHistoryMessages,
               finalMessages.length,
             );
             debugLog(
@@ -4007,9 +4014,6 @@ export async function generateRoutes(app: FastifyInstance) {
               gmCtx.hasSceneModel,
               gmCtx.gameActiveState,
             );
-            for (const msg of finalMessages) {
-              debugLog("[debug/game] [%s] %s", msg.role.toUpperCase(), msg.content);
-            }
           }
 
           // Inject the output format + commands as the last user message so they
@@ -7924,7 +7928,6 @@ export async function generateRoutes(app: FastifyInstance) {
                       description: appearance,
                       location: "",
                       reputation: 0,
-                      met: true,
                       notes: [],
                     };
                     const interaction = mood ? `Encountered (${mood})` : "Encountered";

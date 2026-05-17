@@ -147,7 +147,6 @@ function normalizePromptNpcs(value: unknown): GameNpc[] {
         pronouns: typeof source.pronouns === "string" ? source.pronouns : null,
         location: normalizePromptText(source.location),
         reputation: typeof source.reputation === "number" && Number.isFinite(source.reputation) ? source.reputation : 0,
-        met: typeof source.met === "boolean" ? source.met : true,
         notes: normalizePromptTextList(source.notes),
         avatarUrl: typeof source.avatarUrl === "string" ? source.avatarUrl : null,
       },
@@ -303,13 +302,10 @@ function buildMapStateLines(map: GameMap, playerMoved?: boolean, turnNumber?: nu
 }
 
 function buildTrackedNpcLines(npcs: GameNpc[]): string[] {
-  const sorted = [...npcs].sort((left, right) => {
-    if (left.met !== right.met) return left.met ? -1 : 1;
-    return Math.abs(right.reputation) - Math.abs(left.reputation);
-  });
+  const sorted = [...npcs].sort((left, right) => Math.abs(right.reputation) - Math.abs(left.reputation));
 
   const lines = sorted.slice(0, MAX_PROMPT_NPCS).map((npc) => {
-    const parts = [`- ${npc.name} @ ${npc.location || "unknown"}`, `rep ${npc.reputation}`, npc.met ? "met" : "unmet"];
+    const parts = [`- ${npc.name} @ ${npc.location || "unknown"}`, `rep ${npc.reputation}`];
     if (npc.notes.length > 0) {
       parts.push(npc.notes.slice(0, 2).join("; "));
     }
@@ -445,7 +441,7 @@ export function buildGmSystemPrompt(ctx: GmPromptContext): string {
     `</rules>`,
 
     `<npc_playbook>`,
-    `- Portray a living world with dynamic personalities and realistic awareness.`,
+    `Portray a living world with dynamic personalities and realistic awareness:`,
     `- Characters you play as must not sound interchangeable; keep voices distinct. Match each character's cadence, vocabulary, formality, emotional state, interruptions, fragments, hesitation, slurring, breathlessness, laughter, crying, and implication. The line itself should sound like the emotion it's conveying.`,
     `- Everyone has their own morality, ranging from good through morally gray to evil, but they're not labeled by it. Villains can do noble acts, and heroes can do harm. People can lie, even by omission, and deceive if they're inclined to do so or think it will advance their objectives. Capture how they are flawed, make mistakes, and pursue selfish goals (ignoring what the player or others want, unless their objectives align), but also give them space to grow and change (for better or for worse). NPCs must not merely reach, hover, wait, or unnaturally pause. They fully grab, touch, and commit.`,
     `- No one is omniscient. Characters should know only what they personally witnessed, inferred from available evidence, learned from public reputation, or were told by someone in-scene. One character must not know another location's events, hidden motives, secret arcs, private thoughts, or offscreen revelations unless that information plausibly reached them. When unsure, let them be wrong, suspicious, confused, or curious instead.`,
@@ -1067,7 +1063,7 @@ export function buildSessionSummaryPrompt(language?: string | null): string {
     `5. **keyDiscoveries**: Array of durable, actionable continuity facts: important plot points, hidden truths, twists, quests, lore learned, locations, and newly opened leads that still matter next session. Use this single bucket for both discoveries and reveals. Do not include emotional moments or NPC stance changes unless that fact itself is the core continuity item.`,
     `6. **characterMoments**: Array of notable personal moments between the player and specific characters. Use this only for bonding, romance, betrayal, confessions, arguments, or other interpersonal beats. Empty array if none.`,
     `7. **littleDetails**: Array of small personal details to recall later: preferences, habits, favorite things, casual promises, private jokes, fears, motifs, or fragments of a character's past that are not major plot discoveries. Empty array if none.`,
-    `8. **npcUpdates**: Array of NPC reputation changes, newly met NPCs, and important shifts in an NPC's stance, allegiance, or immediate agenda.`,
+    `8. **npcUpdates**: Array of new NPCs, NPC reputation changes, and important shifts in an NPC's stance, allegiance, or immediate agenda.`,
     `9. **statsSnapshot**: Current party stats, inventory, quest states, and any location / pressure details needed for continuity. This must be a JSON object, not prose.`,
     ``,
     `Cross-field dedupe rules:`,
@@ -1109,7 +1105,7 @@ export function buildSessionConclusionPrompt(args: {
     `- summary.keyDiscoveries: Array of durable, actionable continuity facts: important plot points, hidden truths, twists, quests, lore learned, locations, and newly opened leads that still matter next session. Use this single bucket for both discoveries and reveals.`,
     `- summary.characterMoments: Array of notable interpersonal beats such as bonding, romance, betrayal, confessions, arguments, or other personal turning points.`,
     `- summary.littleDetails: Array of small personal details to recall later: preferences, habits, favorite things, casual promises, private jokes, fears, motifs, or fragments of a character's past that are not major plot discoveries.`,
-    `- summary.npcUpdates: Array of newly met NPCs, reputation changes, and important shifts in an NPC's stance, allegiance, or immediate agenda.`,
+    `- summary.npcUpdates: Array of new NPCs, reputation changes, and important shifts in an NPC's stance, allegiance, or immediate agenda.`,
     `- summary.statsSnapshot: JSON object with continuity-critical state such as party stats, inventory, quest progress, location, active pressure, and partyMorale as a number from 0 to 100.`,
     ``,
     `campaignProgression must be an object with exactly these keys and no others: storyArc, plotTwists, partyArcs.`,
