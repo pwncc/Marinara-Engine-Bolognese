@@ -91,6 +91,18 @@ export function useAutonomousMessaging(
     [chatId],
   );
 
+  const recordClientPresence = useCallback(
+    async (userStatus: "active" | "idle" | "dnd") => {
+      if (!chatId) return;
+      try {
+        await api.post("/conversation/activity/presence", { chatId, userStatus });
+      } catch {
+        // non-critical
+      }
+    },
+    [chatId],
+  );
+
   // ── Polling logic ──
   useEffect(() => {
     if (!chatId || !enabled) return;
@@ -113,6 +125,7 @@ export function useAutonomousMessaging(
 
       // Don't trigger autonomous messages when user is DND
       if (userStatus === "dnd") {
+        await recordClientPresence(userStatus);
         schedulePoll();
         return;
       }
@@ -225,7 +238,7 @@ export function useAutonomousMessaging(
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
       if (busyTimerRef.current) clearTimeout(busyTimerRef.current);
     };
-  }, [chatId, enabled, exchangesEnabled, generate, recordAssistantActivity, qc]);
+  }, [chatId, enabled, exchangesEnabled, generate, recordAssistantActivity, recordClientPresence, qc]);
 
   return {
     recordUserActivity,

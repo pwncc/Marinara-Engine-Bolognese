@@ -108,6 +108,13 @@ export function useBackgroundAutonomousPolling() {
 
       // Don't trigger autonomous messages when user is DND
       if (userStatus === "dnd" || backgroundChats.length === 0) {
+        if (userStatus === "dnd" && backgroundChats.length > 0) {
+          await Promise.allSettled(
+            backgroundChats.map((chat) =>
+              api.post("/conversation/activity/presence", { chatId: chat.id, userStatus }).catch(() => {}),
+            ),
+          );
+        }
         schedulePoll();
         return;
       }

@@ -26,6 +26,7 @@ import {
   checkCharacterExchange,
   recordUserActivity,
   recordAssistantActivity,
+  recordAutonomousClientPresence,
   markGenerationInProgress,
   initializeActivityFromMessages,
 } from "../services/conversation/autonomous.service.js";
@@ -560,13 +561,26 @@ export async function conversationRoutes(app: FastifyInstance) {
   });
 
   // ─────────────────────────────────────────────
-  // POST /autonomous/check — Check if autonomous message should trigger
+  // POST /activity/presence — Record connected client autonomous-poller presence
   // ─────────────────────────────────────────────
   app.post<{
     Body: { chatId: string; userStatus?: AutonomousUserStatus };
+  }>("/activity/presence", async (req, reply) => {
+    recordAutonomousClientPresence(req.body.chatId, normalizeAutonomousUserStatus(req.body.userStatus));
+    return reply.send({ ok: true });
+  });
+
+  // ─────────────────────────────────────────────
+  // POST /autonomous/check — Check if autonomous message should trigger
+  // ─────────────────────────────────────────────
+  app.post<{
+    Body: { chatId: string; userStatus?: AutonomousUserStatus; maxFollowups?: number; source?: "client" | "server" };
   }>("/autonomous/check", async (req, reply) => {
     const { chatId } = req.body;
     const userStatus = normalizeAutonomousUserStatus(req.body.userStatus);
+    if (req.body.source !== "server") {
+      recordAutonomousClientPresence(chatId, userStatus);
+    }
     const chat = await chats.getById(chatId);
     if (!chat) return reply.status(404).send({ error: "Chat not found" });
 
@@ -631,7 +645,9 @@ export async function conversationRoutes(app: FastifyInstance) {
       return reply.send({ shouldTrigger: false, characterIds: [], reason: "scene_active", inactivityMs: 0 });
     }
 
-    const result = checkAutonomousMessaging(chatId, filteredSchedules, isGroup);
+    const result = checkAutonomousMessaging(chatId, filteredSchedules, isGroup, {
+      maxFollowups: req.body.maxFollowups,
+    });
 
     if (result.shouldTrigger) {
       markGenerationInProgress(chatId);

@@ -36,6 +36,7 @@ import {
 } from "./config/runtime-config.js";
 import { corsDelegate } from "./config/cors-config.js";
 import { sidecarProcessService } from "./services/sidecar/sidecar-process.service.js";
+import { startServerAutonomousScheduler } from "./services/conversation/server-autonomous-scheduler.service.js";
 
 const isLite = process.env.MARINARA_LITE === "true" || process.env.MARINARA_LITE === "1";
 const REVALIDATE_FILES = new Set(["index.html"]);
@@ -137,6 +138,9 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
 
   // ── Routes ──
   await registerRoutes(app);
+
+  // ── Server-side autonomous conversation scheduler ──
+  startServerAutonomousScheduler(app);
 
   // ── Sidecar bootstrap (background, skipped in lite mode) ──
   if (!isLite) {
