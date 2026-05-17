@@ -2023,7 +2023,14 @@ function formatAgentBubble(agentType: string, agentName: string, data: unknown):
     case "continuity": {
       const issues = (d.issues as any[]) ?? [];
       if (!issues.length) return null;
-      return issues.map((i: any) => `${i.severity === "error" ? "🔴" : "🟡"} ${i.description}`).join("\n");
+      return issues
+        .map((i: any) => {
+          const description = typeof i.description === "string" ? i.description.trim() : "";
+          const suggestion = typeof i.suggestion === "string" ? i.suggestion.trim() : "";
+          const detail = suggestion ? `${description} Fix: ${suggestion}` : description;
+          return `${i.severity === "error" ? "🔴" : "🟡"} ${detail}`;
+        })
+        .join("\n");
     }
 
     case "prompt-reviewer": {
