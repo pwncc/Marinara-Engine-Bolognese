@@ -138,7 +138,6 @@ import { eq } from "drizzle-orm";
 import { PROFESSOR_MARI_ID } from "@marinara-engine/shared";
 import { chunkAndEmbedMessages, embedMemoryRecallTexts, recallMemories } from "../services/memory-recall.js";
 import { resolveMemoryRecallEmbeddingSource } from "../services/memory-recall-embedding.js";
-import { warmLorebookEntryEmbeddings } from "../services/lorebook/embeddings.js";
 import { postToDiscordWebhook } from "../services/discord-webhook.js";
 import {
   findLastIndex,
@@ -1490,12 +1489,10 @@ export async function generateRoutes(app: FastifyInstance) {
             excludedLorebookIds: gameLorebookScopeExclusions.excludedLorebookIds,
             excludedSourceAgentIds: gameLorebookScopeExclusions.excludedSourceAgentIds,
           })) as LorebookEntry[];
-          await warmLorebookEntryEmbeddings(app.db, activeEntries, {
-            embeddingSource: memoryRecallEmbeddingSource,
-            batchSize: 32,
-          });
-          const hasEmbeddableEntries = activeEntries.length > 0;
-          if (hasEmbeddableEntries) {
+          const hasVectorizedEntries = activeEntries.some(
+            (entry) => Array.isArray(entry.embedding) && entry.embedding.length > 0,
+          );
+          if (hasVectorizedEntries) {
             const recentMsgs = mappedMessages
               .slice(-10)
               .map((m) => m.content)

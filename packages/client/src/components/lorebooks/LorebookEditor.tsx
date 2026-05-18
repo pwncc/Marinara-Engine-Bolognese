@@ -2061,13 +2061,6 @@ function VectorizeSection({ lorebookId, entries }: { lorebookId: string; entries
     }
   }, [fetchSidecarStatus]);
 
-  // Auto-select first embedding connection
-  useEffect(() => {
-    if (!selectedConnectionId && embeddingConnections.length > 0) {
-      setSelectedConnectionId(embeddingConnections[0].id);
-    }
-  }, [embeddingConnections, selectedConnectionId]);
-
   const handleVectorize = async () => {
     if (!selectedConnectionId) return;
     setVectorizing(true);
@@ -2128,6 +2121,7 @@ function VectorizeSection({ lorebookId, entries }: { lorebookId: string; entries
               onChange={(e) => setSelectedConnectionId(e.target.value)}
               className="flex-1 rounded-lg bg-[var(--secondary)] px-2.5 py-1.5 text-xs ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
             >
+              <option value="">No semantic search</option>
               {embeddingConnections.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name} ({c.embeddingModel})
@@ -2136,17 +2130,24 @@ function VectorizeSection({ lorebookId, entries }: { lorebookId: string; entries
             </select>
             <button
               onClick={handleVectorize}
-              disabled={vectorizing || vectorizableEntryCount === 0}
+              disabled={vectorizing || vectorizableEntryCount === 0 || !selectedConnectionId}
               className="flex items-center gap-1.5 rounded-xl bg-violet-500/15 px-3 py-1.5 text-xs font-medium text-violet-400 ring-1 ring-violet-500/30 transition-all hover:bg-violet-500/25 active:scale-[0.98] disabled:opacity-50"
             >
               {vectorizing ? <Loader2 size="0.75rem" className="animate-spin" /> : <Sparkles size="0.75rem" />}
               {vectorizing
                 ? "Vectorizing..."
-                : allVectorized
+                : !selectedConnectionId
+                  ? "Select connection"
+                  : allVectorized
                   ? `Re-vectorize ${vectorizableEntryCount} entries`
                   : `Vectorize ${missingCount} missing`}
             </button>
           </div>
+          {!selectedConnectionId && (
+            <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+              Semantic search is off until you choose an embedding connection and vectorize entries.
+            </p>
+          )}
           {result && (
             <p
               className={cn(
