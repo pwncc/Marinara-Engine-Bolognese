@@ -5,6 +5,7 @@ import {
   appendGenerationTailMessages,
   buildUserMessageRegenerationInstruction,
   buildUserMessageRegenerationPrompt,
+  buildUserMessageRegenerationSourceMessage,
 } from "../packages/server/src/routes/generate/generate-route-utils.ts";
 
 describe("user message regeneration instruction", () => {
@@ -59,6 +60,78 @@ describe("user message regeneration instruction", () => {
     });
 
     assert.deepEqual(prompt.images, [imageDataUrl]);
+  });
+
+  it("ignores malformed attachment metadata when rebuilding a user-message regeneration prompt", () => {
+    const prompt = buildUserMessageRegenerationPrompt({
+      content: "regenerate this safely",
+      extra: { attachments: "not an attachment array" },
+    });
+
+    assert.equal(prompt.role, "user");
+    assert.equal(prompt.images, undefined);
+    assert.match(prompt.content, /<original_user_message>\nregenerate this safely\n<\/original_user_message>/);
+  });
+
+  it("ignores malformed attachment metadata when building the regeneration instruction directly", () => {
+    const instruction = buildUserMessageRegenerationInstruction({
+      content: "direct instruction",
+      extra: { attachments: { data: "not an array" } },
+    });
+
+    assert.match(instruction, /<original_user_message>\ndirect instruction\n<\/original_user_message>/);
+  });
+
+  it("builds a source message from the original regenerated user message", () => {
+    const source = buildUserMessageRegenerationSourceMessage({ content: "describe this image" });
+
+    assert.deepEqual(source, { role: "user", content: "describe this image" });
+  });
+
+  it("preserves readable attachments in the regeneration source message", () => {
+    const source = buildUserMessageRegenerationSourceMessage({
+      content: "summarize this",
+      extra: {
+        attachments: [
+          {
+            type: "text/plain",
+            filename: "notes.txt",
+            data: "data:text/plain;base64,TGluZSAxCkxpbmUgMg==",
+          },
+        ],
+      },
+    });
+
+    assert.match(source.content, /summarize this/);
+    assert.match(source.content, /<attached_file name="notes.txt" type="text\/plain">/);
+    assert.match(source.content, /Line 1\nLine 2/);
+  });
+
+  it("preserves image attachments in the regeneration source message", () => {
+    const imageDataUrl = "data:image/png;base64,aW1hZ2U=";
+    const source = buildUserMessageRegenerationSourceMessage({
+      content: "describe this image",
+      extra: {
+        attachments: [
+          {
+            type: "image/png",
+            filename: "image.png",
+            data: imageDataUrl,
+          },
+        ],
+      },
+    });
+
+    assert.deepEqual(source.images, [imageDataUrl]);
+  });
+
+  it("ignores malformed attachment metadata in the regeneration source message", () => {
+    const source = buildUserMessageRegenerationSourceMessage({
+      content: "keep this",
+      extra: { attachments: "broken" },
+    });
+
+    assert.deepEqual(source, { role: "user", content: "keep this" });
   });
 
   it("keeps Gemini user-message regeneration as the final user turn while preserving assistant prefill", () => {

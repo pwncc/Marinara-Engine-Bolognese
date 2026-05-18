@@ -145,6 +145,7 @@ import {
   findLastIndex,
   appendReadableAttachmentsToContent,
   buildUserMessageRegenerationPrompt,
+  buildUserMessageRegenerationSourceMessage,
   extractImageAttachmentDataUrls,
   injectIntoOutputFormatOrLastUser,
   isMessageHiddenFromAI,
@@ -1115,6 +1116,7 @@ export async function generateRoutes(app: FastifyInstance) {
       let lorebookKeeperMessages = chatMessages;
       let regenMsg;
       let regenerateUserMessage: SimpleMessage | null = null;
+      let regenerateUserSourceMessage: SimpleMessage | null = null;
 
       // ── Regeneration as swipe: exclude the target message from context ──
       if (input.regenerateMessageId) {
@@ -1125,6 +1127,7 @@ export async function generateRoutes(app: FastifyInstance) {
         }
         if (regenMsg.role === "user") {
           regenerateUserMessage = buildUserMessageRegenerationPrompt(regenMsg);
+          regenerateUserSourceMessage = buildUserMessageRegenerationSourceMessage(regenMsg);
         }
         chatMessages = chatMessages.filter((m: any) => m.id !== input.regenerateMessageId);
         lorebookKeeperMessages = lorebookKeeperMessages.filter((m: any) => m.id !== input.regenerateMessageId);
@@ -1228,6 +1231,15 @@ export async function generateRoutes(app: FastifyInstance) {
       if (chatMode === "game") {
         applyAllSegmentEdits(mappedMessages, chatMeta as Record<string, unknown>, chatMessages);
       }
+
+      // User-message regeneration removes the target turn from real chat history,
+      // but prompt shaping still needs that original user input for macros,
+      // lorebook matching, semantic embeddings, and memory recall. Keep this
+      // separate from the final Gemini rewrite instruction appended near send time.
+      const currentInputMessages = (): SimpleMessage[] =>
+        regenerateUserSourceMessage ? [...mappedMessages, regenerateUserSourceMessage] : mappedMessages;
+      const currentUserInputContent = (): string | undefined =>
+        [...currentInputMessages()].reverse().find((message) => message.role === "user")?.content;
 
       const persona =
         (chat.personaId ? allPersonas.find((p: any) => p.id === chat.personaId) : null) ??
@@ -1435,7 +1447,7 @@ export async function generateRoutes(app: FastifyInstance) {
             typeof chatMeta.groupScenarioText === "string" && (chatMeta.groupScenarioText as string).trim()
               ? (chatMeta.groupScenarioText as string).trim()
               : null,
-          lastInput: [...mappedMessages].reverse().find((message) => message.role === "user")?.content,
+          lastInput: currentUserInputContent(),
           chatId: input.chatId,
           model: conn.model,
         });
@@ -1456,9 +1468,16 @@ export async function generateRoutes(app: FastifyInstance) {
         // before it lands in runningMessagesForFollowUp, so each message still
         // gets exactly one pass.
         if (followUpIteration === 0) {
-          applyRegexScriptsToPromptMessages(mappedMessages, await regexScriptsStore.list(), {
+          const regexScripts = await regexScriptsStore.list();
+          applyRegexScriptsToPromptMessages(mappedMessages, regexScripts, {
             resolveMacros: (value) => resolveMacros(value, promptMacroContext, { trimResult: false }),
           });
+          if (regenerateUserSourceMessage) {
+            const sourceMessages = [regenerateUserSourceMessage];
+            applyRegexScriptsToPromptMessages(sourceMessages, regexScripts, {
+              resolveMacros: (value) => resolveMacros(value, promptMacroContext, { trimResult: false }),
+            });
+          }
 
           // Always collapse 3+ consecutive blank lines into a double newline —
           // these waste tokens and produce messy logs regardless of user regex settings.
@@ -1466,13 +1485,17 @@ export async function generateRoutes(app: FastifyInstance) {
           for (const msg of mappedMessages) {
             msg.content = msg.content.replace(/\n([ \t]*\n){2,}/g, "\n\n");
           }
+          if (regenerateUserSourceMessage) {
+            regenerateUserSourceMessage.content = regenerateUserSourceMessage.content.replace(
+              /\n([ \t]*\n){2,}/g,
+              "\n\n",
+            );
+          }
         }
-        promptMacroContext.lastInput = [...mappedMessages]
-          .reverse()
-          .find((message) => message.role === "user")?.content;
+        promptMacroContext.lastInput = currentUserInputContent();
         const toLorebookScanMessages = () =>
           buildLorebookScanMessagesWithGenerationGuide(
-            mappedMessages.map((m) => ({
+            currentInputMessages().map((m) => ({
               role: m.role,
               content: m.content,
             })),
@@ -1501,7 +1524,7 @@ export async function generateRoutes(app: FastifyInstance) {
           });
           const hasEmbeddableEntries = activeEntries.length > 0;
           if (hasEmbeddableEntries) {
-            const recentMsgs = mappedMessages
+            const recentMsgs = currentInputMessages()
               .slice(-10)
               .map((m) => m.content)
               .join("\n");
@@ -4122,7 +4145,7 @@ export async function generateRoutes(app: FastifyInstance) {
           const _tRecall = Date.now();
           try {
             // Use the last user message as the query
-            const lastUserMsg = [...mappedMessages].reverse().find((m) => m.role === "user");
+            const lastUserMsg = [...currentInputMessages()].reverse().find((m) => m.role === "user");
             if (lastUserMsg?.content?.trim()) {
               // Scope recall to this chat only. Users expect memories to stay with
               // the exact conversation/roleplay/game where they were created.

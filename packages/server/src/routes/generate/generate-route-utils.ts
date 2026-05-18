@@ -81,6 +81,11 @@ export function isMessageHiddenFromAI(message: { extra?: unknown }): boolean {
   return parseExtra(message.extra).hiddenFromAI === true;
 }
 
+function parsePromptAttachments(extra: unknown): PromptAttachment[] | undefined {
+  const rawAttachments = parseExtra(extra).attachments;
+  return Array.isArray(rawAttachments) ? (rawAttachments as PromptAttachment[]) : undefined;
+}
+
 /**
  * Build the instruction used when regenerating a user-authored message as a swipe.
  * The original user text and readable attachments are wrapped in
@@ -89,7 +94,7 @@ export function isMessageHiddenFromAI(message: { extra?: unknown }): boolean {
  */
 export function buildUserMessageRegenerationInstruction(message: { content?: unknown; extra?: unknown }): string {
   const original = typeof message.content === "string" ? message.content.trim() : "";
-  const attachments = parseExtra(message.extra).attachments as PromptAttachment[] | undefined;
+  const attachments = parsePromptAttachments(message.extra);
   const originalWithAttachments = appendReadableAttachmentsToContent(original, attachments);
   return [
     "Regenerate the user's previous message as an alternate swipe.",
@@ -103,11 +108,31 @@ export function buildUserMessageRegenerationInstruction(message: { content?: unk
 }
 
 export function buildUserMessageRegenerationPrompt(message: { content?: unknown; extra?: unknown }): SimpleMessage {
-  const attachments = parseExtra(message.extra).attachments as PromptAttachment[] | undefined;
+  const attachments = parsePromptAttachments(message.extra);
   const images = extractImageAttachmentDataUrls(attachments);
   return {
     role: "user",
     content: buildUserMessageRegenerationInstruction(message),
+    ...(images.length ? { images } : {}),
+  };
+}
+
+/**
+ * Build the context-facing version of a user message being regenerated.
+ * This preserves the original user text and attachments for prompt shaping
+ * without adding the provider-facing rewrite instruction.
+ */
+export function buildUserMessageRegenerationSourceMessage(message: {
+  content?: unknown;
+  extra?: unknown;
+}): SimpleMessage {
+  const original = typeof message.content === "string" ? message.content : "";
+  const attachments = parsePromptAttachments(message.extra);
+  const content = appendReadableAttachmentsToContent(original, attachments);
+  const images = extractImageAttachmentDataUrls(attachments);
+  return {
+    role: "user",
+    content,
     ...(images.length ? { images } : {}),
   };
 }
