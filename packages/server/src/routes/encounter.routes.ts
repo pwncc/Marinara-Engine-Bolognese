@@ -10,6 +10,7 @@ import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js
 import { mapSheetAttributesToRPG } from "../services/game/skill-check.service.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import type { ChatMessage } from "../services/llm/base-provider.js";
+import { logger, logDebugOverride } from "../lib/logger.js";
 import type {
   EncounterInitRequest,
   EncounterActionRequest,
@@ -517,7 +518,10 @@ export async function encounterRoutes(app: FastifyInstance) {
 
   // ───────────────────────── INIT ─────────────────────────
   app.post<{ Body: EncounterInitRequest }>("/init", async (req, reply) => {
-    const { chatId, connectionId, settings, spellbookId } = req.body;
+    const { chatId, connectionId, settings, spellbookId, debugMode } = req.body;
+    const debugLog = (message: string, ...args: unknown[]) => {
+      logDebugOverride(debugMode === true, message, ...args);
+    };
 
     if (!chatId || !settings) {
       return reply.status(400).send({ error: "Missing required fields: chatId, settings" });
@@ -562,12 +566,27 @@ export async function encounterRoutes(app: FastifyInstance) {
       }));
 
       const prompt = buildInitPrompt(personaName, personaCtx, characterCtx, recentMsgs, gameStateCtx, spellbookCtx);
+      debugLog(
+        "[debug/game/combat:init] request chatId=%s model=%s historyMessages=%d settings=%s",
+        chatId,
+        conn.model ?? "",
+        recentMsgs.length,
+        JSON.stringify(settings),
+      );
+      debugLog("[debug/game/combat:init] prompt messages:\n%s", JSON.stringify(prompt, null, 2));
 
       const result = await provider.chatComplete(prompt, {
         model: conn.model,
         temperature: 0.8,
         maxTokens: COMBAT_BLUEPRINT_OUTPUT_TOKENS,
       });
+      debugLog(
+        "[debug/game/combat:init] raw response chatId=%s model=%s chars=%d\n%s",
+        chatId,
+        conn.model ?? "",
+        result.content?.length ?? 0,
+        result.content ?? "",
+      );
 
       if (!result.content) {
         return reply.status(502).send({ error: "No response from AI" });
@@ -583,10 +602,12 @@ export async function encounterRoutes(app: FastifyInstance) {
       if (!combatState?.party || !combatState?.enemies) {
         return reply.status(502).send({ error: "Invalid combat data returned by AI" });
       }
+      debugLog("[debug/game/combat:init] parsed response:\n%s", JSON.stringify(combatState, null, 2));
 
       return { combatState };
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
+      logger.warn(err, "[game/combat:init] Encounter init failed");
       return reply.status(500).send({ error: `Encounter init failed: ${message}` });
     }
   });

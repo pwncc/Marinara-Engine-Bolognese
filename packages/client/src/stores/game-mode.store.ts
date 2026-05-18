@@ -153,7 +153,6 @@ function buildTrackedNpcStub(name: string, avatarUrl: string): GameNpc {
     description: "",
     location: "",
     reputation: 0,
-    met: true,
     notes: [],
     avatarUrl,
   };

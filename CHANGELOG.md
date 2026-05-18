@@ -4,6 +4,23 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+### Added
+
+- Added a manual Game Mode combat start control with confirmation so players can trigger encounter setup when a scene should enter combat.
+
+### Changed
+
+- Improved Game Mode combat setup so encounter generation can run in the background after scene analysis, with debug logging and a wait state only when the player reaches combat before setup is ready.
+- Removed unreliable met/unmet status tracking from Game Mode NPC prompt context.
+
+### Fixed
+
+- Fixed mobile Game Mode character and party controls so sheet actions stay compact, long character names can remain accessible, and crowded party rosters collapse into a scrollable mobile party picker.
+- Fixed mobile Game Mode choice prompts so large choice sets stay readable and scroll inside the available play area instead of squishing buttons or pushing custom input off-screen.
+- Fixed mobile Game Mode side dialogue voice playback so voiced dialogue cues can play when the side line first appears.
+- Fixed Game Mode log deletion on mobile so deleting the currently viewed beat returns to the previous beat instead of the start of the turn.
+- Fixed Game Mode combat presentation across desktop and mobile: combatants scale to fit tighter screens, status badges no longer misalign portraits, ally NPC avatars resolve from character/game assets, action pacing is slower, desktop dialogue bubbles avoid overlap, and mobile combat dialogue is shown as tappable cues above the action box.
+
 ## [1.6.0]
 
 ### Added

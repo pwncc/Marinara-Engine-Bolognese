@@ -196,6 +196,8 @@ export interface EncounterInitRequest {
   settings: EncounterSettings;
   /** Optional spellbook lorebook ID to inject spell/attack data into combat */
   spellbookId?: string | null;
+  /** When enabled, log the generated combat request/response in the server console. */
+  debugMode?: boolean;
 }
 
 /** Response from POST /api/encounter/init */

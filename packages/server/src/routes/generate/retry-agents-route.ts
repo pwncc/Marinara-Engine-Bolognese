@@ -107,6 +107,35 @@ function parseSettingsRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+function getGameImageStylePrompt(chat: any, chatMeta: Record<string, unknown>): string {
+  if (((chat as any).mode ?? "conversation") !== "game") return "";
+  const setupConfig = parseSettingsRecord(chatMeta.gameSetupConfig);
+  return typeof setupConfig.artStylePrompt === "string" ? setupConfig.artStylePrompt.trim() : "";
+}
+
+function buildIllustratorImagePrompt(args: {
+  gameArtStylePrompt: string;
+  style: string;
+  imagePrompt: string;
+  imagePositivePrompt: string;
+}): string {
+  const imagePrompt = args.imagePrompt.trim();
+  const imagePromptLower = imagePrompt.toLowerCase();
+  const prefixParts: string[] = [];
+  const seen = new Set<string>();
+
+  for (const part of [args.gameArtStylePrompt, args.style]) {
+    const trimmed = part.trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || seen.has(key) || imagePromptLower.includes(key)) continue;
+    seen.add(key);
+    prefixParts.push(trimmed);
+  }
+
+  const fullPrompt = [...prefixParts, imagePrompt].join(", ");
+  return args.imagePositivePrompt ? `${fullPrompt}, ${args.imagePositivePrompt}` : fullPrompt;
+}
+
 async function resolvePersonaContext(
   chars: ReturnType<typeof createCharactersStorage>,
   chat: any,
@@ -274,6 +303,11 @@ async function buildRetryAgentContext(args: {
     streaming,
     memory: {},
   };
+
+  const gameImageStylePrompt = getGameImageStylePrompt(chat, chatMeta);
+  if (gameImageStylePrompt) {
+    agentContext.memory._gameImageStylePrompt = gameImageStylePrompt;
+  }
 
   if (resolvedAgentTypes.has("lorebook-keeper")) {
     const lorebookKeeperSettings = getLorebookKeeperSettings(chatMeta);
@@ -1738,7 +1772,8 @@ async function applyRetryResultEffects(args: {
               const imageSettings = await loadImageGenerationUserSettings(app.db);
 
               const chatMeta = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
-              const selfieRes = (chatMeta.selfieResolution as string) ?? "";
+              const isGameIllustration = ((chat as any).mode ?? "conversation") === "game";
+              const selfieRes = isGameIllustration ? "" : ((chatMeta.selfieResolution as string) ?? "");
               const resParts = selfieRes.split("x").map(Number);
               const parsedW = resParts[0] ?? 0;
               const parsedH = resParts[1] ?? 0;
@@ -1747,15 +1782,24 @@ async function applyRetryResultEffects(args: {
               if (parsedW > 0 && parsedH > 0) {
                 imgWidth = parsedW;
                 imgHeight = parsedH;
+              } else if (isGameIllustration) {
+                imgWidth = imageSettings.background.width;
+                imgHeight = imageSettings.background.height;
               } else {
                 imgWidth = imageSettings.selfie.width;
                 imgHeight = imageSettings.selfie.height;
               }
 
-              let fullPrompt = style ? `${style}, ${imagePrompt}` : imagePrompt;
-              if (imagePositivePrompt) {
-                fullPrompt = `${fullPrompt}, ${imagePositivePrompt}`;
-              }
+              const gameArtStylePrompt =
+                typeof agentContext.memory._gameImageStylePrompt === "string"
+                  ? agentContext.memory._gameImageStylePrompt
+                  : "";
+              const fullPrompt = buildIllustratorImagePrompt({
+                gameArtStylePrompt,
+                style,
+                imagePrompt,
+                imagePositivePrompt,
+              });
               const finalNegativePrompt = [negativePrompt, savedNegativePrompt].filter(Boolean).join(", ");
 
               // Collect character avatar references when enabled

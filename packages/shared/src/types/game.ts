@@ -119,8 +119,6 @@ export interface GameNpc {
   location: string;
   /** Party reputation with this NPC: -100 (hostile) to 100 (devoted) */
   reputation: number;
-  /** Whether the party has met this NPC */
-  met: boolean;
   /** Notable interactions or knowledge */
   notes: string[];
   /** Optional avatar URL (generated or uploaded) */

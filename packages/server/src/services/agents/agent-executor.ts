@@ -1085,6 +1085,23 @@ function buildAgentExtras(context: AgentContext, agentTypes: string[] = []): str
     parts.push(`</current_game_state>`);
   }
 
+  const gameImageStylePrompt =
+    context.chatMode === "game" && typeof context.memory._gameImageStylePrompt === "string"
+      ? context.memory._gameImageStylePrompt.trim()
+      : "";
+  if (agentTypes.includes("illustrator") && gameImageStylePrompt) {
+    parts.push(`<game_image_instructions>`);
+    parts.push(
+      `This chat is in Game Mode. Gallery -> Illustrate should produce a scene illustration for the current VN/game beat, not a generic character selfie.`,
+    );
+    parts.push(`Required visual style prompt: ${escapeXml(gameImageStylePrompt)}`);
+    parts.push(
+      `Carry this visual style into both the JSON "style" field and the generated "prompt". Do not replace it with a generic art style.`,
+    );
+    parts.push(`Prefer a landscape/16:9 scene composition unless the latest assistant message clearly calls for another framing.`);
+    parts.push(`</game_image_instructions>`);
+  }
+
   if (agentTypes.includes("expression")) {
     const availableSpritesBlock = buildAvailableSpritesBlock(context);
     if (availableSpritesBlock) parts.push(availableSpritesBlock);
