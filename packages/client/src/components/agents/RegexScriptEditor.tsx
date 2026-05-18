@@ -559,14 +559,16 @@ export function RegexScriptEditor() {
           >
             <div className="space-y-3">
               {/* Prompt Only */}
-              <label className="flex items-center gap-2.5 cursor-pointer">
+              <div className="flex items-center gap-2.5">
                 <button
                   type="button"
+                  aria-label="Toggle Prompt Only"
+                  aria-pressed={localPromptOnly}
                   onClick={() => {
                     setLocalPromptOnly((v) => !v);
                     markDirty();
                   }}
-                  className="shrink-0"
+                  className="shrink-0 cursor-pointer"
                 >
                   {localPromptOnly ? (
                     <ToggleRight size="1.125rem" className="text-orange-400" />
@@ -580,7 +582,7 @@ export function RegexScriptEditor() {
                     Only apply in the prompt context sent to the AI, not in the displayed message.
                   </div>
                 </div>
-              </label>
+              </div>
 
               {/* Order */}
               <div className="flex items-center gap-3">
