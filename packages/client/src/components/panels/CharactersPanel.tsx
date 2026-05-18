@@ -298,6 +298,12 @@ export function CharactersPanel() {
   }, []);
 
   const toggleExcludedTag = useCallback((tag: string) => {
+    setIncludedTags((prev) => {
+      if (!prev.has(tag)) return prev;
+      const next = new Set(prev);
+      next.delete(tag);
+      return next;
+    });
     setExcludedTags((prev) => {
       const next = new Set(prev);
       if (next.has(tag)) {
