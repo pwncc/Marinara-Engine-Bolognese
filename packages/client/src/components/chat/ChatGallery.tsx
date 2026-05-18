@@ -22,6 +22,7 @@ import {
 } from "../../hooks/use-gallery";
 import { useGalleryStore } from "../../stores/gallery.store";
 import { ImagePromptPanel } from "./ImagePromptPanel";
+import { toast } from "sonner";
 
 interface ChatGalleryProps {
   chatId: string;
@@ -73,6 +74,8 @@ export function ChatGallery({ chatId, onIllustrate }: ChatGalleryProps) {
     setChatIllustrating(chatId, true);
     try {
       await onIllustrate();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Image generation failed.");
     } finally {
       setChatIllustrating(chatId, false);
     }
