@@ -69,8 +69,9 @@ Click Next to continue."
 
 ; ── Directory page ──
 !define MUI_DIRECTORYPAGE_TEXT_TOP "\
-Choose where to install ${APP_NAME}. About 3 GB of free space is recommended.$\r$\n$\r$\n\
-Upgrading? Pick the same Marinara-Engine folder that already has your data. Chats and characters live under packages\server\data. Windows may count many dependency folders; those are normal app files."
+Choose where to install ${APP_NAME}. About 2.5 GB of free space is recommended.$\r$\n$\r$\n\
+Upgrading? Choose the Marinara Engine folder that already has your data. Before reinstalling, back up packages\server\data, or the root data folder for older installs.$\r$\n$\r$\n\
+The installer will download app files and install dependencies."
 
 ; ── Finish page ──
 !define MUI_FINISHPAGE_TITLE "Installation Complete!"
@@ -120,9 +121,8 @@ Function LaunchApp
 FunctionEnd
 
 Function .onInit
-  ; Older Windows installs used the hyphenated LocalAppData folder. If a
-  ; registry default points elsewhere but the hyphenated folder has user data,
-  ; prefer the data-bearing folder so upgrades do not look like fresh installs.
+  ; Keep upgrades pointed at data-bearing installs from older defaults and
+  ; entrypoints instead of making them look like fresh installs.
   StrCpy $0 "0"
   ${If} ${FileExists} "$INSTDIR\packages\server\data\*.*"
     StrCpy $0 "1"
@@ -138,6 +138,22 @@ Function .onInit
     ${EndIf}
     ${If} ${FileExists} "$LOCALAPPDATA\Marinara-Engine\data\*.*"
       StrCpy $INSTDIR "$LOCALAPPDATA\Marinara-Engine"
+      Return
+    ${EndIf}
+    ${If} ${FileExists} "$LOCALAPPDATA\MarinaraEngine\packages\server\data\*.*"
+      StrCpy $INSTDIR "$LOCALAPPDATA\MarinaraEngine"
+      Return
+    ${EndIf}
+    ${If} ${FileExists} "$LOCALAPPDATA\MarinaraEngine\data\*.*"
+      StrCpy $INSTDIR "$LOCALAPPDATA\MarinaraEngine"
+      Return
+    ${EndIf}
+    ${If} ${FileExists} "$PROFILE\Marinara-Engine\packages\server\data\*.*"
+      StrCpy $INSTDIR "$PROFILE\Marinara-Engine"
+      Return
+    ${EndIf}
+    ${If} ${FileExists} "$PROFILE\Marinara-Engine\data\*.*"
+      StrCpy $INSTDIR "$PROFILE\Marinara-Engine"
     ${EndIf}
   ${EndIf}
 FunctionEnd
@@ -162,15 +178,15 @@ Function WarnSameDirectoryReinstall
     Return
   ${EndIf}
   ${If} $USER_DATA_PATHS == ""
-    StrCpy $USER_DATA_PATHS "$\r$\n$INSTDIR\packages\server\data (if present)$\r$\n$INSTDIR\data (older installs, if present)"
+    StrCpy $USER_DATA_PATHS "$\r$\n$INSTDIR\packages\server\data (if you have existing data)$\r$\n$INSTDIR\data (older installs, if present)"
   ${EndIf}
 
   MessageBox MB_YESNO|MB_ICONEXCLAMATION "\
 You are reinstalling ${APP_NAME} into the same folder:$\r$\n\
 $INSTDIR$\r$\n$\r$\n\
-Before continuing, back up the Marinara data folder(s) below if you want to keep chats, characters, images, and settings:$\r$\n\
+Before continuing, copy the Marinara data folder(s) below to a backup location outside this install folder if you want to keep chats, characters, images, and settings:$\r$\n\
 $USER_DATA_PATHS$\r$\n$\r$\n\
-Legacy SQL installs store chats and characters in marinara-engine.db, plus possible .db-wal and .db-shm files, inside packages\server\data.$\r$\n$\r$\n\
+If a data folder contains marinara-engine.db, copy it together with marinara-engine.db-wal and marinara-engine.db-shm if present.$\r$\n$\r$\n\
 Continue anyway?" IDYES continueReinstallWarning
   Abort
 
@@ -198,8 +214,9 @@ FunctionEnd
 ; ──────────────────────────────────────────────
 Section "Install" SecInstall
   ; NSIS cannot infer the repository clone and pnpm dependency footprint from
-  ; the tiny embedded installer payload, so declare a realistic install size.
-  AddSize 3145728
+  ; the tiny embedded installer payload. A local fresh build measured about
+  ; 2.16 GiB, so reserve a 2.5 GiB installer footprint with headroom.
+  AddSize 2621440
 
   SetOutPath "$INSTDIR"
   SetDetailsPrint both
@@ -654,8 +671,7 @@ ${APP_URL}"
   DetailPrint ""
   DetailPrint "═══ Step 3/6: Installing dependencies ═══"
   DetailPrint ""
-  DetailPrint "Running pnpm install (this may take 2-5 minutes)..."
-  DetailPrint "This installs app dependencies and can create many small folders; that is normal and is not your chat or character count."
+  DetailPrint "Running pnpm install (this may take 2-5 minutes and creates dependency folders)..."
   ${If} $PNPM_RUNNER == "corepack"
     nsExec::ExecToLog 'cmd /c corepack pnpm@${PNPM_VERSION} install'
     Pop $0
