@@ -378,15 +378,6 @@ function audioFormatMimeType(format: string): string {
   }
 }
 
-function elevenLabsOutputFormat(format: string): string {
-  switch (format) {
-    case "wav":
-      return "wav";
-    default:
-      return "mp3_44100_128";
-  }
-}
-
 function buildSpeechInstructions(input: { speaker?: string; tone?: string; includeSpeaker?: boolean }) {
   const parts: string[] = [];
   if (input.includeSpeaker !== false && input.speaker?.trim()) {
@@ -618,7 +609,7 @@ export async function ttsRoutes(app: FastifyInstance) {
       : usePocketTtsSpeech
         ? `${base}/tts`
         : cfg.source === "elevenlabs"
-          ? `${elevenLabsApiRoot(base)}/v1/text-to-speech/${encodeURIComponent(requestVoice)}?output_format=${elevenLabsOutputFormat(audioFormat)}`
+          ? `${elevenLabsApiRoot(base)}/v1/text-to-speech/${encodeURIComponent(requestVoice)}?output_format=mp3_44100_128`
           : `${base}/audio/speech`;
     const providerText = cfg.source === "elevenlabs" ? buildElevenLabsTextInput(text, tone) : text;
     const elevenLabsLanguageCode = cfg.elevenLabsLanguageCode?.trim();

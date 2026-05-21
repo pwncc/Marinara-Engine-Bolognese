@@ -971,7 +971,7 @@ export function TTSConfigCard() {
             </FieldRow>
           )}
 
-          {/* Audio Format */}
+          {source !== "elevenlabs" && (
           <FieldRow
             label="Audio Format"
             help="Output audio format. WAV are useful for local/self-hosted TTS servers that do not support MP3."
@@ -989,6 +989,7 @@ export function TTSConfigCard() {
               <option value="wav">WAV</option>
             </select>
           </FieldRow>
+          )}
 
           {source === "elevenlabs" && (
             <FieldRow
