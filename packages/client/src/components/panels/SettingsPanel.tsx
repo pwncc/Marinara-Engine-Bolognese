@@ -78,6 +78,7 @@ import { TrackerSizeTierIcon } from "../ui/TrackerSizeTierIcon";
 import { ImageUploadDropzone } from "../ui/ImageUploadDropzone";
 import { ConversationSoundSetting, ToggleSetting } from "./settings/SettingControls";
 import { TrackerCardColorSettings } from "./settings/TrackerCardColorSettings";
+import { PromptOverridesEditor } from "./settings/PromptOverridesEditor";
 import { DraftNumberInput } from "../ui/DraftNumberInput";
 import { ExportFormatDialog, type ExportFormatChoice } from "../ui/ExportFormatDialog";
 import { inspectCharacterFilesForEmbeddedLorebooks } from "../../lib/character-import";
@@ -4048,6 +4049,8 @@ function AdvancedSettings() {
           />
         </div>
       </div>
+
+      <PromptOverridesEditor />
 
       <div className="retro-divider" />
       <div
