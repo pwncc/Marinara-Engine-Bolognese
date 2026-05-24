@@ -83,7 +83,7 @@ impl AppState {
             if !default_data.exists() {
                 continue;
             }
-            seed_bundled_defaults(&storage, &default_data)?;
+            seed_bundled_defaults(storage, &default_data)?;
             game_assets.seed_missing_from(&default_data.join("game-assets"))?;
             backgrounds.seed_missing_from(&default_data.join("backgrounds"))?;
         }
