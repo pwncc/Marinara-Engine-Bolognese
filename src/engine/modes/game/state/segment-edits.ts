@@ -3,9 +3,8 @@ import { formatSkillCheckResultSummary } from "../../../shared/scoring/skill-che
 
 /**
  * Strip GM command tags from message content.
- * Mirrors the client's `stripGmTagsKeepReadables` (minus readable
- * preservation which is irrelevant for segment editing). Resolved skill checks
- * are preserved as plain text because the roll result is canonical history.
+ * Mirrors the client's `stripGmTagsKeepReadables`. Resolved skill checks are
+ * preserved as plain text because the roll result is canonical history.
  */
 export function stripGmCommandTags(content: string): string {
   let text = preserveResolvedSkillCheckResults(content)
@@ -154,7 +153,7 @@ function stripUnknownBracketTags(text: string, keep?: (tagName: string) => boole
       let cursor = index + 1;
       while (cursor < text.length && /[A-Za-z0-9_]/.test(text[cursor]!)) cursor += 1;
       const tagName = text.slice(index + 1, cursor);
-      if (cursor > index + 1 && text[cursor] === ":" && (!keep || !keep(tagName))) {
+      if (cursor > index + 1 && text[cursor] === ":") {
         let depth = 1;
         let inString: '"' | "'" | null = null;
         let escaped = false;
@@ -184,6 +183,9 @@ function stripUnknownBracketTags(text: string, keep?: (tagName: string) => boole
           }
         }
         if (end < text.length) {
+          if (keep?.(tagName)) {
+            out += text.slice(index, end + 1);
+          }
           index = end + 1;
           continue;
         }

@@ -14,6 +14,12 @@ describe("game segment edit command stripping", () => {
     ).toBe("Read this. [Note: nested [clue] text]");
   });
 
+  it("keeps unknown-looking text inside readable tag payloads", () => {
+    expect(stripGmCommandTags('[Note: Keep literal [debug: {"x":1}] text] [debug: {"drop":true}]')).toBe(
+      '[Note: Keep literal [debug: {"x":1}] text]',
+    );
+  });
+
   it("does not leak unknown nested tag fragments when applying segment edits", () => {
     const content = [
       'The room shifts. [debug: {"items":["torch"]}]',
