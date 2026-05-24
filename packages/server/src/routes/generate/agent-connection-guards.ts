@@ -1,7 +1,7 @@
 import { LOCAL_SIDECAR_CONNECTION_ID } from "@marinara-engine/shared";
 
 export type AgentConnectionWarning = {
-  code: "local_sidecar_unavailable" | "default_agent_connection_active";
+  code: "local_sidecar_unavailable" | "default_agent_connection_active" | "dangling_agent_connection";
   severity: "warning";
   message: string;
   agentNames: string[];
@@ -43,6 +43,19 @@ export function buildLocalSidecarUnavailableWarning(agentNames: string[]): Agent
     agentNames: normalizedNames,
     fallbackPrevented: true,
     message: `${agentList} requested Local Model, but the local sidecar is unavailable. Marinara skipped ${noun} instead of falling back to a paid API connection.`,
+  };
+}
+
+export function buildDanglingAgentConnectionWarning(agentNames: string[]): AgentConnectionWarning {
+  const normalizedNames = agentNames.length > 0 ? agentNames : ["Agent"];
+  const agentList = formatAgentNameList(normalizedNames);
+  const noun = normalizedNames.length === 1 ? "this agent" : "these agents";
+
+  return {
+    code: "dangling_agent_connection",
+    severity: "warning",
+    agentNames: normalizedNames,
+    message: `${agentList} reference an API connection that no longer exists. Marinara skipped ${noun} for this turn. Open Agent settings and choose a valid connection.`,
   };
 }
 

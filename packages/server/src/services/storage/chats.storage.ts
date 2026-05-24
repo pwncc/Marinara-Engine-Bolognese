@@ -317,6 +317,21 @@ export function createChatsStorage(db: DB) {
       return db.select().from(chats).where(eq(chats.groupId, groupId)).orderBy(desc(chats.updatedAt));
     },
 
+    async listByConnectionId(connectionId: string) {
+      const rows = await db
+        .select({ id: chats.id, name: chats.name })
+        .from(chats)
+        .where(eq(chats.connectionId, connectionId));
+      return rows;
+    },
+
+    async clearConnectionId(connectionId: string) {
+      await db
+        .update(chats)
+        .set({ connectionId: null, updatedAt: now() })
+        .where(eq(chats.connectionId, connectionId));
+    },
+
     async updateMetadata(id: string, metadata: Record<string, unknown>) {
       await db
         .update(chats)

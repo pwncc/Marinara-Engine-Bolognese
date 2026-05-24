@@ -205,6 +205,7 @@ import { registerRetryAgentsRoute } from "./generate/retry-agents-route.js";
 import { fingerprintChatSummary } from "../services/prompt/chat-summary-fingerprint.js";
 import { sendSseEvent, startSseReply, trySendSseEvent } from "./generate/sse.js";
 import {
+  buildDanglingAgentConnectionWarning,
   buildDefaultAgentConnectionWarning,
   buildLocalSidecarUnavailableWarning,
   isLocalSidecarConnectionId,
@@ -3966,6 +3967,7 @@ export async function generateRoutes(app: FastifyInstance) {
 
         const agentConnectionWarnings: AgentConnectionWarning[] = [];
         const skippedLocalSidecarAgents: string[] = [];
+        const danglingConnectionAgents: string[] = [];
         const defaultAgentConnectionAgents: string[] = [];
         let responseOrchestratorSelectorAgent: ResolvedAgent | null = null;
         let responseOrchestratorSelectorUnavailable = false;
@@ -4026,6 +4028,17 @@ export async function generateRoutes(app: FastifyInstance) {
                     maxParallelJobs: agentMaxParallelJobs,
                   });
                 }
+              } else {
+                // Agent points at a connection that no longer exists (likely deleted).
+                // Skip it for this turn and surface a warning so the user can fix the config.
+                danglingConnectionAgents.push(cfg.name ?? cfg.type);
+                logger.warn(
+                  "[generate] Skipping agent %s for chat %s: connectionId %s does not resolve to a known connection",
+                  cfg.type,
+                  input.chatId,
+                  effectiveConnectionId,
+                );
+                continue;
               }
             }
           }
@@ -4045,6 +4058,9 @@ export async function generateRoutes(app: FastifyInstance) {
         }
         if (skippedLocalSidecarAgents.length > 0) {
           agentConnectionWarnings.push(buildLocalSidecarUnavailableWarning(skippedLocalSidecarAgents));
+        }
+        if (danglingConnectionAgents.length > 0) {
+          agentConnectionWarnings.push(buildDanglingAgentConnectionWarning(danglingConnectionAgents));
         }
 
         // Built-in agents with no DB row → use defaults only if explicitly in the per-chat list

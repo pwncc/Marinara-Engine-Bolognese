@@ -216,6 +216,22 @@ export function createAgentsStorage(db: DB) {
       await db.delete(agentConfigs).where(eq(agentConfigs.id, id));
     },
 
+    async listByConnectionId(connectionId: string) {
+      const rows = await db
+        .select({ id: agentConfigs.id, type: agentConfigs.type, name: agentConfigs.name })
+        .from(agentConfigs)
+        .where(eq(agentConfigs.connectionId, connectionId));
+      return rows;
+    },
+
+    async clearConnectionId(connectionId: string) {
+      const result = await db
+        .update(agentConfigs)
+        .set({ connectionId: null, updatedAt: now() })
+        .where(eq(agentConfigs.connectionId, connectionId));
+      return result;
+    },
+
     // ── Agent Runs ──
 
     async saveRun(input: { agentConfigId: string; chatId: string; messageId: string; result: AgentResult }) {

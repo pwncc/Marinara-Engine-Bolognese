@@ -4,6 +4,8 @@
 import type { FastifyInstance } from "fastify";
 import { MODEL_LISTS, createConnectionSchema, inferImageSource } from "@marinara-engine/shared";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
+import { createAgentsStorage } from "../services/storage/agents.storage.js";
+import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { fetchOpenAIChatGPTModels, getOpenAIChatGPTAuth } from "../services/llm/openai-chatgpt-auth.js";
 import { buildGoogleVertexModelUrl, googleAuthHeadersForVertex } from "../services/llm/providers/google.provider.js";
@@ -184,6 +186,8 @@ function knownStabilityImageModels() {
 
 export async function connectionsRoutes(app: FastifyInstance) {
   const storage = createConnectionsStorage(app.db);
+  const agentsStorage = createAgentsStorage(app.db);
+  const chatsStorage = createChatsStorage(app.db);
 
   app.get("/", async () => {
     return storage.list();
@@ -219,8 +223,44 @@ export async function connectionsRoutes(app: FastifyInstance) {
     return { success: true };
   });
 
-  app.delete<{ Params: { id: string } }>("/:id", async (req, reply) => {
+  app.delete<{ Params: { id: string }; Querystring: { force?: string } }>("/:id", async (req, reply) => {
+    const existing = await storage.getById(req.params.id);
+    if (!existing) return reply.status(404).send({ error: "Connection not found" });
+
+    const force = req.query.force === "true";
+    const [referencingAgents, referencingChats] = await Promise.all([
+      agentsStorage.listByConnectionId(req.params.id),
+      chatsStorage.listByConnectionId(req.params.id),
+    ]);
+
+    if ((referencingAgents.length > 0 || referencingChats.length > 0) && !force) {
+      return reply.status(409).send({
+        error: "Connection is in use",
+        message:
+          "This connection is referenced by other records. Repoint them first, " +
+          "or call DELETE again with ?force=true to clear those references and delete.",
+        agents: referencingAgents,
+        chats: referencingChats,
+      });
+    }
+
+    if (referencingAgents.length > 0) {
+      await agentsStorage.clearConnectionId(req.params.id);
+    }
+    if (referencingChats.length > 0) {
+      await chatsStorage.clearConnectionId(req.params.id);
+    }
+
     await storage.remove(req.params.id);
+
+    if (force && (referencingAgents.length > 0 || referencingChats.length > 0)) {
+      return reply.status(200).send({
+        cleared: {
+          agents: referencingAgents.length,
+          chats: referencingChats.length,
+        },
+      });
+    }
     return reply.status(204).send();
   });
 
