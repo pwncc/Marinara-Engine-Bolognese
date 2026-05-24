@@ -45,7 +45,11 @@ import { useTranslate } from "../../../../../shared/hooks/use-translate";
 import { storageApi } from "../../../../../shared/api/storage-api";
 import { ttsService } from "../../../../../shared/lib/tts-service";
 import { useTTSConfig } from "../../../../../shared/hooks/use-tts";
-import { buildTTSMessageText, resolveTTSVoiceForSpeaker } from "../../../../../shared/lib/tts-dialogue";
+import {
+  buildTTSMessageText,
+  clientSidePlaybackRate,
+  resolveTTSVoiceForSpeaker,
+} from "../../../../../shared/lib/tts-dialogue";
 import { DIALOGUE_QUOTE_PATTERN_SOURCE, HTML_SAFE_DIALOGUE_QUOTE_PATTERN_SOURCE } from "../../../../../shared/lib/dialogue-quotes";
 import DOMPurify from "dompurify";
 import type { CharacterMap, MessageSelectionToggle, PersonaInfo } from "../types";
@@ -182,7 +186,9 @@ function renderWithSpeakerTags(
 ): ReactNode[] {
   const renderLine = (line: string, color = defaultDialogueColor) => highlightDialogue(line, color, boldDialogue);
 
-  if (!speakerColorMap || !SPEAKER_TAG_RE.test(text)) {
+  // Tag stripping is a side-effect of the loop, not the colour logic, so the loop
+  // must run whenever tags are present — otherwise `<speaker="…">` renders as text.
+  if (!SPEAKER_TAG_RE.test(text)) {
     return renderLine(text, defaultDialogueColor);
   }
   SPEAKER_TAG_RE.lastIndex = 0;
@@ -199,7 +205,7 @@ function renderWithSpeakerTags(
     }
     const speakerName = match[1]!;
     const dialogue = match[2]!;
-    const speakerColor = speakerColorMap.get(speakerName) ?? defaultDialogueColor;
+    const speakerColor = speakerColorMap?.get(speakerName) ?? defaultDialogueColor;
     // Render the dialogue content (without the tags) using the speaker's color
     nodes.push(<span key={`s${key++}`}>{renderLine(dialogue, speakerColor)}</span>);
     lastIndex = match.index + match[0].length;
@@ -765,9 +771,13 @@ export const ChatMessage = memo(function ChatMessage({
       ttsService.stop();
     } else {
       if (!ttsSpeakText) return;
-      void ttsService.speak(ttsSpeakText, message.id, { speaker: ttsSpeakerName, voice: ttsVoice });
+      void ttsService.speak(ttsSpeakText, message.id, {
+        speaker: ttsSpeakerName,
+        voice: ttsVoice,
+        playbackRate: clientSidePlaybackRate(ttsConfig),
+      });
     }
-  }, [message.id, ttsSpeakText, ttsSpeakerName, ttsVoice]);
+  }, [message.id, ttsSpeakText, ttsSpeakerName, ttsVoice, ttsConfig]);
 
   const handlePauseResumeTTS = useCallback(() => {
     if (ttsService.getActiveId() !== message.id) return;

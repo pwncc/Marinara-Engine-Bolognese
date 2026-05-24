@@ -216,26 +216,24 @@ fn profile_collections(state: &AppState) -> AppResult<Map<String, Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use crate::state::AppState;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn temp_data_dir(test_name: &str) -> PathBuf {
+    fn test_state(label: &str) -> AppState {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock should be after epoch")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "marinara-profile-import-{test_name}-{}-{nonce}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&path).expect("temporary profile data dir should be created");
-        path
+        let path = std::env::temp_dir().join(format!("marinara-profile-import-{label}-{nonce}"));
+        if path.exists() {
+            std::fs::remove_dir_all(&path).expect("stale temp profile dir should be removable");
+        }
+        AppState::from_data_dir(path, Vec::new()).expect("test app state should initialize")
     }
 
     #[test]
     fn profile_import_rolls_back_collections_when_asset_install_fails() {
-        let data_dir = temp_data_dir("asset-install-fails");
-        let state = AppState::from_data_dir(&data_dir, Vec::new()).unwrap();
+        let state = test_state("asset-install-fails");
         state
             .storage
             .replace_all("characters", vec![json!({ "id": "old-character" })])
@@ -258,7 +256,47 @@ mod tests {
             state.storage.list("characters").unwrap()[0]["id"],
             "old-character"
         );
+    }
 
-        fs::remove_dir_all(data_dir).unwrap();
+    #[test]
+    fn profile_import_legacy_file_storage_app_settings_key_sets_ui_id() {
+        let state = test_state("legacy-file-storage-app-settings");
+        state
+            .storage
+            .upsert_with_id(
+                "app-settings",
+                "ui",
+                json!({ "value": { "theme": "seeded" } }),
+            )
+            .expect("seeded ui settings should write");
+
+        import_profile(
+            &state,
+            json!({
+                "type": "marinara_profile",
+                "version": 1,
+                "data": {
+                    "fileStorage": {
+                        "tables": {
+                            "app_settings": [
+                                {
+                                    "key": "ui",
+                                    "value": { "theme": "imported" }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }),
+        )
+        .expect("legacy file-storage profile import should succeed");
+
+        let ui = state
+            .storage
+            .get("app-settings", "ui")
+            .expect("ui settings lookup should not fail")
+            .expect("imported ui settings should be addressable by id");
+        assert_eq!(ui["id"], "ui");
+        assert_eq!(ui["value"]["theme"], "imported");
     }
 }

@@ -21,13 +21,13 @@ The pack's `docs/ARCHITECTURE_MAP.md` reference maps to:
 
 This repo currently has no root `CHANGELOG.md`. Do not invent one just because a source card mentions changelog discipline.
 
-For user-facing or PR-affecting changes, update the repo-defined docs, `updates/`, or release-note source only when one exists and the change belongs there. Otherwise report `Docs/updates: not needed` or `Release notes: not applicable` with the reason.
+For user-facing or PR-affecting changes, update the repo-defined docs or release-note source only when one exists and the change belongs there. Otherwise report `Docs/release notes: not needed` or `Release notes: not applicable` with the reason.
 
 ## Scratch And Durable State
 
 Use temporary/session-local proof notes for transient work. Do not add a new `scratch/` convention unless the task explicitly needs a local throwaway artifact.
 
-Use `updates/` for durable bug ownership, active work status, reusable debugging lessons, and architecture decisions when `AGENTS.md` says the information should persist.
+Do not use repo-local update folders for status tracking. Durable bug ownership and active work status belong in GitHub issues or PRs; reusable debugging lessons and architecture decisions belong in repo docs or skill references only when they change durable guidance.
 
 Do not store secrets, private user data, bulky raw logs, or machine-local paths in durable repo files.
 
@@ -41,9 +41,9 @@ Do not treat missing pack automation as a blocker. Treat it as a reason to make 
 
 ## Branches And PR Targets
 
-The source pack has Marinara assumptions about `Pasta-Devs/Marinara-Engine`, `staging`, and team-branch workflow. This checkout is `Pasta-Devs/Marinara-Engine-Refactor` on `main`.
+The source pack has Marinara assumptions about legacy `staging` and team-branch workflow. This checkout is `Pasta-Devs/Marinara-Engine` on the `refactor` branch unless the current task says otherwise.
 
-Always verify `git status --short --branch`, `git branch --show-current`, and `git remote -v` before shipping. Do not assume `staging`, fork workflow, or team-branch workflow unless the current repo and user request confirm it.
+Always verify `git status --short --branch`, `git branch --show-current`, and `git remote -v` before shipping. Do not assume `staging`, `main`, fork workflow, or team-branch workflow unless the current repo and user request confirm it.
 
 Never push directly to protected branches or force-push without explicit approval.
 

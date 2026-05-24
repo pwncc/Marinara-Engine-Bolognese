@@ -535,7 +535,12 @@ mod tests {
         let error = storage
             .replace_all_many_and_then(
                 vec![("characters", vec![json!({ "id": "new-character" })])],
-                || Err(AppError::new("asset_install_failed", "asset install failed")),
+                || {
+                    Err(AppError::new(
+                        "asset_install_failed",
+                        "asset install failed",
+                    ))
+                },
             )
             .expect_err("after-install failure should reject the batch");
 

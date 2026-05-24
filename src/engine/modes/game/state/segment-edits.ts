@@ -3,9 +3,8 @@ import { formatSkillCheckResultSummary } from "../../../shared/scoring/skill-che
 
 /**
  * Strip GM command tags from message content.
- * Mirrors the client's `stripGmTagsKeepReadables` (minus readable
- * preservation which is irrelevant for segment editing). Resolved skill checks
- * are preserved as plain text because the roll result is canonical history.
+ * Mirrors the client's `stripGmTagsKeepReadables`. Resolved skill checks are
+ * preserved as plain text because the roll result is canonical history.
  */
 export function stripGmCommandTags(content: string): string {
   let text = preserveResolvedSkillCheckResults(content)
@@ -32,7 +31,7 @@ export function stripGmCommandTags(content: string): string {
   text = stripMapUpdateTag(text);
   text = stripBalancedTag(text, "[choices:");
   // Catch-all for unknown [tag: value] (but NOT [Name] or [Note:/Book:])
-  text = text.replace(/\[(?!Note:|Book:)\w+:[^\]]*\]/g, "");
+  text = stripUnknownBracketTags(text, (tagName) => /^note$/i.test(tagName) || /^book$/i.test(tagName));
   text = stripDanglingTagClosers(text);
   return text.trim();
 }
@@ -144,6 +143,58 @@ function stripBalancedTag(text: string, tagPrefix: string): string {
 
 function stripMapUpdateTag(text: string): string {
   return stripBalancedTag(text, "[map_update:").replace(/\[map_update:[^\r\n]*(?:\r?\n|$)/gi, "");
+}
+
+function stripUnknownBracketTags(text: string, keep?: (tagName: string) => boolean): string {
+  let out = "";
+  let index = 0;
+  while (index < text.length) {
+    if (text[index] === "[") {
+      let cursor = index + 1;
+      while (cursor < text.length && /[A-Za-z0-9_]/.test(text[cursor]!)) cursor += 1;
+      const tagName = text.slice(index + 1, cursor);
+      if (cursor > index + 1 && text[cursor] === ":") {
+        let depth = 1;
+        let inString: '"' | "'" | null = null;
+        let escaped = false;
+        let end = cursor + 1;
+        for (; end < text.length; end += 1) {
+          const char = text[end]!;
+          if (escaped) {
+            escaped = false;
+            continue;
+          }
+          if (char === "\\") {
+            escaped = true;
+            continue;
+          }
+          if (inString) {
+            if (char === inString) inString = null;
+            continue;
+          }
+          if (char === '"' || char === "'") {
+            inString = char;
+            continue;
+          }
+          if (char === "[") depth += 1;
+          if (char === "]") {
+            depth -= 1;
+            if (depth === 0) break;
+          }
+        }
+        if (end < text.length) {
+          if (keep?.(tagName)) {
+            out += text.slice(index, end + 1);
+          }
+          index = end + 1;
+          continue;
+        }
+      }
+    }
+    out += text[index];
+    index += 1;
+  }
+  return out;
 }
 
 // ── Segment parsing (mirrors client parseNarrationSegments indexing) ──

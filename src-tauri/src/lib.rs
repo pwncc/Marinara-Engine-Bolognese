@@ -1,5 +1,6 @@
 pub mod app;
 pub(crate) mod builtins;
+pub(crate) mod connection_refs;
 pub mod http_dispatch;
 pub mod http_server;
 mod seed_defaults;

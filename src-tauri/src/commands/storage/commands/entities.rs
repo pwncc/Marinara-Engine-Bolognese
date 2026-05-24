@@ -113,7 +113,11 @@ pub fn storage_delete(
     state: State<'_, AppState>,
     entity: String,
     id: String,
+    force: Option<bool>,
 ) -> Result<Value, AppError> {
+    if entity == "connections" {
+        return crate::connection_refs::delete_connection(&state, &id, force.unwrap_or(false));
+    }
     if is_protected_record(&entity, &id) {
         return Err(AppError::invalid_input(
             "Built-in Professor Mari cannot be deleted",
