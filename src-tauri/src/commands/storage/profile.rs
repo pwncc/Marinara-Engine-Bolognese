@@ -5,7 +5,7 @@ mod legacy;
 #[path = "profile/zip_import.rs"]
 mod zip_import;
 
-use self::assets::{profile_assets, restore_profile_assets};
+use self::assets::{profile_assets, restore_profile_assets, RestoredProfileAssets};
 use self::legacy::import_legacy_profile_tables;
 use self::zip_import::import_profile_zip;
 use super::shared::*;
@@ -136,28 +136,64 @@ fn import_profile_collections(
     data: &Map<String, Value>,
     collections: &Map<String, Value>,
 ) -> AppResult<Value> {
-    let restored_assets = restore_profile_assets(state, data.get("assets"))?;
-    import_profile_collections_with_restored_assets(state, collections, restored_assets)
+    let mut restored_assets = restore_profile_assets(state, data.get("assets"))?;
+    let restored_count = restored_assets.restored();
+    let result =
+        import_profile_collections_with_restored_assets(state, collections, restored_count, || {
+            restored_assets.install()
+        });
+    finish_profile_import_assets(restored_assets, result)
 }
 
-pub(super) fn import_profile_collections_with_restored_assets(
+pub(super) fn import_profile_collections_with_restored_assets<F>(
     state: &AppState,
     collections: &Map<String, Value>,
     restored_assets: usize,
-) -> AppResult<Value> {
+    install_assets: F,
+) -> AppResult<Value>
+where
+    F: FnOnce() -> AppResult<()>,
+{
     let mut imported = Map::new();
+    let mut replacements = Vec::new();
     for collection in PROFILE_COLLECTIONS {
         let rows = collections
             .get(*collection)
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        state.storage.replace_all(collection, rows.clone())?;
         imported.insert((*collection).to_string(), json!(rows.len()));
+        replacements.push((*collection, rows));
     }
+    state
+        .storage
+        .replace_all_many_and_then(replacements, install_assets)?;
     imported.insert("files".to_string(), json!(restored_assets));
     insert_profile_import_aliases(&mut imported);
     Ok(json!({ "success": true, "imported": imported }))
+}
+
+fn finish_profile_import_assets(
+    restored_assets: RestoredProfileAssets,
+    result: AppResult<Value>,
+) -> AppResult<Value> {
+    match result {
+        Ok(value) => {
+            restored_assets.commit();
+            Ok(value)
+        }
+        Err(error) => {
+            if let Err(rollback_error) = restored_assets.rollback() {
+                return Err(AppError::new(
+                    "profile_import_rollback_failed",
+                    format!(
+                        "{error}; additionally failed to roll back profile assets: {rollback_error}"
+                    ),
+                ));
+            }
+            Err(error)
+        }
+    }
 }
 
 fn insert_profile_import_aliases(imported: &mut Map<String, Value>) {
@@ -193,6 +229,33 @@ mod tests {
             std::fs::remove_dir_all(&path).expect("stale temp profile dir should be removable");
         }
         AppState::from_data_dir(path, Vec::new()).expect("test app state should initialize")
+    }
+
+    #[test]
+    fn profile_import_rolls_back_collections_when_asset_install_fails() {
+        let state = test_state("asset-install-fails");
+        state
+            .storage
+            .replace_all("characters", vec![json!({ "id": "old-character" })])
+            .unwrap();
+
+        let mut collections = Map::new();
+        collections.insert("characters".to_string(), json!([{ "id": "new-character" }]));
+
+        let error =
+            import_profile_collections_with_restored_assets(&state, &collections, 0, || {
+                Err(AppError::new(
+                    "asset_install_failed",
+                    "asset install failed",
+                ))
+            })
+            .expect_err("asset install failure should reject the import");
+
+        assert_eq!(error.code, "asset_install_failed");
+        assert_eq!(
+            state.storage.list("characters").unwrap()[0]["id"],
+            "old-character"
+        );
     }
 
     #[test]
