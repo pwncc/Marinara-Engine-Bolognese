@@ -893,8 +893,20 @@ export function useGenerate() {
     async (chatId: string, agentTypes?: string[], options?: Record<string, unknown>) => {
       try {
         await assertChatCanGenerate(queryClient, chatId);
-        useAgentStore.getState().setProcessing(true);
-        useAgentStore.getState().clearFailedAgentTypes();
+        const agentStore = useAgentStore.getState();
+        agentStore.setProcessing(true);
+        if (agentTypes && agentTypes.length > 0) {
+          // Targeted retry: clear only the entries for agents we're about to re-run, so
+          // prior-turn failures for agents that aren't being retried stay visible. If any
+          // of the retried agents fail again, addFailedAgentFailure in applyAgentResultEffects
+          // will repopulate them via the result loop below.
+          const retrySet = new Set(agentTypes);
+          const remaining = agentStore.failedAgentFailures.filter((failure) => !retrySet.has(failure.agentType));
+          agentStore.setFailedAgentFailures(remaining);
+        } else {
+          // Full retry: clear everything; the result loop repopulates anything still failing.
+          agentStore.clearFailedAgentTypes();
+        }
         const results = await retryGenerationAgents(
           { storage: storageApi, llm: llmApi, integrations: integrationGateway },
           { chatId, agentTypes, options },
