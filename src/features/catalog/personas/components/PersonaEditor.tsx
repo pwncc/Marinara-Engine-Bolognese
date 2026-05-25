@@ -53,6 +53,7 @@ import {
 import {
   useCharacterSprites,
   useUploadSprite,
+  useUploadSprites,
   useDeleteSprite,
   useCleanupSavedSprites,
   useRestoreSpriteCleanupPoint,
@@ -104,10 +105,9 @@ interface PersonaFormData {
   dialogueColor: string;
   boxColor: string;
   trackerCardColors: TrackerCardColorConfig;
-  personaStats: string;
+  personaStats: PersonaStatsData | null;
   altDescriptions: AltDescriptionEntry[];
   tags: string[];
-  /** Avatar crop region parsed from the persona row's JSON-encoded `avatarCrop`. */
   avatarCrop: AvatarCrop | null;
 }
 
@@ -121,17 +121,16 @@ interface PersonaRow {
   backstory: string;
   appearance: string;
   avatarPath: string | null;
-  /** JSON-encoded AvatarCrop, or empty string when unset. */
-  avatarCrop?: string;
+  avatarCrop?: AvatarCrop | null;
   isActive: string | boolean;
   nameColor?: string;
   dialogueColor?: string;
   boxColor?: string;
   trackerCardColors?: string;
   [TRACKER_CARD_COLOR_PREVIEW_BASE_FIELD]?: string;
-  personaStats?: string;
-  altDescriptions?: string;
-  tags?: string;
+  personaStats?: Record<string, unknown> | string;
+  altDescriptions?: AltDescriptionEntry[];
+  tags?: string[];
 }
 
 export function PersonaEditor() {
@@ -182,47 +181,30 @@ export function PersonaEditor() {
 
     loadedPersonaIdRef.current = rawPersona.id;
 
-    let parsedAltDescs: AltDescriptionEntry[] = [];
-    try {
-      const raw = rawPersona.altDescriptions;
-      if (raw) parsedAltDescs = JSON.parse(raw);
-    } catch {
-      /* ignore */
-    }
+    const parsedAltDescs: AltDescriptionEntry[] = Array.isArray(rawPersona.altDescriptions) ? rawPersona.altDescriptions : [];
 
     let parsedAvatarCrop: AvatarCrop | null = null;
-    try {
-      const raw = rawPersona.avatarCrop;
-      if (raw) {
-        const obj = JSON.parse(raw);
-        // Defensive: malformed crop data is dropped so the editor falls back to defaults.
-        if (obj && typeof obj === "object") {
-          // Validate geometry — finite, positive, within normalized bounds.
-          // Anything malformed is dropped so the editor falls back to defaults
-          // instead of producing NaN transforms or an off-screen overlay.
-          if (
-            Number.isFinite(obj.srcX) &&
-            Number.isFinite(obj.srcY) &&
-            Number.isFinite(obj.srcWidth) &&
-            Number.isFinite(obj.srcHeight) &&
-            obj.srcWidth > 0 &&
-            obj.srcHeight > 0 &&
-            obj.srcX >= 0 &&
-            obj.srcY >= 0 &&
-            obj.srcX + obj.srcWidth <= 1.001 &&
-            obj.srcY + obj.srcHeight <= 1.001
-          ) {
-            parsedAvatarCrop = {
-              srcX: obj.srcX,
-              srcY: obj.srcY,
-              srcWidth: obj.srcWidth,
-              srcHeight: obj.srcHeight,
-            };
-          }
-        }
+    const obj = rawPersona.avatarCrop;
+    if (obj && typeof obj === "object") {
+      if (
+        Number.isFinite(obj.srcX) &&
+        Number.isFinite(obj.srcY) &&
+        Number.isFinite(obj.srcWidth) &&
+        Number.isFinite(obj.srcHeight) &&
+        obj.srcWidth > 0 &&
+        obj.srcHeight > 0 &&
+        obj.srcX >= 0 &&
+        obj.srcY >= 0 &&
+        obj.srcX + obj.srcWidth <= 1.001 &&
+        obj.srcY + obj.srcHeight <= 1.001
+      ) {
+        parsedAvatarCrop = {
+          srcX: obj.srcX,
+          srcY: obj.srcY,
+          srcWidth: obj.srcWidth,
+          srcHeight: obj.srcHeight,
+        };
       }
-    } catch {
-      /* ignore — empty / malformed crop just stays null */
     }
 
     const savedTrackerCardColors =
@@ -242,15 +224,12 @@ export function PersonaEditor() {
       dialogueColor: rawPersona.dialogueColor ?? "",
       boxColor: rawPersona.boxColor ?? "",
       trackerCardColors: parseTrackerCardColorConfig(savedTrackerCardColors),
-      personaStats: rawPersona.personaStats ?? "",
+      personaStats:
+        rawPersona.personaStats && typeof rawPersona.personaStats === "object"
+          ? (rawPersona.personaStats as unknown as PersonaStatsData)
+          : null,
       altDescriptions: parsedAltDescs,
-      tags: (() => {
-        try {
-          return rawPersona.tags ? JSON.parse(rawPersona.tags) : [];
-        } catch {
-          return [];
-        }
-      })(),
+      tags: Array.isArray(rawPersona.tags) ? rawPersona.tags : [],
       avatarCrop: parsedAvatarCrop,
     });
     setAvatarPreview(rawPersona.avatarPath);
@@ -270,11 +249,10 @@ export function PersonaEditor() {
       await updatePersona.mutateAsync({
         id: personaId,
         ...rest,
-        altDescriptions: JSON.stringify(altDescriptions),
-        tags: JSON.stringify(tags),
+        altDescriptions,
+        tags,
         trackerCardColors: serializeTrackerCardColorConfig(formData.trackerCardColors),
-        // Persist as JSON string; empty string means "no crop".
-        avatarCrop: avatarCrop ? JSON.stringify(avatarCrop) : "",
+        avatarCrop: avatarCrop ?? null,
       });
       setDirty(false);
     } finally {
@@ -672,6 +650,7 @@ function PersonaSpritesTab({
   const { data: sprites, isLoading } = useCharacterSprites(personaId);
   const { data: spriteCapabilities } = useSpriteCapabilities();
   const uploadSprite = useUploadSprite();
+  const uploadSprites = useUploadSprites();
   const deleteSprite = useDeleteSprite();
   const cleanupSavedSprites = useCleanupSavedSprites();
   const restoreSpriteCleanupPoint = useRestoreSpriteCleanupPoint();
@@ -716,13 +695,13 @@ function PersonaSpritesTab({
   const cleanupEngineReason =
     spriteCapabilities?.cleanupEngine?.reason ?? "Sprite cleanup is not available.";
 
-  const normalizeExpressionForCategory = (raw: string) => {
+  const normalizeExpressionForCategory = (raw: string, forCategory: SpriteCategory = category) => {
     const cleaned = raw
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9_-]/g, "_");
     if (!cleaned) return "";
-    if (category === "full-body") {
+    if (forCategory === "full-body") {
       return cleaned.startsWith("full_") ? cleaned : `full_${cleaned}`;
     }
     return cleaned.replace(/^full_/, "");
@@ -767,25 +746,51 @@ function PersonaSpritesTab({
     if (imageFiles.length === 0) return;
 
     setFolderProgress({ done: 0, total: imageFiles.length });
-    for (let i = 0; i < imageFiles.length; i++) {
-      const file = imageFiles[i]!;
-      const expression = file.name.replace(/\.[^.]+$/, "").trim();
-      const normalized = normalizeExpressionForCategory(expression);
-      if (!normalized) continue;
-      const dataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.readAsDataURL(file);
-      });
-      try {
-        await uploadSprite.mutateAsync({ characterId: personaId, expression: normalized, image: dataUrl });
-      } catch {
-        /* skip */
+    try {
+      const uploads: Array<{ expression: string; image: string }> = [];
+      const folderCategory = category;
+      let skipped = 0;
+      for (let i = 0; i < imageFiles.length; i++) {
+        const file = imageFiles[i]!;
+        const expression = file.name.replace(/\.[^.]+$/, "").trim();
+        const normalized = normalizeExpressionForCategory(expression, folderCategory);
+        if (!normalized) {
+          skipped += 1;
+          setFolderProgress({ done: i + 1, total: imageFiles.length });
+          continue;
+        }
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error ?? new Error(`Failed to read ${file.name}`));
+          reader.readAsDataURL(file);
+        }).catch(() => {
+          skipped += 1;
+          return null;
+        });
+        if (dataUrl) {
+          uploads.push({ expression: normalized, image: dataUrl });
+        }
+        setFolderProgress({ done: i + 1, total: imageFiles.length });
       }
-      setFolderProgress({ done: i + 1, total: imageFiles.length });
+      if (uploads.length > 0) {
+        const result = await uploadSprites.mutateAsync({ characterId: personaId, sprites: uploads });
+        if (result.failed.length > 0 || skipped > 0) {
+          toast.warning(
+            `${result.failed.length + skipped} sprite${result.failed.length + skipped === 1 ? "" : "s"} could not be imported.`,
+          );
+        } else {
+          toast.success(`Imported ${result.imported} sprite${result.imported === 1 ? "" : "s"}.`);
+        }
+      } else if (skipped > 0) {
+        toast.error("No sprites could be imported.");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to import sprites.");
+    } finally {
+      setFolderProgress(null);
+      e.target.value = "";
     }
-    setFolderProgress(null);
-    e.target.value = "";
   };
 
   const handleDeleteSingleSprite = useCallback(async () => {
@@ -1594,18 +1599,10 @@ function PersonaStatsTab({
   formData: PersonaFormData;
   updateField: <K extends keyof PersonaFormData>(key: K, value: PersonaFormData[K]) => void;
 }) {
-  const parsed: PersonaStatsData = formData.personaStats
-    ? (() => {
-        try {
-          return JSON.parse(formData.personaStats) as PersonaStatsData;
-        } catch {
-          return DEFAULT_PERSONA_STATS;
-        }
-      })()
-    : DEFAULT_PERSONA_STATS;
+  const parsed: PersonaStatsData = formData.personaStats ?? DEFAULT_PERSONA_STATS;
 
   const save = (next: PersonaStatsData) => {
-    updateField("personaStats", JSON.stringify(next));
+    updateField("personaStats", next);
   };
 
   const updateBar = (index: number, field: string, value: string | number) => {

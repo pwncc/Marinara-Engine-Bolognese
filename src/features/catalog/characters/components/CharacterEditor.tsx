@@ -20,6 +20,7 @@ import {
   useUploadCharacterGalleryImage,
   useDeleteCharacterGalleryImage,
   useUploadSprite,
+  useUploadSprites,
   useDeleteSprite,
   useCleanupSavedSprites,
   useRestoreSpriteCleanupPoint,
@@ -120,7 +121,7 @@ interface AltDescriptionEntry {
 
 interface ParsedCharacter {
   id: string;
-  data: string;
+  data: CharacterData;
   comment: string;
   avatarPath: string | null;
   spriteFolderPath: string | null;
@@ -223,18 +224,10 @@ export function CharacterEditor() {
 
     loadedCharacterIdRef.current = char.id;
 
-    try {
-      const parsed = typeof char.data === "string" ? JSON.parse(char.data) : char.data;
-      setFormData(parsed as CharacterData);
-      setCharacterComment(char.comment ?? "");
-      setAvatarPreview(char.avatarPath);
-      setDirtyState(false);
-    } catch {
-      setFormData(null);
-      setCharacterComment("");
-      setAvatarPreview(null);
-      setDirtyState(false);
-    }
+    setFormData(char.data ?? null);
+    setCharacterComment(char.comment ?? "");
+    setAvatarPreview(char.avatarPath);
+    setDirtyState(false);
   }, [rawCharacter, setDirtyState]);
 
   const updateField = useCallback(<K extends keyof CharacterData>(key: K, value: CharacterData[K]) => {
@@ -464,7 +457,7 @@ export function CharacterEditor() {
 
     const rpgStats = formData.extensions.rpgStats as RPGStatsConfig | undefined;
     const personaStats = rpgStats
-      ? JSON.stringify({
+      ? {
           enabled: !!rpgStats.enabled,
           bars: [
             { name: "Satiety", value: 100, max: 100, color: "#f59e0b" },
@@ -473,8 +466,8 @@ export function CharacterEditor() {
             { name: "Mood", value: 100, max: 100, color: "#ec4899" },
           ],
           rpgStats,
-        })
-      : "";
+        }
+      : null;
 
     try {
       const created = (await createPersona.mutateAsync({
@@ -492,8 +485,8 @@ export function CharacterEditor() {
           parseTrackerCardColorConfig(formData.extensions.trackerCardColors),
         ),
         personaStats,
-        altDescriptions: "[]",
-        tags: JSON.stringify(formData.tags ?? []),
+        altDescriptions: [],
+        tags: formData.tags ?? [],
       })) as { id?: string };
 
       const personaId = created?.id;
@@ -2101,6 +2094,7 @@ function SpritesTab({
   const { data: sprites, isLoading } = useCharacterSprites(characterId);
   const { data: spriteCapabilities } = useSpriteCapabilities();
   const uploadSprite = useUploadSprite();
+  const uploadSprites = useUploadSprites();
   const deleteSprite = useDeleteSprite();
   const cleanupSavedSprites = useCleanupSavedSprites();
   const restoreSpriteCleanupPoint = useRestoreSpriteCleanupPoint();
@@ -2145,13 +2139,13 @@ function SpritesTab({
   const cleanupEngineReason =
     spriteCapabilities?.cleanupEngine?.reason ?? "Sprite cleanup is not available.";
 
-  const normalizeExpressionForCategory = (raw: string) => {
+  const normalizeExpressionForCategory = (raw: string, forCategory: SpriteCategory = category) => {
     const cleaned = raw
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9_-]/g, "_");
     if (!cleaned) return "";
-    if (category === "full-body") {
+    if (forCategory === "full-body") {
       return cleaned.startsWith("full_") ? cleaned : `full_${cleaned}`;
     }
     return cleaned.replace(/^full_/, "");
@@ -2204,30 +2198,56 @@ function SpritesTab({
     if (imageFiles.length === 0) return;
 
     setFolderProgress({ done: 0, total: imageFiles.length });
+    try {
+      const uploads: Array<{ expression: string; image: string }> = [];
+      const folderCategory = category;
+      let skipped = 0;
 
-    for (let i = 0; i < imageFiles.length; i++) {
-      const file = imageFiles[i]!;
-      // Derive expression name from filename (strip extension, lowercase, sanitize)
-      const expression = file.name.replace(/\.[^.]+$/, "").trim();
-      const normalized = normalizeExpressionForCategory(expression);
-      if (!normalized) continue;
+      for (let i = 0; i < imageFiles.length; i++) {
+        const file = imageFiles[i]!;
+        // Derive expression name from filename (strip extension, lowercase, sanitize)
+        const expression = file.name.replace(/\.[^.]+$/, "").trim();
+        const normalized = normalizeExpressionForCategory(expression, folderCategory);
+        if (!normalized) {
+          skipped += 1;
+          setFolderProgress({ done: i + 1, total: imageFiles.length });
+          continue;
+        }
 
-      const dataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.readAsDataURL(file);
-      });
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error ?? new Error(`Failed to read ${file.name}`));
+          reader.readAsDataURL(file);
+        }).catch(() => {
+          skipped += 1;
+          return null;
+        });
 
-      try {
-        await uploadSprite.mutateAsync({ characterId, expression: normalized, image: dataUrl });
-      } catch {
-        // Skip failed uploads, continue with the rest
+        if (dataUrl) {
+          uploads.push({ expression: normalized, image: dataUrl });
+        }
+        setFolderProgress({ done: i + 1, total: imageFiles.length });
       }
-      setFolderProgress({ done: i + 1, total: imageFiles.length });
-    }
 
-    setFolderProgress(null);
-    e.target.value = "";
+      if (uploads.length > 0) {
+        const result = await uploadSprites.mutateAsync({ characterId, sprites: uploads });
+        if (result.failed.length > 0 || skipped > 0) {
+          toast.warning(
+            `${result.failed.length + skipped} sprite${result.failed.length + skipped === 1 ? "" : "s"} could not be imported.`,
+          );
+        } else {
+          toast.success(`Imported ${result.imported} sprite${result.imported === 1 ? "" : "s"}.`);
+        }
+      } else if (skipped > 0) {
+        toast.error("No sprites could be imported.");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to import sprites.");
+    } finally {
+      setFolderProgress(null);
+      e.target.value = "";
+    }
   };
 
   const handleDeleteSingleSprite = useCallback(async () => {
