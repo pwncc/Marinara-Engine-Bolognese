@@ -572,18 +572,6 @@ fn build_mari_workspace_seed(state: &AppState) -> AppResult<MariWorkspaceSeed> {
         "Untitled Character",
         &characters,
         &[
-            "description",
-            "personality",
-            "scenario",
-            "firstMessage",
-            "first_message",
-            "first_mes",
-            "greeting",
-            "mes_example",
-            "exampleDialogue",
-            "systemPrompt",
-            "creatorNotes",
-            "creator_notes",
             "data.description",
             "data.personality",
             "data.scenario",
@@ -592,6 +580,8 @@ fn build_mari_workspace_seed(state: &AppState) -> AppResult<MariWorkspaceSeed> {
             "data.creator_notes",
             "data.system_prompt",
             "data.post_history_instructions",
+            "data.extensions.backstory",
+            "data.extensions.appearance",
         ],
     )?;
 
@@ -894,12 +884,12 @@ fn add_record_folder(
 ) -> AppResult<()> {
     for field in text_fields {
         if let Some(text) =
-            string_field_path_owned(record, field).filter(|value| !value.trim().is_empty())
+            string_field_path(record, field).filter(|value| !value.trim().is_empty())
         {
             add_bound_file(
                 seed,
                 format!("{folder}/{}.md", field_file_name(field)),
-                text,
+                text.to_string(),
                 entity,
                 id,
                 field,
@@ -1016,7 +1006,7 @@ fn record_label(record: &Value, fallback: &str) -> String {
 
 fn record_label_for_entity(entity: &str, record: &Value, fallback: &str) -> String {
     let candidates: &[&str] = match entity {
-        "characters" => &["data.name", "name", "title"],
+        "characters" => &["data.name"],
         "personas" => &["name", "data.name", "title", "comment"],
         "lorebooks" => &["name", "title"],
         "lorebook-entries" => &["comment", "name"],
@@ -1026,12 +1016,14 @@ fn record_label_for_entity(entity: &str, record: &Value, fallback: &str) -> Stri
         "prompt-variables" => &["name", "key", "label", "title"],
         _ => &["data.name", "name", "title", "label", "comment", "key"],
     };
-    first_non_empty_owned(
-        candidates
+    first_non_empty(
+        &candidates
             .iter()
-            .filter_map(|field| string_field_path_owned(record, field)),
+            .map(|field| string_field_path(record, field))
+            .collect::<Vec<_>>(),
     )
-    .unwrap_or_else(|| fallback.to_string())
+    .unwrap_or(fallback)
+    .to_string()
 }
 
 fn lorebook_entry_label(record: &Value) -> String {
@@ -1053,33 +1045,16 @@ fn first_non_empty<'a>(values: &[Option<&'a str>]) -> Option<&'a str> {
         .find(|value| !value.is_empty())
 }
 
-fn first_non_empty_owned(values: impl IntoIterator<Item = String>) -> Option<String> {
-    values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .find(|value| !value.is_empty())
-}
-
 fn str_field<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
     value.get(field).and_then(Value::as_str)
 }
 
-fn string_field_path_owned(value: &Value, field_path: &str) -> Option<String> {
-    fn walk(current: &Value, parts: &[&str]) -> Option<String> {
-        if parts.is_empty() {
-            return current.as_str().map(str::to_string);
-        }
-        if let Some(object) = current.as_object() {
-            return walk(object.get(parts[0])?, &parts[1..]);
-        }
-        if let Some(raw) = current.as_str() {
-            let parsed = serde_json::from_str::<Value>(raw).ok()?;
-            return walk(&parsed, parts);
-        }
-        None
+fn string_field_path<'a>(value: &'a Value, field_path: &str) -> Option<&'a str> {
+    let mut current = value;
+    for field in field_path.split('.') {
+        current = current.get(field)?;
     }
-    let parts = field_path.split('.').collect::<Vec<_>>();
-    walk(value, &parts)
+    current.as_str()
 }
 
 fn display_label(label: &str) -> String {
@@ -1107,8 +1082,6 @@ fn string_array_items(value: Option<&Value>) -> Vec<String> {
             .filter_map(Value::as_str)
             .map(str::to_string)
             .collect(),
-        Some(Value::String(raw)) => serde_json::from_str::<Vec<String>>(raw)
-            .unwrap_or_else(|_| raw.lines().map(str::to_string).collect()),
         _ => Vec::new(),
     }
 }
@@ -1120,7 +1093,6 @@ fn keys_text(record: &Value) -> Option<String> {
 
 fn metadata_without_fields(record: &Value, text_fields: &[&str]) -> Value {
     let mut metadata = record.clone();
-    expand_json_string_objects(&mut metadata);
     remove_field_path(&mut metadata, "id");
     remove_field_path(&mut metadata, "createdAt");
     remove_field_path(&mut metadata, "updatedAt");
@@ -1129,30 +1101,6 @@ fn metadata_without_fields(record: &Value, text_fields: &[&str]) -> Value {
     }
     sanitize_metadata_value(&mut metadata);
     metadata
-}
-
-fn expand_json_string_objects(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            for child in object.values_mut() {
-                expand_json_string_objects(child);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                expand_json_string_objects(item);
-            }
-        }
-        Value::String(raw) => {
-            if let Ok(parsed @ (Value::Object(_) | Value::Array(_))) =
-                serde_json::from_str::<Value>(raw)
-            {
-                *value = parsed;
-                expand_json_string_objects(value);
-            }
-        }
-        _ => {}
-    }
 }
 
 fn remove_field_path(value: &mut Value, field_path: &str) {

@@ -86,11 +86,9 @@ fn patch_imported_character_lorebook_pointer(
             "entriesImported": entries_imported
         }),
     );
-    state.storage.patch(
-        "characters",
-        character_id,
-        json!({ "data": data }),
-    )?;
+    state
+        .storage
+        .patch("characters", character_id, json!({ "data": data }))?;
     Ok(())
 }
 
