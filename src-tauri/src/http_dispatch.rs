@@ -179,6 +179,13 @@ fn storage_delete(state: &AppState, args: &Map<String, Value>) -> AppResult<Valu
             args.get("force").and_then(Value::as_bool).unwrap_or(false),
         );
     }
+    if entity == "chats" {
+        let existed = state.storage.get("chats", id)?.is_some();
+        if existed {
+            chats::delete_chat_with_messages(state, id)?;
+        }
+        return Ok(json!({ "deleted": existed }));
+    }
     if is_protected_record(entity, id) {
         return Err(AppError::invalid_input(
             "Built-in Professor Mari cannot be deleted",
