@@ -23,20 +23,26 @@ function depsForChat(chat: Record<string, unknown>) {
 function generationDepsForChat(options: {
   savedUserMessage?: unknown;
   messagesAfterSave?: Record<string, unknown>[];
+  chatMetadata?: Record<string, unknown>;
+  agents?: Record<string, unknown>[];
+  agentRuns?: Record<string, unknown>[];
+  initialMessages?: Record<string, unknown>[];
 } = {}) {
   const chat = {
     id: "chat-1",
     mode: "conversation",
     connectionId: "connection-1",
     characterIds: [],
-    metadata: {},
+    metadata: options.chatMetadata ?? {},
   };
   const connection = {
     id: "connection-1",
     model: "test-model",
     defaultParameters: {},
   };
-  const initialMessages = [{ id: "assistant-1", chatId: "chat-1", role: "assistant", content: "What now?" }];
+  const initialMessages = options.initialMessages ?? [
+    { id: "assistant-1", chatId: "chat-1", role: "assistant", content: "What now?" },
+  ];
   const listChatMessages = vi.fn(async () =>
     listChatMessages.mock.calls.length > 1 && options.messagesAfterSave
       ? options.messagesAfterSave
@@ -59,7 +65,11 @@ function generationDepsForChat(options: {
       if (entity === "connections" && id === "connection-1") return connection;
       return null;
     }),
-    list: vi.fn(async () => []),
+    list: vi.fn(async (entity: string) => {
+      if (entity === "agents") return options.agents ?? [];
+      if (entity === "agent-runs") return options.agentRuns ?? [];
+      return [];
+    }),
     create: vi.fn(async (_entity: string, value: Record<string, unknown>) => value),
     createChatMessage,
     listChatMessages,
@@ -187,5 +197,68 @@ describe("startGeneration chat message loading", () => {
     expect(streamedRequests[0]).toMatchObject({
       messages: expect.arrayContaining([expect.objectContaining({ role: "user", content: "hello" })]),
     });
+  });
+});
+
+describe("retryGenerationAgents lorebook keeper backfill", () => {
+  it("uses run interval and read-behind settings to backfill only unprocessed batch anchors", async () => {
+    const messages = Array.from({ length: 40 }, (_, index) => ({
+      id: `assistant-${index + 1}`,
+      chatId: "chat-1",
+      role: "assistant",
+      content: `Assistant message ${index + 1}`,
+    }));
+    const { deps, streamedRequests } = generationDepsForChat({
+      chatMetadata: {
+        enableAgents: true,
+        activeAgentIds: ["lorebook-keeper"],
+        lorebookKeeperReadBehindMessages: 10,
+      },
+      agents: [
+        {
+          id: "lorebook-agent",
+          type: "lorebook-keeper",
+          name: "Lorebook Keeper",
+          enabled: true,
+          phase: "post_processing",
+          connectionId: null,
+          model: "agent-model",
+          promptTemplate: "Return JSON.",
+          settings: { runInterval: 10, contextSize: 15 },
+        },
+      ],
+      agentRuns: [
+        {
+          id: "run-10",
+          chatId: "chat-1",
+          messageId: "assistant-10",
+          agentType: "lorebook-keeper",
+          success: true,
+        },
+      ],
+      initialMessages: messages,
+    });
+
+    const results = await retryGenerationAgents(deps, {
+      chatId: "chat-1",
+      agentTypes: ["lorebook-keeper"],
+      options: { lorebookKeeperBackfill: true },
+    });
+
+    expect(results).toHaveLength(2);
+    expect(streamedRequests).toHaveLength(2);
+    expect(streamedRequests.map((request) => (request as { messages: Array<{ content: string }> }).messages.at(-1)?.content)).toEqual([
+      expect.stringContaining("Assistant message 20"),
+      expect.stringContaining("Assistant message 30"),
+    ]);
+    const promptTexts = streamedRequests.map((request) =>
+      (request as { messages: Array<{ content: string }> }).messages.map((message) => message.content).join("\n"),
+    );
+    expect(promptTexts[0]).toContain("Assistant message 19");
+    expect(promptTexts[0]).toContain("Assistant message 20");
+    expect(promptTexts[0]).not.toContain("Assistant message 31");
+    expect(promptTexts[1]).toContain("Assistant message 29");
+    expect(promptTexts[1]).toContain("Assistant message 30");
+    expect(promptTexts[1]).not.toContain("Assistant message 31");
   });
 });

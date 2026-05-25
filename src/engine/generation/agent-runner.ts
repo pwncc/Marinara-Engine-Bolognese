@@ -585,6 +585,7 @@ async function resolveAgents(deps: AgentDeps, input: GenerationAgentRuntimeInput
     .filter((agent) => {
       const type = readString(agent.type || agent.agentType);
       const id = readString(agent.id);
+      if ((!input.agentTypes || input.agentTypes.size === 0) && type === "lorebook-keeper") return false;
       if (scopedAgentIds.size > 0 && !scopedAgentIds.has(type) && !scopedAgentIds.has(id)) return false;
       if (!input.agentTypes || input.agentTypes.size === 0) return true;
       return input.agentTypes.has(type);
