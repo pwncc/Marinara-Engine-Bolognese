@@ -170,7 +170,7 @@ pub(crate) fn normalize_typed_json_fields(collection: &str, object: &mut Map<Str
             normalize_json_array_fields(object, &["keys", "secondaryKeys"])?;
         }
         "connections" => {
-            normalize_json_object_fields(object, &["defaultParameters", "capabilities", "providerMetadata"])?;
+            normalize_nullable_json_object_fields(object, &["defaultParameters", "capabilities", "providerMetadata"])?;
         }
         "custom-tools" => {
             normalize_json_object_fields(object, &["parametersSchema"])?;
