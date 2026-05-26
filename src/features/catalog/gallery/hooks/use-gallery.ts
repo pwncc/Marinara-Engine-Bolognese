@@ -19,12 +19,27 @@ export function useUploadGalleryImage(chatId: string | null) {
     mutationFn: async (files: File[]) => {
       if (!chatId) return [];
       const uploaded: ChatImage[] = [];
+      let failedCount = 0;
+
       for (const file of files) {
-        uploaded.push(await galleryApi.uploadChat<ChatImage>(chatId, file));
+        try {
+          uploaded.push(await galleryApi.uploadChat<ChatImage>(chatId, file));
+        } catch {
+          failedCount += 1;
+        }
       }
+
+      if (failedCount > 0) {
+        throw new Error(
+          failedCount === 1
+            ? "One chat gallery image failed to upload."
+            : `${failedCount} chat gallery images failed to upload.`,
+        );
+      }
+
       return uploaded;
     },
-    onSuccess: () => {
+    onSettled: () => {
       if (chatId) {
         queryClient.invalidateQueries({ queryKey: galleryKeys.images(chatId) });
       }
