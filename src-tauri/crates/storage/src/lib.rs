@@ -8,7 +8,7 @@ use std::fs;
 use std::fmt;
 use std::io::{BufReader, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MESSAGE_REVERSE_READ_CHUNK_SIZE: u64 = 1024 * 1024;
@@ -16,7 +16,7 @@ const MESSAGE_REVERSE_READ_CHUNK_SIZE: u64 = 1024 * 1024;
 #[derive(Clone)]
 pub struct FileStorage {
     root: PathBuf,
-    lock: Arc<Mutex<()>>,
+    lock: Arc<RwLock<()>>,
 }
 
 impl FileStorage {
@@ -25,7 +25,7 @@ impl FileStorage {
         fs::create_dir_all(root.join("collections"))?;
         Ok(Self {
             root,
-            lock: Arc::new(Mutex::new(())),
+            lock: Arc::new(RwLock::new(())),
         })
     }
 
@@ -36,7 +36,7 @@ impl FileStorage {
     pub fn list(&self, collection: &str) -> AppResult<Vec<Value>> {
         let _guard = self
             .lock
-            .lock()
+            .read()
             .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
         self.read_collection(collection)
     }
@@ -48,7 +48,7 @@ impl FileStorage {
     ) -> AppResult<Vec<Value>> {
         let _guard = self
             .lock
-            .lock()
+            .read()
             .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
         self.read_collection_filtered(collection, |row| {
                 let Some(obj) = row.as_object() else {
@@ -63,7 +63,7 @@ impl FileStorage {
     pub fn list_messages_for_chat(&self, chat_id: &str) -> AppResult<Vec<Value>> {
         let _guard = self
             .lock
-            .lock()
+            .read()
             .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
         self.read_messages_for_chat(chat_id)
     }
@@ -71,7 +71,7 @@ impl FileStorage {
     pub fn list_message_ids_for_chat(&self, chat_id: &str) -> AppResult<Vec<Value>> {
         let _guard = self
             .lock
-            .lock()
+            .read()
             .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
         self.read_message_ids_for_chat(chat_id)
     }
@@ -84,7 +84,7 @@ impl FileStorage {
     ) -> AppResult<Vec<Value>> {
         let _guard = self
             .lock
-            .lock()
+            .read()
             .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
         self.read_messages_for_chat_page(chat_id, limit, before)
     }
@@ -92,7 +92,7 @@ impl FileStorage {
     pub fn get(&self, collection: &str, id: &str) -> AppResult<Option<Value>> {
         let _guard = self
             .lock
-            .lock()
+            .read()
             .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
         self.read_collection_find_by_id(collection, id)
     }
@@ -100,7 +100,7 @@ impl FileStorage {
     pub fn create(&self, collection: &str, value: Value) -> AppResult<Value> {
         let _guard = self
             .lock
-            .lock()
+            .write()
             .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
         let mut object = ensure_object(value)?;
         let had_id = object
@@ -136,7 +136,7 @@ impl FileStorage {
     pub fn upsert_with_id(&self, collection: &str, id: &str, value: Value) -> AppResult<Value> {
         let _guard = self
             .lock
-            .lock()
+            .write()
             .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
         let mut rows = self.read_collection(collection)?;
         let mut object = ensure_object(value)?;
@@ -158,7 +158,7 @@ impl FileStorage {
     pub fn patch(&self, collection: &str, id: &str, patch: Value) -> AppResult<Value> {
         let _guard = self
             .lock
-            .lock()
+            .write()
             .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
         let mut rows = self.read_collection(collection)?;
         let patch = ensure_object(patch)?;
@@ -189,7 +189,7 @@ impl FileStorage {
     pub fn delete(&self, collection: &str, id: &str) -> AppResult<bool> {
         let _guard = self
             .lock
-            .lock()
+            .write()
             .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
         let mut rows = self.read_collection(collection)?;
         let before = rows.len();
@@ -201,10 +201,36 @@ impl FileStorage {
         Ok(deleted)
     }
 
+    pub fn delete_where(
+        &self,
+        collection: &str,
+        filters: &Map<String, Value>,
+    ) -> AppResult<usize> {
+        self.delete_where_matching(collection, |row| row_matches_filters(row, filters))
+    }
+
+    pub fn delete_where_matching<F>(&self, collection: &str, mut predicate: F) -> AppResult<usize>
+    where
+        F: FnMut(&Value) -> bool,
+    {
+        let _guard = self
+            .lock
+            .write()
+            .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
+        let mut rows = self.read_collection(collection)?;
+        let before = rows.len();
+        rows.retain(|row| !predicate(row));
+        let deleted = before.saturating_sub(rows.len());
+        if deleted > 0 {
+            self.write_collection(collection, &rows)?;
+        }
+        Ok(deleted)
+    }
+
     pub fn replace_all(&self, collection: &str, rows: Vec<Value>) -> AppResult<()> {
         let _guard = self
             .lock
-            .lock()
+            .write()
             .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
         self.write_collection(collection, &rows)
     }
@@ -223,7 +249,7 @@ impl FileStorage {
     {
         let _guard = self
             .lock
-            .lock()
+            .write()
             .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
         self.replace_all_many_locked(replacements, after_install)
     }
@@ -231,7 +257,7 @@ impl FileStorage {
     pub fn clear_all(&self) -> AppResult<()> {
         let _guard = self
             .lock
-            .lock()
+            .write()
             .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
         let collections = self.root.join("collections");
         if collections.exists() {
@@ -492,6 +518,15 @@ impl FileStorage {
         cleanup_pending_collection_transaction_files(&pending);
         Ok(())
     }
+}
+
+fn row_matches_filters(row: &Value, filters: &Map<String, Value>) -> bool {
+    let Some(object) = row.as_object() else {
+        return false;
+    };
+    filters
+        .iter()
+        .all(|(key, expected)| object.get(key) == Some(expected))
 }
 
 struct FilterRowsVisitor<F> {
@@ -1147,6 +1182,36 @@ mod tests {
         assert_eq!(rows[0]["id"], "a-1");
         assert_eq!(rows[1]["id"], "a-2");
         assert_eq!(rows[1]["content"], "second");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_where_removes_all_matching_rows() {
+        let root = temp_storage_root("delete-where");
+        let storage = FileStorage::new(&root).unwrap();
+
+        storage
+            .replace_all(
+                "messages",
+                vec![
+                    json!({ "id": "a-1", "chatId": "chat-a", "content": "first" }),
+                    json!({ "id": "b-1", "chatId": "chat-b", "content": "skip me" }),
+                    json!({ "id": "a-2", "chatId": "chat-a", "content": "second" }),
+                ],
+            )
+            .unwrap();
+
+        let mut filters = Map::new();
+        filters.insert("chatId".to_string(), Value::String("chat-a".to_string()));
+
+        let deleted = storage.delete_where("messages", &filters).unwrap();
+
+        assert_eq!(deleted, 2);
+        assert_eq!(
+            storage.list("messages").unwrap(),
+            vec![json!({ "id": "b-1", "chatId": "chat-b", "content": "skip me" })]
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
