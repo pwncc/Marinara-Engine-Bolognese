@@ -1,4 +1,4 @@
-import type { AgentResult } from "../contracts/types/agent";
+import { BUILT_IN_AGENT_RUN_INTERVAL_DEFAULTS, type AgentContext, type AgentResult } from "../contracts/types/agent";
 import type { GameState } from "../contracts/types/game-state";
 import type { EventGateway } from "../capabilities/events";
 import type { IntegrationGateway } from "../capabilities/integrations";
@@ -23,7 +23,7 @@ import { buildGenerationReplay } from "./generation-replay";
 import { assembleGenerationPrompt } from "./prompt-assembly";
 import type { GenerationCharacterContext } from "./prompt-assembly";
 import { applyRuntimeRegexScripts } from "./regex-runtime";
-import { hiddenFromAi, isRecord, nowIso, parseRecord, readString, stringArray, type JsonRecord } from "./runtime-records";
+import { boolish, hiddenFromAi, isRecord, nowIso, parseRecord, readString, stringArray, type JsonRecord } from "./runtime-records";
 import {
   commitTrackerSnapshotForTarget,
   createTrackerSnapshotReadContext,
@@ -53,6 +53,8 @@ export interface StartGenerationInput extends JsonRecord {
   forCharacterId?: string | null;
   mentionedCharacterNames?: string[];
   attachments?: PromptAttachment[];
+  debugMode?: boolean;
+  debugSink?: AgentContext["debugSink"];
 }
 
 export interface GenerationEngineDeps {
@@ -75,6 +77,9 @@ interface PreparedUserInput {
   images: string[];
   mentionedCharacterNames: string[];
 }
+
+const LOREBOOK_KEEPER_AGENT_TYPE = "lorebook-keeper";
+const DEFAULT_LOREBOOK_KEEPER_RUN_INTERVAL = BUILT_IN_AGENT_RUN_INTERVAL_DEFAULTS[LOREBOOK_KEEPER_AGENT_TYPE] ?? 8;
 
 const CONTINUE_ASSISTANT_RESPONSE_INSTRUCTION =
   "[Generation instruction: continue from the latest assistant message. Do not repeat or summarize the previous response; pick up naturally from where it stopped.]";
@@ -383,6 +388,108 @@ function targetAssistantMessage(messages: JsonRecord[], options: Record<string, 
   return [...messages].reverse().find((message) => readString(message.role) === "assistant") ?? null;
 }
 
+function messageIndex(messages: JsonRecord[], target: JsonRecord | null): number {
+  const id = readString(target?.id).trim();
+  if (!id) return -1;
+  return messages.findIndex((message) => readString(message.id).trim() === id);
+}
+
+function messagesBeforeTarget(messages: JsonRecord[], target: JsonRecord | null): JsonRecord[] {
+  const index = messageIndex(messages, target);
+  return index >= 0 ? messages.slice(0, index) : messages;
+}
+
+function positiveInteger(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(1, Math.trunc(value));
+}
+
+function nonNegativeInteger(value: unknown, fallback = 0): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.trunc(value));
+}
+
+function lorebookKeeperReadBehind(chat: JsonRecord): number {
+  return nonNegativeInteger(parseRecord(chat.metadata).lorebookKeeperReadBehindMessages, 0);
+}
+
+function agentType(agent: JsonRecord): string {
+  return readString(agent.type || agent.agentType).trim();
+}
+
+function agentSettings(agent: JsonRecord): JsonRecord {
+  return parseRecord(agent.settings);
+}
+
+function lorebookKeeperRunInterval(agent: JsonRecord | null): number {
+  return positiveInteger(agent ? agentSettings(agent).runInterval : null, DEFAULT_LOREBOOK_KEEPER_RUN_INTERVAL);
+}
+
+function chatActiveAgentIds(chat: JsonRecord): Set<string> {
+  return new Set(stringArray(parseRecord(chat.metadata).activeAgentIds).map((id) => id.trim()).filter(Boolean));
+}
+
+function chatHasLorebookKeeperEnabled(chat: JsonRecord, agent: JsonRecord): boolean {
+  if (!boolish(agent.enabled, false) || agentType(agent) !== LOREBOOK_KEEPER_AGENT_TYPE) return false;
+  const activeAgentIds = chatActiveAgentIds(chat);
+  if (activeAgentIds.size > 0) {
+    const id = readString(agent.id).trim();
+    return activeAgentIds.has(LOREBOOK_KEEPER_AGENT_TYPE) || (id ? activeAgentIds.has(id) : false);
+  }
+  return boolish(parseRecord(chat.metadata).enableAgents, false);
+}
+
+async function lorebookKeeperAgent(storage: StorageGateway, chat: JsonRecord): Promise<JsonRecord | null> {
+  const agents = await storage.list<JsonRecord>("agents").catch(() => []);
+  return agents.find((agent) => chatHasLorebookKeeperEnabled(chat, agent)) ?? null;
+}
+
+async function successfulLorebookKeeperMessageIds(storage: StorageGateway, chatId: string): Promise<Set<string>> {
+  const runs = await storage.list<JsonRecord>("agent-runs").catch(() => []);
+  return new Set(
+    runs
+      .filter((run) => readString(run.chatId).trim() === chatId)
+      .filter((run) => readString(run.agentType).trim() === LOREBOOK_KEEPER_AGENT_TYPE)
+      .filter((run) => boolish(run.success, false))
+      .map((run) => readString(run.messageId).trim())
+      .filter(Boolean),
+  );
+}
+
+interface LorebookKeeperTarget {
+  message: JsonRecord;
+}
+
+function lorebookKeeperBackfillTargets(
+  storedMessages: JsonRecord[],
+  processedMessageIds: Set<string>,
+  options: { readBehind: number; runInterval: number },
+): LorebookKeeperTarget[] {
+  const assistantMessages = storedMessages
+    .filter((message) => !hiddenFromAi(message))
+    .filter((message) => readString(message.role).trim() === "assistant")
+    .filter((message) => readString(message.id).trim() && readString(message.content).trim());
+  const eligibleCount = Math.max(0, assistantMessages.length - options.readBehind);
+  const targets: LorebookKeeperTarget[] = [];
+
+  for (let ordinal = options.runInterval; ordinal <= eligibleCount; ordinal += options.runInterval) {
+    const message = assistantMessages[ordinal - 1]!;
+    const id = readString(message.id).trim();
+    if (processedMessageIds.has(id)) continue;
+    targets.push({ message });
+  }
+
+  return targets;
+}
+
+function isLorebookKeeperBackfill(input: RetryAgentsInput): boolean {
+  return (
+    input.options?.lorebookKeeperBackfill === true &&
+    Array.isArray(input.agentTypes) &&
+    input.agentTypes.some((type) => readString(type).trim() === LOREBOOK_KEEPER_AGENT_TYPE)
+  );
+}
+
 async function commitVisibleTrackerSnapshotSafely(
   storage: StorageGateway,
   chatId: string,
@@ -421,21 +528,18 @@ async function selectGenerationTrackerBaseline(
   });
 }
 
-export async function retryGenerationAgents(
-  deps: GenerationEngineDeps,
-  input: RetryAgentsInput,
-  signal?: AbortSignal,
-): Promise<AgentResult[]> {
+async function runGenerationAgentsForTarget(args: {
+  deps: GenerationEngineDeps;
+  input: RetryAgentsInput;
+  chat: JsonRecord;
+  connection: JsonRecord;
+  storedMessages: JsonRecord[];
+  target: JsonRecord | null;
+  agentTypes: Set<string>;
+  signal?: AbortSignal;
+}): Promise<AgentResult[]> {
+  const { deps, input, chat, connection, storedMessages, target, agentTypes, signal } = args;
   const chatId = readString(input.chatId).trim();
-  if (!chatId) throw new Error("chatId is required");
-  const agentTypes = Array.isArray(input.agentTypes)
-    ? new Set(input.agentTypes.map((type) => readString(type).trim()).filter(Boolean))
-    : new Set<string>();
-  const chat = requireRecord(await deps.storage.get("chats", chatId), "Chat");
-  assertChatCanGenerate(chat);
-  const connection = await resolveGenerationConnection(deps.storage, chat, input);
-  const storedMessages = await loadChatMessages(deps.storage, chatId);
-  const target = targetAssistantMessage(storedMessages, input.options);
   const targetTrackerTarget = trackerSnapshotTargetFromMessage(target);
   const trackerReadContext = await createTrackerSnapshotReadContext(deps.storage, chatId);
   const retryBaseline = await selectTrackerSnapshotForGeneration(
@@ -459,9 +563,10 @@ export async function retryGenerationAgents(
     trackerReadContext,
   );
   const chatForAgents = targetSnapshot ?? retryBaseline ? { ...chat, gameState: targetSnapshot ?? retryBaseline } : chat;
+  const contextMessages = messagesBeforeTarget(storedMessages, target);
   const assembly = await assembleGenerationPrompt(deps.storage, {
     chat: chatForAgents,
-    storedMessages,
+    storedMessages: contextMessages,
     connection,
     request: input,
     latestUserInput: "",
@@ -472,7 +577,7 @@ export async function retryGenerationAgents(
     {
       chat: chatForAgents,
       connection,
-      storedMessages,
+      storedMessages: contextMessages,
       characters: assembly.characters,
       persona: assembly.persona,
       activatedLorebookEntries: assembly.activatedLorebookEntries,
@@ -496,6 +601,68 @@ export async function retryGenerationAgents(
   }
   await persistAgentResults(deps.storage, chatId, target ? readString(target.id) || null : null, finalResults);
   return finalResults;
+}
+
+async function runLorebookKeeperBackfill(
+  deps: GenerationEngineDeps,
+  input: RetryAgentsInput,
+  args: {
+    chat: JsonRecord;
+    connection: JsonRecord;
+    storedMessages?: JsonRecord[];
+    signal?: AbortSignal;
+  },
+): Promise<AgentResult[]> {
+  const chatId = readString(input.chatId).trim();
+  const agent = await lorebookKeeperAgent(deps.storage, args.chat);
+  if (!agent) return [];
+
+  const storedMessages = args.storedMessages ?? (await loadChatMessages(deps.storage, chatId));
+  const processedMessageIds = await successfulLorebookKeeperMessageIds(deps.storage, chatId);
+  const targets = lorebookKeeperBackfillTargets(storedMessages, processedMessageIds, {
+    readBehind: lorebookKeeperReadBehind(args.chat),
+    runInterval: lorebookKeeperRunInterval(agent),
+  });
+  const agentTypes = new Set([LOREBOOK_KEEPER_AGENT_TYPE]);
+  const allResults: AgentResult[] = [];
+
+  for (const target of targets) {
+    allResults.push(
+      ...(await runGenerationAgentsForTarget({
+        deps,
+        input,
+        chat: args.chat,
+        connection: args.connection,
+        storedMessages,
+        target: target.message,
+        agentTypes,
+        signal: args.signal,
+      })),
+    );
+  }
+
+  return allResults;
+}
+
+export async function retryGenerationAgents(
+  deps: GenerationEngineDeps,
+  input: RetryAgentsInput,
+  signal?: AbortSignal,
+): Promise<AgentResult[]> {
+  const chatId = readString(input.chatId).trim();
+  if (!chatId) throw new Error("chatId is required");
+  const agentTypes = Array.isArray(input.agentTypes)
+    ? new Set(input.agentTypes.map((type) => readString(type).trim()).filter(Boolean))
+    : new Set<string>();
+  const chat = requireRecord(await deps.storage.get("chats", chatId), "Chat");
+  assertChatCanGenerate(chat);
+  const connection = await resolveGenerationConnection(deps.storage, chat, input);
+  const storedMessages = await loadChatMessages(deps.storage, chatId);
+  if (isLorebookKeeperBackfill(input)) {
+    return runLorebookKeeperBackfill(deps, input, { chat, connection, storedMessages, signal });
+  }
+  const target = targetAssistantMessage(storedMessages, input.options);
+  return runGenerationAgentsForTarget({ deps, input, chat, connection, storedMessages, target, agentTypes, signal });
 }
 
 export async function* startGeneration(
@@ -564,6 +731,8 @@ export async function* startGeneration(
             persona: assembly.persona,
             activatedLorebookEntries: assembly.activatedLorebookEntries,
             chatSummary: assembly.chatSummary,
+            debugMode: input.debugMode === true,
+            debugSink: input.debugSink,
             signal,
           },
           (result) => agentEvents.push(result),
@@ -644,6 +813,21 @@ export async function* startGeneration(
         });
     if (saved) await persistTrackerSnapshotSafely(deps.storage, chatId, saved, allAgentResults, generationTrackerBaseline);
     await persistAgentResults(deps.storage, chatId, messageId(saved), allAgentResults);
+    if (saved) {
+      const autoLorebookResults = await runLorebookKeeperBackfill(
+        deps,
+        {
+          chatId,
+          connectionId: readString(connection.id) || input.connectionId || null,
+          agentTypes: [LOREBOOK_KEEPER_AGENT_TYPE],
+          options: { lorebookKeeperBackfill: true },
+        },
+        { chat, connection, signal },
+      );
+      for (const result of autoLorebookResults) {
+        yield { type: "agent_result", data: result };
+      }
+    }
     if (saved) yield { type: "assistant_message", data: saved };
     yield { type: "done", data: { transcript: visibleTranscript(generationMessages) } };
     return;
@@ -697,6 +881,21 @@ export async function* startGeneration(
         attachments: connected.assistantAttachments,
         usage,
       });
+  if (saved) {
+    const autoLorebookResults = await runLorebookKeeperBackfill(
+      deps,
+      {
+        chatId,
+        connectionId: readString(connection.id) || input.connectionId || null,
+        agentTypes: [LOREBOOK_KEEPER_AGENT_TYPE],
+        options: { lorebookKeeperBackfill: true },
+      },
+      { chat, connection, signal },
+    );
+    for (const result of autoLorebookResults) {
+      yield { type: "agent_result", data: result };
+    }
+  }
   if (saved) yield { type: "assistant_message", data: saved };
   yield { type: "done" };
 }

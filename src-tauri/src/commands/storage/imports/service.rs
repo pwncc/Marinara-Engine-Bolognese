@@ -1,5 +1,6 @@
 use super::super::media_uploads::{
-    decode_image_payload, extension_for_image_mime, safe_filename, unique_file_path,
+    decode_image_payload, extension_for_image_mime, persist_image_bytes, persist_image_file_copy,
+    safe_filename, unique_file_path,
 };
 use super::super::shared::*;
 use super::super::*;
@@ -94,10 +95,12 @@ fn patch_imported_character_lorebook_pointer(
 
 fn import_st_character_payload(
     state: &AppState,
-    payload: Value,
+    mut payload: Value,
     filename: Option<String>,
     body: &Value,
+    trusted_avatar_source: Option<&Path>,
 ) -> AppResult<Value> {
+    strip_reserved_avatar_source_fields(&mut payload);
     let tag_mode = body
         .get("tagImportMode")
         .and_then(Value::as_str)
@@ -122,13 +125,22 @@ fn import_st_character_payload(
     let mut record = json!({
         "data": data,
         "comment": data.get("creator_notes").and_then(Value::as_str).unwrap_or(""),
-        "avatarPath": payload
-            .get("_avatarDataUrl")
-            .and_then(Value::as_str)
-            .map(|value| Value::String(value.to_string()))
-            .unwrap_or(Value::Null),
+        "avatarPath": null,
         "format": payload.get("spec").and_then(Value::as_str).unwrap_or("chara_card_v2"),
     });
+    if let Some(avatar) =
+        imported_avatar_reference(state, &payload, filename.as_deref(), trusted_avatar_source)?
+    {
+        let object = record
+            .as_object_mut()
+            .expect("character import record should be an object");
+        object.insert("avatarPath".to_string(), Value::String(avatar.asset_url));
+        object.insert(
+            "avatarFilePath".to_string(),
+            Value::String(avatar.absolute_path),
+        );
+        object.insert("avatarFilename".to_string(), Value::String(avatar.filename));
+    }
     apply_timestamp_overrides(&mut record, body, &payload);
     let character = state.storage.create("characters", record)?;
 
@@ -182,6 +194,67 @@ fn import_st_character_payload(
     }))
 }
 
+fn strip_reserved_avatar_source_fields(payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    object.remove("_avatarSourcePath");
+    object.remove("_avatarFileCopySourcePath");
+}
+
+struct ImportedAvatarReference {
+    asset_url: String,
+    absolute_path: String,
+    filename: String,
+}
+
+fn imported_avatar_reference(
+    state: &AppState,
+    payload: &Value,
+    filename: Option<&str>,
+    trusted_avatar_source: Option<&Path>,
+) -> AppResult<Option<ImportedAvatarReference>> {
+    if let Some(source) = trusted_avatar_source {
+        let filename_hint = source
+            .file_name()
+            .and_then(|value| value.to_str())
+            .or(filename)
+            .unwrap_or("avatar.png");
+        let stored = persist_image_file_copy(state, "avatars/characters", filename_hint, source)?;
+        return Ok(Some(ImportedAvatarReference {
+            asset_url: stored.asset_url,
+            absolute_path: stored.absolute_path,
+            filename: stored.filename,
+        }));
+    }
+    let Some(value) = payload.get("_avatarDataUrl").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    if !value.starts_with("data:image/") {
+        return Ok(None);
+    }
+    let (mime, bytes) = decode_image_payload(value, "avatar")?;
+    let fallback = payload
+        .get("data")
+        .and_then(|data| data.get("name"))
+        .or_else(|| payload.get("name"))
+        .and_then(Value::as_str)
+        .or(filename)
+        .unwrap_or("avatar");
+    let stored = persist_image_bytes(
+        state,
+        "avatars/characters",
+        &safe_filename(fallback),
+        &bytes,
+        &mime,
+    )?;
+    Ok(Some(ImportedAvatarReference {
+        asset_url: stored.asset_url,
+        absolute_path: stored.absolute_path,
+        filename: stored.filename,
+    }))
+}
+
 pub(crate) fn import_st_character(state: &AppState, body: Value) -> AppResult<Value> {
     let payload = if body.get("file").is_some() {
         let uploaded = decode_uploaded_file_value(
@@ -192,7 +265,7 @@ pub(crate) fn import_st_character(state: &AppState, body: Value) -> AppResult<Va
     } else {
         body.clone()
     };
-    import_st_character_payload(state, payload, None, &body)
+    import_st_character_payload(state, payload, None, &body, None)
 }
 
 fn import_st_character_batch(state: &AppState, body: Value) -> AppResult<Value> {
@@ -232,7 +305,7 @@ fn import_st_character_batch(state: &AppState, body: Value) -> AppResult<Value> 
             }
         }
         let result = parse_character_file(&file.name, &file.bytes).and_then(|payload| {
-            import_st_character_payload(state, payload, Some(filename.clone()), &file_body)
+            import_st_character_payload(state, payload, Some(filename.clone()), &file_body, None)
         });
         match result {
             Ok(mut value) => {
@@ -354,5 +427,116 @@ pub(crate) fn import_stream_channel(
             "stream_not_supported",
             format!("Streaming is not supported for /import/{}", rest.join("/")),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::AppState;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "marinara-st-character-import-{label}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn import_st_character_ignores_untrusted_avatar_source_fields() {
+        let app_root = temp_path("app");
+        let source_root = temp_path("source");
+        fs::create_dir_all(&source_root).expect("source dir should be created");
+        let source = source_root.join("not-an-avatar.txt");
+        fs::write(&source, b"do not copy me").expect("source fixture should be written");
+        let state = AppState::from_data_dir(&app_root, Vec::new())
+            .expect("test app state should initialize");
+
+        let result = import_st_character(
+            &state,
+            json!({
+                "spec": "chara_card_v2",
+                "data": {
+                    "name": "Reserved Field Probe",
+                    "description": "Should not copy arbitrary files"
+                },
+                "_avatarSourcePath": source.to_string_lossy(),
+                "_avatarFileCopySourcePath": source.to_string_lossy()
+            }),
+        )
+        .expect("reserved avatar source fields should be ignored");
+
+        let character = result
+            .get("character")
+            .and_then(Value::as_object)
+            .expect("import should return a character record");
+        assert!(
+            character
+                .get("avatarFilePath")
+                .and_then(Value::as_str)
+                .is_none(),
+            "external payload fields must not create managed avatar file paths"
+        );
+        assert_eq!(character.get("avatarPath"), Some(&Value::Null));
+        assert!(
+            !app_root.join("avatars").join("characters").exists(),
+            "untrusted local file paths should not be copied into managed avatars"
+        );
+
+        let _ = fs::remove_dir_all(app_root);
+        let _ = fs::remove_dir_all(source_root);
+    }
+
+    #[test]
+    fn import_st_character_uses_trusted_avatar_source_path() {
+        let app_root = temp_path("app");
+        let source_root = temp_path("source");
+        fs::create_dir_all(&source_root).expect("source dir should be created");
+        let source = source_root.join("trusted-avatar.png");
+        fs::write(&source, b"trusted-avatar-bytes").expect("source fixture should be written");
+        let state = AppState::from_data_dir(&app_root, Vec::new())
+            .expect("test app state should initialize");
+
+        let result = import_st_character_payload(
+            &state,
+            json!({
+                "spec": "chara_card_v2",
+                "data": {
+                    "name": "Trusted Source",
+                    "description": "Trusted bulk import source path"
+                }
+            }),
+            Some("trusted-avatar.png".to_string()),
+            &Value::Null,
+            Some(&source),
+        )
+        .expect("trusted avatar source should import");
+
+        let character = result
+            .get("character")
+            .and_then(Value::as_object)
+            .expect("import should return a character record");
+        let avatar_file_path = character
+            .get("avatarFilePath")
+            .and_then(Value::as_str)
+            .expect("trusted source should create a managed avatar file");
+        assert!(
+            avatar_file_path.contains("avatars")
+                && avatar_file_path.contains("characters")
+                && avatar_file_path.ends_with("trusted-avatar.png"),
+            "managed avatar path should stay under the character avatar folder"
+        );
+        assert!(
+            Path::new(avatar_file_path).exists(),
+            "managed avatar file should exist"
+        );
+
+        let _ = fs::remove_dir_all(app_root);
+        let _ = fs::remove_dir_all(source_root);
     }
 }

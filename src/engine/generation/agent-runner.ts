@@ -34,6 +34,8 @@ export interface GenerationAgentRuntimeInput {
   persona: GenerationPersonaContext | null;
   activatedLorebookEntries: Array<{ id: string; name: string; content: string; tag: string }>;
   chatSummary: string | null;
+  debugMode?: boolean;
+  debugSink?: AgentContext["debugSink"];
   signal?: AbortSignal;
   agentTypes?: Set<string>;
 }
@@ -583,6 +585,7 @@ async function resolveAgents(deps: AgentDeps, input: GenerationAgentRuntimeInput
     .filter((agent) => {
       const type = readString(agent.type || agent.agentType);
       const id = readString(agent.id);
+      if ((!input.agentTypes || input.agentTypes.size === 0) && type === "lorebook-keeper") return false;
       if (scopedAgentIds.size > 0 && !scopedAgentIds.has(type) && !scopedAgentIds.has(id)) return false;
       if (!input.agentTypes || input.agentTypes.size === 0) return true;
       return input.agentTypes.has(type);
@@ -664,6 +667,8 @@ async function buildAgentContext(deps: AgentDeps, input: GenerationAgentRuntimeI
     activatedLorebookEntries: input.activatedLorebookEntries,
     writableLorebookIds: null,
     chatSummary: input.chatSummary,
+    debugMode: input.debugMode === true,
+    debugSink: input.debugSink,
     streaming: true,
     signal: input.signal,
   };

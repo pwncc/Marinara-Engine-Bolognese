@@ -342,7 +342,7 @@ fn import_marinara_character(state: &AppState, data: Value) -> AppResult<Value> 
         || data.get("format").is_some()
         || data.get("avatarPath").is_some();
     if !looks_like_storage_record {
-        return import_st_character_payload(state, data, None, &Value::Null);
+        return import_st_character_payload(state, data, None, &Value::Null, None);
     }
 
     let mut source = data.clone();
