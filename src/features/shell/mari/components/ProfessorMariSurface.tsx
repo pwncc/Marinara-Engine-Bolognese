@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Check,
@@ -13,7 +14,14 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { runProfessorMariEntry, type MariMessage, type MariTraceEvent } from "../../../../engine/mari/mari-entry";
+import {
+  isMariStagedAction,
+  runProfessorMariEntry,
+  type MariEntryAction,
+  type MariMessage,
+  type MariStorageAction,
+  type MariTraceEvent,
+} from "../../../../engine/mari/mari-entry";
 import { mariApi } from "../../../../shared/api/mari-api";
 import { useConnections } from "../../../catalog/connections/index";
 import { usePersonas } from "../../../catalog/characters/index";
@@ -92,6 +100,7 @@ function formatErrorDetails(error: unknown) {
 }
 
 export function ProfessorMariSurface() {
+  const queryClient = useQueryClient();
   const { data: rawConnections } = useConnections();
   const { data: rawPersonas } = usePersonas();
   const convoGradient = useUIStore((s) => s.convoGradient);
@@ -106,13 +115,16 @@ export function ProfessorMariSurface() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendErrorDetails, setSendErrorDetails] = useState<string | null>(null);
   const [liveTrace, setLiveTrace] = useState<MariTraceEvent[]>([]);
+  const [pendingAction, setPendingAction] = useState<MariEntryAction | null>(null);
+  const [applyingAction, setApplyingAction] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLElement>(null);
   const spriteMeasureRef = useRef<HTMLDivElement>(null);
   const [spriteSafeInset, setSpriteSafeInset] = useState(0);
-  const canSend = (draft.trim().length > 0 || attachments.length > 0) && !sending;
+  const canSend = (draft.trim().length > 0 || attachments.length > 0) && !sending && !applyingAction;
   const connections = useMemo(
     () =>
       filterLanguageGenerationConnections((rawConnections ?? []) as MariConnection[]).sort((a, b) =>
@@ -240,6 +252,8 @@ export function ProfessorMariSurface() {
     setAttachments([]);
     setSendError(null);
     setSendErrorDetails(null);
+    setActionError(null);
+    setPendingAction(null);
     setLiveTrace([]);
     setSending(true);
     setOptionPanel(null);
@@ -295,8 +309,42 @@ export function ProfessorMariSurface() {
       trace: response.trace,
     };
     setMessages((current) => [...current, assistant]);
+    setPendingAction(isMariStagedAction(response.action) && response.action.changes.length > 0 ? response.action : null);
     setLiveTrace([]);
     setSending(false);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const approvePendingChanges = async () => {
+    if (!isMariStagedAction(pendingAction) || pendingAction.storageActions.length === 0 || applyingAction) return;
+    setApplyingAction(true);
+    setActionError(null);
+    try {
+      const result = await mariApi.applyStagedChanges(pendingAction);
+      setPendingAction(null);
+      await queryClient.invalidateQueries();
+      setMessages((current) => [
+        ...current,
+        {
+          id: newId("mari-assistant"),
+          role: "assistant",
+          content: `Saved ${result.applied} staged change${result.applied === 1 ? "" : "s"} to your library.`,
+          createdAt: result.appliedAt ?? new Date().toISOString(),
+        },
+      ]);
+    } catch (error) {
+      console.error("Professor Mari failed to apply staged changes", error);
+      setActionError(error instanceof Error ? error.message : "Professor Mari failed to apply staged changes.");
+    } finally {
+      setApplyingAction(false);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  };
+
+  const rejectPendingChanges = () => {
+    if (applyingAction) return;
+    setPendingAction(null);
+    setActionError(null);
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
@@ -311,6 +359,15 @@ export function ProfessorMariSurface() {
           <div className="flex-1 space-y-3 pb-32 sm:pb-40" style={{ width: "calc(100% - var(--mari-chat-gutter))", maxWidth: "100%" }}>
             <MariConversation messages={messages} persona={selectedPersona} />
             {sending && <MariLiveMessage events={liveTrace} />}
+            {pendingAction && (
+              <MariStagedChangesPanel
+                action={pendingAction}
+                applying={applyingAction}
+                error={actionError}
+                onApprove={() => void approvePendingChanges()}
+                onReject={rejectPendingChanges}
+              />
+            )}
             {sendError && <MariErrorMessage message={sendError} details={sendErrorDetails} />}
             <div ref={messagesEndRef} className="h-1" />
           </div>
@@ -504,6 +561,110 @@ function MariChatMessage({ message, persona }: { message: MariMessage; persona: 
       </div>
     </div>
   );
+}
+
+function MariStagedChangesPanel({
+  action,
+  applying,
+  error,
+  onApprove,
+  onReject,
+}: {
+  action: MariEntryAction;
+  applying: boolean;
+  error: string | null;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  if (!isMariStagedAction(action)) return null;
+  const storageActions = action.storageActions;
+  const visibleActions = storageActions.slice(0, 4);
+  const hiddenActionCount = Math.max(0, storageActions.length - visibleActions.length);
+  const canApprove = storageActions.length > 0 && !applying;
+  return (
+    <div className="flex w-full items-start gap-2.5 sm:gap-3">
+      <MariAvatar />
+      <div className="min-w-0 flex-1">
+        <div className="relative w-full rounded-2xl rounded-tl-sm bg-[var(--card)]/92 py-3 pl-3.5 pr-[calc(0.875rem+var(--mari-bubble-overlap))] text-sm leading-6 shadow-sm ring-1 ring-[var(--primary)]/35 sm:pl-4 sm:pr-[calc(1rem+var(--mari-bubble-overlap))]">
+          <span className="absolute -left-1 top-3 h-3 w-3 rotate-45 border-b border-l border-[var(--primary)]/35 bg-[var(--card)]/92" />
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex h-7 w-7 items-center justify-center rounded-xl bg-[var(--primary)]/12 text-[var(--primary)]">
+              <FileText size="0.9rem" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-[var(--foreground)]">Review Mari's staged changes</div>
+              <div className="text-xs text-[var(--muted-foreground)]">
+                {storageActions.length} storage action{storageActions.length === 1 ? "" : "s"} from {action.changes.length} file change
+                {action.changes.length === 1 ? "" : "s"}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 space-y-1.5">
+            {visibleActions.map((item, index) => (
+              <div key={`${item.type}-${item.entity}-${index}`} className="rounded-xl bg-[var(--secondary)]/45 px-2.5 py-2">
+                <div className="font-semibold text-[var(--foreground)]/90">{describeStorageAction(item)}</div>
+                {item.paths?.length ? <div className="mt-0.5 truncate text-[0.6875rem] text-[var(--muted-foreground)]">{item.paths[0]}</div> : null}
+              </div>
+            ))}
+            {hiddenActionCount > 0 && (
+              <div className="px-2.5 text-[0.6875rem] font-medium text-[var(--muted-foreground)]">+{hiddenActionCount} more</div>
+            )}
+            {action.unmappedChanges.length > 0 && (
+              <details className="rounded-xl bg-amber-500/10 px-2.5 py-2 text-[0.6875rem] text-amber-600 dark:text-amber-300">
+                <summary className="cursor-pointer font-semibold">
+                  {action.unmappedChanges.length} file change{action.unmappedChanges.length === 1 ? "" : "s"} cannot be applied automatically
+                </summary>
+                <div className="mt-2 space-y-1">
+                  {action.unmappedChanges.slice(0, 4).map((change) => (
+                    <div key={change.path} className="break-words">
+                      <span className="font-semibold">{change.path}</span>
+                      {change.reason ? <span>: {change.reason}</span> : null}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+          </div>
+
+          {error && <div className="mt-3 rounded-xl bg-red-500/10 px-2.5 py-2 text-[0.75rem] text-red-400">{error}</div>}
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onApprove}
+              disabled={!canApprove}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-xl border border-[var(--border)] px-3 py-1.5 text-xs font-semibold transition",
+                canApprove
+                  ? "bg-[var(--foreground)] text-[var(--background)] hover:opacity-90 active:scale-95"
+                  : "cursor-not-allowed bg-[var(--secondary)] text-[var(--muted-foreground)] opacity-60",
+              )}
+            >
+              <Check size="0.8rem" />
+              {applying ? "Saving" : "Approve"}
+            </button>
+            <button
+              type="button"
+              onClick={onReject}
+              disabled={applying}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--border)] bg-transparent px-3 py-1.5 text-xs font-semibold text-[var(--muted-foreground)] transition hover:text-[var(--foreground)] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <X size="0.8rem" />
+              Reject
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function describeStorageAction(action: MariStorageAction) {
+  if (action.label) return action.label;
+  const entity = action.entity.replace(/-/g, " ");
+  if (action.type === "create_record") return `Create ${entity}`;
+  return `Edit ${entity}`;
 }
 
 function PersonaAvatar({ persona }: { persona: MariPersona | null }) {

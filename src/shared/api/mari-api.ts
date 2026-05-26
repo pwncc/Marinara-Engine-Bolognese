@@ -1,4 +1,4 @@
-import type { MariEntryRequest, MariGatewayResponse, MariTraceEvent } from "../../engine/mari/mari-entry";
+import type { MariApplyStagedChangesResult, MariEntryAction, MariEntryRequest, MariGatewayResponse, MariTraceEvent } from "../../engine/mari/mari-entry";
 import { Channel } from "@tauri-apps/api/core";
 import { invokeTauri } from "./tauri-client";
 
@@ -12,4 +12,8 @@ export const mariApi = {
       onEvent: channel,
     });
   },
+  applyStagedChanges: (action: MariEntryAction) =>
+    invokeTauri<MariApplyStagedChangesResult>("professor_mari_apply_staged_changes", {
+      action,
+    }),
 };

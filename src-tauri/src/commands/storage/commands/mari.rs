@@ -12,3 +12,11 @@ pub async fn professor_mari_prompt(
 ) -> Result<Value, AppError> {
     mari::professor_mari_prompt(&state, request, on_event).await
 }
+
+#[tauri::command]
+pub fn professor_mari_apply_staged_changes(
+    state: State<'_, AppState>,
+    action: Value,
+) -> Result<Value, AppError> {
+    mari::professor_mari_apply_staged_changes(&state, action)
+}

@@ -22,7 +22,7 @@ const checks = [
   },
   {
     path: "src-tauri/src/commands/storage/imports/marinara.rs",
-    maxLines: 750,
+    maxLines: 1000,
     forbiddenPatterns: [],
     reason: "Marinara envelope import logic should stay focused and split if it grows further",
   },

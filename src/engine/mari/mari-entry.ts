@@ -63,18 +63,27 @@ export const MARI_ACTION_ENTITIES = [
 
 export type MariActionEntity = (typeof MARI_ACTION_ENTITIES)[number];
 
-export type MariEntryAction =
-  | {
-      type: "none";
-      capability: "read_only";
-      reason: string;
-    }
+export type MariFileChange = {
+  op: "create" | "modify" | "delete" | string;
+  path: string;
+  before?: string;
+  after?: string;
+  reason?: string;
+  binding?: {
+    entity?: MariActionEntity | string;
+    id?: string;
+    field?: string | null;
+  };
+};
+
+export type MariStorageAction =
   | {
       type: "create_record";
       entity: MariActionEntity;
       draft: Record<string, unknown>;
       label?: string;
       rationale?: string;
+      paths?: string[];
     }
   | {
       type: "edit_record";
@@ -83,14 +92,47 @@ export type MariEntryAction =
       patch: Record<string, unknown>;
       label?: string;
       rationale?: string;
+      paths?: string[];
     };
 
-const MARI_READ_ONLY_REASON = "Professor Mari v1 can inspect the creative library but cannot create or edit records.";
+export type MariEntryAction =
+  | {
+      type: "none";
+      capability: "bashkit_virtual_workspace" | "read_only";
+      reason: string;
+      changes?: MariFileChange[];
+      workspaceManifest?: unknown;
+      approvalRequired?: false;
+    }
+  | {
+      type: "staged_file_changes";
+      capability: "bashkit_virtual_workspace";
+      changes: MariFileChange[];
+      storageActions: MariStorageAction[];
+      unmappedChanges: MariFileChange[];
+      workspaceManifest?: unknown;
+      approvalRequired: boolean;
+    }
+  | MariStorageAction;
 
-export const MARI_READ_ONLY_ACTION: MariEntryAction = {
+const MARI_NO_CHANGES_REASON = "Professor Mari did not stage any storage changes.";
+
+export const MARI_NO_CHANGES_ACTION: MariEntryAction = {
   type: "none",
-  capability: "read_only",
-  reason: MARI_READ_ONLY_REASON,
+  capability: "bashkit_virtual_workspace",
+  reason: MARI_NO_CHANGES_REASON,
+  approvalRequired: false,
+};
+
+export type MariApplyStagedChangesResult = {
+  applied: number;
+  appliedAt?: string;
+  results: Array<{
+    type: "create_record" | "edit_record" | string;
+    entity?: MariActionEntity | string;
+    id?: string;
+    record?: unknown;
+  }>;
 };
 
 export type MariEntryResponse = {
@@ -125,6 +167,10 @@ export async function runProfessorMariEntry(input: MariEntryRequest, gateway: Ma
   };
 }
 
+export function isMariStagedAction(action: MariEntryAction | null | undefined): action is Extract<MariEntryAction, { type: "staged_file_changes" }> {
+  return action?.type === "staged_file_changes";
+}
+
 function normalizeMariTrace(value: unknown): MariTraceEvent[] {
   if (!Array.isArray(value)) return [];
   return value.filter(isRecord).map((event) => ({
@@ -144,14 +190,39 @@ function normalizeMariTrace(value: unknown): MariTraceEvent[] {
 }
 
 function normalizeMariEntryAction(value: unknown): MariEntryAction {
-  if (!isRecord(value)) return MARI_READ_ONLY_ACTION;
-  if (value.type === "none" && value.capability === "read_only") {
+  if (!isRecord(value)) return MARI_NO_CHANGES_ACTION;
+  if (value.type === "none") {
     return {
       type: "none",
-      capability: "read_only",
-      reason: typeof value.reason === "string" && value.reason.trim() ? value.reason : MARI_READ_ONLY_REASON,
+      capability: value.capability === "read_only" ? "read_only" : "bashkit_virtual_workspace",
+      reason: typeof value.reason === "string" && value.reason.trim() ? value.reason : MARI_NO_CHANGES_REASON,
+      changes: normalizeMariFileChanges(value.changes),
+      workspaceManifest: value.workspaceManifest,
+      approvalRequired: false,
     };
   }
+  if (value.type === "staged_file_changes") {
+    return {
+      type: "staged_file_changes",
+      capability: "bashkit_virtual_workspace",
+      changes: normalizeMariFileChanges(value.changes),
+      storageActions: normalizeMariStorageActions(value.storageActions),
+      unmappedChanges: normalizeMariFileChanges(value.unmappedChanges),
+      workspaceManifest: value.workspaceManifest,
+      approvalRequired: value.approvalRequired === true,
+    };
+  }
+  const storageAction = normalizeMariStorageAction(value);
+  return storageAction ?? MARI_NO_CHANGES_ACTION;
+}
+
+function normalizeMariStorageActions(value: unknown): MariStorageAction[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(normalizeMariStorageAction).filter((action): action is MariStorageAction => !!action);
+}
+
+function normalizeMariStorageAction(value: unknown): MariStorageAction | null {
+  if (!isRecord(value)) return null;
   if (value.type === "create_record" && isMariActionEntity(value.entity) && isRecord(value.draft)) {
     return {
       type: "create_record",
@@ -159,15 +230,10 @@ function normalizeMariEntryAction(value: unknown): MariEntryAction {
       draft: value.draft,
       ...(typeof value.label === "string" ? { label: value.label } : {}),
       ...(typeof value.rationale === "string" ? { rationale: value.rationale } : {}),
+      ...(Array.isArray(value.paths) ? { paths: value.paths.filter((path): path is string => typeof path === "string") } : {}),
     };
   }
-  if (
-    value.type === "edit_record" &&
-    isMariActionEntity(value.entity) &&
-    typeof value.id === "string" &&
-    value.id.trim() &&
-    isRecord(value.patch)
-  ) {
+  if (value.type === "edit_record" && isMariActionEntity(value.entity) && typeof value.id === "string" && value.id.trim() && isRecord(value.patch)) {
     return {
       type: "edit_record",
       entity: value.entity,
@@ -175,9 +241,35 @@ function normalizeMariEntryAction(value: unknown): MariEntryAction {
       patch: value.patch,
       ...(typeof value.label === "string" ? { label: value.label } : {}),
       ...(typeof value.rationale === "string" ? { rationale: value.rationale } : {}),
+      ...(Array.isArray(value.paths) ? { paths: value.paths.filter((path): path is string => typeof path === "string") } : {}),
     };
   }
-  return MARI_READ_ONLY_ACTION;
+  return null;
+}
+
+function normalizeMariFileChanges(value: unknown): MariFileChange[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).flatMap((change) => {
+    if (typeof change.path !== "string" || !change.path.trim()) return [];
+    return [
+      {
+        op: typeof change.op === "string" ? change.op : "modify",
+        path: change.path,
+        ...(typeof change.before === "string" ? { before: change.before } : {}),
+        ...(typeof change.after === "string" ? { after: change.after } : {}),
+        ...(typeof change.reason === "string" ? { reason: change.reason } : {}),
+        ...(isRecord(change.binding)
+          ? {
+              binding: {
+                ...(typeof change.binding.entity === "string" ? { entity: change.binding.entity } : {}),
+                ...(typeof change.binding.id === "string" ? { id: change.binding.id } : {}),
+                ...(typeof change.binding.field === "string" || change.binding.field === null ? { field: change.binding.field } : {}),
+              },
+            }
+          : {}),
+      },
+    ];
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
