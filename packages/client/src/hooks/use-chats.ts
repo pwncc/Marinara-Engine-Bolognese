@@ -195,8 +195,6 @@ export function useChatMessages(chatId: string | null, pageSize: number = 0, ena
         : oldestLoaded.createdAt;
     },
     enabled: !!chatId && enabled,
-    staleTime: 60_000,
-    refetchOnWindowFocus: false,
   });
 }
 
@@ -206,7 +204,6 @@ export function useChatMessageCount(chatId: string | null) {
     queryFn: () => api.get<{ count: number }>(`/chats/${chatId}/message-count`),
     enabled: !!chatId,
     staleTime: 30_000,
-    refetchOnWindowFocus: false,
   });
 }
 

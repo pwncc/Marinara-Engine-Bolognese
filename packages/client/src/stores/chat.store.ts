@@ -171,7 +171,13 @@ interface ChatState {
 
 export const useChatStore = create<ChatState>()(
   subscribeWithSelector((set, get) => ({
-    activeChatId: null,
+    activeChatId: (() => {
+      try {
+        return localStorage.getItem(STORAGE_KEY) || null;
+      } catch {
+        return null;
+      }
+    })(),
     activeChat: null,
     messages: [],
     isStreaming: false,
