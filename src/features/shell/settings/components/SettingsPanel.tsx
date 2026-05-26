@@ -3642,7 +3642,7 @@ function AdvancedSettings() {
         label="Debug mode"
         checked={debugMode}
         onChange={setDebugMode}
-        help="Shows the in-app agent debug panel with prompt, response, tool, and result details for troubleshooting."
+        help="Shows the in-app agent debug panel and emits agent runtime diagnostics to the console for troubleshooting."
       />
 
       {/* Backup */}
