@@ -119,6 +119,7 @@ export const ttsConfigSchema = z.object({
   autoplayRP: z.boolean().default(false),
   autoplayConvo: z.boolean().default(false),
   autoplayGame: z.boolean().default(false),
+  autoplayStreaming: z.boolean().default(false),
   dialogueOnly: z.boolean().default(false),
   dialogueScope: ttsDialogueScopeSchema.default("all"),
   dialogueCharacterName: z.string().default(""),

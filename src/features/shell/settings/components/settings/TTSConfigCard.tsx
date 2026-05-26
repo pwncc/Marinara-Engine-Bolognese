@@ -304,6 +304,7 @@ export function TTSConfigCard() {
   const [autoplayRP, setAutoplayRP] = useState(false);
   const [autoplayConvo, setAutoplayConvo] = useState(false);
   const [autoplayGame, setAutoplayGame] = useState(false);
+  const [autoplayStreaming, setAutoplayStreaming] = useState(false);
   const [dialogueOnly, setDialogueOnly] = useState(false);
 
   const [expanded, setExpanded] = useState(false);
@@ -345,6 +346,7 @@ export function TTSConfigCard() {
     setAutoplayRP(savedConfig.autoplayRP);
     setAutoplayConvo(savedConfig.autoplayConvo);
     setAutoplayGame(savedConfig.autoplayGame);
+    setAutoplayStreaming(savedConfig.autoplayStreaming ?? false);
     setDialogueOnly(savedConfig.dialogueOnly ?? false);
     setSaveStatus("idle");
   }, [savedConfig]);
@@ -387,6 +389,7 @@ export function TTSConfigCard() {
     autoplayRP,
     autoplayConvo,
     autoplayGame,
+    autoplayStreaming,
     dialogueOnly,
     dialogueScope: "all",
     dialogueCharacterName: "",
@@ -1112,6 +1115,14 @@ export function TTSConfigCard() {
               onChange={(v) => {
                 setAutoplayGame(v);
                 mark({ autoplayGame: v });
+              }}
+            />
+            <ToggleRow
+              label="Stream as the model generates"
+              checked={autoplayStreaming}
+              onChange={(v) => {
+                setAutoplayStreaming(v);
+                mark({ autoplayStreaming: v });
               }}
             />
             <ToggleRow

@@ -16,6 +16,10 @@ export interface TTSUtterance {
   tone?: string;
 }
 
+export interface TTSVoiceRequest extends TTSUtterance {
+  voice?: string;
+}
+
 export function normalizeTTSCharacterName(value?: string | null): string {
   return (value ?? "").toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -258,22 +262,49 @@ export function buildTTSMessageText(text: string, config: TTSConfig, fallbackSpe
     .join("\n");
 }
 
+export function buildTTSVoiceRequests(
+  text: string,
+  config: TTSConfig,
+  fallbackSpeaker?: string | null,
+  fallbackCharacterId?: string | null,
+  resolveCharacterIdForSpeaker?: (speaker?: string | null) => string | null | undefined,
+): TTSVoiceRequest[] {
+  const hasSpeakerTags = /<speaker="[^"]*">/i.test(text);
+  const shouldExtractUtterances = config.dialogueOnly || hasSpeakerTags;
+  const utterances =
+    hasSpeakerTags && !config.dialogueOnly
+      ? extractSpeakerTaggedUtterances(text, config, fallbackSpeaker, true)
+      : shouldExtractUtterances
+        ? extractDialogueUtterances(text, config, fallbackSpeaker)
+        : [{ text: cleanTTSInputText(text), speaker: fallbackSpeaker || undefined } satisfies TTSUtterance];
+
+  const fallbackSpeakerKey = normalizeTTSCharacterName(fallbackSpeaker);
+  return utterances.flatMap((utterance) => {
+    const speaker = utterance.speaker || fallbackSpeaker || undefined;
+    const speakerKey = normalizeTTSCharacterName(speaker);
+    const resolvedCharacterId = speaker
+      ? (resolveCharacterIdForSpeaker?.(speaker) ??
+        (speakerKey && speakerKey === fallbackSpeakerKey ? fallbackCharacterId : undefined))
+      : fallbackCharacterId;
+    const voice = resolveTTSVoiceForSpeaker(config, speaker, resolvedCharacterId);
+    if (config.source === "elevenlabs" && !voice) return [];
+
+    return splitTTSChunks(utterance.text).map((chunk) => ({
+      text: chunk,
+      speaker,
+      tone: utterance.tone,
+      voice,
+    }));
+  });
+}
+
 export function extractDialogueUtterances(
   text: string,
   config: Pick<TTSConfig, "dialogueScope" | "dialogueCharacterName">,
   fallbackSpeaker?: string | null,
 ): TTSUtterance[] {
   const utterances: TTSUtterance[] = [];
-
-  const speakerTagRe = /<speaker="([^"]*)">([\s\S]*?)<\/speaker>/gi;
-  let speakerTagMatch: RegExpExecArray | null;
-  while ((speakerTagMatch = speakerTagRe.exec(text)) !== null) {
-    const speaker = speakerTagMatch[1]?.trim() || fallbackSpeaker || undefined;
-    const spoken = cleanTTSInputText(speakerTagMatch[2] ?? "");
-    if (spoken && ttsConfigMatchesSpeaker(config, speaker)) {
-      utterances.push({ text: spoken, speaker });
-    }
-  }
+  utterances.push(...extractSpeakerTaggedUtterances(text, config, fallbackSpeaker, false));
 
   const vnLineRe = /^\s*(?:Dialogue\s*)?\[([^\]]+)\]\s*(?:\[([^\]]+)\])?\s*(?:\[([^\]]+)\])?\s*:\s*(.+)$/i;
   for (const rawLine of text.split(/\r?\n/)) {
@@ -309,6 +340,38 @@ export function extractDialogueUtterances(
   }
 
   return dedupeUtterances(utterances);
+}
+
+function extractSpeakerTaggedUtterances(
+  text: string,
+  config: Pick<TTSConfig, "dialogueScope" | "dialogueCharacterName">,
+  fallbackSpeaker?: string | null,
+  includeNarration = false,
+): TTSUtterance[] {
+  const utterances: TTSUtterance[] = [];
+  const speakerTagRe = /<speaker="([^"]*)">([\s\S]*?)<\/speaker>/gi;
+  let speakerTagMatch: RegExpExecArray | null;
+  let lastIndex = 0;
+
+  const addNarration = (value: string) => {
+    if (!includeNarration) return;
+    const spoken = cleanTTSInputText(value);
+    if (spoken) utterances.push({ text: spoken, speaker: "Narrator" });
+  };
+
+  while ((speakerTagMatch = speakerTagRe.exec(text)) !== null) {
+    addNarration(text.slice(lastIndex, speakerTagMatch.index));
+
+    const speaker = speakerTagMatch[1]?.trim() || fallbackSpeaker || undefined;
+    const spoken = cleanTTSInputText(stripSurroundingDialogueQuotes((speakerTagMatch[2] ?? "").trim()));
+    if (spoken && ttsConfigMatchesSpeaker(config, speaker)) {
+      utterances.push({ text: spoken, speaker });
+    }
+    lastIndex = speakerTagRe.lastIndex;
+  }
+
+  addNarration(text.slice(lastIndex));
+  return utterances;
 }
 
 function dedupeUtterances(utterances: TTSUtterance[]): TTSUtterance[] {

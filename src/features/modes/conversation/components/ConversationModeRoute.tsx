@@ -72,6 +72,7 @@ export function ConversationModeRoute({ activeChatId }: ConversationModeRoutePro
     onRegenerate: timeline.handleRegenerate,
   });
   useChatTtsAutoplay({
+    chatId: activeChatId,
     mode: "conversation",
     messages: data.messages,
     characterMap: data.characterMap,

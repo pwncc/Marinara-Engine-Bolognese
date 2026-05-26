@@ -46,6 +46,11 @@ import { storageApi } from "../../../../../shared/api/storage-api";
 import { ttsService } from "../../../../../shared/lib/tts-service";
 import { useTTSConfig } from "../../../../../shared/hooks/use-tts";
 import {
+  isStreamingTTSActive,
+  stopStreamingTTS,
+  subscribeStreamingTTSActive,
+} from "../hooks/use-streaming-tts";
+import {
   buildTTSMessageText,
   clientSidePlaybackRate,
   resolveTTSVoiceForSpeaker,
@@ -760,8 +765,14 @@ export const ChatMessage = memo(function ChatMessage({
   const isSpeakingThis = ttsActiveId === message.id;
   const isLoadingThis = isSpeakingThis && ttsState === "loading";
   const isPausedThis = isSpeakingThis && ttsState === "paused";
+  const [streamingTTSActive, setStreamingTTSActive] = useState<boolean>(() => isStreamingTTSActive());
+  useEffect(() => subscribeStreamingTTSActive(setStreamingTTSActive), []);
 
   const handleSpeak = useCallback(() => {
+    if (isStreamingTTSActive()) {
+      stopStreamingTTS();
+      return;
+    }
     // Read directly from the singleton so we never act on stale React state
     const liveState = ttsService.getState();
     const liveActiveId = ttsService.getActiveId();
@@ -1828,7 +1839,7 @@ export const ChatMessage = memo(function ChatMessage({
                     icon={
                       isLoadingThis ? (
                         <Loader2 size={MESSAGE_ACTION_ICON_SIZE} className="animate-spin" />
-                      ) : isSpeakingThis ? (
+                      ) : isSpeakingThis || streamingTTSActive ? (
                         <VolumeX size={MESSAGE_ACTION_ICON_SIZE} />
                       ) : (
                         <Volume2 size={MESSAGE_ACTION_ICON_SIZE} />
@@ -1836,7 +1847,9 @@ export const ChatMessage = memo(function ChatMessage({
                     }
                     onClick={handleSpeak}
                     title={
-                      !ttsSpeakText
+                      streamingTTSActive
+                        ? "Stop streaming narration"
+                        : !ttsSpeakText
                         ? "No dialogue to speak"
                         : isLoadingThis
                           ? "Loading…"
@@ -1844,8 +1857,8 @@ export const ChatMessage = memo(function ChatMessage({
                             ? "Stop speaking"
                             : "Speak"
                     }
-                    className={isSpeakingThis ? "text-sky-400 hover:text-sky-300" : undefined}
-                    disabled={!ttsSpeakText || (ttsBusy && !isSpeakingThis)}
+                    className={isSpeakingThis || streamingTTSActive ? "text-sky-400 hover:text-sky-300" : undefined}
+                    disabled={!streamingTTSActive && (!ttsSpeakText || (ttsBusy && !isSpeakingThis))}
                     dark
                   />
                 </>
@@ -2235,7 +2248,7 @@ export const ChatMessage = memo(function ChatMessage({
                   icon={
                     isLoadingThis ? (
                       <Loader2 size={MESSAGE_ACTION_ICON_SIZE} className="animate-spin" />
-                    ) : isSpeakingThis ? (
+                    ) : isSpeakingThis || streamingTTSActive ? (
                       <VolumeX size={MESSAGE_ACTION_ICON_SIZE} />
                     ) : (
                       <Volume2 size={MESSAGE_ACTION_ICON_SIZE} />
@@ -2243,7 +2256,9 @@ export const ChatMessage = memo(function ChatMessage({
                   }
                   onClick={handleSpeak}
                   title={
-                    !ttsSpeakText
+                    streamingTTSActive
+                      ? "Stop streaming narration"
+                      : !ttsSpeakText
                       ? "No dialogue to speak"
                       : isLoadingThis
                         ? "Loading…"
@@ -2251,8 +2266,8 @@ export const ChatMessage = memo(function ChatMessage({
                           ? "Stop speaking"
                           : "Speak"
                   }
-                  className={isSpeakingThis ? "text-sky-500" : undefined}
-                  disabled={!ttsSpeakText || (ttsBusy && !isSpeakingThis)}
+                  className={isSpeakingThis || streamingTTSActive ? "text-sky-500" : undefined}
+                  disabled={!streamingTTSActive && (!ttsSpeakText || (ttsBusy && !isSpeakingThis))}
                 />
               </>
             )}

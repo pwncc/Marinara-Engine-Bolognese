@@ -109,6 +109,7 @@ export function RoleplayModeRoute({ activeChatId, fallbackChatMode = "roleplay" 
     onRegenerate: timeline.handleRegenerate,
   });
   useChatTtsAutoplay({
+    chatId: activeChatId,
     mode: data.chatMode === "visual_novel" ? "visual_novel" : "roleplay",
     messages: data.messages,
     characterMap: data.characterMap,

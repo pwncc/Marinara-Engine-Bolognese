@@ -120,6 +120,7 @@ fn default_config() -> Value {
         "autoplayRP": false,
         "autoplayConvo": false,
         "autoplayGame": false,
+        "autoplayStreaming": false,
         "dialogueOnly": false,
         "dialogueScope": "all",
         "dialogueCharacterName": ""
@@ -771,6 +772,50 @@ mod tests {
         format!("http://{address}/v1")
     }
 
+    async fn serve_pockettts_audio() -> String {
+        const WAV_BYTES: &[u8] = &[
+            82, 73, 70, 70, 38, 0, 0, 0, 87, 65, 86, 69, 102, 109, 116, 32, 16, 0, 0, 0, 1, 0,
+            1, 0, 64, 31, 0, 0, 64, 31, 0, 0, 1, 0, 8, 0, 100, 97, 116, 97, 2, 0, 0, 0, 128,
+            128,
+        ];
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test TTS server should bind");
+        let address = listener
+            .local_addr()
+            .expect("test TTS server address should be readable");
+        tokio::spawn(async move {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("test TTS server should accept one request");
+            let mut buffer = [0_u8; 8192];
+            let bytes = stream
+                .read(&mut buffer)
+                .await
+                .expect("test TTS server should read request");
+            let request = String::from_utf8_lossy(&buffer[..bytes]);
+            assert!(request.starts_with("POST /tts "));
+            assert!(request.contains("name=\"text\""));
+            assert!(request.contains("name=\"voice_url\""));
+
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                WAV_BYTES.len()
+            );
+            stream
+                .write_all(header.as_bytes())
+                .await
+                .expect("test TTS server should write response header");
+            stream
+                .write_all(WAV_BYTES)
+                .await
+                .expect("test TTS server should write response body");
+        });
+        format!("http://{address}")
+    }
+
     #[tokio::test]
     async fn openai_compatible_voice_lookup_passes_configured_model() {
         let state = test_state("openai-voices-model");
@@ -797,6 +842,34 @@ mod tests {
 
         assert_eq!(result["fromProvider"], true);
         assert_eq!(result["voices"], json!(["af_heart"]));
+    }
+
+    #[tokio::test]
+    async fn pockettts_speak_returns_provider_audio() {
+        let state = test_state("pockettts-speak");
+        let base_url = serve_pockettts_audio().await;
+        state
+            .storage
+            .upsert_with_id(
+                "app-settings",
+                TTS_SETTINGS_KEY,
+                json!({
+                    "value": {
+                        "enabled": true,
+                        "source": "pockettts",
+                        "baseUrl": base_url,
+                        "voice": "alba"
+                    }
+                }),
+            )
+            .expect("TTS settings should be stored");
+
+        let result = speak(&state, json!({ "text": "Hello from streaming TTS." }))
+            .await
+            .expect("TTS speak should return provider audio");
+
+        assert_eq!(result["contentType"], "audio/wav");
+        assert!(result["audioBase64"].as_str().is_some_and(|audio| !audio.is_empty()));
     }
 
     #[test]
