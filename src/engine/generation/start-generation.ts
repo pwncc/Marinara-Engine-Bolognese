@@ -7,6 +7,14 @@ import type { StorageGateway } from "../capabilities/storage";
 import type { GenerationGuideSource } from "../shared/text/generation-guide";
 import { createGenerationAgentRuntime } from "./agent-runner";
 import { persistConnectedCommandTags } from "./connected-commands";
+import type { LLMToolCall } from "../generation-core/llm/base-provider";
+import {
+  buildMainToolDefinitions,
+  executeMainToolCall,
+  normalizeToolCall,
+  type MainToolDefinitions,
+  type ToolRuntimeInput,
+} from "./tools-runtime";
 import { llmParameters, loadChatMessages, requireRecord, resolveGenerationConnection } from "./context";
 import {
   appendReadableAttachmentsToContent,
@@ -798,26 +806,29 @@ export async function* startGeneration(
 
     const parallelAgents = runtime?.runParallel() ?? Promise.resolve<AgentResult[]>([]);
     yield { type: "phase", data: "Calling model..." };
-    let content = "";
-    let usage: unknown = null;
-    for await (const chunk of deps.llm.stream(
-      {
-        connectionId: readString(connection.id) || input.connectionId,
-        model: readString(connection.model) || undefined,
-        messages: [...prompt, generationGuide(input)].filter((message): message is LlmMessage => !!message),
-        parameters: llmParameters(connection, input),
-      },
+    const mainTools = await buildMainToolDefinitions({
+      chat: chatForGeneration,
+      storage: deps.storage,
+      integrations: deps.integrations,
+    });
+    const toolRuntimeInput: ToolRuntimeInput = {
+      chat: chatForGeneration,
+      activatedLorebookEntries: assembly.activatedLorebookEntries,
+      chatSummary: assembly.chatSummary,
+    };
+    const baseMessages: LlmMessage[] = [...prompt, generationGuide(input)].filter(
+      (message): message is LlmMessage => !!message,
+    );
+    const { content: streamedContent, usage } = yield* streamMainGenerationLoop({
+      deps,
+      connection,
+      input,
+      baseMessages,
+      mainTools,
+      toolRuntimeInput,
       signal,
-    )) {
-      if (chunk.type === "token" && chunk.text) {
-        content += chunk.text;
-        yield { type: "token", data: chunk.text };
-      } else if (chunk.type === "thinking" && chunk.text) {
-        yield { type: "thinking", data: chunk.text };
-      } else if (chunk.type === "usage") {
-        usage = chunk.data ?? null;
-      }
-    }
+    });
+    let content = streamedContent;
 
     const parallelResults = await parallelAgents;
     const postResults = runtime ? await runtime.runPost(content) : [];
@@ -875,26 +886,29 @@ export async function* startGeneration(
     preparedUserInput.images,
   );
   yield { type: "phase", data: "Calling model..." };
-  let content = "";
-  let usage: unknown = null;
-  for await (const chunk of deps.llm.stream(
-    {
-      connectionId: readString(connection.id) || input.connectionId,
-      model: readString(connection.model) || undefined,
-      messages: [...(prompt ?? []), generationGuide(input)].filter((message): message is LlmMessage => !!message),
-      parameters: llmParameters(connection, input),
-    },
+  const mainToolsDirect = await buildMainToolDefinitions({
+    chat: chatForGeneration,
+    storage: deps.storage,
+    integrations: deps.integrations,
+  });
+  const toolRuntimeInputDirect: ToolRuntimeInput = {
+    chat: chatForGeneration,
+    activatedLorebookEntries: assembly.activatedLorebookEntries,
+    chatSummary: assembly.chatSummary,
+  };
+  const baseMessagesDirect: LlmMessage[] = [...(prompt ?? []), generationGuide(input)].filter(
+    (message): message is LlmMessage => !!message,
+  );
+  const { content: streamedContentDirect, usage } = yield* streamMainGenerationLoop({
+    deps,
+    connection,
+    input,
+    baseMessages: baseMessagesDirect,
+    mainTools: mainToolsDirect,
+    toolRuntimeInput: toolRuntimeInputDirect,
     signal,
-  )) {
-    if (chunk.type === "token" && chunk.text) {
-      content += chunk.text;
-      yield { type: "token", data: chunk.text };
-    } else if (chunk.type === "thinking" && chunk.text) {
-      yield { type: "thinking", data: chunk.text };
-    } else if (chunk.type === "usage") {
-      usage = chunk.data ?? null;
-    }
-  }
+  });
+  let content = streamedContentDirect;
   content = await applyRuntimeRegexScripts(deps.storage, "ai_output", content);
   const connected = await persistConnectedCommandTags(
     deps.storage,
@@ -940,4 +954,121 @@ export async function* startGeneration(
 function generationGuide(input: StartGenerationInput): LlmMessage | null {
   const guide = readString(input.generationGuide).trim();
   return guide ? { role: "user", content: guide } : null;
+}
+
+/**
+ * Cap on the number of stream → tool-execute → re-stream iterations the main
+ * generation loop will perform before forcing a final turn. Picked defensively
+ * to cover realistic multi-step flows (e.g. Spotify-style 4-hop sequences,
+ * combat-style dice + state-update interleaves) while preventing runaway loops
+ * from broken models that always emit a tool call.
+ */
+const MAX_MAIN_TOOL_ITERATIONS = 8;
+
+/**
+ * Multi-turn main-character streaming loop.
+ *
+ * Streams from the LLM, collects any `tool_call` chunks, executes them via
+ * `executeMainToolCall`, appends the assistant turn + tool results to the
+ * conversation, and re-streams until the model produces a turn with no tool
+ * calls (or the iteration cap is hit).
+ *
+ * Mode-blind by construction: this helper reads no chat-mode flag. The only
+ * gate on the tool loop is `mainTools !== null`, which the caller derives from
+ * `chat.metadata.enableTools` via `buildMainToolDefinitions`.
+ *
+ * Tool-result messages are conversation-internal — they are NOT persisted as
+ * chat messages. Only the final accumulated text reaches `saveAssistantMessage`.
+ */
+async function* streamMainGenerationLoop(args: {
+  deps: GenerationEngineDeps;
+  connection: JsonRecord;
+  input: StartGenerationInput;
+  baseMessages: LlmMessage[];
+  mainTools: MainToolDefinitions | null;
+  toolRuntimeInput: ToolRuntimeInput;
+  signal: AbortSignal | undefined;
+}): AsyncGenerator<GenerationEvent, { content: string; usage: unknown }> {
+  const { deps, connection, input, baseMessages, mainTools, toolRuntimeInput, signal } = args;
+  let content = "";
+  let usage: unknown = null;
+  const conversation: LlmMessage[] = [...baseMessages];
+  let iteration = 0;
+
+  while (true) {
+    iteration++;
+    const pendingToolCalls: LLMToolCall[] = [];
+    let turnContent = "";
+
+    for await (const chunk of deps.llm.stream(
+      {
+        connectionId: readString(connection.id) || input.connectionId,
+        model: readString(connection.model) || undefined,
+        messages: conversation,
+        parameters: llmParameters(connection, input),
+        tools: mainTools?.toolDefs,
+      },
+      signal,
+    )) {
+      if (chunk.type === "token" && chunk.text) {
+        turnContent += chunk.text;
+        yield { type: "token", data: chunk.text };
+      } else if (chunk.type === "thinking" && chunk.text) {
+        yield { type: "thinking", data: chunk.text };
+      } else if (chunk.type === "tool_call") {
+        const normalized = normalizeToolCall(chunk.data);
+        if (normalized) pendingToolCalls.push(normalized);
+      } else if (chunk.type === "usage") {
+        usage = chunk.data ?? null;
+      }
+    }
+
+    content += turnContent;
+
+    if (!mainTools || pendingToolCalls.length === 0) break;
+    if (iteration >= MAX_MAIN_TOOL_ITERATIONS) {
+      yield {
+        type: "phase",
+        data: `Tool-call iteration limit (${MAX_MAIN_TOOL_ITERATIONS}) reached; finishing without further tool calls.`,
+      };
+      break;
+    }
+
+    conversation.push({
+      role: "assistant",
+      content: turnContent,
+      tool_calls: pendingToolCalls,
+    });
+
+    for (const call of pendingToolCalls) {
+      const toolName = call.function?.name || call.name;
+      const toolArgs = call.function?.arguments || call.arguments || "{}";
+      yield { type: "tool_call", data: { id: call.id, name: toolName, arguments: toolArgs } };
+      let resultText: string;
+      let success = true;
+      try {
+        resultText = await executeMainToolCall({
+          deps: { storage: deps.storage, integrations: deps.integrations },
+          input: toolRuntimeInput,
+          customTools: mainTools.customTools,
+          call,
+        });
+      } catch (err) {
+        success = false;
+        resultText = err instanceof Error ? err.message : String(err);
+      }
+      yield {
+        type: "tool_result",
+        data: { toolCallId: call.id, name: toolName, result: resultText, success },
+      };
+      conversation.push({
+        role: "tool",
+        content: resultText,
+        tool_call_id: call.id,
+        name: toolName,
+      });
+    }
+  }
+
+  return { content, usage };
 }
