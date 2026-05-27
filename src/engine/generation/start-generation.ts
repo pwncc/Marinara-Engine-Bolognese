@@ -991,7 +991,7 @@ async function* streamMainGenerationLoop(args: {
 }): AsyncGenerator<GenerationEvent, { content: string; usage: unknown }> {
   const { deps, connection, input, baseMessages, mainTools, toolRuntimeInput, signal } = args;
   let content = "";
-  let usage: unknown = null;
+  const usages: unknown[] = [];
   const conversation: LlmMessage[] = [...baseMessages];
   let iteration = 0;
 
@@ -1018,8 +1018,8 @@ async function* streamMainGenerationLoop(args: {
       } else if (chunk.type === "tool_call") {
         const normalized = normalizeToolCall(chunk.data);
         if (normalized) pendingToolCalls.push(normalized);
-      } else if (chunk.type === "usage") {
-        usage = chunk.data ?? null;
+      } else if (chunk.type === "usage" && chunk.data != null) {
+        usages.push(chunk.data);
       }
     }
 
@@ -1051,6 +1051,7 @@ async function* streamMainGenerationLoop(args: {
           deps: { storage: deps.storage, integrations: deps.integrations },
           input: toolRuntimeInput,
           customTools: mainTools.customTools,
+          allowedToolNames: mainTools.allowedToolNames,
           call,
         });
       } catch (err) {
@@ -1070,5 +1071,38 @@ async function* streamMainGenerationLoop(args: {
     }
   }
 
-  return { content, usage };
+  return { content, usage: mergeUsages(usages) };
+}
+
+/**
+ * Aggregate per-turn usage records across a multi-turn tool-call loop.
+ *
+ * Each LLM turn (every iteration of `streamMainGenerationLoop`) emits its own
+ * `usage` chunk. When the loop runs once with no tool calls, behavior is
+ * byte-identical to the pre-loop world — the single record is returned as-is.
+ * When the loop iterates 2+ times, numeric leaf fields (prompt/completion/total
+ * tokens, cached/reasoning/cost breakdowns) are summed so downstream
+ * `generationInfo.usage` reflects total cost, not just the final turn's slice.
+ *
+ * Falls back to the latest non-null entry when usages have heterogeneous shapes
+ * (different providers, different keys) so we never silently report wrong-typed
+ * data.
+ */
+function mergeUsages(usages: unknown[]): unknown {
+  if (usages.length === 0) return null;
+  if (usages.length === 1) return usages[0];
+  const records = usages.filter(isRecord);
+  if (records.length === 0) return usages[usages.length - 1] ?? null;
+  const merged: Record<string, unknown> = {};
+  for (const record of records) {
+    for (const [key, value] of Object.entries(record)) {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        const prev = merged[key];
+        merged[key] = typeof prev === "number" && Number.isFinite(prev) ? prev + value : value;
+      } else if (!(key in merged)) {
+        merged[key] = value;
+      }
+    }
+  }
+  return merged;
 }

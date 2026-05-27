@@ -49,7 +49,8 @@ export function normalizeToolCall(value: unknown): LLMToolCall | null {
   const rawFunction = isRecord(value.function) ? value.function : value;
   const name = readString(rawFunction.name || value.name).trim();
   if (!name) return null;
-  const args = readString(rawFunction.arguments || value.arguments, "{}");
+  const rawArgs = rawFunction.arguments ?? value.arguments;
+  const args = typeof rawArgs === "string" ? rawArgs : JSON.stringify(rawArgs ?? {});
   return {
     id: readString(value.id) || `tool-${name}-${Date.now().toString(36)}`,
     name,
@@ -443,6 +444,13 @@ export interface BuildMainToolDefinitionsArgs {
 export interface MainToolDefinitions {
   toolDefs: LlmToolDefinition[];
   customTools: Map<string, CustomToolRecord>;
+  /**
+   * Set of tool names that survived the filter and were actually advertised to
+   * the model. `executeMainToolCall` enforces this allowlist at dispatch time
+   * so a hallucinated or injected call to a filtered-out tool (Spotify,
+   * agent-only, inactive, name-collided custom) cannot reach execution.
+   */
+  allowedToolNames: Set<string>;
 }
 
 /**
@@ -477,22 +485,29 @@ export async function buildMainToolDefinitions(
     if (!filter(tool.name)) continue;
     builtIns.push({ name: tool.name, description: tool.description, parameters: tool.parameters });
   }
-  const customTools = await loadCustomTools(args.storage);
+  const loadedCustomTools = await loadCustomTools(args.storage);
+  const customTools = new Map<string, CustomToolRecord>();
   const customs: LlmToolDefinition[] = [];
-  for (const tool of customTools.values()) {
+  for (const tool of loadedCustomTools.values()) {
     if (!filter(tool.name)) continue;
     // Dedupe: built-in wins on name collision. Matches staging behavior.
     if (BUILT_IN_TOOL_MAP.has(tool.name)) continue;
+    customTools.set(tool.name, tool);
     customs.push(customToolDefinition(tool));
   }
   if (builtIns.length === 0 && customs.length === 0) return null;
-  return { toolDefs: [...builtIns, ...customs], customTools };
+  const allowedToolNames = new Set<string>([
+    ...builtIns.map((tool) => tool.name),
+    ...customTools.keys(),
+  ]);
+  return { toolDefs: [...builtIns, ...customs], customTools, allowedToolNames };
 }
 
 export interface ExecuteMainToolCallArgs {
   deps: ToolDeps;
   input: ToolRuntimeInput;
   customTools: Map<string, CustomToolRecord>;
+  allowedToolNames: Set<string>;
   call: LLMToolCall;
 }
 
@@ -513,6 +528,9 @@ export interface ExecuteMainToolCallArgs {
  */
 export async function executeMainToolCall(args: ExecuteMainToolCallArgs): Promise<string> {
   const name = args.call.function?.name || args.call.name;
+  if (!args.allowedToolNames.has(name)) {
+    return stringifyToolResult({ error: `Tool not enabled for this chat: ${name}` });
+  }
   if (BUILT_IN_TOOL_MAP.has(name)) {
     const syntheticMainAgent: JsonRecord = { id: "main", type: "main", name: "Main Generation" };
     return stringifyToolResult(await executeBuiltInTool(args.deps, args.input, syntheticMainAgent, args.call));

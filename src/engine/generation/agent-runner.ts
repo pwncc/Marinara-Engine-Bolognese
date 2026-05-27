@@ -182,7 +182,7 @@ function buildAgentToolContext(
     .filter((tool): tool is LLMToolDefinition => !!tool);
   const selectedCustomTools = selectedNames
     .map((name) => customTools.get(name))
-    .filter((tool): tool is CustomToolRecord => !!tool);
+    .filter((tool): tool is CustomToolRecord => !!tool && !BUILT_IN_TOOL_MAP.has(tool.name));
   if (selectedBuiltIns.length === 0 && selectedCustomTools.length === 0) return undefined;
 
   return {

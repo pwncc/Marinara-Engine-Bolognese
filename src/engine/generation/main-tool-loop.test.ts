@@ -6,6 +6,7 @@ import { startGeneration, type GenerationEngineDeps } from "./start-generation";
 import {
   buildMainToolDefinitions,
   executeMainToolCall,
+  normalizeToolCall,
   type CustomToolRecord,
 } from "./tools-runtime";
 
@@ -708,6 +709,7 @@ describe("row 10 — custom-tool name collision with built-in: built-in wins, no
         chatSummary: null,
       },
       customTools,
+      allowedToolNames: new Set(["roll_dice"]),
       call: {
         id: "call-1",
         name: "roll_dice",
@@ -723,5 +725,104 @@ describe("row 10 — custom-tool name collision with built-in: built-in wins, no
     expect(parsed.notation).toMatch(/^1d6/);
     expect(parsed.rolls).toHaveLength(1);
     expect(typeof parsed.total).toBe("number");
+  });
+
+  it("executeMainToolCall rejects tools that were filtered out of toolDefs (allowlist enforcement)", async () => {
+    // The model hallucinates a call to spotify_play, which buildMainToolDefinitions
+    // had filtered out. executeMainToolCall must reject it without dispatching.
+    const customExecute = vi.fn(async () => ({ ok: true }));
+    const storage = {
+      get: vi.fn(async () => null),
+      list: vi.fn(async () => []),
+      update: vi.fn(async () => ({})),
+    } as unknown as StorageGateway;
+    const integrations = {
+      customTools: { execute: customExecute },
+      spotify: {
+        player: vi.fn(async () => ({ playing: true })),
+      } as unknown as IntegrationGateway["spotify"],
+      haptic: {} as IntegrationGateway["haptic"],
+      image: {} as IntegrationGateway["image"],
+    } as IntegrationGateway;
+
+    const result = await executeMainToolCall({
+      deps: { storage, integrations },
+      input: {
+        chat: { id: "chat-1", metadata: {} },
+        activatedLorebookEntries: [],
+        chatSummary: null,
+      },
+      customTools: new Map(),
+      allowedToolNames: new Set(["roll_dice"]), // spotify_play NOT in allowlist
+      call: {
+        id: "call-1",
+        name: "spotify_play",
+        arguments: JSON.stringify({ uri: "spotify:track:abc" }),
+        function: { name: "spotify_play", arguments: JSON.stringify({ uri: "spotify:track:abc" }) },
+      },
+    });
+
+    expect(customExecute).not.toHaveBeenCalled();
+    expect((integrations.spotify as unknown as { player: ReturnType<typeof vi.fn> }).player).not.toHaveBeenCalled();
+    const parsed = JSON.parse(result) as { error: string };
+    expect(parsed.error).toContain("Tool not enabled for this chat");
+    expect(parsed.error).toContain("spotify_play");
+  });
+
+  it("normalizeToolCall preserves object-form arguments instead of coercing to '{}'", async () => {
+    // Some providers emit pre-parsed arguments as an object rather than a JSON string.
+    // The pre-fix readString coercion would collapse the object to "{}", silently
+    // erasing required fields and failing downstream tool execution.
+    const objectArgsCall = normalizeToolCall({
+      id: "call-obj",
+      function: { name: "roll_dice", arguments: { notation: "2d6", reason: "perception" } },
+    });
+    expect(objectArgsCall).not.toBeNull();
+    const parsed = JSON.parse(objectArgsCall!.arguments) as { notation: string; reason: string };
+    expect(parsed.notation).toBe("2d6");
+    expect(parsed.reason).toBe("perception");
+
+    // String form still passes through unchanged.
+    const stringArgsCall = normalizeToolCall({
+      id: "call-str",
+      function: { name: "roll_dice", arguments: JSON.stringify({ notation: "1d20" }) },
+    });
+    expect(stringArgsCall).not.toBeNull();
+    expect(stringArgsCall!.arguments).toBe(JSON.stringify({ notation: "1d20" }));
+
+    // Missing arguments fall back to empty object literal.
+    const noArgsCall = normalizeToolCall({ id: "call-none", function: { name: "roll_dice" } });
+    expect(noArgsCall).not.toBeNull();
+    expect(noArgsCall!.arguments).toBe("{}");
+  });
+
+  it("usage is aggregated across multi-turn tool-call loops, not overwritten by the last turn", async () => {
+    // Two-turn loop: turn 1 emits usage A + a tool call, turn 2 emits usage B
+    // and resolves. Saved usage must reflect both turns' token counts.
+    const { deps, createChatMessage } = makeStubDeps({
+      chatMetadata: { enableTools: true, activeToolIds: ["roll_dice"] },
+      script: {
+        turns: [
+          [
+            { type: "token", text: "thinking..." },
+            toolCallChunk("roll_dice", { notation: "1d6" }, "c1"),
+            { type: "usage", data: { promptTokens: 100, completionTokens: 20, totalTokens: 120 } },
+          ],
+          [
+            { type: "token", text: " result is 4." },
+            { type: "usage", data: { promptTokens: 150, completionTokens: 30, totalTokens: 180 } },
+          ],
+        ],
+      },
+    });
+
+    await collectEvents(startGeneration(deps, { chatId: "chat-1", message: "go" }));
+
+    const assistantCall = createChatMessage.mock.calls.find(([, body]) => (body as Record<string, unknown>).role === "assistant");
+    expect(assistantCall).toBeDefined();
+    const generationInfo = (assistantCall![1] as { generationInfo: { usage: Record<string, number> } }).generationInfo;
+    expect(generationInfo.usage.promptTokens).toBe(250);
+    expect(generationInfo.usage.completionTokens).toBe(50);
+    expect(generationInfo.usage.totalTokens).toBe(300);
   });
 });
