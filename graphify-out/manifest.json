@@ -160,8 +160,8 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/tauri.conf.json": {
-    "mtime": 1779867918.334506,
-    "ast_hash": "6512090b7535625c7a1f4f436a03d922",
+    "mtime": 1779919487.678176,
+    "ast_hash": "6a8d473e583ff74c4c0de2f30e43d773",
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/build.rs": {
@@ -170,8 +170,8 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/tauri.prealpha.conf.json": {
-    "mtime": 1779867918.3347065,
-    "ast_hash": "d19d8dd78fb08e812fb003deafef9421",
+    "mtime": 1779919487.6783743,
+    "ast_hash": "3390ad5c4011f3142b3ea0ecaf84a5b6",
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/crates/llm/src/lib.rs": {
@@ -190,8 +190,8 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/crates/storage/src/lib.rs": {
-    "mtime": 1779915600.572228,
-    "ast_hash": "df1582f1253d273f58d20a73f7cd1e51",
+    "mtime": 1779919263.6702945,
+    "ast_hash": "0d19f20eafebc751b109def10769d14a",
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/crates/integrations/src/lib.rs": {
@@ -290,12 +290,12 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/src/http_dispatch.rs": {
-    "mtime": 1779915628.9994879,
+    "mtime": 1779919172.801553,
     "ast_hash": "19e8033165ab040f958aa166a7a5c2ae",
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/src/http_server.rs": {
-    "mtime": 1779912872.7630858,
+    "mtime": 1779919172.8014855,
     "ast_hash": "de252348326f4c49a587fba9f0820f5e",
     "semantic_hash": ""
   },
@@ -305,8 +305,8 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/src/lib.rs": {
-    "mtime": 1779905730.5331533,
-    "ast_hash": "851a0ecd99fd37216b1a7c7998afb262",
+    "mtime": 1779919487.6775165,
+    "ast_hash": "5046d6d119914c8330d67c988e5c8cf4",
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/src/seed_defaults.rs": {
@@ -345,7 +345,7 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/src/commands/storage/llm.rs": {
-    "mtime": 1779912703.6515973,
+    "mtime": 1779919172.8017368,
     "ast_hash": "b095a6af3eb62f3ea125e32a0b45b982",
     "semantic_hash": ""
   },
@@ -410,7 +410,7 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/src/commands/storage/integrations.rs": {
-    "mtime": 1779912703.651212,
+    "mtime": 1779919172.801861,
     "ast_hash": "b29e60ef26fc51c8ea73c76791517b1e",
     "semantic_hash": ""
   },
@@ -445,7 +445,7 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/src/commands/storage/images.rs": {
-    "mtime": 1779912703.6506739,
+    "mtime": 1779919172.802017,
     "ast_hash": "040845317ff53f8c903599b62aac1672",
     "semantic_hash": ""
   },
@@ -475,7 +475,7 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/src/commands/storage/shared.rs": {
-    "mtime": 1779915645.514624,
+    "mtime": 1779919172.8016186,
     "ast_hash": "d42ef63088d456a1ac33eeb84d8a3991",
     "semantic_hash": ""
   },
@@ -485,12 +485,12 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/src/commands/storage/admin.rs": {
-    "mtime": 1779912703.650124,
+    "mtime": 1779919172.8021364,
     "ast_hash": "e7266480d4c56371e6109224503c06ab",
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/src/commands/storage/images/providers.rs": {
-    "mtime": 1779912703.6510198,
+    "mtime": 1779919172.8019373,
     "ast_hash": "3f843a57f170a39c70dfe683b362510a",
     "semantic_hash": ""
   },
@@ -560,7 +560,7 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/src/commands/storage/integrations/discord.rs": {
-    "mtime": 1779912703.6513584,
+    "mtime": 1779919172.8018072,
     "ast_hash": "e1f8a8e4f44050617144e6070884b230",
     "semantic_hash": ""
   },
@@ -575,7 +575,7 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/src/commands/storage/profile/legacy.rs": {
-    "mtime": 1779912703.6518538,
+    "mtime": 1779919172.8016846,
     "ast_hash": "ae337a77f2438a65da87ce535d03a784",
     "semantic_hash": ""
   },
@@ -625,7 +625,7 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src-tauri/src/commands/storage/commands/entities.rs": {
-    "mtime": 1779915624.2805943,
+    "mtime": 1779919172.802083,
     "ast_hash": "8b350e3089c63826023ddfbabb712bb6",
     "semantic_hash": ""
   },
@@ -700,8 +700,8 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src/app/shell/useStartNewChat.ts": {
-    "mtime": 1779902697.5180738,
-    "ast_hash": "a500ed4e08d7f34bfc57a57d43681752",
+    "mtime": 1779918988.5112867,
+    "ast_hash": "579a88b4a3c2a703824cca5cb051a21a",
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src/app/shell/ModalRenderer.tsx": {
@@ -1960,8 +1960,8 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src/features/catalog/chats/hooks/use-chats.ts": {
-    "mtime": 1779909643.493332,
-    "ast_hash": "19461ee17420c01b4fc716943b187dbf",
+    "mtime": 1779919074.5547945,
+    "ast_hash": "adf900d687ba73d6e35ab486842a3ae5",
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src/features/catalog/chats/hooks/use-chat-folders.ts": {
@@ -2085,8 +2085,8 @@
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src/features/catalog/characters/hooks/use-characters.ts": {
-    "mtime": 1779914125.4892192,
-    "ast_hash": "ed8b4b519e771eaab0696b00acedc58a",
+    "mtime": 1779918956.0835876,
+    "ast_hash": "7ede4be0c03636d8bbcb6f13e3624612",
     "semantic_hash": ""
   },
   "/Users/marysia/Developer/Marinara-Engine/src/features/catalog/characters/lib/import-drop.test.ts": {

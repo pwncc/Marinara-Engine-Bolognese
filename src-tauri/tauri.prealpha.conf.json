@@ -8,6 +8,7 @@
         "title": "Marinara Engine Pre-Alpha",
         "width": 800,
         "height": 600,
+        "center": true,
         "dragDropEnabled": false,
         "decorations": false,
         "resizable": true,

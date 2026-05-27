@@ -53,6 +53,7 @@ const PERSONA_SUMMARY_OPTIONS = {
     "avatarPath",
     "avatarCrop",
     "isActive",
+    "active",
     "createdAt",
     "nameColor",
     "dialogueColor",
@@ -517,16 +518,19 @@ export function useActivePersona(enabled = true) {
   return useQuery({
     queryKey: characterKeys.activePersona,
     queryFn: async () => {
-      for (const filters of [
-        { isActive: true },
-        { isActive: "true" },
-        { active: true },
-        { active: "true" },
-      ]) {
-        const [persona] = await storageApi.list<unknown>("personas", { filters, limit: 1 });
-        if (persona) return persona;
-      }
-      return null;
+      const personas = await storageApi.list<PersonaSummary & { active?: string | boolean }>(
+        "personas",
+        PERSONA_SUMMARY_OPTIONS,
+      );
+      return (
+        personas.find(
+          (persona) =>
+            persona.isActive === true ||
+            persona.isActive === "true" ||
+            persona.active === true ||
+            persona.active === "true",
+        ) ?? null
+      );
     },
     enabled,
     staleTime: 5 * 60_000,

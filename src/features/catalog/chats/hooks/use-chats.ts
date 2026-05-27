@@ -1,7 +1,14 @@
 // ──────────────────────────────────────────────
 // React Query: neutral chat data hooks used by conversation, roleplay, and game.
 // ──────────────────────────────────────────────
-import { useQuery, useInfiniteQuery, useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import {
+  useQuery,
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+  type InfiniteData,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { chatKeys } from "../query-keys";
 import { previewGenerationPrompt } from "../../../../engine/generation/prompt-preview";
 import { boolish } from "../../../../engine/generation/runtime-records";
@@ -178,6 +185,67 @@ export type ChatListItem = Pick<
     >
   >;
 };
+
+type ChatCacheRecord = Record<string, unknown> & { id?: string; metadata?: unknown };
+
+function updateCachedChatRows<T extends ChatCacheRecord>(
+  rows: T[] | undefined,
+  id: string,
+  updater: (row: T) => T,
+): T[] | undefined {
+  if (!Array.isArray(rows)) return rows;
+  let changed = false;
+  const next = rows.map((row) => {
+    if (!row || row.id !== id) return row;
+    changed = true;
+    return updater(row);
+  });
+  return changed ? next : rows;
+}
+
+function applyChatFieldPatch<T extends ChatCacheRecord>(chat: T, patch: Record<string, unknown>): T {
+  return { ...chat, ...patch };
+}
+
+function applyChatMetadataPatch<T extends ChatCacheRecord>(chat: T, patch: Record<string, unknown>): T {
+  return {
+    ...chat,
+    metadata: {
+      ...parseRecord(chat.metadata),
+      ...patch,
+    },
+  };
+}
+
+function setChatCacheRecord(
+  qc: Pick<QueryClient, "setQueryData" | "setQueriesData">,
+  id: string,
+  updater: (chat: ChatCacheRecord) => ChatCacheRecord,
+) {
+  qc.setQueryData<ChatCacheRecord | undefined>(chatKeys.detail(id), (current) =>
+    current ? updater(current) : current,
+  );
+  qc.setQueriesData<ChatCacheRecord[]>({ queryKey: chatKeys.list() }, (rows) => updateCachedChatRows(rows, id, updater));
+  qc.setQueriesData<ChatCacheRecord[]>(
+    { queryKey: [...chatKeys.all, "group"] },
+    (rows) => updateCachedChatRows(rows, id, updater),
+  );
+
+  const activeChat = useChatStore.getState().activeChat as ChatCacheRecord | null;
+  if (activeChat?.id === id) {
+    useChatStore.getState().setActiveChat(updater(activeChat) as unknown as Chat);
+  }
+}
+
+function patchAffectsActiveLorebooks(patch: Record<string, unknown>): boolean {
+  return [
+    "activeLorebookIds",
+    "lorebookTokenBudget",
+    "lorebookKeeperTargetLorebookId",
+    "gameLorebookKeeperEnabled",
+    "gameLorebookKeeperLorebookId",
+  ].some((key) => Object.prototype.hasOwnProperty.call(patch, key));
+}
 
 export function useChats() {
   return useQuery({
@@ -516,9 +584,33 @@ export function useUpdateChat() {
       personaId?: string | null;
       characterIds?: string[];
     }) => storageApi.update<Chat>("chats", id, data),
+    onMutate: async ({ id, ...data }) => {
+      await qc.cancelQueries({ queryKey: chatKeys.detail(id) });
+      await qc.cancelQueries({ queryKey: chatKeys.list() });
+      await qc.cancelQueries({ queryKey: [...chatKeys.all, "group"] });
+
+      const previousDetail = qc.getQueryData<ChatCacheRecord>(chatKeys.detail(id));
+      const previousListQueries = qc.getQueriesData<ChatCacheRecord[]>({ queryKey: chatKeys.list() });
+      const previousGroupQueries = qc.getQueriesData<ChatCacheRecord[]>({ queryKey: [...chatKeys.all, "group"] });
+      const previousActiveChat = useChatStore.getState().activeChat;
+
+      setChatCacheRecord(qc, id, (chat) => applyChatFieldPatch(chat, data));
+
+      return { previousDetail, previousListQueries, previousGroupQueries, previousActiveChat };
+    },
+    onError: (_error, vars, context) => {
+      if (context?.previousDetail) qc.setQueryData(chatKeys.detail(vars.id), context.previousDetail);
+      for (const [queryKey, data] of context?.previousListQueries ?? []) qc.setQueryData(queryKey, data);
+      for (const [queryKey, data] of context?.previousGroupQueries ?? []) qc.setQueryData(queryKey, data);
+      if (context?.previousActiveChat) useChatStore.getState().setActiveChat(context.previousActiveChat);
+    },
     onSuccess: (updatedChat, vars) => {
-      qc.invalidateQueries({ queryKey: chatKeys.detail(vars.id) });
-      qc.invalidateQueries({ queryKey: chatKeys.list() });
+      if (updatedChat) {
+        qc.setQueryData(chatKeys.detail(vars.id), updatedChat);
+        setChatCacheRecord(qc, vars.id, (chat) => applyChatFieldPatch(chat, vars));
+      } else {
+        qc.invalidateQueries({ queryKey: chatKeys.detail(vars.id) });
+      }
 
       // Patch the group cache so the branch selector dropdown reflects renames
       // (and any other field changes) without waiting for a chat switch.
@@ -527,7 +619,14 @@ export function useUpdateChat() {
           existing?.map((chat) => (chat.id === vars.id ? updatedChat : chat)),
         );
       }
-      qc.invalidateQueries({ queryKey: [...chatKeys.all, "group"] });
+      if (
+        "characterIds" in vars ||
+        "personaId" in vars ||
+        "promptPresetId" in vars ||
+        "connectionId" in vars
+      ) {
+        qc.invalidateQueries({ queryKey: lorebookKeys.active(vars.id) });
+      }
     },
   });
 }
@@ -537,7 +636,28 @@ export function useUpdateChatMetadata() {
   return useMutation({
     mutationFn: ({ id, ...metadata }: { id: string; [key: string]: unknown }) =>
       storageApi.patchChatMetadata<Chat>(id, metadata),
+    onMutate: async ({ id, ...metadata }) => {
+      await qc.cancelQueries({ queryKey: chatKeys.detail(id) });
+      await qc.cancelQueries({ queryKey: chatKeys.list() });
+      await qc.cancelQueries({ queryKey: [...chatKeys.all, "group"] });
+
+      const previousDetail = qc.getQueryData<ChatCacheRecord>(chatKeys.detail(id));
+      const previousListQueries = qc.getQueriesData<ChatCacheRecord[]>({ queryKey: chatKeys.list() });
+      const previousGroupQueries = qc.getQueriesData<ChatCacheRecord[]>({ queryKey: [...chatKeys.all, "group"] });
+      const previousActiveChat = useChatStore.getState().activeChat;
+
+      setChatCacheRecord(qc, id, (chat) => applyChatMetadataPatch(chat, metadata));
+
+      return { previousDetail, previousListQueries, previousGroupQueries, previousActiveChat };
+    },
+    onError: (_error, vars, context) => {
+      if (context?.previousDetail) qc.setQueryData(chatKeys.detail(vars.id), context.previousDetail);
+      for (const [queryKey, data] of context?.previousListQueries ?? []) qc.setQueryData(queryKey, data);
+      for (const [queryKey, data] of context?.previousGroupQueries ?? []) qc.setQueryData(queryKey, data);
+      if (context?.previousActiveChat) useChatStore.getState().setActiveChat(context.previousActiveChat);
+    },
     onSuccess: (data, vars) => {
+      const { id, ...metadata } = vars;
       // Write the saved response straight into the detail cache. Plain
       // invalidation alone leaves stale data in place when no observer is
       // mounted to trigger a refetch (e.g. user navigated away after firing
@@ -545,12 +665,12 @@ export function useUpdateChatMetadata() {
       // value — which is what made cleared chat backgrounds reappear after
       // a chat switch round-trip.
       if (data) {
-        qc.setQueryData(chatKeys.detail(vars.id), data);
+        qc.setQueryData(chatKeys.detail(id), data);
       } else {
-        qc.invalidateQueries({ queryKey: chatKeys.detail(vars.id) });
+        qc.invalidateQueries({ queryKey: chatKeys.detail(id) });
       }
-      qc.invalidateQueries({ queryKey: chatKeys.list() });
-      qc.invalidateQueries({ queryKey: lorebookKeys.active(vars.id) });
+      setChatCacheRecord(qc, id, (chat) => applyChatMetadataPatch(chat, metadata));
+      if (patchAffectsActiveLorebooks(metadata)) qc.invalidateQueries({ queryKey: lorebookKeys.active(id) });
     },
   });
 }

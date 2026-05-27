@@ -34,11 +34,10 @@ impl FileStorage {
     }
 
     pub fn list(&self, collection: &str) -> AppResult<Vec<Value>> {
-        let _guard = self
-            .lock
-            .write()
-            .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
-        self.read_collection(collection)
+        self.read_locked_or_recover(
+            || self.read_collection_no_recovery(collection),
+            || self.read_collection(collection),
+        )
     }
 
     pub fn list_where(
@@ -46,18 +45,10 @@ impl FileStorage {
         collection: &str,
         filters: &Map<String, Value>,
     ) -> AppResult<Vec<Value>> {
-        let _guard = self
-            .lock
-            .write()
-            .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
-        self.read_collection_filtered(collection, |row| {
-            let Some(obj) = row.as_object() else {
-                return false;
-            };
-            filters
-                .iter()
-                .all(|(key, expected)| obj.get(key) == Some(expected))
-        })
+        self.read_locked_or_recover(
+            || self.read_collection_filtered_no_recovery(collection, filters),
+            || self.read_collection_filtered(collection, filters),
+        )
     }
 
     pub fn list_projected(
@@ -66,35 +57,31 @@ impl FileStorage {
         fields: &[String],
         field_selections: &Map<String, Value>,
     ) -> AppResult<Vec<Value>> {
-        let _guard = self
-            .lock
-            .write()
-            .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
-        self.read_collection_projected(collection, fields, field_selections)
+        self.read_locked_or_recover(
+            || self.read_collection_projected_no_recovery(collection, fields, field_selections),
+            || self.read_collection_projected(collection, fields, field_selections),
+        )
     }
 
     pub fn list_messages_for_chat(&self, chat_id: &str) -> AppResult<Vec<Value>> {
-        let _guard = self
-            .lock
-            .write()
-            .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
-        self.read_messages_for_chat(chat_id)
+        self.read_locked_or_recover(
+            || self.read_messages_for_chat_no_recovery(chat_id),
+            || self.read_messages_for_chat(chat_id),
+        )
     }
 
     pub fn list_message_ids_for_chat(&self, chat_id: &str) -> AppResult<Vec<Value>> {
-        let _guard = self
-            .lock
-            .write()
-            .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
-        self.read_message_ids_for_chat(chat_id)
+        self.read_locked_or_recover(
+            || self.read_message_ids_for_chat_no_recovery(chat_id),
+            || self.read_message_ids_for_chat(chat_id),
+        )
     }
 
     pub fn count_messages_for_chat(&self, chat_id: &str) -> AppResult<usize> {
-        let _guard = self
-            .lock
-            .write()
-            .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
-        self.read_message_count_for_chat(chat_id)
+        self.read_locked_or_recover(
+            || self.read_message_count_for_chat_no_recovery(chat_id),
+            || self.read_message_count_for_chat(chat_id),
+        )
     }
 
     pub fn list_messages_for_chat_page(
@@ -103,19 +90,17 @@ impl FileStorage {
         limit: usize,
         before: Option<&str>,
     ) -> AppResult<Vec<Value>> {
-        let _guard = self
-            .lock
-            .write()
-            .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
-        self.read_messages_for_chat_page(chat_id, limit, before)
+        self.read_locked_or_recover(
+            || self.read_messages_for_chat_page_no_recovery(chat_id, limit, before),
+            || self.read_messages_for_chat_page(chat_id, limit, before),
+        )
     }
 
     pub fn get(&self, collection: &str, id: &str) -> AppResult<Option<Value>> {
-        let _guard = self
-            .lock
-            .write()
-            .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
-        self.read_collection_find_by_id(collection, id)
+        self.read_locked_or_recover(
+            || self.read_collection_find_by_id_no_recovery(collection, id),
+            || self.read_collection_find_by_id(collection, id),
+        )
     }
 
     pub fn create(&self, collection: &str, value: Value) -> AppResult<Value> {
@@ -332,6 +317,31 @@ impl FileStorage {
             .join(format!("{collection}.json")))
     }
 
+    fn read_locked_or_recover<T>(
+        &self,
+        read_only: impl FnOnce() -> AppResult<T>,
+        recover: impl FnOnce() -> AppResult<T>,
+    ) -> AppResult<T> {
+        let read_result = {
+            let _guard = self
+                .lock
+                .read()
+                .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
+            read_only()
+        };
+
+        match read_result {
+            Ok(value) => Ok(value),
+            Err(_) => {
+                let _guard = self
+                    .lock
+                    .write()
+                    .map_err(|_| AppError::new("lock_error", "Storage lock poisoned"))?;
+                recover()
+            }
+        }
+    }
+
     fn read_collection(&self, collection: &str) -> AppResult<Vec<Value>> {
         let path = self.collection_path(collection)?;
         if !path.exists() {
@@ -345,18 +355,39 @@ impl FileStorage {
             .or_else(|error| self.recover_collection_after_read_error(collection, &path, error))
     }
 
-    fn read_collection_filtered<F>(
+    fn read_collection_no_recovery(&self, collection: &str) -> AppResult<Vec<Value>> {
+        let path = self.collection_path(collection)?;
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let raw = fs::read_to_string(&path)?;
+        if raw.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        parse_collection_rows(collection, &raw)
+    }
+
+    fn read_collection_filtered(
         &self,
         collection: &str,
-        mut predicate: F,
-    ) -> AppResult<Vec<Value>>
-    where
-        F: FnMut(&Value) -> bool,
-    {
+        filters: &Map<String, Value>,
+    ) -> AppResult<Vec<Value>> {
         Ok(self
             .read_collection(collection)?
             .into_iter()
-            .filter(|row| predicate(row))
+            .filter(|row| row_matches_filters(row, filters))
+            .collect())
+    }
+
+    fn read_collection_filtered_no_recovery(
+        &self,
+        collection: &str,
+        filters: &Map<String, Value>,
+    ) -> AppResult<Vec<Value>> {
+        Ok(self
+            .read_collection_no_recovery(collection)?
+            .into_iter()
+            .filter(|row| row_matches_filters(row, filters))
             .collect())
     }
 
@@ -365,6 +396,25 @@ impl FileStorage {
         collection: &str,
         fields: &[String],
         field_selections: &Map<String, Value>,
+    ) -> AppResult<Vec<Value>> {
+        self.read_collection_projected_inner(collection, fields, field_selections, true)
+    }
+
+    fn read_collection_projected_no_recovery(
+        &self,
+        collection: &str,
+        fields: &[String],
+        field_selections: &Map<String, Value>,
+    ) -> AppResult<Vec<Value>> {
+        self.read_collection_projected_inner(collection, fields, field_selections, false)
+    }
+
+    fn read_collection_projected_inner(
+        &self,
+        collection: &str,
+        fields: &[String],
+        field_selections: &Map<String, Value>,
+        recover_on_fallback: bool,
     ) -> AppResult<Vec<Value>> {
         let path = self.collection_path(collection)?;
         if fields.is_empty() {
@@ -384,15 +434,38 @@ impl FileStorage {
             field_selections: &nested_field_sets,
         }) {
             Ok(rows) => Ok(rows),
-            Err(_) => Ok(self
-                .read_collection(collection)?
-                .into_iter()
-                .map(|row| project_row(row, &field_set, &nested_field_sets))
-                .collect()),
+            Err(_) => {
+                let rows = if recover_on_fallback {
+                    self.read_collection(collection)?
+                } else {
+                    self.read_collection_no_recovery(collection)?
+                };
+                Ok(rows
+                    .into_iter()
+                    .map(|row| project_row(row, &field_set, &nested_field_sets))
+                    .collect())
+            }
         }
     }
 
     fn read_collection_find_by_id(&self, collection: &str, id: &str) -> AppResult<Option<Value>> {
+        self.read_collection_find_by_id_inner(collection, id, true)
+    }
+
+    fn read_collection_find_by_id_no_recovery(
+        &self,
+        collection: &str,
+        id: &str,
+    ) -> AppResult<Option<Value>> {
+        self.read_collection_find_by_id_inner(collection, id, false)
+    }
+
+    fn read_collection_find_by_id_inner(
+        &self,
+        collection: &str,
+        id: &str,
+        recover_on_fallback: bool,
+    ) -> AppResult<Option<Value>> {
         let path = self.collection_path(collection)?;
         if !path.exists() || fs::metadata(&path)?.len() == 0 {
             return Ok(None);
@@ -402,14 +475,32 @@ impl FileStorage {
         let mut deserializer = serde_json::Deserializer::from_reader(reader);
         match deserializer.deserialize_seq(FindRowByIdVisitor { id }) {
             Ok(row) => Ok(row),
-            Err(_) => Ok(self
-                .read_collection(collection)?
-                .into_iter()
-                .find(|row| row.get("id").and_then(Value::as_str) == Some(id))),
+            Err(_) => {
+                let rows = if recover_on_fallback {
+                    self.read_collection(collection)?
+                } else {
+                    self.read_collection_no_recovery(collection)?
+                };
+                Ok(rows
+                    .into_iter()
+                    .find(|row| row.get("id").and_then(Value::as_str) == Some(id)))
+            }
         }
     }
 
     fn read_messages_for_chat(&self, chat_id: &str) -> AppResult<Vec<Value>> {
+        self.read_messages_for_chat_inner(chat_id, true)
+    }
+
+    fn read_messages_for_chat_no_recovery(&self, chat_id: &str) -> AppResult<Vec<Value>> {
+        self.read_messages_for_chat_inner(chat_id, false)
+    }
+
+    fn read_messages_for_chat_inner(
+        &self,
+        chat_id: &str,
+        recover_on_fallback: bool,
+    ) -> AppResult<Vec<Value>> {
         let path = self.collection_path("messages")?;
         if !path.exists() || fs::metadata(&path)?.len() == 0 {
             return Ok(Vec::new());
@@ -419,15 +510,33 @@ impl FileStorage {
         let mut deserializer = serde_json::Deserializer::from_reader(reader);
         match deserializer.deserialize_seq(MessageRowsForChatVisitor { chat_id }) {
             Ok(rows) => Ok(rows),
-            Err(_) => Ok(self
-                .read_collection("messages")?
-                .into_iter()
-                .filter(|row| row.get("chatId").and_then(Value::as_str) == Some(chat_id))
-                .collect()),
+            Err(_) => {
+                let rows = if recover_on_fallback {
+                    self.read_collection("messages")?
+                } else {
+                    self.read_collection_no_recovery("messages")?
+                };
+                Ok(rows
+                    .into_iter()
+                    .filter(|row| row.get("chatId").and_then(Value::as_str) == Some(chat_id))
+                    .collect())
+            }
         }
     }
 
     fn read_message_ids_for_chat(&self, chat_id: &str) -> AppResult<Vec<Value>> {
+        self.read_message_ids_for_chat_inner(chat_id, true)
+    }
+
+    fn read_message_ids_for_chat_no_recovery(&self, chat_id: &str) -> AppResult<Vec<Value>> {
+        self.read_message_ids_for_chat_inner(chat_id, false)
+    }
+
+    fn read_message_ids_for_chat_inner(
+        &self,
+        chat_id: &str,
+        recover_on_fallback: bool,
+    ) -> AppResult<Vec<Value>> {
         let path = self.collection_path("messages")?;
         if !path.exists() || fs::metadata(&path)?.len() == 0 {
             return Ok(Vec::new());
@@ -437,21 +546,39 @@ impl FileStorage {
         let mut deserializer = serde_json::Deserializer::from_reader(reader);
         match deserializer.deserialize_seq(MessageIdRowsForChatVisitor { chat_id }) {
             Ok(rows) => Ok(rows),
-            Err(_) => Ok(self
-                .read_collection("messages")?
-                .into_iter()
-                .filter(|row| row.get("chatId").and_then(Value::as_str) == Some(chat_id))
-                .filter_map(|row| {
-                    let id = row.get("id")?.clone();
-                    let mut object = Map::new();
-                    object.insert("id".to_string(), id);
-                    Some(Value::Object(object))
-                })
-                .collect()),
+            Err(_) => {
+                let rows = if recover_on_fallback {
+                    self.read_collection("messages")?
+                } else {
+                    self.read_collection_no_recovery("messages")?
+                };
+                Ok(rows
+                    .into_iter()
+                    .filter(|row| row.get("chatId").and_then(Value::as_str) == Some(chat_id))
+                    .filter_map(|row| {
+                        let id = row.get("id")?.clone();
+                        let mut object = Map::new();
+                        object.insert("id".to_string(), id);
+                        Some(Value::Object(object))
+                    })
+                    .collect())
+            }
         }
     }
 
     fn read_message_count_for_chat(&self, chat_id: &str) -> AppResult<usize> {
+        self.read_message_count_for_chat_inner(chat_id, true)
+    }
+
+    fn read_message_count_for_chat_no_recovery(&self, chat_id: &str) -> AppResult<usize> {
+        self.read_message_count_for_chat_inner(chat_id, false)
+    }
+
+    fn read_message_count_for_chat_inner(
+        &self,
+        chat_id: &str,
+        recover_on_fallback: bool,
+    ) -> AppResult<usize> {
         let path = self.collection_path("messages")?;
         if !path.exists() || fs::metadata(&path)?.len() == 0 {
             return Ok(0);
@@ -464,7 +591,13 @@ impl FileStorage {
         let mut deserializer = serde_json::Deserializer::from_reader(reader);
         match deserializer.deserialize_seq(MessageCountForChatVisitor { chat_id }) {
             Ok(count) => Ok(count),
-            Err(_) => Ok(self.read_messages_for_chat(chat_id)?.len()),
+            Err(_) => {
+                if recover_on_fallback {
+                    Ok(self.read_messages_for_chat(chat_id)?.len())
+                } else {
+                    Ok(self.read_messages_for_chat_no_recovery(chat_id)?.len())
+                }
+            }
         }
     }
 
@@ -473,6 +606,25 @@ impl FileStorage {
         chat_id: &str,
         limit: usize,
         before: Option<&str>,
+    ) -> AppResult<Vec<Value>> {
+        self.read_messages_for_chat_page_inner(chat_id, limit, before, true)
+    }
+
+    fn read_messages_for_chat_page_no_recovery(
+        &self,
+        chat_id: &str,
+        limit: usize,
+        before: Option<&str>,
+    ) -> AppResult<Vec<Value>> {
+        self.read_messages_for_chat_page_inner(chat_id, limit, before, false)
+    }
+
+    fn read_messages_for_chat_page_inner(
+        &self,
+        chat_id: &str,
+        limit: usize,
+        before: Option<&str>,
+        recover_on_fallback: bool,
     ) -> AppResult<Vec<Value>> {
         if limit == 0 {
             return Ok(Vec::new());
@@ -488,7 +640,11 @@ impl FileStorage {
             Err(_) => {}
         }
 
-        let mut rows = self.read_messages_for_chat(chat_id)?;
+        let mut rows = if recover_on_fallback {
+            self.read_messages_for_chat(chat_id)?
+        } else {
+            self.read_messages_for_chat_no_recovery(chat_id)?
+        };
         apply_message_page(&mut rows, limit, before);
         Ok(rows)
     }
@@ -571,7 +727,10 @@ impl FileStorage {
         Ok(())
     }
 
-    fn delete_pretty_messages_for_chats(&self, chat_ids: &HashSet<String>) -> AppResult<Option<usize>> {
+    fn delete_pretty_messages_for_chats(
+        &self,
+        chat_ids: &HashSet<String>,
+    ) -> AppResult<Option<usize>> {
         let path = self.collection_path("messages")?;
         if !path.exists() || fs::metadata(&path)?.len() == 0 {
             return Ok(Some(0));
@@ -954,7 +1113,9 @@ impl<'de, 'a> Visitor<'de> for FindRowByIdRowVisitor<'a> {
     }
 }
 
-fn selected_nested_fields(field_selections: &Map<String, Value>) -> HashMap<String, HashSet<String>> {
+fn selected_nested_fields(
+    field_selections: &Map<String, Value>,
+) -> HashMap<String, HashSet<String>> {
     field_selections
         .iter()
         .filter_map(|(field, selection)| {
@@ -996,7 +1157,12 @@ fn project_nested_value(value: Value, fields: &HashSet<String>) -> Value {
         Value::Object(object) => {
             let projected = fields
                 .iter()
-                .filter_map(|field| object.get(field).cloned().map(|value| (field.clone(), value)))
+                .filter_map(|field| {
+                    object
+                        .get(field)
+                        .cloned()
+                        .map(|value| (field.clone(), value))
+                })
                 .collect();
             Value::Object(projected)
         }
@@ -1004,7 +1170,12 @@ fn project_nested_value(value: Value, fields: &HashSet<String>) -> Value {
             Ok(Value::Object(object)) => {
                 let projected = fields
                     .iter()
-                    .filter_map(|field| object.get(field).cloned().map(|value| (field.clone(), value)))
+                    .filter_map(|field| {
+                        object
+                            .get(field)
+                            .cloned()
+                            .map(|value| (field.clone(), value))
+                    })
                     .collect();
                 Value::Object(projected)
             }
@@ -1143,7 +1314,10 @@ impl<'de, 'a> Visitor<'de> for ProjectedNestedVisitor<'a> {
     where
         E: serde::de::Error,
     {
-        Ok(project_nested_value(Value::String(value.to_string()), self.fields))
+        Ok(project_nested_value(
+            Value::String(value.to_string()),
+            self.fields,
+        ))
     }
 
     fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
@@ -1493,7 +1667,11 @@ fn pretty_message_record_matches_chat(record_lines: &[String], chat_ids: &HashSe
     })
 }
 
-fn write_pretty_record<W: Write>(writer: &mut W, record_lines: &[String], needs_comma: bool) -> AppResult<()> {
+fn write_pretty_record<W: Write>(
+    writer: &mut W,
+    record_lines: &[String],
+    needs_comma: bool,
+) -> AppResult<()> {
     if needs_comma {
         writer.write_all(b",\n")?;
     }
@@ -1511,9 +1689,7 @@ fn write_pretty_record<W: Write>(writer: &mut W, record_lines: &[String], needs_
 fn strip_record_trailing_comma(line: &str) -> String {
     let newline = if line.ends_with('\n') { "\n" } else { "" };
     let without_newline = line.trim_end_matches('\n');
-    let without_comma = without_newline
-        .strip_suffix(',')
-        .unwrap_or(without_newline);
+    let without_comma = without_newline.strip_suffix(',').unwrap_or(without_newline);
     format!("{without_comma}{newline}")
 }
 

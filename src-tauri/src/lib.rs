@@ -15,7 +15,17 @@ pub fn run() {
     let builder = tauri::Builder::default();
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let builder = builder.plugin(tauri_plugin_window_state::Builder::new().build());
+    let builder = builder.plugin(
+        tauri_plugin_window_state::Builder::new()
+            .with_state_flags(
+                tauri_plugin_window_state::StateFlags::SIZE
+                    | tauri_plugin_window_state::StateFlags::MAXIMIZED
+                    | tauri_plugin_window_state::StateFlags::VISIBLE
+                    | tauri_plugin_window_state::StateFlags::DECORATIONS
+                    | tauri_plugin_window_state::StateFlags::FULLSCREEN,
+            )
+            .build(),
+    );
 
     builder
         .plugin(tauri_plugin_dialog::init())
