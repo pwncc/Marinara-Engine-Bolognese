@@ -584,9 +584,14 @@ async function saveAssistantMessage(args: {
 
   if (args.input.impersonate === true) {
     if (regenerateMessageId) {
-      await args.storage.addChatMessageSwipe(args.input.chatId, regenerateMessageId, args.content);
-      const extraPatch = generationReplayExtraPatch(generationReplay, args.chatSummaryFingerprint);
-      return args.storage.patchChatMessageExtra(regenerateMessageId, extraPatch);
+      return saveRegeneratedMessage({
+        storage: args.storage,
+        chatId: args.input.chatId,
+        messageId: regenerateMessageId,
+        content: args.content,
+        generationReplay,
+        chatSummaryFingerprint: args.chatSummaryFingerprint,
+      });
     }
 
     return args.storage.createChatMessage(args.input.chatId, {
@@ -602,9 +607,14 @@ async function saveAssistantMessage(args: {
   }
 
   if (regenerateMessageId) {
-    await args.storage.addChatMessageSwipe(args.input.chatId, regenerateMessageId, args.content);
-    const extraPatch = generationReplayExtraPatch(generationReplay, args.chatSummaryFingerprint);
-    return args.storage.patchChatMessageExtra(regenerateMessageId, extraPatch);
+    return saveRegeneratedMessage({
+      storage: args.storage,
+      chatId: args.input.chatId,
+      messageId: regenerateMessageId,
+      content: args.content,
+      generationReplay,
+      chatSummaryFingerprint: args.chatSummaryFingerprint,
+    });
   }
 
   const requestedCharacterId = readString(args.input.forCharacterId).trim();
@@ -634,6 +644,19 @@ async function saveAssistantMessage(args: {
       usage: args.usage ?? null,
     },
   });
+}
+
+async function saveRegeneratedMessage(args: {
+  storage: StorageGateway;
+  chatId: string;
+  messageId: string;
+  content: string;
+  generationReplay: GenerationReplay | null;
+  chatSummaryFingerprint: string | null;
+}): Promise<unknown | null> {
+  await args.storage.addChatMessageSwipe(args.chatId, args.messageId, args.content);
+  const extraPatch = generationReplayExtraPatch(args.generationReplay, args.chatSummaryFingerprint);
+  return args.storage.patchChatMessageExtra(args.messageId, extraPatch);
 }
 
 function generationReplayExtraPatch(
