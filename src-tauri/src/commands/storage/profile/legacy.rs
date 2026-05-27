@@ -888,4 +888,55 @@ mod tests {
         assert_eq!(folder["id"], "folder-1");
         assert_eq!(folder["name"], "My Folder");
     }
+
+    #[test]
+    fn legacy_connection_import_preserves_folder_assignment() {
+        let state = test_state("connection-folder-id");
+        let mut tables = Map::new();
+        tables.insert(
+            "api_connection_folders".to_string(),
+            json!([
+                {
+                    "id": "folder-1",
+                    "name": "Provider Folder",
+                    "color": "#22c55e",
+                    "sortOrder": 3,
+                    "collapsed": true
+                }
+            ]),
+        );
+        tables.insert(
+            "api_connections".to_string(),
+            json!([
+                {
+                    "id": "conn-1",
+                    "name": "Imported Provider",
+                    "provider": "openai",
+                    "model": "gpt-4.1",
+                    "folderId": "folder-1",
+                    "sortOrder": 9
+                }
+            ]),
+        );
+
+        import_legacy_profile_tables_with_restored_assets(&state, &tables, 0, None, || Ok(()))
+            .expect("legacy profile import should succeed");
+
+        let connection = state
+            .storage
+            .get("connections", "conn-1")
+            .expect("connection lookup should not fail")
+            .expect("imported connection should be addressable by id");
+        assert_eq!(connection["folderId"], "folder-1");
+        assert_eq!(connection["sortOrder"], 9);
+
+        let folder = state
+            .storage
+            .get("connection-folders", "folder-1")
+            .expect("connection-folders lookup should not fail")
+            .expect("imported folder should be addressable by id");
+        assert_eq!(folder["id"], "folder-1");
+        assert_eq!(folder["name"], "Provider Folder");
+        assert_eq!(folder["collapsed"], true);
+    }
 }
