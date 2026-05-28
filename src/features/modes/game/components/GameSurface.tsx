@@ -2300,10 +2300,14 @@ export function GameSurface({
         }
       }
 
+      const inventoryPersist =
+        updated !== previousInventory
+          ? persistGameMetadata(activeChatId, { gameInventory: updated }, chatMeta).catch(() => null)
+          : Promise.resolve(null);
+
       if (updated !== previousInventory) {
         inventoryItemsRef.current = updated;
         setInventoryItems(updated);
-        persistGameMetadata(activeChatId, { gameInventory: updated }, chatMeta).catch(() => {});
       }
 
       if (currentGameState?.chatId === activeChatId && currentPlayerStats && nextPlayerStats !== currentPlayerStats) {
@@ -2314,6 +2318,7 @@ export function GameSurface({
 
       if (journalEntries.length > 0) {
         void (async () => {
+          await inventoryPersist;
           for (const entry of journalEntries) {
             try {
               const res = await gameApi.addJournalEntry({

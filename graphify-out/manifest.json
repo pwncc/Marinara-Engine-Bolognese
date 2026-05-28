@@ -1745,8 +1745,8 @@
     "semantic_hash": ""
   },
   "src/features/modes/game/components/GameSurface.tsx": {
-    "mtime": 1779995530.279743,
-    "ast_hash": "990d226efc8db1ec39d23fb27f352d81",
+    "mtime": 1779996297.268134,
+    "ast_hash": "a337a4b1e843c4bd81ccd304815834be",
     "semantic_hash": ""
   },
   "src/features/modes/game/components/GameTransitionManager.tsx": {
