@@ -38,6 +38,17 @@ fn center_main_window_on_primary_monitor(app: &tauri::App) {
     }
 }
 
+#[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]
+fn open_main_window_devtools_if_requested(app: &tauri::App) {
+    if std::env::var("MARINARA_TAURI_AUTO_DEVTOOLS").as_deref() != Ok("1") {
+        return;
+    }
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    window.open_devtools();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
@@ -65,6 +76,8 @@ pub fn run() {
             app.manage(state);
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             center_main_window_on_primary_monitor(app);
+            #[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]
+            open_main_window_devtools_if_requested(app);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
