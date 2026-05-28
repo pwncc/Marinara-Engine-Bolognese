@@ -165,6 +165,7 @@ type GameAssetGenerationResult = {
   fallbackBackground?: string | null;
   generatedIllustration: { tag: string; segment?: number } | null;
   generatedNpcAvatars: Array<{ name: string; avatarUrl: string }>;
+  sessionChat?: Chat;
 };
 
 type GameAssetGenerationOptions = {
@@ -1794,21 +1795,33 @@ export function GameSurface({
 
   // Keep the journal in step when game state reports a new location.
   const lastJournaledLocationRef = useRef<string | null>(null);
+  const queryClient = useQueryClient();
+  const publishSessionChat = useCallback(
+    (sessionChat: Chat | null | undefined) => {
+      if (!sessionChat?.id) return;
+      queryClient.setQueryData(chatKeys.detail(sessionChat.id), sessionChat);
+      if (useChatStore.getState().activeChatId === sessionChat.id) {
+        useChatStore.getState().setActiveChat(sessionChat);
+      }
+    },
+    [queryClient],
+  );
+
   useEffect(() => {
     const loc = gameSnapshot?.location;
     if (!loc || loc === lastJournaledLocationRef.current) return;
     lastJournaledLocationRef.current = loc;
-    gameApi
+    void gameApi
       .addJournalEntry({
         chatId: activeChatId,
         type: "location",
         data: { location: loc, description: `The party is at ${loc}.` },
       })
+      .then((res) => publishSessionChat(res.sessionChat))
       .catch(() => {});
-  }, [activeChatId, gameSnapshot?.location]);
+  }, [activeChatId, gameSnapshot?.location, publishSessionChat]);
 
   // Asset store
-  const queryClient = useQueryClient();
   const syncHudWidgetsToChatCache = useCallback(
     (widgets: HudWidget[]) => {
       const detailKey = chatKeys.detail(activeChatId);
@@ -2042,7 +2055,7 @@ export function GameSurface({
     (readable: JournalReadable) => {
       if (!activeChatId) return;
 
-      gameApi
+      void gameApi
         .addJournalEntry({
           chatId: activeChatId,
           type: "note",
@@ -2054,9 +2067,10 @@ export function GameSurface({
             sourceSegmentIndex: readable.sourceSegmentIndex,
           },
         })
+        .then((res) => publishSessionChat(res.sessionChat))
         .catch(() => {});
     },
-    [activeChatId],
+    [activeChatId, publishSessionChat],
   );
 
   // Handle readable segments from GameNarration: queue them and show one at a time
@@ -2286,10 +2300,14 @@ export function GameSurface({
         }
       }
 
+      const inventoryPersist =
+        updated !== previousInventory
+          ? persistGameMetadata(activeChatId, { gameInventory: updated }, chatMeta).catch(() => null)
+          : Promise.resolve(null);
+
       if (updated !== previousInventory) {
         inventoryItemsRef.current = updated;
         setInventoryItems(updated);
-        persistGameMetadata(activeChatId, { gameInventory: updated }, chatMeta).catch(() => {});
       }
 
       if (currentGameState?.chatId === activeChatId && currentPlayerStats && nextPlayerStats !== currentPlayerStats) {
@@ -2298,18 +2316,26 @@ export function GameSurface({
         });
       }
 
-      for (const entry of journalEntries) {
-        gameApi
-          .addJournalEntry({
-            chatId: activeChatId,
-            type: "item",
-            data: {
-              item: entry.item,
-              action: entry.action,
-              quantity: 1,
-            },
-          })
-          .catch(() => {});
+      if (journalEntries.length > 0) {
+        void (async () => {
+          await inventoryPersist;
+          for (const entry of journalEntries) {
+            try {
+              const res = await gameApi.addJournalEntry({
+                chatId: activeChatId,
+                type: "item",
+                data: {
+                  item: entry.item,
+                  action: entry.action,
+                  quantity: 1,
+                },
+              });
+              publishSessionChat(res.sessionChat);
+            } catch {
+              // Best-effort journal write; keep inventory updates responsive.
+            }
+          }
+        })();
       }
 
       if (notifications.length > 0) {
@@ -2318,7 +2344,7 @@ export function GameSurface({
         notificationTimerRef.current = setTimeout(() => setInventoryNotifications([]), 4000);
       }
     },
-    [activeChatId, patchVisibleGameState],
+    [activeChatId, patchVisibleGameState, publishSessionChat],
   );
 
   const playDirections = useCallback((directions: DirectionCommand[]) => {
@@ -3959,6 +3985,7 @@ export function GameSurface({
 
   const applyGeneratedAssets = useCallback(
     async (res: GameAssetGenerationResult) => {
+      publishSessionChat(res.sessionChat);
       const nextBackground = res.generatedBackground ?? res.fallbackBackground;
       if (nextBackground) {
         await fetchManifest();
@@ -3972,7 +3999,7 @@ export function GameSurface({
         clearFailedNpcAvatars(res.generatedNpcAvatars.map((avatar) => avatar.name));
       }
     },
-    [clearFailedNpcAvatars, fetchManifest, installGeneratedIllustration],
+    [clearFailedNpcAvatars, fetchManifest, installGeneratedIllustration, publishSessionChat],
   );
 
   async function applySceneResult(result: SceneAnalysis, msg: { id: string }) {
@@ -5075,12 +5102,13 @@ export function GameSurface({
 
         setInventoryItems(updatedInventory);
 
-        gameApi
+        void gameApi
           .addJournalEntry({
             chatId: activeChatId,
             type: "item",
             data: { item: itemName, action: "removed", quantity: 1 },
           })
+          .then((res) => publishSessionChat(res.sessionChat))
           .catch(() => {});
 
         setInventoryNotifications([`You removed ${itemName}.`]);
@@ -5095,7 +5123,7 @@ export function GameSurface({
         toast.error(message);
       }
     },
-    [activeChatId, inventoryItems, patchVisibleGameState, updateChatMetadata],
+    [activeChatId, inventoryItems, patchVisibleGameState, publishSessionChat, updateChatMetadata],
   );
 
   const handleClearInventoryItem = useCallback(
@@ -5139,12 +5167,13 @@ export function GameSurface({
 
         setInventoryItems(updatedInventory);
 
-        gameApi
+        void gameApi
           .addJournalEntry({
             chatId: activeChatId,
             type: "item",
             data: { item: itemName, action: "removed", quantity: removedQuantity },
           })
+          .then((res) => publishSessionChat(res.sessionChat))
           .catch(() => {});
 
         setInventoryNotifications([`You removed ${itemName}.`]);
@@ -5159,7 +5188,7 @@ export function GameSurface({
         toast.error(message);
       }
     },
-    [activeChatId, inventoryItems, patchVisibleGameState, updateChatMetadata],
+    [activeChatId, inventoryItems, patchVisibleGameState, publishSessionChat, updateChatMetadata],
   );
 
   const handleUseCombatInventoryItem = useCallback(
@@ -5202,12 +5231,13 @@ export function GameSurface({
 
         setInventoryItems(updatedInventory);
 
-        gameApi
+        void gameApi
           .addJournalEntry({
             chatId: activeChatId,
             type: "item",
             data: { item: normalizedItemName, action: "used", quantity: 1 },
           })
+          .then((res) => publishSessionChat(res.sessionChat))
           .catch(() => {});
 
         setInventoryNotifications([`You used ${normalizedItemName}.`]);
@@ -5222,7 +5252,7 @@ export function GameSurface({
         toast.error(message);
       }
     },
-    [activeChatId, inventoryItems, patchVisibleGameState, updateChatMetadata],
+    [activeChatId, inventoryItems, patchVisibleGameState, publishSessionChat, updateChatMetadata],
   );
 
   const handleRenameInventoryItem = useCallback(
@@ -7041,7 +7071,7 @@ export function GameSurface({
       journalDescLines.push(`Party status: ${partyStatus.join("; ")}`);
       if (lootText) journalDescLines.push(`Loot: ${lootText}`);
 
-      gameApi
+      void gameApi
         .addJournalEntry({
           chatId: activeChatId,
           type: "combat",
@@ -7050,9 +7080,10 @@ export function GameSurface({
             outcome: outcome === "flee" ? "fled" : outcome,
           },
         })
+        .then((res) => publishSessionChat(res.sessionChat))
         .catch(() => {});
     },
-    [sendMessage, activeChatId, clearCombatSnapshot, transitionGameState],
+    [sendMessage, activeChatId, clearCombatSnapshot, publishSessionChat, transitionGameState],
   );
 
   // Toggle audio mute
