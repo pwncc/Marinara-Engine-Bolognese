@@ -9,6 +9,7 @@ import { applyRegexScriptsToPromptMessages } from "../generation-core/regex/rege
 import { stripConversationPromptTimestamps } from "../modes/chat/core/summaries/transcript-sanitize";
 import { resolveMacros, type MacroContext } from "../shared/macros/macro-engine";
 import { collapseExcessBlankLines } from "../shared/text/newlines";
+import { cleanPromptText, stripPromptComments } from "../shared/text/prompt-comments";
 import { normalizeUserTimeZone } from "../shared/time/timezone";
 import type { GameActiveState, GameCampaignPlan, GameMap, GameNpc, HudWidget, SessionSummary } from "../contracts/types/game";
 import { buildGmFormatReminder, buildGmSystemPrompt, type GmPromptContext } from "../modes/game/prompts/gm-prompts";
@@ -122,7 +123,7 @@ function dataRecord(record: JsonRecord): JsonRecord {
 }
 
 function field(source: JsonRecord, key: string): string {
-  return readString(source[key]).trim();
+  return cleanPromptText(readString(source[key]));
 }
 
 function stringRecord(value: unknown): Record<string, string> {
@@ -1519,7 +1520,7 @@ export async function assembleGenerationPrompt(
         summary,
         agentData,
       });
-      const resolved = resolveMacros(rawContent, macros);
+      const resolved = cleanPromptText(resolveMacros(rawContent, macros));
       if (!resolved.trim()) continue;
       if (marker?.type === "chat_summary" && summary?.trim()) insertedSummary = true;
       const name = readString(section.name) || readString(section.identifier) || marker?.type || "Prompt";
@@ -1599,10 +1600,12 @@ export async function assembleGenerationPrompt(
   applyRegexScriptsToPromptMessages(messages, regexScripts, {
     resolveMacros: (value) => resolveMacros(value, macros, { trimResult: false }),
   });
-  messages = messages.map((message) => ({
-    ...message,
-    content: collapseExcessBlankLines(message.content),
-  }));
+  messages = messages
+    .map((message) => ({
+      ...message,
+      content: collapseExcessBlankLines(stripPromptComments(message.content)).trim(),
+    }))
+    .filter((message) => message.content.length > 0);
   const individualGroupTarget = scopedIndividualGroupTarget(input, characters);
   if (individualGroupTarget) {
     messages = scopeIndividualGroupHistoryRoles(messages, individualGroupTarget);

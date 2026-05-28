@@ -118,6 +118,21 @@ function storageWithCharacters(characters: Row[]): StorageGateway {
   };
 }
 
+function storageWithPersonas(sections: Row[], personas: Row[]): StorageGateway {
+  const base = storageWithSections(sections);
+  return {
+    ...base,
+    list: async <T,>(entity: string, options?: { filters?: Record<string, unknown> }) => {
+      if (entity === "personas") return personas as T[];
+      return base.list<T>(entity, options);
+    },
+    get: async <T,>(entity: string, id: string) => {
+      if (entity === "personas") return (personas.find((persona) => persona.id === id) as T) ?? null;
+      return base.get<T>(entity, id);
+    },
+  };
+}
+
 function storageWithSectionsAndCharacters(sections: Row[], characters: Row[]): StorageGateway {
   const base = storageWithSections(sections);
   return {
@@ -156,6 +171,52 @@ const request = {
 };
 
 describe("assembleGenerationPrompt macro parity", () => {
+  it("strips prompt comments from persona fields and preset sections", async () => {
+    const assembly = await assembleGenerationPrompt(
+      storageWithPersonas(
+        [
+          section({
+            id: "persona",
+            name: "Persona",
+            role: "system",
+            markerConfig: { type: "persona" },
+            sortOrder: 0,
+          }),
+          section({
+            id: "main",
+            name: "Main",
+            role: "system",
+            content: "Visible preset instruction. {{// hidden preset note }}",
+            sortOrder: 1,
+          }),
+        ],
+        [
+          {
+            id: "persona-1",
+            name: "Mari",
+            description: "Visible persona details. {{// hidden persona note }}",
+            personality: "{{// remove this line }}\nPrecise and curious.",
+          },
+        ],
+      ),
+      {
+        chat: { id: "chat", mode: "roleplay", personaId: "persona-1" },
+        storedMessages: [],
+        connection: {},
+        request,
+        latestUserInput: "",
+      },
+    );
+
+    const prompt = assembly.messages.map((message) => message.content).join("\n\n");
+    expect(prompt).toContain("Visible persona details.");
+    expect(prompt).toContain("Precise and curious.");
+    expect(prompt).toContain("Visible preset instruction.");
+    expect(prompt).not.toContain("hidden persona note");
+    expect(prompt).not.toContain("hidden preset note");
+    expect(prompt).not.toContain("{{//");
+  });
+
   it("resolves charSysInfo and charPostHistory from active character instruction fields", async () => {
     const assembly = await assembleGenerationPrompt(
       storageWithSectionsAndCharacters(

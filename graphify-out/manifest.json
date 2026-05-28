@@ -175,8 +175,8 @@
     "semantic_hash": ""
   },
   "src-tauri/crates/llm/src/lib.rs": {
-    "mtime": 1779966146.6500144,
-    "ast_hash": "0dab242ac6965b2d1bd943c3ff48464f",
+    "mtime": 1779967487.65232,
+    "ast_hash": "26eb642c0c0ba60287e84ce936c3c2e4",
     "semantic_hash": ""
   },
   "src-tauri/crates/core/src/lib.rs": {
@@ -1565,8 +1565,8 @@
     "semantic_hash": ""
   },
   "src/features/shell/settings/hooks/use-themes.ts": {
-    "mtime": 1779835633.8655238,
-    "ast_hash": "f9b3ed5b1e487859d0642db3c45e3518",
+    "mtime": 1779967735.7810075,
+    "ast_hash": "0a7eb9e5d656996a32cbb17919de2a0b",
     "semantic_hash": ""
   },
   "src/features/shell/settings/hooks/use-prompt-overrides.ts": {
@@ -3460,8 +3460,8 @@
     "semantic_hash": ""
   },
   "src/engine/contracts/types/theme.ts": {
-    "mtime": 1779835633.8058364,
-    "ast_hash": "7fed1dfc67440bf6cc4e721c5914edf7",
+    "mtime": 1779967480.973344,
+    "ast_hash": "4af9c66a05674a1551f2b049704e3571",
     "semantic_hash": ""
   },
   "src/engine/contracts/constants/image-generation-defaults.ts": {
@@ -3800,8 +3800,8 @@
     "semantic_hash": ""
   },
   "src/engine/generation/prompt-preview.ts": {
-    "mtime": 1779961269.1945243,
-    "ast_hash": "3cde86c40db737ace08993d7e3f40b74",
+    "mtime": 1779967730.240956,
+    "ast_hash": "baeb01177440c4a22e7e5904af275fe0",
     "semantic_hash": ""
   },
   "src/engine/generation/prompt-overrides.test.ts": {
@@ -3865,8 +3865,8 @@
     "semantic_hash": ""
   },
   "src/engine/generation/prompt-assembly.test.ts": {
-    "mtime": 1779961269.1926937,
-    "ast_hash": "483c6e5b6f58f5486c60b9c7d919fc8f",
+    "mtime": 1779967361.040058,
+    "ast_hash": "27b754248255654eda5010b7e08dec48",
     "semantic_hash": ""
   },
   "src/engine/generation/start-generation.ts": {
@@ -3885,8 +3885,8 @@
     "semantic_hash": ""
   },
   "src/engine/generation/prompt-assembly.ts": {
-    "mtime": 1779961269.1935837,
-    "ast_hash": "5ae3673d3d2c515917abc69f394522ea",
+    "mtime": 1779967725.6304483,
+    "ast_hash": "975e117305964a261775329c5b34f927",
     "semantic_hash": ""
   },
   "src/engine/generation/agent-normalizers.ts": {
@@ -5737,6 +5737,11 @@
   "src/shared/api/translation-api.ts": {
     "mtime": 1779961565.0026476,
     "ast_hash": "1fd1541cd7c74a005ebed16c1e16cf2e",
+    "semantic_hash": ""
+  },
+  "src/engine/shared/text/prompt-comments.ts": {
+    "mtime": 1779967333.7607794,
+    "ast_hash": "10b621e0012ab57edc48f9d4d15ea13f",
     "semantic_hash": ""
   }
 }

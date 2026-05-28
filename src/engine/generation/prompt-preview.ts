@@ -2,7 +2,7 @@ import type { ChatMLMessage, GenerationParameters } from "../contracts/types/pro
 import type { StorageGateway } from "../capabilities/storage";
 import { llmParameters, loadChatMessages, requireRecord, resolveGenerationConnection } from "./context";
 import { assembleGenerationPrompt } from "./prompt-assembly";
-import { readNumber, readString } from "./runtime-records";
+import { parseRecord, readNumber, readString } from "./runtime-records";
 
 export interface PromptPreviewInput {
   chatId: string;
@@ -34,13 +34,21 @@ export interface PromptPreviewResult {
   } | null;
 }
 
+function promptPreviewMessageLoadOptions(
+  chat: Record<string, unknown>,
+): Parameters<StorageGateway["listChatMessages"]>[1] {
+  const chatLimit = readNumber(parseRecord(chat.metadata).contextMessageLimit, 0);
+  const historyLimit = Math.max(1, Math.min(9999, chatLimit || 300));
+  return { limit: Math.max(40, Math.min(340, historyLimit + 20)) };
+}
+
 export async function previewGenerationPrompt(
   storage: StorageGateway,
   input: PromptPreviewInput,
 ): Promise<PromptPreviewResult> {
   const chat = requireRecord(await storage.get("chats", input.chatId), "Chat");
   const connection = await resolveGenerationConnection(storage, chat, {});
-  const storedMessages = await loadChatMessages(storage, input.chatId);
+  const storedMessages = await loadChatMessages(storage, input.chatId, promptPreviewMessageLoadOptions(chat));
   const request = {
     promptPresetId: input.presetId ?? (readString(chat.promptPresetId) || null),
     forCharacterId: input.forCharacterId ?? null,

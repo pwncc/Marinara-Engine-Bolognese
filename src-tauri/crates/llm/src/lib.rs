@@ -103,9 +103,13 @@ pub async fn stream_events(
     emit(json!({ "type": "start" }))?;
     if should_use_openai_responses(&request) || request.connection.provider == "openai_chatgpt" {
         stream_openai_responses(request, &mut emit).await?;
-    } else if request.connection.provider == "google" || request.connection.provider == "google_vertex" {
+    } else if request.connection.provider == "google"
+        || request.connection.provider == "google_vertex"
+    {
         stream_google(request, &mut emit).await?;
-    } else if request.connection.provider != "anthropic" && request.connection.provider != "claude_subscription" {
+    } else if request.connection.provider != "anthropic"
+        && request.connection.provider != "claude_subscription"
+    {
         stream_openai_compatible(request, &mut emit).await?;
     } else {
         let result = complete_rich(request).await?;
@@ -387,8 +391,7 @@ fn is_claude_opus_adaptive_only_model(model: &str) -> bool {
 }
 
 fn supports_anthropic_adaptive_thinking(model: &str) -> bool {
-    is_claude_opus_adaptive_only_model(model)
-        || claude_version_at_least(model, "sonnet", 4, 5)
+    is_claude_opus_adaptive_only_model(model) || claude_version_at_least(model, "sonnet", 4, 5)
 }
 
 fn should_send_openai_sampling_parameters(request: &LlmRequest) -> bool {
@@ -1299,7 +1302,9 @@ fn apply_openai_parameters(body: &mut Value, request: &LlmRequest) {
     {
         if let Some(entries) = extra.as_object() {
             for (key, value) in entries {
-                if !should_send_openai_sampling_parameters(request) && is_sampling_parameter_key(key) {
+                if !should_send_openai_sampling_parameters(request)
+                    && is_sampling_parameter_key(key)
+                {
                     continue;
                 }
                 if body.get(key).is_none() {
@@ -1833,8 +1838,8 @@ async fn complete_anthropic(request: LlmRequest) -> AppResult<String> {
     }
     let adaptive_only = is_claude_opus_adaptive_only_model(&request.connection.model);
     let thinking_effort = anthropic_thinking_effort(&request.parameters);
-    let adaptive_thinking =
-        thinking_effort.is_some() && supports_anthropic_adaptive_thinking(&request.connection.model);
+    let adaptive_thinking = thinking_effort.is_some()
+        && supports_anthropic_adaptive_thinking(&request.connection.model);
     if !adaptive_only && !adaptive_thinking {
         if let Some(temp) = temperature(&request.parameters) {
             body["temperature"] = json!(temp);
@@ -1898,8 +1903,27 @@ fn google_vertex_endpoint(base: &str, model: &str, endpoint: &str) -> String {
     format!("{base}/publishers/google/models/{model}:{endpoint}")
 }
 
+fn normalize_google_base_url(base: String) -> String {
+    let trimmed = base.trim_end_matches('/').to_string();
+    let Ok(mut url) = reqwest::Url::parse(&trimmed) else {
+        return trimmed;
+    };
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    if matches!(
+        host.as_str(),
+        "linkapi.ai" | "www.linkapi.ai" | "home.linkapi.ai"
+    ) && url.set_host(Some("api.linkapi.ai")).is_ok()
+    {
+        return url.to_string().trim_end_matches('/').to_string();
+    }
+    trimmed
+}
+
 fn google_api_base(request: &LlmRequest) -> String {
-    let base = base_url(&request.connection.provider, &request.connection.base_url);
+    let base = normalize_google_base_url(base_url(
+        &request.connection.provider,
+        &request.connection.base_url,
+    ));
     if request.connection.provider == "google"
         && (base.ends_with("/v1beta") || base.ends_with("/v1"))
     {
@@ -1932,10 +1956,10 @@ fn google_endpoint(request: &LlmRequest, endpoint: &str, streaming: bool) -> Str
 }
 
 fn google_contents(request: &LlmRequest) -> Vec<Value> {
-    request_messages(request)
+    let contents: Vec<Value> = request_messages(request)
         .into_iter()
         .filter(|message| message.role != "system")
-        .map(|message| {
+        .filter_map(|message| {
             let role = if message.role == "assistant" {
                 "model"
             } else {
@@ -1950,9 +1974,14 @@ fn google_contents(request: &LlmRequest) -> Vec<Value> {
                     parts.push(json!({ "inlineData": { "mimeType": mime_type, "data": data } }));
                 }
             }
-            json!({ "role": role, "parts": parts })
+            (!parts.is_empty()).then(|| json!({ "role": role, "parts": parts }))
         })
-        .collect()
+        .collect();
+    if contents.is_empty() {
+        vec![json!({ "role": "user", "parts": [{ "text": "Continue." }] })]
+    } else {
+        contents
+    }
 }
 
 fn google_system_instruction(request: &LlmRequest) -> Option<Value> {
@@ -2005,6 +2034,10 @@ fn google_generate_body(request: &LlmRequest) -> Value {
     body
 }
 
+fn should_fallback_google_stream_status(status: reqwest::StatusCode) -> bool {
+    status.is_server_error()
+}
+
 async fn complete_google(request: LlmRequest) -> AppResult<String> {
     let url = google_endpoint(&request, "generateContent", false);
     ensure_url_allowed(&url)?;
@@ -2025,7 +2058,11 @@ async fn complete_google(request: LlmRequest) -> AppResult<String> {
             .and_then(Value::as_array)
             .and_then(|parts| {
                 parts.iter().find_map(|part| {
-                    if part.get("thought").and_then(Value::as_bool).unwrap_or(false) {
+                    if part
+                        .get("thought")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                    {
                         None
                     } else {
                         part.get("text").and_then(Value::as_str)
@@ -2054,6 +2091,13 @@ async fn stream_google(
     let status = response.status();
     if !status.is_success() {
         let error_body = response.json::<Value>().await.unwrap_or_else(|_| json!({}));
+        if should_fallback_google_stream_status(status) {
+            let content = complete_google(request).await?;
+            if !content.is_empty() {
+                emit(json!({ "type": "token", "text": content, "data": content }))?;
+            }
+            return Ok(());
+        }
         return Err(provider_http_error(status, error_body));
     }
 
@@ -2111,10 +2155,18 @@ fn process_google_sse_block(
             continue;
         };
         for part in parts {
-            let Some(text) = part.get("text").and_then(Value::as_str).filter(|text| !text.is_empty()) else {
+            let Some(text) = part
+                .get("text")
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+            else {
                 continue;
             };
-            if part.get("thought").and_then(Value::as_bool).unwrap_or(false) {
+            if part
+                .get("thought")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
                 emit(json!({ "type": "thinking", "text": text, "data": text }))?;
             } else {
                 emit(json!({ "type": "token", "text": text, "data": text }))?;
@@ -2406,6 +2458,31 @@ mod tests {
     }
 
     #[test]
+    fn google_linkapi_console_hosts_normalize_to_api_host() {
+        assert_eq!(
+            normalize_google_base_url("https://home.linkapi.ai".to_string()),
+            "https://api.linkapi.ai"
+        );
+        assert_eq!(
+            normalize_google_base_url("https://www.linkapi.ai/v1beta".to_string()),
+            "https://api.linkapi.ai/v1beta"
+        );
+    }
+
+    #[test]
+    fn google_stream_fallback_is_limited_to_server_errors() {
+        assert!(should_fallback_google_stream_status(
+            reqwest::StatusCode::from_u16(530).expect("530 should be a valid status")
+        ));
+        assert!(should_fallback_google_stream_status(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR
+        ));
+        assert!(!should_fallback_google_stream_status(
+            reqwest::StatusCode::UNAUTHORIZED
+        ));
+    }
+
+    #[test]
     fn google_top_k_zero_is_not_sent() {
         let mut request = request_for("google", "gemini-2.5-flash", json!({ "topK": 0 }));
         assert!(should_send_top_k(&request));
@@ -2421,8 +2498,9 @@ mod tests {
 
     #[test]
     fn gemini_3_thinking_config_sends_thinking_only_shape() {
-        let config = google_thinking_config("gemini-3-pro", &json!({ "reasoningEffort": "medium" }))
-            .expect("Gemini 3 reasoning effort should create thinking config");
+        let config =
+            google_thinking_config("gemini-3-pro", &json!({ "reasoningEffort": "medium" }))
+                .expect("Gemini 3 reasoning effort should create thinking config");
         assert_eq!(config["thinkingLevel"], json!("medium"));
         assert_eq!(config["includeThoughts"], json!(true));
     }
@@ -2474,8 +2552,14 @@ mod tests {
         .expect("Gemini stream block should parse");
 
         assert_eq!(emitted[0]["type"], json!("usage"));
-        assert_eq!(emitted[1], json!({ "type": "thinking", "text": "pondering", "data": "pondering" }));
-        assert_eq!(emitted[2], json!({ "type": "token", "text": "hello", "data": "hello" }));
+        assert_eq!(
+            emitted[1],
+            json!({ "type": "thinking", "text": "pondering", "data": "pondering" })
+        );
+        assert_eq!(
+            emitted[2],
+            json!({ "type": "token", "text": "hello", "data": "hello" })
+        );
     }
 
     #[test]
@@ -2508,7 +2592,9 @@ mod tests {
         assert!(supports_anthropic_adaptive_thinking("claude-opus-4-7"));
         assert!(supports_anthropic_adaptive_thinking("claude-opus-5-6"));
         assert!(supports_anthropic_adaptive_thinking("claude-sonnet-4-5"));
-        assert!(!supports_anthropic_adaptive_thinking("claude-opus-4-20250514"));
+        assert!(!supports_anthropic_adaptive_thinking(
+            "claude-opus-4-20250514"
+        ));
     }
 
     #[test]
