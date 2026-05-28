@@ -169,6 +169,7 @@ const HIDDEN_ROLEPLAY_AGENTS = new Set([
   "response-orchestrator",
   "autonomous-messenger",
 ]);
+const HAPTIC_AGENT_ID = "haptic";
 
 type SpotifySourceType = "liked" | "playlist" | "artist" | "any";
 
@@ -424,6 +425,7 @@ export function ChatSettingsDrawer({
   );
   const activeToolIds: string[] = metadata.activeToolIds ?? [];
   const spotifyActive = activeAgentIds.includes("spotify");
+  const hapticAgentActive = activeAgentIds.includes(HAPTIC_AGENT_ID);
   const gameLorebookKeeperLorebook = gameLorebookKeeperLorebookId
     ? ((lorebooks ?? []) as Array<{ id: string; name: string }>).find(
         (book) => book.id === gameLorebookKeeperLorebookId,
@@ -4409,7 +4411,7 @@ export function ChatSettingsDrawer({
                 )}
 
                 {/* Love Toys Control — not for game mode */}
-                {metadata.enableAgents && !isGame && (
+                {metadata.enableAgents && !isGame && hapticAgentActive && (
                   <div className="space-y-1.5">
                     <button
                       onClick={() => {

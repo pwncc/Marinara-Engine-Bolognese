@@ -890,8 +890,8 @@
     "semantic_hash": ""
   },
   "src/features/modes/shared/chat-ui/components/ChatSettingsDrawer.tsx": {
-    "mtime": 1779961269.2018745,
-    "ast_hash": "7867203361fa5df198765963353612e5",
+    "mtime": 1779965165.524291,
+    "ast_hash": "d4fd31762b503f10d50040c59775cfb0",
     "semantic_hash": ""
   },
   "src/features/modes/shared/chat-ui/components/ChatGalleryDrawer.tsx": {
@@ -2765,12 +2765,12 @@
     "semantic_hash": ""
   },
   "src/shared/hooks/use-translate.ts": {
-    "mtime": 1779961269.2527666,
+    "mtime": 1779961565.0029511,
     "ast_hash": "7aac88a618b674f420224520c633471b",
     "semantic_hash": ""
   },
   "src/shared/hooks/use-tts.ts": {
-    "mtime": 1779961269.2528908,
+    "mtime": 1779961565.0030563,
     "ast_hash": "f77c2491c183fd078a16ce5b358025a6",
     "semantic_hash": ""
   },
@@ -2885,7 +2885,7 @@
     "semantic_hash": ""
   },
   "src/shared/lib/translate-text.ts": {
-    "mtime": 1779961269.2530134,
+    "mtime": 1779961565.003192,
     "ast_hash": "522be87d45ec69f10ef3b25c0bfac40f",
     "semantic_hash": ""
   },
@@ -2910,7 +2910,7 @@
     "semantic_hash": ""
   },
   "src/shared/lib/tts-service.ts": {
-    "mtime": 1779961269.2531939,
+    "mtime": 1779961565.003386,
     "ast_hash": "9b85ebf7e691157ccc9420da45d2d8a5",
     "semantic_hash": ""
   },
@@ -3070,12 +3070,12 @@
     "semantic_hash": ""
   },
   "src/shared/api/tauri-client.test.ts": {
-    "mtime": 1779961284.833742,
+    "mtime": 1779961565.0024629,
     "ast_hash": "ef31722c9adfbbfdb6f456f1d1ab045c",
     "semantic_hash": ""
   },
   "src/shared/api/integration-utility-api.ts": {
-    "mtime": 1779961269.251514,
+    "mtime": 1779961565.002336,
     "ast_hash": "ec989a93dec480f67a367e93fa1a0c5b",
     "semantic_hash": ""
   },
@@ -3995,12 +3995,12 @@
     "semantic_hash": ""
   },
   "docs/developer/modules.html": {
-    "mtime": 1779961298.5200481,
+    "mtime": 1779961564.9894168,
     "ast_hash": "277716b2df29c92977e424b10a2099e6",
     "semantic_hash": ""
   },
   "docs/developer/architecture.html": {
-    "mtime": 1779961298.5197978,
+    "mtime": 1779961564.9892247,
     "ast_hash": "6251aa221c9f17e5788443f6a1733060",
     "semantic_hash": ""
   },
@@ -5720,22 +5720,22 @@
     "semantic_hash": ""
   },
   "src/shared/api/tts-api.test.ts": {
-    "mtime": 1779961298.52898,
+    "mtime": 1779961565.0027478,
     "ast_hash": "cfaf506a1554688d6cc95cbb01adf3a2",
     "semantic_hash": ""
   },
   "src/shared/api/translation-api.test.ts": {
-    "mtime": 1779961269.2518702,
+    "mtime": 1779961565.002552,
     "ast_hash": "210c12d9c312182ffd6ab69b7511363f",
     "semantic_hash": ""
   },
   "src/shared/api/tts-api.ts": {
-    "mtime": 1779961298.5291655,
+    "mtime": 1779961565.002834,
     "ast_hash": "62c1cb70ce635ed3442ad9ed3c8d5b88",
     "semantic_hash": ""
   },
   "src/shared/api/translation-api.ts": {
-    "mtime": 1779961269.2523615,
+    "mtime": 1779961565.0026476,
     "ast_hash": "1fd1541cd7c74a005ebed16c1e16cf2e",
     "semantic_hash": ""
   }
