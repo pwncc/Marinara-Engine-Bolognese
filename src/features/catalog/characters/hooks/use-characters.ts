@@ -7,10 +7,8 @@ import { characterKeys, spriteKeys } from "../query-keys";
 import {
   createCharacterSchema,
   createGroupSchema,
-  createPersonaGroupSchema,
   updateCharacterSchema,
   updateGroupSchema,
-  updatePersonaGroupSchema,
 } from "../../../../engine/contracts/schemas/character.schema";
 import { characterApi } from "../../../../shared/api/character-api";
 import { storageApi } from "../../../../shared/api/storage-api";
@@ -89,7 +87,7 @@ function listCharacterSummaries(): Promise<CharacterSummary[]> {
   return storageApi.list<CharacterSummary>("characters", CHARACTER_SUMMARY_OPTIONS);
 }
 
-export function upsertCharacterListRecord(current: unknown[] | undefined, record: unknown): unknown[] | undefined {
+function upsertCharacterListRecord(current: unknown[] | undefined, record: unknown): unknown[] | undefined {
   if (!isCharacterListRecord(record)) return current;
   if (!Array.isArray(current)) return current;
 
@@ -101,7 +99,7 @@ export function upsertCharacterListRecord(current: unknown[] | undefined, record
   );
 }
 
-export function removeCharacterListRecord(current: unknown[] | undefined, id: string): unknown[] | undefined {
+function removeCharacterListRecord(current: unknown[] | undefined, id: string): unknown[] | undefined {
   if (!Array.isArray(current)) return current;
   return current.filter((item) => !isCharacterListRecord(item) || item.id !== id);
 }
@@ -564,25 +562,6 @@ export function usePersonaSummaries(enabled = true) {
   });
 }
 
-export function usePersonaSummariesByIds(ids: string[], enabled = true) {
-  const uniqueIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
-  const queries = useQueries({
-    queries: uniqueIds.map((id) => ({
-      queryKey: characterKeys.personaSummaryDetail(id),
-      queryFn: () => storageApi.get<PersonaSummary>("personas", id, PERSONA_SUMMARY_OPTIONS),
-      enabled: enabled && !!id,
-      staleTime: 5 * 60_000,
-      refetchOnWindowFocus: false,
-    })),
-  });
-
-  return {
-    data: queries.map((query) => query.data).filter(Boolean),
-    isLoading: queries.some((query) => query.isLoading),
-    isFetching: queries.some((query) => query.isFetching),
-  };
-}
-
 export function usePersona(id: string | null, enabled = true) {
   return useQuery({
     queryKey: characterKeys.personaDetail(id ?? ""),
@@ -705,29 +684,6 @@ export function useDeletePersona() {
   });
 }
 
-export function useDuplicatePersona() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => storageCommandsApi.duplicate("personas", id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: characterKeys.personas });
-      qc.invalidateQueries({ queryKey: characterKeys.personaSummaries });
-    },
-  });
-}
-
-export function useActivatePersona() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => personaApi.activate(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: characterKeys.personas });
-      qc.invalidateQueries({ queryKey: characterKeys.personaSummaries });
-      qc.invalidateQueries({ queryKey: characterKeys.activePersona });
-    },
-  });
-}
-
 export function useUploadPersonaAvatar() {
   const qc = useQueryClient();
   return useMutation({
@@ -748,14 +704,6 @@ export function useCharacterGroups() {
   return useQuery({
     queryKey: characterKeys.groups,
     queryFn: () => storageApi.list<unknown>("character-groups"),
-  });
-}
-
-export function useCharacterGroup(id: string | null) {
-  return useQuery({
-    queryKey: characterKeys.groupDetail(id ?? ""),
-    queryFn: () => storageApi.get("character-groups", id!),
-    enabled: !!id,
   });
 }
 
@@ -792,31 +740,5 @@ export function usePersonaGroups(enabled = true) {
     queryKey: characterKeys.personaGroups,
     queryFn: () => storageApi.list<unknown>("persona-groups"),
     enabled,
-  });
-}
-
-export function useCreatePersonaGroup() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: { name: string; description?: string; personaIds?: string[] }) =>
-      storageApi.create("persona-groups", createPersonaGroupSchema.parse(data)),
-    onSuccess: () => qc.invalidateQueries({ queryKey: characterKeys.personaGroups }),
-  });
-}
-
-export function useUpdatePersonaGroup() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, ...data }: { id: string; name?: string; description?: string; personaIds?: string[] }) =>
-      storageApi.update("persona-groups", id, updatePersonaGroupSchema.parse(data)),
-    onSuccess: () => qc.invalidateQueries({ queryKey: characterKeys.personaGroups }),
-  });
-}
-
-export function useDeletePersonaGroup() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => storageApi.delete("persona-groups", id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: characterKeys.personaGroups }),
   });
 }
