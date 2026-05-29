@@ -706,20 +706,39 @@ pub(crate) fn branch_chat(state: &AppState, chat_id: &str, body: Value) -> AppRe
         .and_then(Value::as_str)
         .unwrap_or("Chat")
         .to_string();
-    let group_id = object
+    let source_group_id = object
         .get("groupId")
         .and_then(Value::as_str)
-        .unwrap_or(chat_id)
-        .to_string();
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let group_id = source_group_id
+        .clone()
+        .unwrap_or_else(|| chat_id.to_string());
     object.insert("id".to_string(), Value::String(new_chat_id.clone()));
     object.insert(
         "name".to_string(),
         Value::String(format!("{base_name} Branch")),
     );
-    object.insert("groupId".to_string(), Value::String(group_id));
+    object.insert("groupId".to_string(), Value::String(group_id.clone()));
     let source_has_tracker_snapshots =
         game_state_snapshots::latest_tracker_snapshot(state, chat_id)?.is_some();
     let mut new_chat = state.storage.create("chats", chat)?;
+    // The first branch turns the source chat into a group root. Enroll the
+    // source chat into the new group too, otherwise it keeps `groupId: null`
+    // and Manage Chat Files / the branch selector (which key off the active
+    // chat's groupId) cannot discover the branches when opened from the
+    // original chat. This mirrors the intent of the ST-chat-into-group import
+    // path (promote the root into the group); it does not copy that path's
+    // patch-then-rollback ordering. The branch is created first on purpose: if
+    // this enroll patch fails, the state is exactly the pre-fix one (branch
+    // grouped, root ungrouped) which a later branch attempt re-converges,
+    // rather than leaving a root enrolled in a group that has no branches.
+    if source_group_id.is_none() {
+        state
+            .storage
+            .patch("chats", chat_id, json!({ "groupId": group_id }))?;
+    }
     let up_to = body.get("upToMessageId").and_then(Value::as_str);
     let mut visible_tracker_target: Option<(String, i64)> = None;
     for mut message in messages_for_chat(state, chat_id)? {
@@ -1076,6 +1095,76 @@ mod tests {
             std::fs::remove_dir_all(&path).expect("stale temp chat delete dir should be removable");
         }
         AppState::from_data_dir(path, Vec::new()).expect("test app state should initialize")
+    }
+
+    #[test]
+    fn branch_chat_enrolls_ungrouped_source_chat_into_the_new_group() {
+        let state = test_state("branch-enroll-root");
+        state
+            .storage
+            .create(
+                "chats",
+                json!({
+                    "id": "root-1",
+                    "name": "New Roleplay",
+                    "mode": "roleplay",
+                    "characterIds": [],
+                    "metadata": {}
+                }),
+            )
+            .expect("source chat should be created");
+
+        let branch = branch_chat(&state, "root-1", json!({})).expect("branch should be created");
+
+        // The new branch joins a group keyed on the source chat id...
+        assert_eq!(branch["groupId"], "root-1");
+
+        // ...and the source/root chat is enrolled into that same group instead
+        // of keeping groupId: null, so Manage Chat Files finds the branches
+        // when opened from the original chat.
+        let source = state
+            .storage
+            .get("chats", "root-1")
+            .expect("source lookup should not fail")
+            .expect("source chat should still exist");
+        assert_eq!(source["groupId"], "root-1");
+
+        let mut filters = Map::new();
+        filters.insert("groupId".to_string(), Value::String("root-1".to_string()));
+        let group_members = state
+            .storage
+            .list_where("chats", &filters)
+            .expect("group listing should not fail");
+        assert_eq!(group_members.len(), 2);
+    }
+
+    #[test]
+    fn branch_chat_preserves_existing_group_without_repatching_source() {
+        let state = test_state("branch-existing-group");
+        state
+            .storage
+            .create(
+                "chats",
+                json!({
+                    "id": "root-1",
+                    "name": "Grouped Roleplay",
+                    "mode": "roleplay",
+                    "groupId": "existing-group",
+                    "characterIds": [],
+                    "metadata": {}
+                }),
+            )
+            .expect("source chat should be created");
+
+        let branch = branch_chat(&state, "root-1", json!({})).expect("branch should be created");
+
+        assert_eq!(branch["groupId"], "existing-group");
+        let source = state
+            .storage
+            .get("chats", "root-1")
+            .expect("source lookup should not fail")
+            .expect("source chat should still exist");
+        assert_eq!(source["groupId"], "existing-group");
     }
 
     #[test]
