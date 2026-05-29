@@ -82,9 +82,7 @@ pub(crate) async fn generate_image_with_options(
         "openrouter" | "gemini_image" => {
             generate_chat_image(connection, prompt, width, height, &options).await
         }
-        "google_image" => {
-            generate_google_image(connection, prompt, width, height, &options).await
-        }
+        "google_image" => generate_google_image(connection, prompt, width, height, &options).await,
         "xai" => generate_xai(connection, prompt, width, height).await,
         "openai" | "togetherai" | "nanogpt" | "blockentropy" | "" => {
             generate_openai_compatible_image(connection, &source, prompt, width, height, &options)
@@ -1132,6 +1130,12 @@ async fn generate_google_image(
     };
 
     if is_imagen_model(&model) {
+        if !options.reference_images.is_empty() {
+            eprintln!(
+                "Google Imagen model {model} does not support reference images; ignoring {} reference image(s).",
+                options.reference_images.len()
+            );
+        }
         let payload = json!({
             "instances": [{ "prompt": prompt }],
             "parameters": {
@@ -1147,8 +1151,12 @@ async fn generate_google_image(
             .await
             .map_err(|error| AppError::new("image_network_error", error.to_string()))?;
         let json = response_json(response, GOOGLE_IMAGE_PROVIDER).await?;
-        return parse_google_predict_image(&json)
-            .ok_or_else(|| AppError::new("image_response_error", "Google Imagen returned no image data"));
+        return parse_google_predict_image(&json).ok_or_else(|| {
+            AppError::new(
+                "image_response_error",
+                "Google Imagen returned no image data",
+            )
+        });
     }
 
     let mut parts: Vec<Value> = Vec::new();
@@ -1255,7 +1263,9 @@ fn parse_google_generate_content_image(json: &Value) -> Option<(String, String)>
     for part in parts {
         // v1beta REST emits camelCase, but accept snake_case defensively.
         for key in ["inlineData", "inline_data"] {
-            let Some(inline) = part.get(key) else { continue };
+            let Some(inline) = part.get(key) else {
+                continue;
+            };
             let data = inline
                 .get("data")
                 .and_then(Value::as_str)
