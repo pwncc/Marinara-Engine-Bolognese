@@ -40,19 +40,25 @@ export function ConversationModeRoute({ activeChatId }: ConversationModeRoutePro
 
   const overlays = useChatOverlays(activeChatId);
   const spriteState = useSpriteMetadataState({ chat: data.chat, chatMeta: data.chatMeta, messages: data.messages });
-  const enabledAgentTypes = useMemo(() => {
+  const { agentsEnabled, enabledAgentTypes, agentThoughtBubbleTypes } = useMemo(() => {
+    const activeAgentIds = Array.isArray(data.chatMeta.activeAgentIds)
+      ? data.chatMeta.activeAgentIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      : [];
     const set = new Set<string>();
-    if (!data.chatMeta.enableAgents) return set;
-    const activeAgentIds: string[] = Array.isArray(data.chatMeta.activeAgentIds) ? data.chatMeta.activeAgentIds : [];
-    for (const id of activeAgentIds) set.add(id);
-    return set;
+    for (const id of activeAgentIds) set.add(id.trim());
+    const agentsEnabled = Boolean(data.chatMeta.enableAgents) || activeAgentIds.length > 0;
+    return {
+      agentsEnabled,
+      enabledAgentTypes: agentsEnabled ? set : new Set<string>(),
+      agentThoughtBubbleTypes: agentsEnabled && activeAgentIds.length === 0 ? undefined : set,
+    };
   }, [data.chatMeta.activeAgentIds, data.chatMeta.enableAgents]);
   const timeline = useChatTimelineActions({
     activeChatId,
     messages: data.messages,
     messageIdByOrderIndex: data.messageIdByOrderIndex,
     enabledAgentTypes,
-    refreshWorldStateOnTimelineChange: Boolean(data.chatMeta.enableAgents),
+    refreshWorldStateOnTimelineChange: agentsEnabled,
   });
   const shortcutsBlocked =
     overlays.settingsOpen ||
@@ -125,6 +131,7 @@ export function ConversationModeRoute({ activeChatId }: ConversationModeRoutePro
         personaInfo={data.personaInfo}
         chatMeta={data.chatMeta}
         chatCharIds={data.chatCharIds}
+        enabledAgentTypes={agentThoughtBubbleTypes}
         connectedChatName={data.connectedChatName}
         sceneInfo={sceneInfo}
         settingsOpen={overlays.settingsOpen}
