@@ -728,7 +728,12 @@ pub(crate) fn branch_chat(state: &AppState, chat_id: &str, body: Value) -> AppRe
     // source chat into the new group too, otherwise it keeps `groupId: null`
     // and Manage Chat Files / the branch selector (which key off the active
     // chat's groupId) cannot discover the branches when opened from the
-    // original chat. Mirrors the ST-chat-into-group import path.
+    // original chat. This mirrors the intent of the ST-chat-into-group import
+    // path (promote the root into the group); it does not copy that path's
+    // patch-then-rollback ordering. The branch is created first on purpose: if
+    // this enroll patch fails, the state is exactly the pre-fix one (branch
+    // grouped, root ungrouped) which a later branch attempt re-converges,
+    // rather than leaving a root enrolled in a group that has no branches.
     if source_group_id.is_none() {
         state
             .storage
