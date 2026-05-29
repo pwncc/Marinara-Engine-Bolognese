@@ -482,6 +482,13 @@ async fn check_image_generation_connection(connection: &Value) -> AppResult<Stri
                 .to_string(),
         ),
         "openrouter" | "gemini_image" => check_openrouter_key_for_base(connection, &base).await,
+        "google_image" => {
+            // Google's native API authenticates with x-goog-api-key, not bearer auth.
+            // Listing models is a lightweight way to validate the AI Studio key.
+            let url = format!("{}/models", base.trim_end_matches('/'));
+            check_google_api_key_get(&url, connection, "Google").await?;
+            Ok("Google AI Studio API key is valid.".to_string())
+        }
         "novelai" => {
             check_bearer_get("https://api.novelai.net/user/subscription", connection, "NovelAI")
                 .await?;
@@ -555,6 +562,19 @@ async fn check_bearer_get(url: &str, connection: &Value, label: &str) -> AppResu
         .get(url)
         .header("accept", "application/json")
         .bearer_auth(api_key);
+    send_connection_test_request(request, label).await
+}
+
+/// Like `check_bearer_get`, but authenticates with Google's `x-goog-api-key`
+/// header. Google rejects bearer auth on the Generative Language API with a 401
+/// "Expected OAuth 2 access token" error, so the API key must travel this way.
+async fn check_google_api_key_get(url: &str, connection: &Value, label: &str) -> AppResult<Value> {
+    let api_key = connection_api_key(connection)?;
+    ensure_model_url_allowed(url)?;
+    let request = connection_test_client()?
+        .get(url)
+        .header("accept", "application/json")
+        .header("x-goog-api-key", api_key);
     send_connection_test_request(request, label).await
 }
 

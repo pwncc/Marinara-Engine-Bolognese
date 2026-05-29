@@ -340,8 +340,8 @@
     "semantic_hash": ""
   },
   "src-tauri/src/commands/storage/llm.rs": {
-    "mtime": 1780037235.664906,
-    "ast_hash": "54bfc1979116c2f93c2b636601c7db9e",
+    "mtime": 1780042089.8063247,
+    "ast_hash": "5e61889e3c4f0f913b4ea58acfe2f23e",
     "semantic_hash": ""
   },
   "src-tauri/src/commands/storage/agents.rs": {
@@ -485,8 +485,8 @@
     "semantic_hash": ""
   },
   "src-tauri/src/commands/storage/images/providers.rs": {
-    "mtime": 1780037341.701868,
-    "ast_hash": "5eeba687c9319e796ebac16a3397628c",
+    "mtime": 1780042089.8052802,
+    "ast_hash": "fa041cf75feeadbe093b5c4ca46e7ab1",
     "semantic_hash": ""
   },
   "src-tauri/src/commands/storage/imports/rollback.rs": {
@@ -3590,8 +3590,8 @@
     "semantic_hash": ""
   },
   "src/engine/contracts/constants/model-lists.ts": {
-    "mtime": 1779991017.9867623,
-    "ast_hash": "12f8d7818e76adf6ac342d99d9441cdf",
+    "mtime": 1780042089.8074248,
+    "ast_hash": "213ddd8a66c11389f551a35aaf1b7498",
     "semantic_hash": ""
   },
   "src/engine/contracts/constants/impersonate.ts": {

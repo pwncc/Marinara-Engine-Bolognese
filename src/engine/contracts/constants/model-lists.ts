@@ -446,6 +446,13 @@ export const IMAGE_GENERATION_SOURCES: ImageGenSource[] = [
     requiresApiKey: true,
   },
   {
+    id: "google_image",
+    name: "Google Gemini (Nano Banana)",
+    description: 'Gemini 2.5 Flash Image ("Nano Banana") and Imagen via your Google AI Studio key.',
+    defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    requiresApiKey: true,
+  },
+  {
     id: "xai",
     name: "xAI / Grok Imagine",
     description: "Grok Imagine image generation via xAI's Images API.",
@@ -533,6 +540,13 @@ const IMAGE_GEN_MODELS: KnownModel[] = [
   { id: "black-forest-labs/FLUX.1-schnell", name: "FLUX.1 Schnell", context: 0, maxOutput: 0 },
   { id: "black-forest-labs/FLUX.1.1-pro", name: "FLUX 1.1 Pro", context: 0, maxOutput: 0 },
   { id: "stabilityai/stable-diffusion-xl-base-1.0", name: "SDXL Base 1.0", context: 0, maxOutput: 0 },
+  // Google Gemini native (AI Studio — "Nano Banana") & Imagen
+  { id: "gemini-3-pro-image", name: "Gemini 3 Pro Image (Nano Banana Pro)", context: 0, maxOutput: 0 },
+  { id: "gemini-3.1-flash-image", name: "Gemini 3.1 Flash Image (Nano Banana 2)", context: 0, maxOutput: 0 },
+  { id: "gemini-2.5-flash-image", name: "Gemini 2.5 Flash Image (Nano Banana)", context: 0, maxOutput: 0 },
+  { id: "imagen-4.0-generate-001", name: "Imagen 4 (Google)", context: 0, maxOutput: 0 },
+  { id: "imagen-4.0-ultra-generate-001", name: "Imagen 4 Ultra (Google)", context: 0, maxOutput: 0 },
+  { id: "imagen-4.0-fast-generate-001", name: "Imagen 4 Fast (Google)", context: 0, maxOutput: 0 },
   // OpenRouter image output models
   { id: "google/gemini-2.5-flash-image", name: "Gemini 2.5 Flash Image (OpenRouter)", context: 0, maxOutput: 0 },
   {
@@ -580,11 +594,15 @@ export function inferImageSource(model: string, baseUrl: string): string {
     m === "comfyui" ||
     m === "automatic1111" ||
     m === "runpod_comfyui" ||
-    m === "gemini_image"
+    m === "gemini_image" ||
+    m === "google_image"
   ) {
     return m;
   }
   if (m === "drawthings") return "automatic1111";
+  // Google's native image API (AI Studio) — detected by host, must win over the
+  // generic gemini/imagen → gemini_image (OpenRouter) fallback below.
+  if (u.includes("generativelanguage.googleapis.com")) return "google_image";
   if (u.includes("nano-gpt.com")) return "nanogpt";
   if (u.includes("openrouter.ai")) return "openrouter";
   if (u.includes("api.x.ai") || u.includes("x.ai")) return "xai";
