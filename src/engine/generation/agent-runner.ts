@@ -39,6 +39,7 @@ import {
   lorebookEntryPassesContextFilters,
   type GameStateForScanning,
 } from "../generation-core/lorebooks/keyword-scanner";
+import { resolveGameLorebookScopeExclusions } from "../generation-core/lorebooks/game-lorebook-scope";
 import { buildSpriteExpressionChoices } from "../modes/game/prompts/sprite.service";
 import { llmParameters } from "./context";
 import { loadAgentMemory, secretPlotStateFromMemory } from "./agent-memory-runtime";
@@ -326,8 +327,21 @@ function chatActiveLorebookIds(input: GenerationAgentRuntimeInput): Set<string> 
   return new Set([...stringSet(chatMetadata(input).activeLorebookIds), ...stringSet(input.chat.activeLorebookIds)]);
 }
 
+function lorebookExcludedByAgentScope(lorebook: JsonRecord, input: GenerationAgentRuntimeInput): boolean {
+  const scopeExclusions = resolveGameLorebookScopeExclusions(
+    readString(input.chat.mode || input.chat.chatMode),
+    chatMetadata(input),
+  );
+  const lorebookId = readString(lorebook.id).trim();
+  if (scopeExclusions.excludedLorebookIds.includes(lorebookId)) return true;
+  if (scopeExclusions.excludedSourceAgentIds.includes(readString(lorebook.sourceAgentId).trim())) return true;
+  return false;
+}
+
 function lorebookAppliesToAgentContext(lorebook: JsonRecord, input: GenerationAgentRuntimeInput): boolean {
   if (!boolish(lorebook.enabled, true)) return false;
+  if (lorebookExcludedByAgentScope(lorebook, input)) return false;
+
   if (boolish(lorebook.isGlobal ?? lorebook.global, false)) return true;
 
   const lorebookId = readString(lorebook.id).trim();
@@ -441,13 +455,16 @@ async function loadKnowledgeSourceLorebookEntries(
 ): Promise<LorebookEntry[]> {
   const lorebooks = await storage.list<JsonRecord>("lorebooks");
   const scopedLorebooks = lorebooks.filter((lorebook) => lorebookAppliesToAgentContext(lorebook, input));
+  const lorebookById = new Map(lorebooks.map((lorebook) => [readString(lorebook.id).trim(), lorebook]));
   const sourceIds = normalizeKnowledgeSourceLorebookIds(
     settings,
     scopedLorebooks.map((lorebook) => readString(lorebook.id).trim()).filter(Boolean),
-  );
+  ).filter((lorebookId) => {
+    const lorebook = lorebookById.get(lorebookId);
+    return !lorebook || !lorebookExcludedByAgentScope(lorebook, input);
+  });
   if (sourceIds.length === 0) return [];
 
-  const lorebookById = new Map(lorebooks.map((lorebook) => [readString(lorebook.id).trim(), lorebook]));
   const rows = await Promise.all(
     [...new Set(sourceIds)].map(async (lorebookId) => {
       const lorebook = lorebookById.get(lorebookId);
@@ -493,7 +510,7 @@ async function runKnowledgePreGenerationAgents(
     const entries = await loadKnowledgeSourceLorebookEntries(deps.storage, input, agent.settings);
     const scopedEntries =
       agent.type === KNOWLEDGE_ROUTER_AGENT_TYPE
-        ? entries.filter((entry) => knowledgeEntryPassesContext(entry, input))
+        ? entries.filter((entry) => !entry.constant && knowledgeEntryPassesContext(entry, input))
         : entries;
     if (scopedEntries.length === 0) continue;
 

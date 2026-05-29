@@ -74,4 +74,47 @@ describe("analyzeGameScene", () => {
     expect(result.segmentEffects?.[0]?.directions).toEqual([{ effect: "flash", duration: 1 }]);
     expect(result.directions).toEqual([]);
   });
+
+  it("drops malformed nested scene fields without losing valid analysis", async () => {
+    const llm = {
+      complete: vi.fn(async () =>
+        JSON.stringify({
+          background: "castle hall",
+          weather: "cold",
+          segmentEffects: [
+            {
+              segment: 0,
+              background: "old castle hallway",
+              sfx: [null, "door slam", { bad: true }],
+              directions: [null, { effect: "flash", duration: 1 }],
+            },
+          ],
+        }),
+      ),
+      stream: emptyStream,
+      listModels: vi.fn(async () => []),
+    } satisfies LlmGateway;
+    const storage = {
+      get: vi.fn(async () => ({ id: "chat-1", metadata: { gameSceneConnectionId: "scene-conn" } })),
+      list: vi.fn(async () => []),
+    } as unknown as StorageGateway;
+
+    const result = await analyzeGameScene(
+      { storage, llm },
+      {
+        chatId: "chat-1",
+        narration: "The party steps into the old castle as the doors slam shut.",
+        context: {
+          availableBackgrounds: ["backgrounds:castle:hall"],
+          availableSfx: ["sfx:door-slam"],
+        },
+      },
+    );
+
+    expect(result.background).toBe("backgrounds:castle:hall");
+    expect(result.weather).toBe("frost");
+    expect(result.segmentEffects?.[0]?.background).toBe("backgrounds:castle:hall");
+    expect(result.segmentEffects?.[0]?.sfx).toEqual(["sfx:door-slam"]);
+    expect(result.segmentEffects?.[0]?.directions).toEqual([{ effect: "flash", duration: 1 }]);
+  });
 });

@@ -2058,6 +2058,70 @@ describe("createGenerationAgentRuntime", () => {
     expect(promptText).not.toContain("Wrongport");
   });
 
+  it("excludes generated game lorebook-keeper books from knowledge agent sources when the keeper is disabled", async () => {
+    const calls: LlmRequest[] = [];
+    const runtime = await createGenerationAgentRuntime(
+      {
+        storage: storage(
+          [
+            {
+              id: "knowledge-retrieval",
+              type: "knowledge-retrieval",
+              name: "Knowledge Retrieval",
+              enabled: true,
+              phase: "pre_generation",
+              connectionId: null,
+              model: "agent-model",
+              promptTemplate: "Extract relevant lore.",
+              settings: { sourceLorebookIds: ["keeper-book"] },
+            },
+          ],
+          {
+            lorebooks: [
+              {
+                id: "keeper-book",
+                enabled: true,
+                isGlobal: true,
+                sourceAgentId: "game-lorebook-keeper",
+              },
+            ],
+            "lorebook-entries": [
+              {
+                id: "keeper-entry",
+                lorebookId: "keeper-book",
+                name: "Keeper Internal Lore",
+                content: "This generated game keeper lore should not leak.",
+                enabled: true,
+              },
+            ],
+          },
+        ),
+        llm: countingLlm(calls, "Leaked keeper lore."),
+        integrations,
+      },
+      {
+        chat: {
+          id: "chat-a",
+          mode: "game",
+          metadata: {
+            activeAgentIds: ["knowledge-retrieval"],
+            gameLorebookKeeperEnabled: false,
+            gameLorebookKeeperLorebookId: "keeper-book",
+          },
+        },
+        connection: { id: "chat-connection", model: "chat-model" },
+        storedMessages: [{ role: "user", content: "What does the keeper know?" }],
+        characters: [],
+        persona: null,
+        activatedLorebookEntries: [],
+        chatSummary: null,
+      },
+    );
+
+    expect(runtime.preInjections).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
   it("scopes knowledge router candidates to lorebooks linked to active characters", async () => {
     const calls: LlmRequest[] = [];
     const baseStorage = storage(

@@ -1940,6 +1940,8 @@ export function GameSurface({
   // render beside the main GM narration.
   const [partyChatMessageId, setPartyChatMessageId] = useState<string | null>(null);
   const [partyChatInput, setPartyChatInput] = useState<string | null>(null);
+  const partyTurnRequestIdRef = useRef(0);
+  const partyTurnInFlightRef = useRef(false);
   // The active assistant message ID whose typewriter is currently complete, or null if
   // either no message is finished typing or it's the *previous* turn's completion.
   // We track the message ID rather than a boolean so a stale completion from the
@@ -2219,6 +2221,8 @@ export function GameSurface({
     recentMusicHistoryRef.current = normalizeRecentMusicHistory(chatMeta.gameRecentMusic);
     recentSpotifyTrackHistoryRef.current = normalizeRecentSpotifyTrackHistory(chatMeta.gameRecentSpotifyTracks);
     partyDialogueRestoredRef.current = false;
+    partyTurnRequestIdRef.current += 1;
+    partyTurnInFlightRef.current = false;
     setPartyDialogue([]);
     setPartyChatMessageId(null);
     setPartyChatInput(null);
@@ -6850,22 +6854,37 @@ export function GameSurface({
       }
       setActiveChoices(null);
       if (getGameDirectAddressMode(message) === "party" && !attachments?.length) {
+        if (partyTurnInFlightRef.current || partyTurn.isPending) return;
         const playerAction = stripGameDirectAddressPrefix(message);
+        const requestId = partyTurnRequestIdRef.current + 1;
+        partyTurnRequestIdRef.current = requestId;
+        partyTurnInFlightRef.current = true;
         setPartyDialogue([]);
         setPartyChatMessageId(null);
-        setPartyChatInput(playerAction);
         try {
           await createMessage.mutateAsync({ role: "user", content: message });
+          if (partyTurnRequestIdRef.current !== requestId) return;
+          setPartyChatInput(playerAction);
           const result = await partyTurn.mutateAsync({
             chatId: activeChatId,
             narration: latestNarrationText,
             playerAction,
             connectionId: chat.connectionId ?? undefined,
           });
+          if (partyTurnRequestIdRef.current !== requestId) return;
           setPartyDialogue(result.lines);
           setPartyChatMessageId(result.messageId);
         } catch (error) {
-          toast.error(error instanceof Error ? error.message : "The party did not respond.");
+          if (partyTurnRequestIdRef.current === requestId) {
+            setPartyDialogue([]);
+            setPartyChatMessageId(null);
+            setPartyChatInput(null);
+            toast.error(error instanceof Error ? error.message : "The party did not respond.");
+          }
+        } finally {
+          if (partyTurnRequestIdRef.current === requestId) {
+            partyTurnInFlightRef.current = false;
+          }
         }
         return;
       }
@@ -8472,7 +8491,7 @@ export function GameSurface({
                               hasPartyMembers={partyMembers.length > 0}
                               pendingMoveLabel={pendingMapMove?.label ?? null}
                               onClearPendingMove={() => setPendingMapMove(null)}
-                              disabled={isStreaming || !sessionInteractive}
+                              disabled={isStreaming || partyTurn.isPending || !sessionInteractive}
                               isStreaming={isStreaming}
                               inline
                               draftKey={activeChatId}
@@ -8553,7 +8572,7 @@ export function GameSurface({
                           hasPartyMembers={partyMembers.length > 0}
                           pendingMoveLabel={pendingMapMove?.label ?? null}
                           onClearPendingMove={() => setPendingMapMove(null)}
-                          disabled={isStreaming || !sessionInteractive}
+                          disabled={isStreaming || partyTurn.isPending || !sessionInteractive}
                           isStreaming={isStreaming}
                           inline
                           draftKey={activeChatId}

@@ -1,6 +1,7 @@
 import type { LlmGateway } from "../../../capabilities/llm";
 import type { StorageGateway } from "../../../capabilities/storage";
-import type { SceneAnalysis } from "../../../contracts/types/scene";
+import type { DirectionCommand } from "../../../contracts/types/game";
+import type { SceneAnalysis, SceneSegmentEffect } from "../../../contracts/types/scene";
 import { parseGameJsonish } from "../../../shared/parsing-jsonish";
 import {
   boolish,
@@ -50,28 +51,73 @@ function defaultGameSceneAnalysis(): SceneAnalysis {
   } as SceneAnalysis;
 }
 
-function copyOptional(source: JsonRecord, keys: string[]): JsonRecord {
-  return Object.fromEntries(keys.filter((key) => key in source).map((key) => [key, source[key]]));
+function sanitizeDirection(value: unknown): DirectionCommand | null {
+  if (!isRecord(value)) return null;
+  const effect = readString(value.effect).trim();
+  if (!effect) return null;
+  const direction: DirectionCommand = { effect: effect as DirectionCommand["effect"] };
+  if (typeof value.duration === "number" && Number.isFinite(value.duration)) direction.duration = value.duration;
+  if (typeof value.intensity === "number" && Number.isFinite(value.intensity)) direction.intensity = value.intensity;
+  const target = readString(value.target).trim();
+  if (target) direction.target = target as DirectionCommand["target"];
+  if (isRecord(value.params)) {
+    const params = Object.fromEntries(
+      Object.entries(value.params).filter(([, paramValue]) => typeof paramValue === "string" && paramValue.trim()),
+    );
+    if (Object.keys(params).length > 0) direction.params = params as Record<string, string>;
+  }
+  return direction;
+}
+
+function sanitizeDirections(value: unknown): DirectionCommand[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(sanitizeDirection).filter((direction): direction is DirectionCommand => direction !== null);
+}
+
+function sanitizeSegmentEffects(value: unknown): SceneSegmentEffect[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item): SceneSegmentEffect | null => {
+      if (!isRecord(item)) return null;
+      const segment = readNonNegativeInteger(item.segment, -1);
+      if (segment < 0) return null;
+      const effect: SceneSegmentEffect = { segment };
+      const background = readNullableString(item.background);
+      if (background) effect.background = background;
+      const music = readNullableString(item.music);
+      if (music) effect.music = music;
+      const ambient = readNullableString(item.ambient);
+      if (ambient) effect.ambient = ambient;
+      const sfx = stringArray(item.sfx);
+      if (sfx.length > 0) effect.sfx = sfx;
+      const directions = sanitizeDirections(item.directions);
+      if (directions.length > 0) effect.directions = directions;
+      return effect;
+    })
+    .filter((effect): effect is SceneSegmentEffect => effect !== null);
 }
 
 function sanitizeGameSceneAnalysis(parsed: JsonRecord): SceneAnalysis {
   return {
     ...defaultGameSceneAnalysis(),
-    ...copyOptional(parsed, [
-      "background",
-      "music",
-      "ambient",
-      "weather",
-      "timeOfDay",
-      "musicGenre",
-      "musicIntensity",
-      "locationKind",
-      "spotifyTrack",
-      "illustration",
-    ]),
-    reputationChanges: Array.isArray(parsed.reputationChanges) ? parsed.reputationChanges : [],
-    segmentEffects: Array.isArray(parsed.segmentEffects) ? parsed.segmentEffects : [],
-    directions: Array.isArray(parsed.directions) ? parsed.directions : [],
+    background: readNullableString(parsed.background),
+    music: readNullableString(parsed.music),
+    ambient: readNullableString(parsed.ambient),
+    weather: readNullableString(parsed.weather),
+    timeOfDay: readNullableString(parsed.timeOfDay),
+    musicGenre: readNullableString(parsed.musicGenre) as SceneAnalysis["musicGenre"],
+    musicIntensity: readNullableString(parsed.musicIntensity) as SceneAnalysis["musicIntensity"],
+    locationKind: readNullableString(parsed.locationKind) as SceneAnalysis["locationKind"],
+    spotifyTrack:
+      typeof parsed.spotifyTrack === "string" || isRecord(parsed.spotifyTrack)
+        ? (parsed.spotifyTrack as unknown as SceneAnalysis["spotifyTrack"])
+        : null,
+    reputationChanges: readRecordArray<SceneAnalysis["reputationChanges"][number]>(parsed.reputationChanges),
+    segmentEffects: sanitizeSegmentEffects(parsed.segmentEffects),
+    directions: sanitizeDirections(parsed.directions),
+    illustration: isRecord(parsed.illustration)
+      ? (parsed.illustration as unknown as SceneAnalysis["illustration"])
+      : null,
   } as SceneAnalysis;
 }
 

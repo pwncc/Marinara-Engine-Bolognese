@@ -174,6 +174,10 @@ function normalizeDirection(direction: DirectionCommand): DirectionCommand | nul
   return normalized;
 }
 
+function isDirectionCommand(value: unknown): value is DirectionCommand {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 // ── Tag fuzzy-matching ──
 
 /** Score how well a prose description matches an asset tag by keyword overlap. */
@@ -235,7 +239,7 @@ function postProcessSegment(seg: SceneSegmentEffect, ctx: PostProcessContext): S
   const out = { ...seg };
 
   // Background — fuzzy-match or synthesise generated tag
-  if (out.background && out.background !== "null") {
+  if (typeof out.background === "string" && out.background !== "null") {
     if (!ctx.availableBackgrounds.includes(out.background)) {
       if (out.background.startsWith("backgrounds:generated:") && ctx.canGenerateBackgrounds) {
         // Already valid generated format
@@ -264,9 +268,10 @@ function postProcessSegment(seg: SceneSegmentEffect, ctx: PostProcessContext): S
   }
 
   // SFX
-  if (out.sfx?.length) {
+  if (Array.isArray(out.sfx) && out.sfx.length) {
     const matched: string[] = [];
     for (const item of out.sfx) {
+      if (typeof item !== "string") continue;
       if (ctx.availableSfx.includes(item)) {
         matched.push(item);
       } else {
@@ -297,8 +302,9 @@ function postProcessSegment(seg: SceneSegmentEffect, ctx: PostProcessContext): S
   }
 
   // Cinematic directions
-  if (out.directions?.length) {
+  if (Array.isArray(out.directions) && out.directions.length) {
     out.directions = out.directions
+      .filter(isDirectionCommand)
       .map((direction) => normalizeDirection(direction))
       .filter((direction): direction is DirectionCommand => !!direction)
       .slice(0, 1);
@@ -346,9 +352,15 @@ export function postProcessSceneResult(raw: SceneAnalysis, ctx: PostProcessConte
   const rawRecord = raw as unknown as Record<string, unknown>;
 
   // ── Sanitize string "null" → actual null (grammar sometimes emits the string) ──
-  if (result.background === "null") result.background = null;
-  if (result.weather === "null") result.weather = null;
-  if (result.timeOfDay === "null") result.timeOfDay = null;
+  if (result.background === "null" || (result.background !== null && typeof result.background !== "string")) {
+    result.background = null;
+  }
+  if (result.weather === "null" || (result.weather !== null && typeof result.weather !== "string")) {
+    result.weather = null;
+  }
+  if (result.timeOfDay === "null" || (result.timeOfDay !== null && typeof result.timeOfDay !== "string")) {
+    result.timeOfDay = null;
+  }
   result.music = null;
   result.ambient = null;
   if (ctx.useSpotifyMusic) {
@@ -364,7 +376,7 @@ export function postProcessSceneResult(raw: SceneAnalysis, ctx: PostProcessConte
     : null;
 
   // ── Background ──
-  if (result.background && !ctx.availableBackgrounds.includes(result.background)) {
+  if (typeof result.background === "string" && result.background && !ctx.availableBackgrounds.includes(result.background)) {
     // If the model already output a backgrounds:generated:* tag, leave it as-is
     if (result.background.startsWith("backgrounds:generated:") && ctx.canGenerateBackgrounds) {
       // Already valid generated format — no change needed
@@ -394,7 +406,7 @@ export function postProcessSceneResult(raw: SceneAnalysis, ctx: PostProcessConte
   // Scene analysis only provides compact hints: musicGenre, musicIntensity, locationKind.
 
   // ── Weather — map non-visual values to visual equivalents ──
-  if (result.weather) {
+  if (typeof result.weather === "string" && result.weather) {
     const weatherMap: Record<string, string> = {
       cold: "frost",
       hot: "clear",
@@ -418,9 +430,10 @@ export function postProcessSceneResult(raw: SceneAnalysis, ctx: PostProcessConte
   }
 
   // ── Cinematic directions ──
-  if (result.directions?.length) {
+  if (Array.isArray(result.directions) && result.directions.length) {
     const before = result.directions.length;
     result.directions = result.directions
+      .filter(isDirectionCommand)
       .map((direction) => normalizeDirection(direction))
       .filter((direction): direction is DirectionCommand => !!direction)
       .slice(0, 2);
@@ -430,8 +443,12 @@ export function postProcessSceneResult(raw: SceneAnalysis, ctx: PostProcessConte
   }
 
   // ── Segment Effects (per-beat) ──
-  if (result.segmentEffects?.length) {
-    result.segmentEffects = thinSegmentDirections(result.segmentEffects.map((seg) => postProcessSegment(seg, ctx)));
+  if (Array.isArray(result.segmentEffects) && result.segmentEffects.length) {
+    result.segmentEffects = thinSegmentDirections(
+      result.segmentEffects
+        .filter((segment): segment is SceneSegmentEffect => !!segment && typeof segment === "object")
+        .map((seg) => postProcessSegment(seg, ctx)),
+    );
   }
 
   capCombinedDirections(result);
