@@ -337,7 +337,7 @@ describe("gameApi.partyTurn prompt wiring", () => {
     vi.mocked(llmApi.complete).mockReset();
   });
 
-  it("uses the structured party prompt helper when generating party banter", async () => {
+  function mockPartyChat(metadata: Record<string, unknown> = {}) {
     storageApiMock.get.mockImplementation(async (entity: string, id: string) => {
       if (entity === "chats" && id === "chat-game") {
         return {
@@ -353,11 +353,16 @@ describe("gameApi.partyTurn prompt wiring", () => {
                 class: "Ranger",
               },
             ],
+            ...metadata,
           },
         };
       }
       return null;
     });
+  }
+
+  it("uses the structured party prompt helper when generating party banter", async () => {
+    mockPartyChat();
     vi.mocked(llmApi.complete).mockResolvedValueOnce(`[Mira] [main] [smirk]: "On it."`);
     storageApiMock.create.mockResolvedValueOnce({ id: "message-party" });
 
@@ -395,5 +400,58 @@ describe("gameApi.partyTurn prompt wiring", () => {
         content: `[party-turn]\n[Mira] [main] [smirk]: "On it."`,
       }),
     );
+  });
+
+  it("does not persist a canned party turn when no chat connection is selected", async () => {
+    mockPartyChat();
+
+    await expect(
+      gameApi.partyTurn({
+        chatId: "chat-game",
+        connectionId: null,
+        narration: "A locked gate blocks the path.",
+        playerAction: "Ask Mira what she sees.",
+      }),
+    ).rejects.toThrow("Choose a chat connection");
+
+    expect(vi.mocked(llmApi.complete)).not.toHaveBeenCalled();
+    expect(storageApiMock.create).not.toHaveBeenCalled();
+  });
+
+  it("does not persist a party turn when the provider call fails", async () => {
+    mockPartyChat();
+    vi.mocked(llmApi.complete).mockRejectedValueOnce(new Error("provider offline"));
+
+    await expect(
+      gameApi.partyTurn({
+        chatId: "chat-game",
+        connectionId: "connection-party",
+        narration: "A locked gate blocks the path.",
+        playerAction: "Ask Mira what she sees.",
+      }),
+    ).rejects.toThrow("provider offline");
+
+    expect(storageApiMock.create).not.toHaveBeenCalled();
+  });
+
+  it("does not persist a hidden party turn when the model output has no dialogue lines", async () => {
+    mockPartyChat();
+    vi.mocked(llmApi.complete).mockResolvedValueOnce("The party considers the situation.");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await expect(
+        gameApi.partyTurn({
+          chatId: "chat-game",
+          connectionId: "connection-party",
+          narration: "A locked gate blocks the path.",
+          playerAction: "Ask Mira what she sees.",
+        }),
+      ).rejects.toThrow("empty or malformed");
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    expect(storageApiMock.create).not.toHaveBeenCalled();
   });
 });

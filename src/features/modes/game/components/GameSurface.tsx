@@ -4094,6 +4094,8 @@ export function GameSurface({
       _updateReputation.mutate({ chatId: activeChatId, actions: repActions });
     }
     const assetMap = getScopedAssetMap();
+    const sceneWeather = result.weather ?? gameSnapshot?.weather ?? null;
+    const sceneTimeOfDay = result.timeOfDay ?? gameSnapshot?.time ?? null;
     if (result.background) {
       const resolved = resolveAssetTag(result.background, "backgrounds", assetMap);
       useGameAssetStore.getState().setCurrentBackground(resolved);
@@ -4104,18 +4106,41 @@ export function GameSurface({
         useGameAssetStore.getState().setCurrentBackground(pick);
       }
     }
-    if (result.music && !useSpotifyGameMusic) {
-      const resolved = resolveAssetTag(result.music, "music", assetMap);
-      audioManager.playMusic(resolved, assetMap);
-      useGameAssetStore.getState().setCurrentMusic(resolved);
+    if (!useSpotifyGameMusic) {
+      const resolvedMusic = result.music
+        ? resolveAssetTag(result.music, "music", assetMap)
+        : scoreMusic({
+            state: gameState,
+            weather: sceneWeather,
+            timeOfDay: sceneTimeOfDay,
+            musicGenre: result.musicGenre ?? null,
+            musicIntensity: result.musicIntensity ?? null,
+            currentMusic: useGameAssetStore.getState().currentMusic,
+            recentMusic: recentMusicHistoryRef.current,
+            availableMusic: Object.keys(assetMap ?? {}).filter((k) => k.startsWith("music:")),
+          });
+      if (resolvedMusic) {
+        audioManager.playMusic(resolvedMusic, assetMap);
+        useGameAssetStore.getState().setCurrentMusic(resolvedMusic);
+      }
     }
     if (useSpotifyGameMusic && result.spotifyTrack) {
       void playSpotifySceneTrack(result.spotifyTrack);
     }
-    if (result.ambient) {
-      const resolved = resolveAssetTag(result.ambient, "ambient", assetMap);
-      audioManager.playAmbient(resolved, assetMap);
-      useGameAssetStore.getState().setCurrentAmbient(resolved);
+    const resolvedAmbient = result.ambient
+      ? resolveAssetTag(result.ambient, "ambient", assetMap)
+      : scoreAmbient({
+          state: gameState,
+          weather: sceneWeather,
+          timeOfDay: sceneTimeOfDay,
+          locationKind: result.locationKind ?? null,
+          currentAmbient: useGameAssetStore.getState().currentAmbient,
+          availableAmbient: Object.keys(assetMap ?? {}).filter((k) => k.startsWith("ambient:")),
+          background: useGameAssetStore.getState().currentBackground,
+        });
+    if (resolvedAmbient) {
+      audioManager.playAmbient(resolvedAmbient, assetMap);
+      useGameAssetStore.getState().setCurrentAmbient(resolvedAmbient);
     }
     if (result.directions?.length) {
       playDirections(result.directions);

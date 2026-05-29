@@ -28,32 +28,36 @@ export const characterExtensionsSchema = z
   })
   .passthrough();
 
-export const characterBookEntrySchema = z.object({
-  keys: z.array(z.string()).default([]),
-  content: z.string().default(""),
-  extensions: z.record(z.unknown()).default({}),
-  enabled: z.boolean().default(true),
-  insertion_order: z.number().default(100),
-  case_sensitive: z.boolean().default(false),
-  name: z.string().default(""),
-  priority: z.number().default(100),
-  id: z.number().default(0),
-  comment: z.string().default(""),
-  selective: z.boolean().default(false),
-  secondary_keys: z.array(z.string()).default([]),
-  constant: z.boolean().default(false),
-  position: z.enum(["before_char", "after_char"]).catch("before_char").default("before_char"),
-});
+export const characterBookEntrySchema = z
+  .object({
+    keys: z.array(z.string()).default([]),
+    content: z.string().default(""),
+    extensions: z.record(z.unknown()).default({}),
+    enabled: z.boolean().default(true),
+    insertion_order: z.number().default(100),
+    case_sensitive: z.boolean().default(false),
+    name: z.string().default(""),
+    priority: z.number().default(100),
+    id: z.number().default(0),
+    comment: z.string().default(""),
+    selective: z.boolean().default(false),
+    secondary_keys: z.array(z.string()).default([]),
+    constant: z.boolean().default(false),
+    position: z.enum(["before_char", "after_char"]).catch("before_char").default("before_char"),
+  })
+  .passthrough();
 
-export const characterBookSchema = z.object({
-  name: z.string().default(""),
-  description: z.string().default(""),
-  scan_depth: z.number().default(2),
-  token_budget: z.number().default(512),
-  recursive_scanning: z.boolean().default(false),
-  extensions: z.record(z.unknown()).default({}),
-  entries: z.array(characterBookEntrySchema).default([]),
-});
+export const characterBookSchema = z
+  .object({
+    name: z.string().default(""),
+    description: z.string().default(""),
+    scan_depth: z.number().default(2),
+    token_budget: z.number().default(512),
+    recursive_scanning: z.boolean().default(false),
+    extensions: z.record(z.unknown()).default({}),
+    entries: z.array(characterBookEntrySchema).default([]),
+  })
+  .passthrough();
 
 export const characterDataSchema = z.object({
   name: z.string().min(1),

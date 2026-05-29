@@ -26,6 +26,7 @@ import { addCombatEntry, addEventEntry, addInventoryEntry, addLocationEntry, add
 import { withActiveGameMapMeta } from "../../../../engine/modes/game/world/map-position.service";
 import { createInitialTime, formatGameTime, advanceTime as advanceGameTime, type GameTime } from "../../../../engine/modes/game/world/time.service";
 import { generateWeather, inferBiome, type WeatherState } from "../../../../engine/modes/game/world/weather.service";
+import { parsePartyDialogue } from "../lib/party-dialogue-parser";
 
 export interface CreateGameResponse {
   sessionChat: Chat;
@@ -1521,38 +1522,38 @@ export const gameApi = {
     const cards = Array.isArray(meta.gameCharacterCards) ? meta.gameCharacterCards.map(asRecord) : [];
     const names = cards.map((card, index) => gameCardName(card, `Party member ${index + 1}`));
     const partyNames = names.length ? names.join(", ") : "The party";
-    let raw = `[${partyNames}] [main] [neutral]: "We take this in and prepare for what comes next."`;
-    if (input.connectionId) {
-      try {
-        raw = await llmApi.complete({
-          connectionId: input.connectionId,
-          messages: [
-            {
-              role: "system",
-              content: buildPartySystemPrompt({
-                partyCards: cards.length
-                  ? cards.map((card, index) => ({
-                      name: gameCardName(card, `Party member ${index + 1}`),
-                      card: gameCardPromptText(card),
-                    }))
-                  : [{ name: partyNames, card: partyNames }],
-                playerName: typeof meta.gamePlayerName === "string" && meta.gamePlayerName.trim() ? meta.gamePlayerName : "Player",
-                gameActiveState: typeof meta.gameActiveState === "string" ? meta.gameActiveState : "exploration",
-                partyArcs: Array.isArray(meta.gamePartyArcs) ? (meta.gamePartyArcs as PartyArc[]) : [],
-              }),
-            },
-            {
-              role: "user",
-              content: `GM narration:\n${input.narration}\n\nPlayer action:\n${input.playerAction ?? ""}\n\nWrite the party's immediate reactions.`,
-            },
-          ],
-          parameters: { temperature: 0.9, maxTokens: 1200 },
-        });
-      } catch {
-        raw = `[${partyNames}] [main] [neutral]: "We take this in and prepare for what comes next."`;
-      }
+    const connectionId = input.connectionId?.trim();
+    if (!connectionId) {
+      throw new Error("Choose a chat connection before asking the party.");
     }
+    const raw = await llmApi.complete({
+      connectionId,
+      messages: [
+        {
+          role: "system",
+          content: buildPartySystemPrompt({
+            partyCards: cards.length
+              ? cards.map((card, index) => ({
+                  name: gameCardName(card, `Party member ${index + 1}`),
+                  card: gameCardPromptText(card),
+                }))
+              : [{ name: partyNames, card: partyNames }],
+            playerName: typeof meta.gamePlayerName === "string" && meta.gamePlayerName.trim() ? meta.gamePlayerName : "Player",
+            gameActiveState: typeof meta.gameActiveState === "string" ? meta.gameActiveState : "exploration",
+            partyArcs: Array.isArray(meta.gamePartyArcs) ? (meta.gamePartyArcs as PartyArc[]) : [],
+          }),
+        },
+        {
+          role: "user",
+          content: `GM narration:\n${input.narration}\n\nPlayer action:\n${input.playerAction ?? ""}\n\nWrite the party's immediate reactions.`,
+        },
+      ],
+      parameters: { temperature: 0.9, maxTokens: 1200 },
+    });
     const clean = raw.replace(/\[(?:party-turn|party-chat)\]/gi, "").trim();
+    if (!clean || parsePartyDialogue(clean).length === 0) {
+      throw new Error("The party response was empty or malformed.");
+    }
     const message = await createChatMessage(input.chatId, {
       role: "assistant",
       characterId: null,

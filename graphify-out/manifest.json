@@ -5,8 +5,8 @@
     "semantic_hash": ""
   },
   "knip.json": {
-    "mtime": 1779835633.2152684,
-    "ast_hash": "d4cac35a8291fc04c9ef3524f7baab91",
+    "mtime": 1780044086.963442,
+    "ast_hash": "aefa98ba96b204196a2b4574fba9a04c",
     "semantic_hash": ""
   },
   ".prettierrc.json": {
@@ -15,8 +15,8 @@
     "semantic_hash": ""
   },
   "package.json": {
-    "mtime": 1780038653.4291396,
-    "ast_hash": "d78d907453c597cedb0471b7c0187239",
+    "mtime": 1780044367.708794,
+    "ast_hash": "76057f85abb009ff37e5c278137ebecc",
     "semantic_hash": ""
   },
   "tsconfig.json": {
@@ -690,8 +690,8 @@
     "semantic_hash": ""
   },
   "src/app/shell/useStartNewChat.ts": {
-    "mtime": 1779918988.5112867,
-    "ast_hash": "579a88b4a3c2a703824cca5cb051a21a",
+    "mtime": 1780044086.9644487,
+    "ast_hash": "a6ff339a56ac43d02808c0e6fae65187",
     "semantic_hash": ""
   },
   "src/app/shell/ModalRenderer.tsx": {
@@ -725,8 +725,8 @@
     "semantic_hash": ""
   },
   "src/app/shell/ChatSidebar.tsx": {
-    "mtime": 1779913209.3283143,
-    "ast_hash": "700c1568237372b1cdcf9c0fe259ab73",
+    "mtime": 1780044086.9639454,
+    "ast_hash": "5dac76e7b26632768bfe764f7e6c19c6",
     "semantic_hash": ""
   },
   "src/app/providers/CustomThemeInjector.tsx": {
@@ -945,8 +945,8 @@
     "semantic_hash": ""
   },
   "src/features/modes/shared/chat-ui/components/ChatInput.tsx": {
-    "mtime": 1779968721.5836012,
-    "ast_hash": "7607ffff4fea472651f6e14425ea04e0",
+    "mtime": 1780044086.9849565,
+    "ast_hash": "a89c91608d1b0c34140184d8975ecaa4",
     "semantic_hash": ""
   },
   "src/features/modes/shared/chat-ui/components/PeekPromptModal.tsx": {
@@ -1025,8 +1025,8 @@
     "semantic_hash": ""
   },
   "src/features/modes/game/stores/game-mode.store.ts": {
-    "mtime": 1779835633.8404973,
-    "ast_hash": "c355f04ea23504b19f54c626a147b383",
+    "mtime": 1780044086.9839568,
+    "ast_hash": "750306e84699fff19706450f3a668a00",
     "semantic_hash": ""
   },
   "src/features/modes/game/components/GameDialogueOverlay.tsx": {
@@ -1080,8 +1080,8 @@
     "semantic_hash": ""
   },
   "src/features/modes/game/components/GameNarration.tsx": {
-    "mtime": 1779867918.344894,
-    "ast_hash": "91b8f425983cb2be1fe6308224ff6e83",
+    "mtime": 1780044086.9809566,
+    "ast_hash": "0f3f9e8f29bfb1208223e697c743d04b",
     "semantic_hash": ""
   },
   "src/features/modes/game/components/GameGridMap.tsx": {
@@ -1195,8 +1195,8 @@
     "semantic_hash": ""
   },
   "src/features/modes/game/components/GameSurface.tsx": {
-    "mtime": 1779999126.889984,
-    "ast_hash": "a337a4b1e843c4bd81ccd304815834be",
+    "mtime": 1780044367.7137947,
+    "ast_hash": "25d1a216de138490be7be1177e92365e",
     "semantic_hash": ""
   },
   "src/features/modes/game/components/DirectionEngine.tsx": {
@@ -1210,8 +1210,8 @@
     "semantic_hash": ""
   },
   "src/features/modes/game/hooks/use-party-turn.ts": {
-    "mtime": 1779835633.83814,
-    "ast_hash": "28c477edeb9b3190272205599ddb19bc",
+    "mtime": 1780044086.9834566,
+    "ast_hash": "9c16c4cef48f7e0bfbdcfa2c58b650da",
     "semantic_hash": ""
   },
   "src/features/modes/game/hooks/use-game.ts": {
@@ -1285,13 +1285,13 @@
     "semantic_hash": ""
   },
   "src/features/modes/game/api/game-api.test.ts": {
-    "mtime": 1779999126.8872273,
-    "ast_hash": "2834e252d438a5dba50aebbdd8ee64b4",
+    "mtime": 1780044367.7107942,
+    "ast_hash": "69054337b2c09092823fea4234164e02",
     "semantic_hash": ""
   },
   "src/features/modes/game/api/game-api.ts": {
-    "mtime": 1779999126.8878791,
-    "ast_hash": "a44b2c9d0f7f997ac198d0a0905b384b",
+    "mtime": 1780044367.7117937,
+    "ast_hash": "d7750810a5bb33d9010af138888f6c25",
     "semantic_hash": ""
   },
   "src/features/modes/roleplay/index.ts": {
@@ -1485,8 +1485,8 @@
     "semantic_hash": ""
   },
   "src/features/modes/conversation/components/ConversationView.tsx": {
-    "mtime": 1779997003.5830598,
-    "ast_hash": "a497aa7f9b159ac29d26a7d4e951de70",
+    "mtime": 1780044086.9784477,
+    "ast_hash": "a29e3216cf4001b98a55868d735fa6b4",
     "semantic_hash": ""
   },
   "src/features/modes/conversation/components/ConversationMessage.tsx": {
@@ -1495,8 +1495,8 @@
     "semantic_hash": ""
   },
   "src/features/modes/conversation/components/ConversationInput.tsx": {
-    "mtime": 1779912872.6900501,
-    "ast_hash": "a15d6f253ffa4787cd0670f7a54a1abb",
+    "mtime": 1780044086.9779477,
+    "ast_hash": "367499403a777397dcc0ded8956a1037",
     "semantic_hash": ""
   },
   "src/features/modes/conversation/hooks/autonomous/use-autonomous-messaging.ts": {
@@ -1735,8 +1735,8 @@
     "semantic_hash": ""
   },
   "src/features/catalog/chat-presets/hooks/use-chat-presets.ts": {
-    "mtime": 1780041423.3912997,
-    "ast_hash": "9d1a7cfa67db99fb7d43bcbf5783c311",
+    "mtime": 1780044174.7496352,
+    "ast_hash": "40212396199823fc8dec11d016d66510",
     "semantic_hash": ""
   },
   "src/features/catalog/chat-presets/hooks/use-chat-presets.test.ts": {
@@ -1800,18 +1800,18 @@
     "semantic_hash": ""
   },
   "src/features/catalog/agents/hooks/use-custom-tools.ts": {
-    "mtime": 1780041423.3890157,
-    "ast_hash": "b3913dc37c62cbec67ee94d7276854ee",
+    "mtime": 1780044162.0167766,
+    "ast_hash": "4f78360fd7b425ade791f8dc62f15cdb",
     "semantic_hash": ""
   },
   "src/features/catalog/agents/hooks/use-agents.ts": {
-    "mtime": 1780041423.3888898,
-    "ast_hash": "51b2b00e5227d21b10fe588fcb755426",
+    "mtime": 1780044086.973949,
+    "ast_hash": "4b9d5e0089536d335c08926ffc0fcd6f",
     "semantic_hash": ""
   },
   "src/features/catalog/agents/hooks/use-regex-scripts.ts": {
-    "mtime": 1779835633.818364,
-    "ast_hash": "712535e8e3a9f46de481f3135c407980",
+    "mtime": 1780044086.9749486,
+    "ast_hash": "d3111056c34dc8a06d956fa0ead5acbf",
     "semantic_hash": ""
   },
   "src/features/catalog/personas/shell.ts": {
@@ -1870,8 +1870,8 @@
     "semantic_hash": ""
   },
   "src/features/catalog/connections/hooks/use-connections.ts": {
-    "mtime": 1780041423.3916929,
-    "ast_hash": "21cc1f724d4226c093f5e73c8e66cd10",
+    "mtime": 1780044179.7618227,
+    "ast_hash": "dd996dd4eabd89d20e82c94eebef0c43",
     "semantic_hash": ""
   },
   "src/features/catalog/connections/hooks/use-connection-folders.ts": {
@@ -1980,8 +1980,8 @@
     "semantic_hash": ""
   },
   "src/features/catalog/chats/hooks/use-chats.ts": {
-    "mtime": 1780041423.3915155,
-    "ast_hash": "0ed80a162be11aae858617840a96a34a",
+    "mtime": 1780044189.610479,
+    "ast_hash": "5f63ec721827e762a2f90f11eccd394b",
     "semantic_hash": ""
   },
   "src/features/catalog/chats/hooks/use-chat-folders.ts": {
@@ -2105,13 +2105,13 @@
     "semantic_hash": ""
   },
   "src/features/catalog/characters/hooks/use-characters.test.ts": {
-    "mtime": 1779997003.5804563,
-    "ast_hash": "91486ca185890b165a469fa585b4af3e",
+    "mtime": 1780044367.710294,
+    "ast_hash": "e586ce9edc0a387a01c07755bcb000c2",
     "semantic_hash": ""
   },
   "src/features/catalog/characters/hooks/use-characters.ts": {
-    "mtime": 1780041423.3910964,
-    "ast_hash": "8f8e8d470e7a749edae8e6d65cdb5f07",
+    "mtime": 1780044167.5568237,
+    "ast_hash": "75b294adeeb8d863fac8a46a957fbf50",
     "semantic_hash": ""
   },
   "src/features/catalog/characters/lib/import-drop.test.ts": {
@@ -3160,8 +3160,8 @@
     "semantic_hash": ""
   },
   "src/shared/api/mari-api.ts": {
-    "mtime": 1779876700.193632,
-    "ast_hash": "12bc53880998e79bcc51c40a53ebb2b6",
+    "mtime": 1780044086.9854567,
+    "ast_hash": "6069556d89fced6b6995b31d71ba8648",
     "semantic_hash": ""
   },
   "src/shared/api/settings-assets-api.ts": {
@@ -3415,8 +3415,8 @@
     "semantic_hash": ""
   },
   "src/engine/modes/game/scene/game-scene-analysis.service.ts": {
-    "mtime": 1779835633.8135147,
-    "ast_hash": "38fc6f4a9bc796b19f11213884c27748",
+    "mtime": 1780044353.1364307,
+    "ast_hash": "3ea293eba01b7b265057d8c6ae471472",
     "semantic_hash": ""
   },
   "src/engine/modes/game/assets/npc-avatar-utils.ts": {
@@ -3432,16 +3432,6 @@
   "src/engine/modes/roleplay/scene/scene-service.ts": {
     "mtime": 1779899108.0435572,
     "ast_hash": "b043ae5d1745d29668deee9238e37415",
-    "semantic_hash": ""
-  },
-  "src/engine/modes/roleplay/scene/scene-postprocess.ts": {
-    "mtime": 1779835633.8146641,
-    "ast_hash": "7f7770e7f3566c4d7c1368ae0e27d795",
-    "semantic_hash": ""
-  },
-  "src/engine/modes/roleplay/scene/scene-analyzer.ts": {
-    "mtime": 1779835633.8145797,
-    "ast_hash": "d95911778f53c952b6db1948b06f9ff9",
     "semantic_hash": ""
   },
   "src/engine/modes/roleplay/scene/scene-service.test.ts": {
@@ -3570,8 +3560,8 @@
     "semantic_hash": ""
   },
   "src/engine/contracts/constants/chat-modes.ts": {
-    "mtime": 1779897785.474369,
-    "ast_hash": "19337298921e18a88a3359e40d8d0b47",
+    "mtime": 1780044086.9669478,
+    "ast_hash": "463ce15d4f6bce0c3fe93ffd489c9699",
     "semantic_hash": ""
   },
   "src/engine/contracts/constants/providers.ts": {
@@ -3605,8 +3595,8 @@
     "semantic_hash": ""
   },
   "src/engine/contracts/schemas/character.schema.ts": {
-    "mtime": 1779835633.803527,
-    "ast_hash": "eed2d13167152801afc96f19edf7475b",
+    "mtime": 1780044367.7097943,
+    "ast_hash": "ac6dd0e09ec2d00520744d8e37cc2d5f",
     "semantic_hash": ""
   },
   "src/engine/contracts/schemas/theme.schema.ts": {
@@ -3655,8 +3645,8 @@
     "semantic_hash": ""
   },
   "src/engine/contracts/schemas/app-settings.schema.ts": {
-    "mtime": 1779835633.803442,
-    "ast_hash": "08a2e523a9cb8b4f6012e66aafa970e8",
+    "mtime": 1780044086.9674475,
+    "ast_hash": "687aa01dbace3c10aa60f4646a3a98db",
     "semantic_hash": ""
   },
   "src/engine/contracts/schemas/extension.schema.ts": {
@@ -3685,8 +3675,8 @@
     "semantic_hash": ""
   },
   "src/engine/agents-runtime/pipeline/agent-pipeline.ts": {
-    "mtime": 1780001977.872964,
-    "ast_hash": "c25724a99ab36240dd573f0b1b5fa21c",
+    "mtime": 1780044086.9664483,
+    "ast_hash": "748bf557f3af52c72aa5c8f43c7aa14e",
     "semantic_hash": ""
   },
   "src/engine/agents-runtime/knowledge/knowledge-router.ts": {
@@ -3695,8 +3685,8 @@
     "semantic_hash": ""
   },
   "src/engine/agents-runtime/knowledge/knowledge-retrieval.ts": {
-    "mtime": 1779835633.8013215,
-    "ast_hash": "8ac08a753269c6a3034c323661916a17",
+    "mtime": 1780044086.9649484,
+    "ast_hash": "3d251f3273ccec854424420218261452",
     "semantic_hash": ""
   },
   "src/engine/agents-runtime/executor/agent-executor.test.ts": {
@@ -3920,8 +3910,8 @@
     "semantic_hash": ""
   },
   "src/engine/generation/runtime-records.ts": {
-    "mtime": 1779899108.0415127,
-    "ast_hash": "d2d683a1bb48d1ae71350f87c89694b4",
+    "mtime": 1780044086.970448,
+    "ast_hash": "026a9cd9a74096dce15ec053ba314ce0",
     "semantic_hash": ""
   },
   "src/engine/generation/regex-runtime.ts": {
@@ -3940,8 +3930,8 @@
     "semantic_hash": ""
   },
   "src/engine/generation/agent-runner.ts": {
-    "mtime": 1780039328.8634565,
-    "ast_hash": "4a79b69e3509977ac9eb603fe9cc3a8e",
+    "mtime": 1780044353.1354308,
+    "ast_hash": "bda0d56eb166285b91c36fd6d09b15b4",
     "semantic_hash": ""
   },
   "src/engine/generation/makers.ts": {
@@ -3950,8 +3940,8 @@
     "semantic_hash": ""
   },
   "src/engine/generation/agent-runner.test.ts": {
-    "mtime": 1780039247.7672997,
-    "ast_hash": "a13c3dd3667705bafbadd4cef84aee52",
+    "mtime": 1780044353.134431,
+    "ast_hash": "4a84f12a23bede804b9316342c327603",
     "semantic_hash": ""
   },
   "src/engine/generation/generate-route-utils.test.ts": {
@@ -3965,13 +3955,13 @@
     "semantic_hash": ""
   },
   "src/engine/generation/prompt-assembly.test.ts": {
-    "mtime": 1780041549.9118822,
-    "ast_hash": "0706dd8ef36047de3f1be5161adfc811",
+    "mtime": 1780044086.9694483,
+    "ast_hash": "d42f640b9931b7ef58370d5f22179967",
     "semantic_hash": ""
   },
   "src/engine/generation/start-generation.ts": {
-    "mtime": 1780039247.0864644,
-    "ast_hash": "718d60e07489cb7b0cc3b34e213ab6f8",
+    "mtime": 1780044086.9719484,
+    "ast_hash": "dba55ddc25da64887bb53e5ba7b61f10",
     "semantic_hash": ""
   },
   "src/engine/generation/agent-memory-runtime.ts": {
@@ -3985,8 +3975,8 @@
     "semantic_hash": ""
   },
   "src/engine/generation/prompt-assembly.ts": {
-    "mtime": 1780041820.799526,
-    "ast_hash": "335f7fb9f9b686fa39a7d68319f0bc9a",
+    "mtime": 1780044156.7742064,
+    "ast_hash": "97da729da747e18b0bf93b258ce745a5",
     "semantic_hash": ""
   },
   "src/engine/generation/agent-normalizers.ts": {
@@ -4010,8 +4000,8 @@
     "semantic_hash": ""
   },
   "src/engine/generation/start-generation.test.ts": {
-    "mtime": 1780039030.1453142,
-    "ast_hash": "a2ae9c5545ffda3ad5da83dee2010532",
+    "mtime": 1780044086.970948,
+    "ast_hash": "c779f72f8cfbaa5c7952b28b1f381a6d",
     "semantic_hash": ""
   },
   "src/engine/generation/active-characters.ts": {
@@ -5722,6 +5712,81 @@
   "src/shared/api/custom-tool-api.ts": {
     "mtime": 1780041423.3961341,
     "ast_hash": "1e643aa15ece886c60eb312ad9bbb19c",
+    "semantic_hash": ""
+  },
+  "src/engine/modes/game/scene/game-scene-analysis.service.test.ts": {
+    "mtime": 1780044353.1359308,
+    "ast_hash": "b14c5b40878c002116bfbbd5f71faf3d",
+    "semantic_hash": ""
+  },
+  "src/engine/modes/game/scene/scene-analyzer.ts": {
+    "mtime": 1780044086.9729483,
+    "ast_hash": "d95911778f53c952b6db1948b06f9ff9",
+    "semantic_hash": ""
+  },
+  "src/engine/modes/game/scene/scene-postprocess.ts": {
+    "mtime": 1780044353.1364307,
+    "ast_hash": "904daa2afd60b79a28d9fc8aa9de83e7",
+    "semantic_hash": ""
+  },
+  "src/features/modes/game/stores/game-mode.store.test.ts": {
+    "mtime": 1780044086.9834566,
+    "ast_hash": "8e3be7ab62e5eabe5b8fc20f217e8d97",
+    "semantic_hash": ""
+  },
+  "src-tauri/gen/android/tauri.settings.gradle": {
+    "mtime": 1779703246.2137322,
+    "ast_hash": "61868dc086fa8d1c86d43b90cd5444f5",
+    "semantic_hash": ""
+  },
+  "src-tauri/gen/android/app/tauri.build.gradle.kts": {
+    "mtime": 1779703246.2137322,
+    "ast_hash": "3c89aa14a516eb5c3a9df3b7a618d739",
+    "semantic_hash": ""
+  },
+  "src-tauri/gen/android/app/src/main/java/com/marinara_engine/app/generated/Ipc.kt": {
+    "mtime": 1779703216.6856103,
+    "ast_hash": "a0312100b17edb17ed99f7f3a0ca0d04",
+    "semantic_hash": ""
+  },
+  "src-tauri/gen/android/app/src/main/java/com/marinara_engine/app/generated/Logger.kt": {
+    "mtime": 1779703216.6991236,
+    "ast_hash": "2a999c5543facba10b551cb03620bba0",
+    "semantic_hash": ""
+  },
+  "src-tauri/gen/android/app/src/main/java/com/marinara_engine/app/generated/PermissionHelper.kt": {
+    "mtime": 1779703216.7131283,
+    "ast_hash": "4f305d8fa8340e6b07e04338af908eb5",
+    "semantic_hash": ""
+  },
+  "src-tauri/gen/android/app/src/main/java/com/marinara_engine/app/generated/Rust.kt": {
+    "mtime": 1779703216.7336383,
+    "ast_hash": "5f87ec95bd44c15d74637986e3290183",
+    "semantic_hash": ""
+  },
+  "src-tauri/gen/android/app/src/main/java/com/marinara_engine/app/generated/RustWebChromeClient.kt": {
+    "mtime": 1779703216.7491436,
+    "ast_hash": "317f69b65a24b631a38e225ca38c6636",
+    "semantic_hash": ""
+  },
+  "src-tauri/gen/android/app/src/main/java/com/marinara_engine/app/generated/RustWebView.kt": {
+    "mtime": 1779703216.7641556,
+    "ast_hash": "e61f865f72e5e348c103d3dbf7b60a56",
+    "semantic_hash": ""
+  },
+  "src-tauri/gen/android/app/src/main/java/com/marinara_engine/app/generated/RustWebViewClient.kt": {
+    "mtime": 1779703216.777156,
+    "ast_hash": "eccd02bfa68cd8604634923852c007e3",
+    "semantic_hash": ""
+  },
+  "src-tauri/gen/android/app/src/main/java/com/marinara_engine/app/generated/TauriActivity.kt": {
+    "mtime": 1779703244.018254,
+    "ast_hash": "d03243906946beb7730f6af9d1c940c6",
+    "semantic_hash": ""
+  },
+  "src-tauri/gen/android/app/src/main/java/com/marinara_engine/app/generated/WryActivity.kt": {
+    "mtime": 1779703216.7896566,
+    "ast_hash": "a0315affc0ba380862f265bda859e69e",
     "semantic_hash": ""
   }
 }

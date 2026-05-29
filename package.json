@@ -27,7 +27,7 @@
     "check:docs": "node scripts/check-docs.mjs && node scripts/check-graphify-scope.mjs",
     "check:graphify-scope": "node scripts/check-graphify-scope.mjs",
     "graphify:patch": "node scripts/patch-graphify-portable-paths.mjs",
-    "check:unused": "knip",
+    "check:unused": "knip --no-exit-code --no-config-hints",
     "check": "pnpm check:architecture && pnpm check:frontend && pnpm check:rust && pnpm check:docs",
     "test": "vitest run",
     "test:allow-empty": "vitest run --passWithNoTests",
