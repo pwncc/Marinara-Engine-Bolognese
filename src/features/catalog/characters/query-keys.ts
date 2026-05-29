@@ -12,7 +12,6 @@ export const characterKeys = {
   personaDetail: (id: string) => [...characterKeys.personas, "detail", id] as const,
   activePersona: ["personas", "active"] as const,
   groups: ["character-groups"] as const,
-  groupDetail: (id: string) => ["character-groups", "detail", id] as const,
   personaGroups: ["persona-groups"] as const,
   personaGroupDetail: (id: string) => ["persona-groups", "detail", id] as const,
 };
