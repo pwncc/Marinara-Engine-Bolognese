@@ -200,8 +200,8 @@
     "semantic_hash": ""
   },
   "src-tauri/capabilities/default.json": {
-    "mtime": 1779835633.2745996,
-    "ast_hash": "38ded082eeabf4b2e7867e48a93f7ebc",
+    "mtime": 1780044819.4175239,
+    "ast_hash": "68d1b11deb30f7b734323fbfeaafa2e6",
     "semantic_hash": ""
   },
   "src-tauri/capabilities/desktop.json": {
@@ -720,8 +720,8 @@
     "semantic_hash": ""
   },
   "src/app/shell/WindowTitleBar.tsx": {
-    "mtime": 1779905692.4804556,
-    "ast_hash": "e1efc858894fc48919b47a02b4b4112c",
+    "mtime": 1780044835.4102778,
+    "ast_hash": "506baf860382694c55537013918e98a1",
     "semantic_hash": ""
   },
   "src/app/shell/ChatSidebar.tsx": {
@@ -5722,6 +5722,11 @@
   "src/shared/api/custom-tool-api.ts": {
     "mtime": 1780041423.3961341,
     "ast_hash": "1e643aa15ece886c60eb312ad9bbb19c",
+    "semantic_hash": ""
+  },
+  "src/shared/api/window-controls-api.ts": {
+    "mtime": 1780044835.4687917,
+    "ast_hash": "c231c4c30ec022501c5a1ae19d164e22",
     "semantic_hash": ""
   }
 }
