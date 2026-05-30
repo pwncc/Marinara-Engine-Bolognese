@@ -1403,12 +1403,16 @@ export function useGenerate() {
           // Full retry: clear everything; the result loop repopulates anything still failing.
           agentStore.clearFailedAgentTypes();
         }
-        const results = await retryGenerationAgents(
+        const { results, events } = await retryGenerationAgents(
           { storage: storageApi, llm: llmApi, integrations: integrationGateway, visuals: visualAssetsApi },
           {
             chatId,
             agentTypes,
             hideAutomatedSummarySourceMessages: useUIStore.getState().summaryPopoverSettings.hideSummarizedMessages,
+            imagePromptSettings: {
+              includeAppearances: useUIStore.getState().imagePromptIncludeAppearances,
+              format: useUIStore.getState().imagePromptFormat,
+            },
             options: { ...(options ?? {}), bypassActivation: options?.bypassActivation ?? true },
           },
         );
@@ -1431,6 +1435,19 @@ export function useGenerate() {
         }
         if (failedRetries.length > 0) {
           toast.error(formatAgentFailuresToast(failedRetries), { duration: 10_000 });
+        }
+        for (const event of events) {
+          if (event.type === "illustration") {
+            toast("Illustration generated.");
+            // The chat-query refresh is fired unconditionally after this loop;
+            // here we only need the illustration-specific gallery invalidate.
+            runDeferredGenerationWork("gallery refresh", () =>
+              queryClient.invalidateQueries({ queryKey: ["gallery", "images", chatId] }),
+            );
+          } else if (event.type === "illustration_error") {
+            const data = parseMaybeRecord(event.data);
+            toast.error(readString(data.error, "Illustration generation failed."));
+          }
         }
         runDeferredGenerationWork("agent retry refresh", async () => {
           await refreshGameStateFromStorage(chatId);
