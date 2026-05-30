@@ -4,6 +4,14 @@
 import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
 import { lorebookKeys } from "../query-keys";
 import { scanActiveLorebookEntries } from "../../../../engine/generation/active-lorebooks";
+import {
+  createLorebookEntrySchema,
+  createLorebookFolderSchema,
+  createLorebookSchema,
+  updateLorebookEntrySchema,
+  updateLorebookFolderSchema,
+  updateLorebookSchema,
+} from "../../../../engine/contracts/schemas/lorebook.schema";
 import { storageApi } from "../../../../shared/api/storage-api";
 import { ApiError } from "../../../../shared/api/api-errors";
 import { lorebookCommandApi } from "../../../../shared/api/lorebook-command-api";
@@ -31,16 +39,23 @@ async function transferLorebookEntries(
     if (!entry || entry.lorebookId !== sourceLorebookId) continue;
     if (operation === "move") {
       created.push(
-        await storageApi.update<LorebookEntry>("lorebook-entries", entryId, { lorebookId: targetLorebookId }),
+        await storageApi.update<LorebookEntry>(
+          "lorebook-entries",
+          entryId,
+          updateLorebookEntrySchema.parse({ lorebookId: targetLorebookId }),
+        ),
       );
     } else {
       const copy = { ...(entry as unknown as Record<string, unknown>) };
       delete copy.id;
       created.push(
-        await storageApi.create<LorebookEntry>("lorebook-entries", {
-          ...copy,
-          lorebookId: targetLorebookId,
-        }),
+        await storageApi.create<LorebookEntry>(
+          "lorebook-entries",
+          createLorebookEntrySchema.parse({
+            ...copy,
+            lorebookId: targetLorebookId,
+          }),
+        ),
       );
     }
   }
@@ -63,7 +78,7 @@ async function reorderLorebookEntries(
     entryIds.map((entryId, index) => {
       const patch: Record<string, unknown> = { order: index, sortOrder: index };
       if (folderId !== undefined) patch.folderId = folderId;
-      return storageApi.update("lorebook-entries", entryId, patch);
+      return storageApi.update("lorebook-entries", entryId, updateLorebookEntrySchema.parse(patch));
     }),
   );
   return storageApi.list<LorebookEntry>("lorebook-entries", { filters: { lorebookId } });
@@ -72,10 +87,14 @@ async function reorderLorebookEntries(
 async function reorderLorebookFolders(lorebookId: string, folderIds: string[]): Promise<LorebookFolder[]> {
   await Promise.all(
     folderIds.map((folderId, index) =>
-      storageApi.update("lorebook-folders", folderId, {
-        order: index,
-        sortOrder: index,
-      }),
+      storageApi.update(
+        "lorebook-folders",
+        folderId,
+        updateLorebookFolderSchema.parse({
+          order: index,
+          sortOrder: index,
+        }),
+      ),
     ),
   );
   return storageApi.list<LorebookFolder>("lorebook-folders", { filters: { lorebookId } });
@@ -97,9 +116,13 @@ async function bulkUnvectorizeLorebookEntries(
   const targets = entries.filter((entry) => Array.isArray(entry.embedding) && entry.embedding.length > 0);
   await Promise.all(
     targets.map((entry) =>
-      storageApi.update<LorebookEntry>("lorebook-entries", entry.id, {
-        embedding: null,
-      }),
+      storageApi.update<LorebookEntry>(
+        "lorebook-entries",
+        entry.id,
+        updateLorebookEntrySchema.parse({
+          embedding: null,
+        }),
+      ),
     ),
   );
   return { lorebookId, requested: requestedIds.length || entries.length, cleared: targets.length };
@@ -138,7 +161,8 @@ export function useLorebook(id: string | null) {
 export function useCreateLorebook() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: Record<string, unknown>) => storageApi.create<Lorebook>("lorebooks", data),
+    mutationFn: (data: Record<string, unknown>) =>
+      storageApi.create<Lorebook>("lorebooks", createLorebookSchema.parse(data)),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: lorebookKeys.all });
     },
@@ -149,7 +173,7 @@ export function useUpdateLorebook() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...data }: { id: string } & Record<string, unknown>) =>
-      storageApi.update<Lorebook>("lorebooks", id, data),
+      storageApi.update<Lorebook>("lorebooks", id, updateLorebookSchema.parse(data)),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: lorebookKeys.all });
       qc.invalidateQueries({ queryKey: lorebookKeys.list() });
@@ -251,7 +275,7 @@ export function useCreateLorebookEntry() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ lorebookId, ...data }: { lorebookId: string } & Record<string, unknown>) =>
-      storageApi.create<LorebookEntry>("lorebook-entries", { ...data, lorebookId }),
+      storageApi.create<LorebookEntry>("lorebook-entries", createLorebookEntrySchema.parse({ ...data, lorebookId })),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: lorebookKeys.entries(variables.lorebookId) });
       qc.invalidateQueries({ queryKey: lorebookKeys.active() });
@@ -263,7 +287,7 @@ export function useUpdateLorebookEntry() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ lorebookId, entryId, ...data }: { lorebookId: string; entryId: string } & Record<string, unknown>) =>
-      storageApi.update<LorebookEntry>("lorebook-entries", entryId, data),
+      storageApi.update<LorebookEntry>("lorebook-entries", entryId, updateLorebookEntrySchema.parse(data)),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: lorebookKeys.entries(variables.lorebookId) });
       qc.invalidateQueries({ queryKey: lorebookKeys.entry(variables.entryId) });
@@ -357,7 +381,7 @@ export function useCreateLorebookFolder() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ lorebookId, ...data }: { lorebookId: string } & Record<string, unknown>) =>
-      storageApi.create<LorebookFolder>("lorebook-folders", { ...data, lorebookId }),
+      storageApi.create<LorebookFolder>("lorebook-folders", createLorebookFolderSchema.parse({ ...data, lorebookId })),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: lorebookKeys.folders(variables.lorebookId) });
     },
@@ -374,7 +398,8 @@ export function useUpdateLorebookFolder() {
     }: {
       lorebookId: string;
       folderId: string;
-    } & Record<string, unknown>) => storageApi.update<LorebookFolder>("lorebook-folders", folderId, data),
+    } & Record<string, unknown>) =>
+      storageApi.update<LorebookFolder>("lorebook-folders", folderId, updateLorebookFolderSchema.parse(data)),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: lorebookKeys.folders(variables.lorebookId) });
       // Toggling folder.enabled changes which entries activate during scan

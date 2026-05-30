@@ -2,7 +2,11 @@
 // Hooks: Regex Scripts (React Query)
 // ──────────────────────────────────────────────
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { createRegexScriptSchema, reorderRegexScriptsSchema } from "../../../../engine/contracts/schemas/regex.schema";
+import {
+  createRegexScriptSchema,
+  reorderRegexScriptsSchema,
+  updateRegexScriptSchema,
+} from "../../../../engine/contracts/schemas/regex.schema";
 import { storageApi } from "../../../../shared/api/storage-api";
 
 const regexKeys = {
@@ -50,7 +54,7 @@ export function useUpdateRegexScript() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...data }: { id: string } & Record<string, unknown>) =>
-      storageApi.update<RegexScriptRow>("regex-scripts", id, data),
+      storageApi.update<RegexScriptRow>("regex-scripts", id, updateRegexScriptSchema.parse(data)),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: regexKeys.all });
     },
@@ -64,7 +68,7 @@ export function useReorderRegexScripts() {
       const payload = reorderRegexScriptsSchema.parse({ scriptIds });
       await Promise.all(
         payload.scriptIds.map((id, index) =>
-          storageApi.update("regex-scripts", id, { sortOrder: index, order: index }),
+          storageApi.update("regex-scripts", id, updateRegexScriptSchema.parse({ sortOrder: index, order: index })),
         ),
       );
       return storageApi.list<RegexScriptRow>("regex-scripts");
