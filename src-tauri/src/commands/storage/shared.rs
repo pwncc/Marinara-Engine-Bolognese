@@ -377,7 +377,46 @@ pub(crate) fn normalize_typed_json_fields(
             normalize_json_array_fields(object, &["tags", "characterIds", "personaIds"])?;
         }
         "lorebook-entries" => {
-            normalize_json_array_fields(object, &["keys", "secondaryKeys"])?;
+            // The generic storage boundary is the single contract every
+            // lorebook-entry write crosses (editor, bulk create, copy/move,
+            // tool-generated entries, remote runtime). Coerce every legacy-style
+            // shape - string booleans, JSON-string arrays, and JSON-string
+            // objects - to the native shape, or reject what cannot be coerced,
+            // so downstream UI/generation never has to guess the intended type.
+            normalize_json_array_fields(
+                object,
+                &[
+                    "keys",
+                    "secondaryKeys",
+                    "characterFilterIds",
+                    "characterTagFilters",
+                    "generationTriggerFilters",
+                    "additionalMatchingSources",
+                    "activationConditions",
+                ],
+            )?;
+            normalize_boolish_fields(
+                object,
+                &[
+                    "enabled",
+                    "constant",
+                    "selective",
+                    "matchWholeWords",
+                    "caseSensitive",
+                    "useRegex",
+                    "preventRecursion",
+                    "locked",
+                    "excludeFromVectorization",
+                ],
+            );
+            // Use the nullable object normalizer so a stored entry that already
+            // carries `null` (e.g. round-tripped through a copy/duplicate) is
+            // left untouched rather than rejected, while a JSON-string object is
+            // still parsed and a malformed value still rejected.
+            normalize_nullable_json_object_fields(
+                object,
+                &["relationships", "dynamicState", "schedule"],
+            )?;
         }
         "connections" => {
             normalize_nullable_json_object_fields(
@@ -1533,6 +1572,99 @@ mod tests {
         let Err(error) = result else {
             panic!("a non-svg-root document declared as SVG should be rejected");
         };
+        assert_eq!(error.code, "invalid_input");
+    }
+
+    #[test]
+    fn normalize_typed_lorebook_entry_coerces_legacy_string_fields() {
+        let Value::Object(mut object) = json!({
+            "enabled": "false",
+            "constant": "true",
+            "excludeFromVectorization": "1",
+            "keys": "[\"moon\"]",
+            "secondaryKeys": "[]",
+            "characterFilterIds": "[\"c1\"]",
+            "additionalMatchingSources": "[\"character_name\"]",
+            "relationships": "{}",
+            "schedule": null
+        }) else {
+            unreachable!("json! object literal");
+        };
+
+        normalize_typed_json_fields("lorebook-entries", &mut object)
+            .expect("legacy-style lorebook entry should normalize at the storage boundary");
+
+        assert_eq!(object["enabled"], json!(false));
+        assert_eq!(object["constant"], json!(true));
+        assert_eq!(object["excludeFromVectorization"], json!(true));
+        assert_eq!(object["keys"], json!(["moon"]));
+        assert_eq!(object["secondaryKeys"], json!([]));
+        assert_eq!(object["characterFilterIds"], json!(["c1"]));
+        assert_eq!(object["additionalMatchingSources"], json!(["character_name"]));
+        assert_eq!(object["relationships"], json!({}));
+        assert_eq!(object["schedule"], Value::Null);
+    }
+
+    #[test]
+    fn normalize_typed_lorebook_entry_keeps_native_row_unchanged() {
+        let Value::Object(mut object) = json!({
+            "enabled": true,
+            "constant": false,
+            "keys": ["sun"],
+            "secondaryKeys": [],
+            "additionalMatchingSources": ["character_name"],
+            "relationships": { "ally": "moon" },
+            "dynamicState": {},
+            "schedule": { "activeTimes": [], "activeDates": [], "activeLocations": [] }
+        }) else {
+            unreachable!("json! object literal");
+        };
+        let before = object.clone();
+
+        normalize_typed_json_fields("lorebook-entries", &mut object)
+            .expect("a native lorebook entry should pass through unchanged");
+
+        assert_eq!(object, before);
+    }
+
+    #[test]
+    fn normalize_typed_lorebook_entry_allows_null_object_fields() {
+        // A copy/duplicate round-trips a stored entry through this arm; a null
+        // relationships/dynamicState/schedule must pass through, not be rejected.
+        let Value::Object(mut object) = json!({
+            "relationships": null,
+            "dynamicState": null,
+            "schedule": null
+        }) else {
+            unreachable!("json! object literal");
+        };
+
+        normalize_typed_json_fields("lorebook-entries", &mut object)
+            .expect("null object fields should round-trip, not reject");
+        assert_eq!(object["relationships"], Value::Null);
+        assert_eq!(object["dynamicState"], Value::Null);
+        assert_eq!(object["schedule"], Value::Null);
+    }
+
+    #[test]
+    fn normalize_typed_lorebook_entry_rejects_unparseable_array_field() {
+        let Value::Object(mut object) = json!({ "keys": "not json" }) else {
+            unreachable!("json! object literal");
+        };
+
+        let error = normalize_typed_json_fields("lorebook-entries", &mut object)
+            .expect_err("an unparseable array field must be rejected, not silently stored");
+        assert_eq!(error.code, "invalid_input");
+    }
+
+    #[test]
+    fn normalize_typed_lorebook_entry_rejects_unparseable_object_field() {
+        let Value::Object(mut object) = json!({ "relationships": "not json" }) else {
+            unreachable!("json! object literal");
+        };
+
+        let error = normalize_typed_json_fields("lorebook-entries", &mut object)
+            .expect_err("an unparseable object field must be rejected, not silently stored");
         assert_eq!(error.code, "invalid_input");
     }
 }
