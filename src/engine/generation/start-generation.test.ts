@@ -1235,6 +1235,65 @@ describe("startGeneration generation replay metadata", () => {
     );
   });
 
+  it("omits inactive swipe payloads from regenerated message events", async () => {
+    const { deps } = generationDepsForChat({
+      initialMessages: [
+        { id: "user-1", chatId: "chat-1", role: "user", content: "hello" },
+        {
+          id: "assistant-1",
+          chatId: "chat-1",
+          role: "assistant",
+          content: "first reply",
+          activeSwipeIndex: 0,
+          swipeCount: 2,
+          swipes: [
+            {
+              content: "first reply",
+              extra: {
+                generationPromptSnapshot: { messages: [{ role: "user", content: "old" }], parameters: {} },
+              },
+            },
+            {
+              content: "second reply",
+              extra: {
+                generationPromptSnapshot: { messages: [{ role: "user", content: "older" }], parameters: {} },
+              },
+            },
+          ],
+          extra: {
+            generationPromptSnapshotsBySwipe: {
+              "0": { messages: [{ role: "user", content: "old" }], parameters: {} },
+            },
+          },
+        },
+      ],
+    });
+
+    const events = await collectGeneration(
+      startGeneration(deps, {
+        chatId: "chat-1",
+        regenerateMessageId: "assistant-1",
+        generationGuide: "Make this one colder.",
+        generationGuideSource: "guide",
+      }),
+    );
+
+    const assistantEvents = events.filter(
+      (event): event is { type: string; data: Record<string, unknown> } =>
+        !!event && typeof event === "object" && (event as { type?: unknown }).type === "assistant_message",
+    );
+    const saved = assistantEvents.at(-1)?.data;
+    expect(saved).toBeTruthy();
+    expect(saved).not.toHaveProperty("swipes");
+    expect(saved?.extra).toMatchObject({
+      generationPromptSnapshot: expect.objectContaining({
+        messages: expect.any(Array),
+        parameters: expect.any(Object),
+      }),
+    });
+    expect(saved?.extra).not.toHaveProperty("generationPromptSnapshotsBySwipe");
+  });
+
   it("applies stored assistant replay metadata for direct engine regenerates", async () => {
     const { deps, listChatMessages, streamedRequests } = generationDepsForChat({
       initialMessages: [

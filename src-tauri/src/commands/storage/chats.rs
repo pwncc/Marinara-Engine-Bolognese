@@ -179,6 +179,7 @@ fn active_swipe_update_response(message: &Value) -> Value {
         "content",
         "activeSwipeIndex",
         "swipeCount",
+        "extra",
         "updatedAt",
     ] {
         if let Some(value) = message.get(field) {

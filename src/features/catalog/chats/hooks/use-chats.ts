@@ -38,6 +38,7 @@ import {
   type BulkChatExportFormat,
   type ChatTranscriptExportFormat,
 } from "../lib/chat-transcript-export";
+import { sanitizeTimelineMessage, timelineMessageProjection } from "../lib/timeline-message";
 import { lorebookKeys } from "../../lorebooks/query-keys";
 import type {
   Chat,
@@ -337,11 +338,15 @@ export function useChatMessages(
       if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
       return storageApi
         .listChatMessages<Message>(chatId!, {
-          ...(pageSize > 0 ? { limit: pageSize } : {}),
-          ...(pageParam ? { before: pageParam } : {}),
+          ...timelineMessageProjection({
+            ...(pageSize > 0 ? { limit: pageSize } : {}),
+            ...(pageParam ? { before: pageParam } : {}),
+          }),
         })
         .then((messages) =>
-          chatId ? messages.map((message) => preserveRecentMessageContentEdit(chatId, message)) : messages,
+          chatId
+            ? messages.map((message) => preserveRecentMessageContentEdit(chatId, sanitizeTimelineMessage(message)))
+            : messages.map(sanitizeTimelineMessage),
         );
     },
     initialPageParam: undefined as string | undefined,
@@ -1328,7 +1333,9 @@ export function useSetActiveSwipe(chatId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ messageId, index }: { messageId: string; index: number }) =>
-      chatCommandApi.setActiveSwipe<Message | null>(chatId, messageId, index),
+      chatCommandApi
+        .setActiveSwipe<Message | null>(chatId, messageId, index)
+        .then((message) => sanitizeTimelineMessage(message)),
     onMutate: ({ messageId, index }) => {
       if (!chatId) return;
       void qc.cancelQueries({ queryKey: chatKeys.messages(chatId), exact: true });

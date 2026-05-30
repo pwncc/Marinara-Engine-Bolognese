@@ -10,7 +10,10 @@ function storage(
 ): StorageGateway {
   return {
     list: async <T>(entity: string) => (entity === "agents" ? rows : (collections[entity] ?? [])) as T[],
-    get: async <T>() => null as T | null,
+    get: async <T>(entity: string, id: string) => {
+      const collection = entity === "agents" ? rows : (collections[entity] ?? []);
+      return (collection.find((row) => row.id === id) ?? null) as T | null;
+    },
     create: async <T>() => ({}) as T,
     update: async <T>() => ({}) as T,
     delete: async () => ({ deleted: true }),
@@ -505,6 +508,67 @@ describe("createGenerationAgentRuntime", () => {
       connectionId: "agent-default",
       model: "agent-default-model",
       parameters: expect.objectContaining({ topP: 0.61 }),
+    });
+  });
+
+  it("uses an agent connection override before the default agent connection", async () => {
+    const calls: LlmRequest[] = [];
+    await createGenerationAgentRuntime(
+      {
+        storage: storage(
+          [
+            {
+              id: "agent-a",
+              type: "prose-guardian",
+              name: "Prose Guardian",
+              enabled: true,
+              phase: "pre_generation",
+              connectionId: "agent-specific",
+              model: "",
+              promptTemplate: "Add a concise style note.",
+            },
+          ],
+          {
+            connections: [
+              {
+                id: "agent-default",
+                provider: "anthropic",
+                model: "agent-default-model",
+                defaultForAgents: true,
+                defaultParameters: { topP: 0.61 },
+              },
+              {
+                id: "agent-specific",
+                provider: "openai",
+                model: "agent-specific-model",
+                defaultParameters: { topP: 0.17 },
+              },
+            ],
+          },
+        ),
+        llm: countingLlm(calls),
+        integrations,
+      },
+      {
+        chat: { id: "chat-a", metadata: { activeAgentIds: ["agent-a"] } },
+        connection: {
+          id: "chat-connection",
+          provider: "google",
+          model: "chat-model",
+          defaultParameters: { topP: 0.24 },
+        },
+        storedMessages: [],
+        characters: [],
+        persona: null,
+        activatedLorebookEntries: [],
+        chatSummary: null,
+      },
+    );
+
+    expect(calls[0]).toMatchObject({
+      connectionId: "agent-specific",
+      model: "agent-specific-model",
+      parameters: expect.objectContaining({ topP: 0.17 }),
     });
   });
 

@@ -60,6 +60,30 @@ vi.mock("../../../catalog/chats/index", () => ({
     messages: (chatId: string) => ["chats", "messages", chatId],
     messageCount: (chatId: string) => ["chats", "messageCount", chatId],
   },
+  sanitizeTimelineMessage: (message: unknown) => {
+    if (!message || typeof message !== "object" || Array.isArray(message)) return message;
+    const { swipes: _swipes, ...withoutSwipes } = message as Record<string, unknown>;
+    const extra =
+      withoutSwipes.extra && typeof withoutSwipes.extra === "object" && !Array.isArray(withoutSwipes.extra)
+        ? (withoutSwipes.extra as Record<string, unknown>)
+        : {};
+    const { generationPromptSnapshotsBySwipe: _generationPromptSnapshotsBySwipe, ...timelineExtra } = extra;
+    return { ...withoutSwipes, extra: timelineExtra };
+  },
+  sanitizeTimelineMessageRecord: (record: Record<string, unknown>) => {
+    const { swipes: _swipes, ...withoutSwipes } = record;
+    const extra =
+      withoutSwipes.extra && typeof withoutSwipes.extra === "object" && !Array.isArray(withoutSwipes.extra)
+        ? (withoutSwipes.extra as Record<string, unknown>)
+        : {};
+    const { generationPromptSnapshotsBySwipe: _generationPromptSnapshotsBySwipe, ...timelineExtra } = extra;
+    return { ...withoutSwipes, extra: timelineExtra };
+  },
+  timelineMessageProjection: (options: Record<string, unknown> = {}) => ({
+    ...options,
+    fields: ["id", "chatId", "role", "content", "characterId", "activeSwipeIndex", "swipeCount", "extra", "createdAt"],
+    fieldSelections: { extra: ["generationReplay", "generationPromptSnapshot"] },
+  }),
 }));
 
 vi.mock("../../../catalog/characters/index", () => ({
@@ -253,5 +277,89 @@ describe("runGenerationWithUi", () => {
 
     resolveBackground();
     await expect(generation).resolves.toBe(true);
+  });
+
+  it("keeps regenerated assistant message cache updates free of inactive swipe payloads", async () => {
+    const queryClient = queryClientWithChat();
+    queryClient.setQueryData(["chats", "messages", "chat-1"], {
+      pages: [
+        [
+          {
+            id: "assistant-1",
+            chatId: "chat-1",
+            role: "assistant",
+            characterId: null,
+            content: "Old swipe.",
+            activeSwipeIndex: 0,
+            swipeCount: 4,
+            createdAt: "2026-05-30T00:00:00.000Z",
+            extra: {},
+          },
+        ],
+      ],
+      pageParams: [undefined],
+    });
+    const savedPromptSnapshot = {
+      messages: [{ role: "user", content: "Hello" }],
+      parameters: { temperature: 0.7 },
+    };
+
+    const streamFactory = vi.fn<TestStreamFactory>(async function* () {
+      yield { type: "token", data: "New swipe." };
+      yield {
+        type: "assistant_message",
+        data: {
+          id: "assistant-1",
+          chatId: "chat-1",
+          role: "assistant",
+          content: "New swipe.",
+          characterId: null,
+          activeSwipeIndex: 3,
+          swipeCount: 4,
+          createdAt: "2026-05-30T00:00:00.000Z",
+          swipes: [
+            { content: "Old swipe.", extra: { generationPromptSnapshot: { messages: [], parameters: {} } } },
+            { content: "Second swipe.", extra: { generationPromptSnapshot: { messages: [], parameters: {} } } },
+            { content: "Third swipe.", extra: { generationPromptSnapshot: { messages: [], parameters: {} } } },
+            { content: "New swipe.", extra: { generationPromptSnapshot: savedPromptSnapshot } },
+          ],
+          extra: {
+            thinking: "brief thoughts",
+            generationPromptSnapshot: savedPromptSnapshot,
+            generationPromptSnapshotsBySwipe: {
+              "3": savedPromptSnapshot,
+            },
+          },
+        },
+      };
+      yield { type: "done" };
+    });
+
+    await expect(
+      runGenerationWithUi(
+        queryClient,
+        { chatId: "chat-1", regenerateMessageId: "assistant-1" },
+        streamFactory,
+      ),
+    ).resolves.toBe(true);
+
+    const cached = queryClient.getQueryData<{ pages: Array<Array<Record<string, unknown>>> }>([
+      "chats",
+      "messages",
+      "chat-1",
+    ]);
+    const message = cached?.pages[0]?.[0];
+    expect(message).toMatchObject({
+      id: "assistant-1",
+      content: "New swipe.",
+      activeSwipeIndex: 3,
+      swipeCount: 4,
+    });
+    expect(message).not.toHaveProperty("swipes");
+    expect(message?.extra).toMatchObject({
+      thinking: "brief thoughts",
+      generationPromptSnapshot: savedPromptSnapshot,
+    });
+    expect(message?.extra).not.toHaveProperty("generationPromptSnapshotsBySwipe");
   });
 });

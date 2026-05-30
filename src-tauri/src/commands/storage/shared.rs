@@ -116,6 +116,57 @@ pub(crate) fn materialize_message_swipe_fields(message: &mut Value) {
     }
 }
 
+const TIMELINE_MESSAGE_FIELDS: [&str; 13] = [
+    "id",
+    "chatId",
+    "role",
+    "content",
+    "characterId",
+    "name",
+    "displayName",
+    "characterName",
+    "activeSwipeIndex",
+    "swipeCount",
+    "rowid",
+    "extra",
+    "createdAt",
+];
+
+const TIMELINE_MESSAGE_EXTRA_FIELDS: [&str; 21] = [
+    "displayText",
+    "isGenerated",
+    "tokenCount",
+    "generationInfo",
+    "thinking",
+    "reasoning",
+    "reasoning_content",
+    "spriteExpressions",
+    "cyoaChoices",
+    "contextInjections",
+    "chatSummaryFingerprint",
+    "generationReplay",
+    "generationPromptSnapshot",
+    "attachments",
+    "personaSnapshot",
+    "hiddenFromUser",
+    "hiddenFromAI",
+    "hiddenFromAi",
+    "isConversationStart",
+    "generationError",
+    "translation",
+];
+
+pub(crate) fn project_timeline_message(mut message: Value) -> Value {
+    materialize_message_swipe_fields(&mut message);
+    let options = json!({
+        "fields": TIMELINE_MESSAGE_FIELDS,
+        "fieldSelections": {
+            "extra": TIMELINE_MESSAGE_EXTRA_FIELDS,
+        },
+    });
+    project_record(message, Some(&options))
+}
+
 const SWIPE_SCOPED_EXTRA_KEYS: [&str; 15] = [
     "displayText",
     "isGenerated",
@@ -423,6 +474,10 @@ pub(crate) fn normalize_typed_json_fields(
                 object,
                 &["defaultParameters", "capabilities", "providerMetadata"],
             )?;
+            normalize_boolish_fields(
+                object,
+                &["isDefault", "default", "useForRandom", "defaultForAgents"],
+            );
         }
         "custom-tools" => {
             normalize_json_object_fields(object, &["parametersSchema"])?;

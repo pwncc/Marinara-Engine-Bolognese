@@ -200,7 +200,7 @@ export const storageApi: StorageGateway = {
   },
   deleteChatMessage: (messageId) => storageApi.delete("messages", messageId),
   patchChatMessageExtra: async (messageId, patch) => {
-    const message = await storageApi.get<Record<string, unknown>>("messages", messageId);
+    const message = await storageApi.get<Record<string, unknown>>("messages", messageId, { fields: ["extra"] });
     if (!message) throw new ApiError(`Message ${messageId} was not found`, 404);
     return storageApi.update("messages", messageId, {
       extra: { ...asRecord(message.extra), ...patch },

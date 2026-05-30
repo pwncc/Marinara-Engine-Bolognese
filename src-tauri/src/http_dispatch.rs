@@ -985,17 +985,25 @@ fn storage_get(state: &AppState, args: &Map<String, Value>) -> AppResult<Value> 
 
 fn storage_create(state: &AppState, args: &Map<String, Value>) -> AppResult<Value> {
     let entity = required_string(args, "entity")?;
-    state.storage.create(
+    let created = state.storage.create(
         entity,
         shared::with_entity_defaults(entity, optional_value(args, "value"))?,
-    )
+    )?;
+    if entity == "messages" {
+        return Ok(shared::project_timeline_message(created));
+    }
+    Ok(created)
 }
 
 fn storage_update(state: &AppState, args: &Map<String, Value>) -> AppResult<Value> {
     let entity = required_string(args, "entity")?;
     let id = required_string(args, "id")?;
     if entity == "messages" {
-        return shared::patch_message_update(state, id, optional_value(args, "patch"));
+        return Ok(shared::project_timeline_message(shared::patch_message_update(
+            state,
+            id,
+            optional_value(args, "patch"),
+        )?));
     }
     state.storage.patch(
         entity,
@@ -1024,13 +1032,13 @@ fn storage_duplicate(state: &AppState, args: &Map<String, Value>) -> AppResult<V
 }
 
 fn chat_message_add_swipe(state: &AppState, args: &Map<String, Value>) -> AppResult<Value> {
-    chats::message_swipes(
+    Ok(shared::project_timeline_message(chats::message_swipes(
         state,
         "POST",
         required_string(args, "chatId")?,
         required_string(args, "messageId")?,
         optional_value(args, "body"),
-    )
+    )?))
 }
 
 fn chat_message_update_content_if_unchanged(
@@ -1047,21 +1055,21 @@ fn chat_message_update_content_if_unchanged(
 }
 
 fn chat_message_set_active_swipe(state: &AppState, args: &Map<String, Value>) -> AppResult<Value> {
-    chats::set_active_swipe(
+    Ok(shared::project_timeline_message(chats::set_active_swipe(
         state,
         required_string(args, "chatId")?,
         required_string(args, "messageId")?,
         json!({ "index": optional_value(args, "index") }),
-    )
+    )?))
 }
 
 fn chat_message_delete_swipe(state: &AppState, args: &Map<String, Value>) -> AppResult<Value> {
-    chats::delete_swipe(
+    Ok(shared::project_timeline_message(chats::delete_swipe(
         state,
         required_string(args, "chatId")?,
         required_string(args, "messageId")?,
         required_string(args, "index")?,
-    )
+    )?))
 }
 
 fn chat_autonomous_unread_mark(state: &AppState, args: &Map<String, Value>) -> AppResult<Value> {

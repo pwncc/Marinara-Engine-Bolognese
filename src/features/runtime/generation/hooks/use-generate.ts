@@ -31,7 +31,12 @@ import { useChatStore } from "../../../../shared/stores/chat.store";
 import { useUIStore } from "../../../../shared/stores/ui.store";
 import { useGameStateStore } from "../../world-state/index";
 import { worldStateApi, type WorldStateTarget } from "../../world-state/index";
-import { chatKeys } from "../../../catalog/chats/index";
+import {
+  chatKeys,
+  sanitizeTimelineMessage,
+  sanitizeTimelineMessageRecord,
+  timelineMessageProjection,
+} from "../../../catalog/chats/index";
 import { characterKeys } from "../../../catalog/characters/index";
 import {
   applyLorebookKeeperUpdate,
@@ -171,19 +176,20 @@ function savedMessagePayload(value: unknown, chatId: string): Message | null {
   const content = readString(record.content);
   const messageChatId = readString(record.chatId).trim() || chatId;
   if (!id || messageChatId !== chatId || !role) return null;
+  const timelineRecord = sanitizeTimelineMessageRecord(record);
   return {
-    ...(record as unknown as Message),
+    ...(timelineRecord as unknown as Message),
     id,
     chatId: messageChatId,
     role: role as Message["role"],
     content,
-    characterId: readString(record.characterId).trim() || null,
+    characterId: readString(timelineRecord.characterId).trim() || null,
     activeSwipeIndex:
-      typeof record.activeSwipeIndex === "number" && Number.isFinite(record.activeSwipeIndex)
-        ? record.activeSwipeIndex
+      typeof timelineRecord.activeSwipeIndex === "number" && Number.isFinite(timelineRecord.activeSwipeIndex)
+        ? timelineRecord.activeSwipeIndex
         : 0,
-    createdAt: readString(record.createdAt).trim() || new Date().toISOString(),
-    extra: (record.extra ?? {}) as Message["extra"],
+    createdAt: readString(timelineRecord.createdAt).trim() || new Date().toISOString(),
+    extra: (timelineRecord.extra ?? {}) as Message["extra"],
   };
 }
 
@@ -1358,7 +1364,11 @@ export function useGenerate() {
           .flat()
           .find((message) => readString(message.id) === regenerateMessageId);
         const storedMessage =
-          cachedMessage ?? (await storageApi.get<Message>("messages", regenerateMessageId).catch(() => null));
+          cachedMessage ??
+          (await storageApi
+            .get<Message>("messages", regenerateMessageId, timelineMessageProjection())
+            .then((message) => sanitizeTimelineMessage(message))
+            .catch(() => null));
         if (!storedMessage || readString(storedMessage.chatId).trim() !== chatId) return args;
         const replay = readGenerationReplay(storedMessage?.extra);
         if (!replay) return args;

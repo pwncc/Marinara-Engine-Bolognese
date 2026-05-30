@@ -209,9 +209,16 @@ pub async fn storage_create(
 }
 
 fn storage_create_inner(state: &AppState, entity: String, value: Value) -> Result<Value, AppError> {
-    state
+    let created = state
         .storage
-        .create(&entity, shared::with_entity_defaults(&entity, value)?)
+        .create(&entity, shared::with_entity_defaults(&entity, value)?)?;
+    if entity == "messages" {
+        return Ok(shared::project_timeline_message(created));
+    }
+    if entity == "connections" {
+        clear_other_default_agent_connections(state, &created)?;
+    }
+    Ok(created)
 }
 
 #[tauri::command]
@@ -234,13 +241,73 @@ fn storage_update_inner(
     patch: Value,
 ) -> Result<Value, AppError> {
     if entity == "messages" {
-        return shared::patch_message_update(state, &id, patch);
+        return Ok(shared::project_timeline_message(shared::patch_message_update(
+            state, &id, patch,
+        )?));
     }
-    state.storage.patch(
+    let updated = state.storage.patch(
         &entity,
         &id,
         shared::normalize_update_patch(&entity, patch)?,
-    )
+    )?;
+    if entity == "connections" {
+        clear_other_default_agent_connections(state, &updated)?;
+    }
+    Ok(updated)
+}
+
+fn connection_default_agent_scope(connection: &Value) -> Option<&'static str> {
+    let provider = connection.get("provider").and_then(Value::as_str)?.trim();
+    Some(if provider == "image_generation" {
+        "image"
+    } else {
+        "language"
+    })
+}
+
+fn connection_default_for_agents_enabled(connection: &Value) -> bool {
+    connection
+        .get("defaultForAgents")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn clear_other_default_agent_connections(
+    state: &AppState,
+    selected_connection: &Value,
+) -> Result<(), AppError> {
+    if !connection_default_for_agents_enabled(selected_connection) {
+        return Ok(());
+    }
+    let Some(selected_id) = selected_connection
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+    else {
+        return Ok(());
+    };
+    let Some(selected_scope) = connection_default_agent_scope(selected_connection) else {
+        return Ok(());
+    };
+    for connection in state.storage.list("connections")? {
+        let Some(id) = connection
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| *id != selected_id)
+        else {
+            continue;
+        };
+        if !connection_default_for_agents_enabled(&connection) {
+            continue;
+        }
+        if connection_default_agent_scope(&connection) != Some(selected_scope) {
+            continue;
+        }
+        state
+            .storage
+            .patch("connections", id, json!({ "defaultForAgents": false }))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -447,6 +514,15 @@ mod tests {
             .collect()
     }
 
+    fn default_for_agents(state: &AppState, id: &str) -> bool {
+        state
+            .storage
+            .get("connections", id)
+            .expect("connection should read")
+            .and_then(|row| row.get("defaultForAgents").and_then(Value::as_bool))
+            .unwrap_or(false)
+    }
+
     #[test]
     fn deleting_lorebook_cascades_entries_and_folders_only_for_that_lorebook() {
         let state = test_state("lorebook-delete-cascade");
@@ -605,5 +681,86 @@ mod tests {
             .expect("storage_list returns an array");
         assert_eq!(full_data_rows.len(), 1);
         assert_eq!(full_data_rows[0]["data"]["favorite_color"], "violet");
+    }
+
+    #[test]
+    fn enabling_agent_default_connection_clears_previous_language_default() {
+        let state = test_state("agent-default-exclusive-update");
+        storage_create_inner(
+            &state,
+            "connections".to_string(),
+            json!({
+                "id": "language-a",
+                "name": "Language A",
+                "provider": "anthropic",
+                "defaultForAgents": true
+            }),
+        )
+        .expect("first language connection should be created");
+        storage_create_inner(
+            &state,
+            "connections".to_string(),
+            json!({
+                "id": "image-a",
+                "name": "Image A",
+                "provider": "image_generation",
+                "defaultForAgents": true
+            }),
+        )
+        .expect("image connection should be created");
+        storage_create_inner(
+            &state,
+            "connections".to_string(),
+            json!({
+                "id": "language-b",
+                "name": "Language B",
+                "provider": "openai",
+                "defaultForAgents": false
+            }),
+        )
+        .expect("second language connection should be created");
+
+        storage_update_inner(
+            &state,
+            "connections".to_string(),
+            "language-b".to_string(),
+            json!({ "defaultForAgents": true }),
+        )
+        .expect("second language connection should become default");
+
+        assert!(!default_for_agents(&state, "language-a"));
+        assert!(default_for_agents(&state, "language-b"));
+        assert!(default_for_agents(&state, "image-a"));
+    }
+
+    #[test]
+    fn creating_agent_default_connection_clears_previous_same_scope_default() {
+        let state = test_state("agent-default-exclusive-create");
+        storage_create_inner(
+            &state,
+            "connections".to_string(),
+            json!({
+                "id": "image-a",
+                "name": "Image A",
+                "provider": "image_generation",
+                "defaultForAgents": true
+            }),
+        )
+        .expect("first image connection should be created");
+
+        storage_create_inner(
+            &state,
+            "connections".to_string(),
+            json!({
+                "id": "image-b",
+                "name": "Image B",
+                "provider": "image_generation",
+                "defaultForAgents": "true"
+            }),
+        )
+        .expect("second image connection should be created");
+
+        assert!(!default_for_agents(&state, "image-a"));
+        assert!(default_for_agents(&state, "image-b"));
     }
 }

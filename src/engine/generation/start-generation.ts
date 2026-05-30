@@ -1686,6 +1686,14 @@ function savedGenerationEventType(input: StartGenerationInput): "assistant_messa
   return input.impersonate === true ? "user_message" : "assistant_message";
 }
 
+function savedGenerationEventData(saved: unknown): unknown {
+  if (!isRecord(saved)) return saved;
+  const { swipes: _swipes, ...withoutSwipes } = saved;
+  const extra = parseRecord(withoutSwipes.extra);
+  const { generationPromptSnapshotsBySwipe: _generationPromptSnapshotsBySwipe, ...timelineExtra } = extra;
+  return { ...withoutSwipes, extra: timelineExtra };
+}
+
 function messageId(saved: unknown): string | null {
   return isRecord(saved) ? readString(saved.id) || null : null;
 }
@@ -2103,7 +2111,7 @@ export async function* startGeneration(
   }
   const savedUserMessage = await saveUserMessage(deps.storage, input, preparedUserInput);
   throwIfAborted(signal);
-  if (savedUserMessage) yield { type: "user_message", data: savedUserMessage };
+  if (savedUserMessage) yield { type: "user_message", data: savedGenerationEventData(savedUserMessage) };
   const connection = await resolveGenerationConnection(deps.storage, chat, input);
   throwIfAborted(signal);
   if (savesUserMessage) {
@@ -2312,7 +2320,7 @@ export async function* startGeneration(
         characters: assembly.characters,
       });
     }
-    if (saved) yield { type: savedGenerationEventType(input), data: saved };
+    if (saved) yield { type: savedGenerationEventType(input), data: savedGenerationEventData(saved) };
     throwIfAborted(signal);
 
     const parallelResults = await parallelAgents;
@@ -2336,7 +2344,7 @@ export async function* startGeneration(
       });
       if (patched) {
         latestSaved = patched;
-        yield { type: savedGenerationEventType(input), data: patched };
+        yield { type: savedGenerationEventType(input), data: savedGenerationEventData(patched) };
       }
     }
 
@@ -2359,7 +2367,7 @@ export async function* startGeneration(
       });
       if (patched) {
         latestSaved = patched;
-        yield { type: savedGenerationEventType(input), data: patched };
+        yield { type: savedGenerationEventType(input), data: savedGenerationEventData(patched) };
       }
     }
     throwIfAborted(signal);
@@ -2479,7 +2487,7 @@ export async function* startGeneration(
       characters: assembly.characters,
     });
   }
-  if (saved) yield { type: savedGenerationEventType(input), data: saved };
+  if (saved) yield { type: savedGenerationEventType(input), data: savedGenerationEventData(saved) };
   throwIfAborted(signal);
   if (saved && input.impersonate !== true) {
     const autoLorebookResults = await runLorebookKeeperBackfill(
