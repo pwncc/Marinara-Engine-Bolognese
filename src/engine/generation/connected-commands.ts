@@ -3,6 +3,7 @@ import type { IntegrationGateway } from "../capabilities/integrations";
 import type { LlmGateway } from "../capabilities/llm";
 import {
   parseCharacterCommands,
+  parseDirectMessageCommands,
   type CharacterCommand,
   type CreateCharacterCommand,
   type CreateLorebookCommand,
@@ -91,6 +92,48 @@ async function findConversationChatByTarget(
       return id === normalized || name.includes(normalized);
     }) ?? null
   );
+}
+
+function roleplayDirectMessageCommandsEnabled(chat: JsonRecord): boolean {
+  const mode = readString(chat.mode || chat.chatMode);
+  return mode === "roleplay" && boolish(parseRecord(chat.metadata).roleplayDmCommandsEnabled, false);
+}
+
+function parseConnectedCommands(chat: JsonRecord, content: string): {
+  cleanContent: string;
+  commands: CharacterCommand[];
+  parseEvents: ConnectedCommandEvent[];
+  strippedHiddenContent: boolean;
+} {
+  if (!roleplayDirectMessageCommandsEnabled(chat)) {
+    const parsed = parseCharacterCommands(content);
+    return {
+      ...parsed,
+      parseEvents: [],
+      strippedHiddenContent: parsed.cleanContent !== content,
+    };
+  }
+
+  const directMessages = parseDirectMessageCommands(content);
+  const parsed = parseCharacterCommands(directMessages.cleanContent);
+  const parseEvents: ConnectedCommandEvent[] =
+    directMessages.invalidCommands > 0
+      ? [
+          {
+            type: "command_error",
+            data: {
+              command: "dm",
+              error: "Direct-message command must include both character and message.",
+            },
+          },
+        ]
+      : [];
+  return {
+    cleanContent: parsed.cleanContent,
+    commands: [...parsed.commands, ...directMessages.commands],
+    parseEvents,
+    strippedHiddenContent: directMessages.cleanContent !== content || parsed.cleanContent !== directMessages.cleanContent,
+  };
 }
 
 function messageDefaults(chatId: string, value: Record<string, unknown>): Record<string, unknown> {
@@ -773,24 +816,50 @@ async function executeCommand(
     }
     case "dm": {
       const character = await findByName(storage, "characters", command.character);
-      const targetChat = character?.id
-        ? (await storage.list<JsonRecord>("chats")).find((candidate) => {
-            const ids = stringArray(candidate.characterIds);
-            return readString(candidate.mode) === "conversation" && ids.includes(readString(character.id));
-          })
-        : null;
-      const targetChatId = readString(targetChat?.id);
-      if (!targetChatId) return null;
+      const characterId = readString(character?.id);
+      if (!character || !characterId) {
+        eventsPushCommandError(
+          events,
+          command.type,
+          `No character named "${command.character}" was found for the direct-message command.`,
+        );
+        return null;
+      }
+      let targetChat =
+        (await storage.list<JsonRecord>("chats")).find((candidate) => {
+          const ids = stringArray(candidate.characterIds);
+          return readString(candidate.mode) === "conversation" && ids.includes(characterId);
+        }) ?? null;
+      const createdChat = !targetChat;
+      if (!targetChat) {
+        const characterName = nameOf(character) || command.character;
+        targetChat = await storage.create<JsonRecord>("chats", {
+          name: characterName,
+          mode: "conversation",
+          characterIds: [characterId],
+          folderId: chat.folderId ?? null,
+          metadata: {},
+        });
+      }
+      const targetChatId = readString(targetChat.id);
+      if (!targetChatId) {
+        eventsPushCommandError(events, command.type, "Could not resolve a conversation for the direct-message command.");
+        return null;
+      }
+      const targetChatName = readString(targetChat.name) || nameOf(character) || command.character;
       await storage.createChatMessage(
         targetChatId,
         messageDefaults(targetChatId, {
           role: "assistant",
-          characterId: readString(character?.id) || null,
+          characterId,
           content: command.message,
         }),
       );
-      events.push({ type: "ooc_posted", data: { chatId: targetChatId, count: 1 } });
-      return { name: "dm" };
+      events.push({
+        type: "ooc_posted",
+        data: { chatId: targetChatId, chatName: targetChatName, count: 1, createdChat },
+      });
+      return { name: "dm", suppressSourceMessage: !visibleContent.trim() };
     }
     case "schedule_update":
       return (await applyScheduleUpdate(storage, chat, command)) ? { name: "schedule_update" } : null;
@@ -826,9 +895,9 @@ export async function persistConnectedCommandTags(
 ): Promise<ConnectedCommandResult> {
   const createdNotes: JsonRecord[] = [];
   const pendingNoteWrites: Array<{ chatId: string; note: JsonRecord }> = [];
-  const parsed = parseCharacterCommands(content);
+  const parsed = parseConnectedCommands(chat, content);
   const executedCommands: string[] = [];
-  const events: ConnectedCommandEvent[] = [];
+  const events: ConnectedCommandEvent[] = [...parsed.parseEvents];
   const assistantAttachments: JsonRecord[] = [];
   let suppressAssistantMessage = false;
 
@@ -865,12 +934,16 @@ export async function persistConnectedCommandTags(
     await persistNoteWrites(storage, chat, pendingNoteWrites);
   }
 
+  const hasVisibleSourceOutput = parsed.cleanContent.trim().length > 0 || assistantAttachments.length > 0;
+  const suppressEmptyHiddenCommandSource =
+    !hasVisibleSourceOutput && parsed.strippedHiddenContent && content.trim().length > 0;
+
   return {
     displayContent: parsed.cleanContent,
     createdNotes,
     executedCommands,
     events,
     assistantAttachments,
-    suppressAssistantMessage,
+    suppressAssistantMessage: suppressAssistantMessage || suppressEmptyHiddenCommandSource,
   };
 }
