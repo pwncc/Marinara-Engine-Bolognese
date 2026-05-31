@@ -1710,6 +1710,7 @@ export const ChatMessage = memo(function ChatMessage({
             "mari-message mari-message-narrator rpg-narrator-msg group mb-4 px-2",
             multiSelectMode && isSelected && "rounded-lg bg-[var(--destructive)]/5 ring-2 ring-[var(--destructive)]/50",
           )}
+          data-card-css={message.characterId ?? undefined}
           onClick={handleMobileTap}
           onDoubleClick={handleMessageDoubleClick}
         >
@@ -1787,6 +1788,7 @@ export const ChatMessage = memo(function ChatMessage({
           )}
           data-message-id={message.id}
           data-message-role={message.role}
+          data-card-css={message.characterId ?? undefined}
           onClick={handleMobileTap}
           onDoubleClick={handleMessageDoubleClick}
           style={roleplayAvatarScaleStyle}
@@ -2328,6 +2330,7 @@ export const ChatMessage = memo(function ChatMessage({
       )}
       data-message-id={message.id}
       data-message-role={message.role}
+      data-card-css={message.characterId ?? undefined}
       onClick={handleMobileTap}
       onDoubleClick={handleMessageDoubleClick}
     >
