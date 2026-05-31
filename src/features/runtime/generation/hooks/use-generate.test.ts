@@ -181,6 +181,37 @@ describe("runGenerationWithUi", () => {
     expect(useAgentStore.getState().isProcessing).toBe(false);
   });
 
+  it("coalesces live thinking buffer commits during streaming", async () => {
+    const queryClient = queryClientWithChat();
+
+    const streamFactory = vi.fn<TestStreamFactory>(async function* () {
+      yield { type: "thinking", data: "A" };
+      expect(useChatStore.getState().thinkingBuffer).toBe("A");
+
+      yield { type: "thinking", data: "B" };
+      expect(useChatStore.getState().thinkingBuffer).toBe("A");
+
+      vi.advanceTimersByTime(44);
+      yield { type: "thinking", data: "C" };
+      expect(useChatStore.getState().thinkingBuffer).toBe("A");
+
+      vi.advanceTimersByTime(1);
+      yield { type: "thinking", data: "D" };
+      expect(useChatStore.getState().thinkingBuffer).toBe("ABCD");
+
+      yield { type: "thinking", data: "E" };
+      expect(useChatStore.getState().thinkingBuffer).toBe("ABCD");
+
+      yield { type: "done" };
+    });
+
+    await expect(runGenerationWithUi(queryClient, { chatId: "chat-1" }, streamFactory)).resolves.toBe(false);
+
+    expect(useChatStore.getState().thinkingBuffer).toBe("ABCDE");
+    expect(useChatStore.getState().thinkingBuffers.get("chat-1")).toBe("ABCDE");
+    expect(useAgentStore.getState().isProcessing).toBe(false);
+  });
+
   it("does not clear a newer same-chat controller from stale cleanup", async () => {
     const queryClient = queryClientWithChat();
     const newer = new AbortController();

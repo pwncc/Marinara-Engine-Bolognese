@@ -86,6 +86,32 @@ describe("llmApi stream cancellation", () => {
     await expect(next).resolves.toMatchObject({ done: true });
   });
 
+  it("normalizes remote data-only thinking chunks to text chunks", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller;
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(stream, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("crypto", { randomUUID: () => "llm-stream-fixed" });
+    useUIStore.getState().setRemoteRuntimeUrl("http://127.0.0.1:8787");
+
+    const iterator = llmApi.stream(request);
+    const next = iterator.next();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    streamController!.enqueue(sseChunk({ type: "thinking", data: "provider summary" }));
+    streamController!.close();
+
+    await expect(next).resolves.toMatchObject({
+      done: false,
+      value: { type: "thinking", data: "provider summary", text: "provider summary" },
+    });
+    await iterator.return(undefined);
+  });
+
   it("logs local cancel command failures without changing abort behavior", async () => {
     invokeMock.mockImplementation((command) => {
       if (command === "llm_stream_channel") return pendingCommand();

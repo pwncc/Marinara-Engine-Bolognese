@@ -980,6 +980,9 @@ export async function runGenerationWithUi(
   let visibleStreamText = "";
   let committedStreamText = "";
   let lastStreamBufferCommitAt = 0;
+  let thinkingText = "";
+  let committedThinkingText = "";
+  let lastThinkingBufferCommitAt: number | null = null;
   let pendingReveal = "";
   let typewriterFrame: number | null = null;
   let typewriterActive = false;
@@ -1021,6 +1024,26 @@ export async function runGenerationWithUi(
     visibleStreamText += text;
     commitVisibleStreamBuffer();
     useChatStore.getState().setMariPhase(chatId, "thinking");
+  };
+
+  const commitThinkingBuffer = (force = false, now = performance.now()) => {
+    if (thinkingText === committedThinkingText) return;
+    if (
+      !force &&
+      lastThinkingBufferCommitAt !== null &&
+      now - lastThinkingBufferCommitAt < STREAM_BUFFER_COMMIT_INTERVAL_MS
+    ) {
+      return;
+    }
+    committedThinkingText = thinkingText;
+    lastThinkingBufferCommitAt = now;
+    useChatStore.getState().setThinkingBuffer(thinkingText, chatId);
+  };
+
+  const appendThinkingText = (text: string) => {
+    if (!text) return;
+    thinkingText += text;
+    commitThinkingBuffer();
   };
 
   const typewriterCharsPerSecond = () => {
@@ -1112,6 +1135,11 @@ export async function runGenerationWithUi(
     });
   };
 
+  const flushLiveGenerationBuffers = async () => {
+    commitThinkingBuffer(true);
+    await flushVisibleStreamText();
+  };
+
   const ownsChatController = () => useChatStore.getState().abortControllers.get(chatId) === controller;
 
   const queueAgentResultEffect = (rawResult: unknown) => {
@@ -1160,6 +1188,7 @@ export async function runGenerationWithUi(
     cancelTypewriterFrame();
     pendingReveal = "";
     typewriterActive = false;
+    commitThinkingBuffer(true);
     resolveAllRevealWaiters();
     releaseForegroundGenerationUi();
   };
@@ -1187,7 +1216,7 @@ export async function runGenerationWithUi(
               state.setGenerationPhase("Thinking...");
               state.setMariPhase(chatId, "thinking");
             }
-            useChatStore.getState().appendThinkingBuffer(event.data, chatId);
+            appendThinkingText(event.data);
           }
           break;
         case "token":
@@ -1200,7 +1229,7 @@ export async function runGenerationWithUi(
         case "message":
         case "user_message":
           if (event.data && typeof event.data === "object") {
-            if (event.type === "user_message") await flushVisibleStreamText();
+            if (event.type === "user_message") await flushLiveGenerationBuffers();
             upsertCachedMessage(queryClient, chatId, event.data);
             scheduleChatQueryRefresh(queryClient, chatId);
             releaseForegroundGenerationUi();
@@ -1209,7 +1238,7 @@ export async function runGenerationWithUi(
           break;
         case "assistant_message":
           if (event.data && typeof event.data === "object") {
-            await flushVisibleStreamText();
+            await flushLiveGenerationBuffers();
             upsertCachedMessage(queryClient, chatId, event.data, { replaceMessageId: regenerateMessageId });
             scheduleChatQueryRefresh(queryClient, chatId);
             const trackerTarget = trackerTargetFromMessagePayload(event.data);
@@ -1312,11 +1341,11 @@ export async function runGenerationWithUi(
           break;
         }
         case "done":
-          await flushVisibleStreamText();
+          await flushLiveGenerationBuffers();
           break;
       }
     }
-    await flushVisibleStreamText();
+    await flushLiveGenerationBuffers();
     scheduleChatQueryRefresh(queryClient, chatId);
     return received.length > 0;
   } catch (error) {

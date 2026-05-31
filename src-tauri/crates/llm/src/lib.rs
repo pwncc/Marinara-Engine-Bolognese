@@ -517,11 +517,14 @@ fn should_use_anthropic_adaptive_thinking(
     if !supports_anthropic_adaptive_thinking(model) {
         return false;
     }
+    if is_claude_opus_adaptive_only_model(model) {
+        return true;
+    }
     if effort.is_some() {
         return true;
     }
     param_boolish(parameters, &["showThoughts", "show_thoughts"], false)
-        .unwrap_or_else(|| is_claude_opus_adaptive_only_model(model))
+        .unwrap_or(false)
 }
 
 fn should_send_top_k(request: &LlmRequest) -> bool {
@@ -2143,6 +2146,26 @@ fn emit_anthropic_usage(
     Ok(())
 }
 
+fn emit_anthropic_token(
+    text: &str,
+    emit: &mut (impl FnMut(Value) -> AppResult<()> + Send),
+) -> AppResult<()> {
+    if !text.is_empty() {
+        emit(json!({ "type": "token", "text": text, "data": text }))?;
+    }
+    Ok(())
+}
+
+fn emit_anthropic_thinking(
+    thinking: &str,
+    emit: &mut (impl FnMut(Value) -> AppResult<()> + Send),
+) -> AppResult<()> {
+    if !thinking.is_empty() {
+        emit(json!({ "type": "thinking", "text": thinking, "data": thinking }))?;
+    }
+    Ok(())
+}
+
 fn process_anthropic_sse_block(
     block: &str,
     emit: &mut (impl FnMut(Value) -> AppResult<()> + Send),
@@ -2176,18 +2199,12 @@ fn process_anthropic_sse_block(
                 match block.get("type").and_then(Value::as_str) {
                     Some("text") => {
                         if let Some(text) = block.get("text").and_then(Value::as_str) {
-                            if !text.is_empty() {
-                                emit(json!({ "type": "token", "text": text, "data": text }))?;
-                            }
+                            emit_anthropic_token(text, emit)?;
                         }
                     }
                     Some("thinking") => {
                         if let Some(thinking) = block.get("thinking").and_then(Value::as_str) {
-                            if !thinking.is_empty() {
-                                emit(
-                                    json!({ "type": "thinking", "text": thinking, "data": thinking }),
-                                )?;
-                            }
+                            emit_anthropic_thinking(thinking, emit)?;
                         }
                     }
                     _ => {}
@@ -2199,21 +2216,23 @@ fn process_anthropic_sse_block(
                 match delta.get("type").and_then(Value::as_str) {
                     Some("text_delta") => {
                         if let Some(text) = delta.get("text").and_then(Value::as_str) {
-                            if !text.is_empty() {
-                                emit(json!({ "type": "token", "text": text, "data": text }))?;
-                            }
+                            emit_anthropic_token(text, emit)?;
                         }
                     }
                     Some("thinking_delta") => {
-                        if let Some(thinking) = delta.get("thinking").and_then(Value::as_str) {
-                            if !thinking.is_empty() {
-                                emit(
-                                    json!({ "type": "thinking", "text": thinking, "data": thinking }),
-                                )?;
-                            }
+                        if let Some(thinking) = delta
+                            .get("thinking")
+                            .or_else(|| delta.get("text"))
+                            .and_then(Value::as_str)
+                        {
+                            emit_anthropic_thinking(thinking, emit)?;
                         }
                     }
-                    _ => {}
+                    _ => {
+                        if let Some(thinking) = delta.get("thinking").and_then(Value::as_str) {
+                            emit_anthropic_thinking(thinking, emit)?;
+                        }
+                    }
                 }
             }
         }
@@ -3087,6 +3106,25 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_opus_48_body_ignores_stale_show_thoughts_false() {
+        let request = request_for(
+            "anthropic",
+            "claude-opus-4-8",
+            json!({
+                "maxTokens": 16000,
+                "showThoughts": false
+            }),
+        );
+        let body = build_anthropic_body(&request, false);
+
+        assert_eq!(
+            body["thinking"],
+            json!({ "type": "adaptive", "display": "summarized" })
+        );
+        assert!(body.get("output_config").is_none());
+    }
+
+    #[test]
     fn anthropic_opus_48_stream_body_sets_stream_true() {
         let request = request_for(
             "anthropic",
@@ -3202,6 +3240,36 @@ data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text
         assert_eq!(
             emitted[1],
             json!({ "type": "token", "text": "answer", "data": "answer" })
+        );
+    }
+
+    #[test]
+    fn anthropic_stream_sse_emits_thinking_when_delta_text_shape_varies() {
+        let mut emitted = Vec::new();
+        let mut emit = |value: Value| {
+            emitted.push(value);
+            Ok(())
+        };
+
+        process_anthropic_sse_block(
+            r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","text":"summary fallback"}}"#,
+            &mut emit,
+        )
+        .expect("thinking delta text fallback should parse");
+        process_anthropic_sse_block(
+            r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"thinking":"summary without type"}}"#,
+            &mut emit,
+        )
+        .expect("thinking field without delta type should parse");
+
+        assert_eq!(
+            emitted,
+            vec![
+                json!({ "type": "thinking", "text": "summary fallback", "data": "summary fallback" }),
+                json!({ "type": "thinking", "text": "summary without type", "data": "summary without type" })
+            ]
         );
     }
 

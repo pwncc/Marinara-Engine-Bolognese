@@ -411,14 +411,13 @@ type IllustrationImageSettings = {
 type IllustrationReferenceSubject = {
   id: string;
   name: string;
-  appearance: string;
   avatar: string;
   spriteOwnerType: SpriteOwnerType;
 };
 
 type IllustrationReferenceData = {
   referenceImages: string[];
-  appearanceNotes: string[];
+  referenceSubjectNames: string[];
 };
 
 function promptContainsTag(prompt: string, tag: string): boolean {
@@ -465,25 +464,9 @@ function usableReferenceImage(value: unknown): string {
   return "";
 }
 
-function compactAppearance(value: unknown, limit = 360): string {
-  const text = collapseExcessBlankLines(readString(value)).replace(/\s+/g, " ").trim();
-  return text.length > limit ? `${text.slice(0, limit - 3).trimEnd()}...` : text;
-}
-
 function recordName(record: JsonRecord): string {
   const data = parseRecord(record.data);
   return readString(data.name).trim() || readString(record.name).trim();
-}
-
-function recordAppearance(record: JsonRecord): string {
-  const data = parseRecord(record.data);
-  const extensions = parseRecord(data.extensions);
-  return compactAppearance(
-    readString(extensions.appearance).trim() ||
-      readString(data.appearance).trim() ||
-      readString(data.description).trim() ||
-      readString(record.description).trim(),
-  );
 }
 
 function recordAvatar(record: JsonRecord): string {
@@ -576,7 +559,6 @@ async function loadIllustrationReferenceSubjects(
   const subjects: IllustrationReferenceSubject[] = characterRows.filter(isRecord).map((row) => ({
     id: readString(row.id).trim(),
     name: recordName(row),
-    appearance: recordAppearance(row),
     avatar: recordAvatar(row),
     spriteOwnerType: "character",
   }));
@@ -586,7 +568,6 @@ async function loadIllustrationReferenceSubjects(
     subjects.push({
       id: personaId || readString(persona.id).trim(),
       name: recordName(persona),
-      appearance: recordAppearance(persona),
       avatar: recordAvatar(persona),
       spriteOwnerType: "persona",
     });
@@ -599,21 +580,12 @@ async function illustrationReferenceData(args: {
   visuals?: VisualAssetGateway;
   chat: JsonRecord;
   item: IllustrationPromptData;
-  includeAppearances: boolean;
   useAvatarReferences: boolean;
 }): Promise<IllustrationReferenceData> {
   const subjects = await loadIllustrationReferenceSubjects(args.storage, args.chat);
-  const matchedSubjects = subjects.filter((subject) => matchesIllustrationSubject(subject, args.item));
-  const appearanceSubjects = matchedSubjects.length > 0 ? matchedSubjects : subjects;
-  const hasExplicitReferenceSubjects = args.item.characterNames.some((name) => name.trim());
-  const referenceSubjects = hasExplicitReferenceSubjects && matchedSubjects.length > 0 ? matchedSubjects : subjects;
   const referenceImages: string[] = [];
-  const appearanceNotes: string[] = [];
-  for (const subject of appearanceSubjects) {
-    if (args.includeAppearances && subject.appearance) {
-      appearanceNotes.push(`${subject.name}: ${subject.appearance}`);
-    }
-  }
+  const referenceSubjectNames: string[] = [];
+  const referenceSubjects = subjects.filter((subject) => matchesIllustrationSubject(subject, args.item));
   for (const subject of referenceSubjects) {
     if (!args.useAvatarReferences) continue;
     const sprites = args.visuals
@@ -622,16 +594,32 @@ async function illustrationReferenceData(args: {
     const spriteReference = fullBodySpriteReference(sprites as Array<Record<string, unknown>>);
     const reference = spriteReference || subject.avatar;
     if (reference && !referenceImages.includes(reference)) referenceImages.push(reference);
-    if (subject.spriteOwnerType === "persona" && subject.avatar && !referenceImages.includes(subject.avatar)) {
-      referenceImages.push(subject.avatar);
-    }
+    if (reference && !referenceSubjectNames.includes(subject.name)) referenceSubjectNames.push(subject.name);
   }
-  return { referenceImages, appearanceNotes };
+  return { referenceImages, referenceSubjectNames };
 }
 
-function appendAppearanceNotes(prompt: string, notes: string[]): string {
-  if (notes.length === 0) return prompt.trim();
-  return `${prompt.trim()}\n\nVisible character appearance notes:\n${notes.map((note) => `- ${note}`).join("\n")}`;
+function promptAlreadyMentionsReferences(prompt: string): boolean {
+  const text = prompt.toLowerCase();
+  return (
+    /\bconsult\b[\s\S]{0,80}\breference/.test(text) ||
+    /\b(attached|provided|included)\s+reference/.test(text) ||
+    /\breference\s+image/.test(text)
+  );
+}
+
+function appendReferenceGuidance(prompt: string, subjectNames: string[]): string {
+  const names = subjectNames.map((name) => name.trim()).filter(Boolean);
+  if (names.length === 0) return prompt.trim();
+  if (promptAlreadyMentionsReferences(prompt)) return prompt.trim();
+  const label =
+    names.length === 1
+      ? names[0]!
+      : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return [
+    prompt.trim(),
+    `Reference guidance: Consult the attached reference image(s) for ${label} to preserve identity, face, hair, body proportions, and distinctive visible features. Follow the scene prompt for the current outfit, pose, expression, injuries, lighting, and other moment-specific details; scene-specific appearance overrides default reference clothing.`,
+  ].join("\n\n");
 }
 
 function illustratorPromptData(result: AgentResult): IllustrationPromptData | null {
@@ -654,7 +642,6 @@ async function generateIllustrationAttachments(args: {
   deps: GenerationEngineDeps;
   chat: JsonRecord;
   results: AgentResult[];
-  imagePromptSettings?: StartGenerationInput["imagePromptSettings"];
   signal?: AbortSignal;
 }): Promise<{ attachments: JsonRecord[]; events: GenerationEvent[] }> {
   const attachments: JsonRecord[] = [];
@@ -669,7 +656,6 @@ async function generateIllustrationAttachments(args: {
   }
 
   const size = illustrationSize(meta.illustrationResolution ?? meta.selfieResolution);
-  const includeAppearances = args.imagePromptSettings?.includeAppearances !== false;
   for (let index = 0; index < prompts.length; index += 1) {
     throwIfAborted(args.signal);
     const item = prompts[index]!;
@@ -687,12 +673,11 @@ async function generateIllustrationAttachments(args: {
         visuals: args.deps.visuals,
         chat: args.chat,
         item,
-        includeAppearances,
         useAvatarReferences: settings.useAvatarReferences,
       });
-      const prompt = appendAppearanceNotes(
+      const prompt = appendReferenceGuidance(
         appendMissingPositiveTags(item.prompt, settings.positivePrompt),
-        referenceData.appearanceNotes,
+        referenceData.referenceSubjectNames,
       );
       const image = await args.deps.integrations.image.generate<{
         base64?: string;
@@ -729,7 +714,8 @@ async function generateIllustrationAttachments(args: {
         width: size.width,
         height: size.height,
         kind: "illustration",
-        characters: item.characterNames,
+        characters:
+          referenceData.referenceSubjectNames.length > 0 ? referenceData.referenceSubjectNames : item.characterNames,
         referenceImageCount: referenceData.referenceImages.length,
       });
       const attachment = {
@@ -2067,7 +2053,6 @@ async function runGenerationAgentsForTarget(args: {
       deps,
       chat: chatForAgents,
       results: finalResults,
-      imagePromptSettings: input.imagePromptSettings,
       signal,
     });
     events.push(...illustration.events);
@@ -2424,7 +2409,6 @@ export async function* startGeneration(
         deps,
         chat,
         results: emittedAgentResults,
-        imagePromptSettings: input.imagePromptSettings,
         signal,
       });
       throwIfAborted(signal);
@@ -2608,6 +2592,10 @@ function runtimeLlmParameters(
  */
 const MAX_MAIN_TOOL_ITERATIONS = 8;
 
+function llmChunkText(chunk: { text?: unknown; data?: unknown }): string {
+  return typeof chunk.text === "string" ? chunk.text : typeof chunk.data === "string" ? chunk.data : "";
+}
+
 /**
  * Multi-turn main-character streaming loop.
  *
@@ -2698,11 +2686,15 @@ async function* streamMainGenerationLoop(args: {
       signal,
     )) {
       throwIfAborted(signal);
-      if (chunk.type === "token" && chunk.text) {
-        yield* emitInlineParts(chunk.text);
-      } else if (chunk.type === "thinking" && chunk.text) {
-        thinking += chunk.text;
-        yield { type: "thinking", data: chunk.text };
+      if (chunk.type === "token") {
+        const text = llmChunkText(chunk);
+        if (text) yield* emitInlineParts(text);
+      } else if (chunk.type === "thinking") {
+        const text = llmChunkText(chunk);
+        if (text) {
+          thinking += text;
+          yield { type: "thinking", data: text };
+        }
       } else if (chunk.type === "tool_call") {
         const normalized = normalizeToolCall(chunk.data);
         if (normalized) pendingToolCalls.push(normalized);

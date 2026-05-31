@@ -398,6 +398,38 @@ describe("startGeneration chat message loading", () => {
     expect(createChatMessage.mock.calls.filter(([, value]) => value.role === "user")).toHaveLength(1);
   });
 
+  it("captures provider thinking chunks that arrive with data instead of text", async () => {
+    const { deps, createChatMessage } = generationDepsForChat();
+    deps.llm.stream = vi.fn(async function* () {
+      yield { type: "thinking" as const, data: "provider summary" };
+      yield { type: "token" as const, data: "Visible reply." };
+    });
+
+    const events = await collectGeneration(
+      startGeneration(deps, {
+        chatId: "chat-1",
+        userMessage: "hello",
+        impersonateBlockAgents: true,
+      }),
+    );
+
+    expect(
+      events
+        .filter((event): event is { type: "thinking"; data?: unknown } => {
+          return typeof event === "object" && event !== null && (event as { type?: unknown }).type === "thinking";
+        })
+        .map((event) => event.data)
+        .join(""),
+    ).toBe("provider summary");
+    const assistantCreate = createChatMessage.mock.calls.find(
+      (call) => (call[1] as { role?: unknown }).role === "assistant",
+    );
+    expect(assistantCreate?.[1]).toMatchObject({
+      content: "Visible reply.",
+      extra: { thinking: "provider summary" },
+    });
+  });
+
   it("reuses the pre-commit messages and appends the saved user message for normal sends", async () => {
     const { deps, listChatMessages, streamedRequests } = generationDepsForChat();
 
@@ -1536,7 +1568,7 @@ describe("startGeneration automatic Illustrator cadence", () => {
     expect(streamedRequests).toHaveLength(2);
   });
 
-  it("uses Illustrator image settings and reference images when creating roleplay illustrations", async () => {
+  it("uses Illustrator image settings and visible-character references when creating roleplay illustrations", async () => {
     const imageRequests: Record<string, unknown>[] = [];
     const imageGenerate: IntegrationGateway["image"]["generate"] = async <T = unknown>(
       input: Record<string, unknown>,
@@ -1569,7 +1601,9 @@ describe("startGeneration automatic Illustrator cadence", () => {
     const illustratorResponse = JSON.stringify({
       shouldGenerate: true,
       reason: "Important visual beat",
-      prompt: "Two figures in a moonlit laboratory confrontation",
+      characters: ["Dottore"],
+      prompt:
+        "Il Dottore stands alone in a moonlit laboratory confrontation, dressed for this scene in a tailored black suit with a sharp waistcoat, red eyes narrowed in a smirk, blue hair catching the cold window light, one gloved hand resting on a steel table.",
       negativePrompt: "low detail",
     });
     const { deps, createChatMessage, patchChatMessageExtra } = generationDepsForChat({
@@ -1647,17 +1681,14 @@ describe("startGeneration automatic Illustrator cadence", () => {
       negativePrompt: "low detail, bad anatomy",
       referenceImages: [
         "data:image/png;base64,full-body-sprite",
-        "data:image/png;base64,mari-full-body-sprite",
-        "data:image/png;base64,mari-avatar",
       ],
     });
-    expect(spriteRequests).toEqual([
-      ["char-dottore", "character"],
-      ["persona-mari", "persona"],
-    ]);
-    expect(String(imageRequest.prompt)).toContain("Two figures");
-    expect(String(imageRequest.prompt)).toContain("Il Dottore: blue hair");
-    expect(String(imageRequest.prompt)).toContain("Mari: brown hair");
+    expect(spriteRequests).toEqual([["char-dottore", "character"]]);
+    expect(String(imageRequest.prompt)).toContain("tailored black suit");
+    expect(String(imageRequest.prompt)).toContain("Reference guidance: Consult the attached reference image(s) for Il Dottore");
+    expect(String(imageRequest.prompt)).not.toContain("white coat");
+    expect(String(imageRequest.prompt)).not.toContain("Mari: brown hair");
+    expect(String(imageRequest.prompt)).not.toContain("mari-full-body-sprite");
     expect(String(imageRequest.prompt)).toContain("painterly");
 
     const assistantSave = createChatMessage.mock.calls.find(([, value]) => value.role === "assistant");
@@ -1691,7 +1722,8 @@ describe("startGeneration automatic Illustrator cadence", () => {
         chatId: "chat-1",
         kind: "illustration",
         prompt: imageRequest.prompt,
-        referenceImageCount: 3,
+        characters: ["Il Dottore"],
+        referenceImageCount: 1,
       }),
     );
   });

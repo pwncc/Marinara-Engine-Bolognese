@@ -132,10 +132,11 @@ function anthropicThinkingBudgetTokens(effort: string): number {
 
 function shouldUseAnthropicAdaptiveThinking(model: string, parameters: JsonRecord, effort: string | null): boolean {
   if (!supportsAnthropicAdaptiveThinking(model)) return false;
+  if (isClaudeOpusAdaptiveOnlyModel(model)) return true;
   if (effort) return true;
   const showThoughts = parameters.showThoughts ?? parameters.show_thoughts;
   if (showThoughts != null) return boolish(showThoughts, false);
-  return isClaudeOpusAdaptiveOnlyModel(model);
+  return false;
 }
 
 function isOpenrouterClaudeReasoningModel(provider: string, model: string): boolean {

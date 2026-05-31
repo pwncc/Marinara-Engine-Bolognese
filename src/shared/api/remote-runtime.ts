@@ -371,6 +371,11 @@ function remoteStreamError(event: LlmChunk): ApiError {
   });
 }
 
+function normalizeRemoteLlmChunk(event: LlmChunk): LlmChunk {
+  const text = typeof event.text === "string" ? event.text : typeof event.data === "string" ? event.data : undefined;
+  return text === undefined ? event : { ...event, text };
+}
+
 export async function invokeRemote<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const target = remoteRuntimeTarget();
   if (!target) throw new ApiError("Remote runtime URL is not configured", 400);
@@ -425,7 +430,7 @@ export async function* streamRemoteLlm(
       const parsed = parseSseData(buffer);
       buffer = parsed.rest;
       for (const data of parsed.events) {
-        const event = JSON.parse(data) as LlmChunk;
+        const event = normalizeRemoteLlmChunk(JSON.parse(data) as LlmChunk);
         if (event.type === "error") throw remoteStreamError(event);
         yield event;
       }

@@ -110,6 +110,27 @@ describe("providerVisibleLlmParameters", () => {
     expect(info.showThoughts).toBe(true);
   });
 
+  it("keeps Opus adaptive-only thinking enabled even when stale showThoughts is false", () => {
+    const visible = providerVisibleLlmParameters(
+      { provider: "anthropic", model: "claude-opus-4-8" },
+      {
+        maxTokens: 4096,
+        showThoughts: false,
+      },
+      { stream: true },
+    );
+
+    expect(visible).toEqual({
+      max_tokens: 4096,
+      stream: true,
+      thinking: { type: "adaptive", display: "summarized" },
+    });
+
+    const info = generationInfoFromVisibleParameters({ provider: "anthropic", model: "claude-opus-4-8" }, visible);
+    expect(info.showThoughts).toBe(true);
+    expect(info.reasoningEffort).toBeNull();
+  });
+
   it("strips OpenRouter Claude Opus sampling parameters from the peekable request shape", () => {
     const visible = providerVisibleLlmParameters(
       { provider: "openrouter", model: "anthropic/claude-opus-4-8", openrouterProvider: "anthropic" },
