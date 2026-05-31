@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LlmChunk, LlmRequest } from "../../engine/capabilities/llm";
 import { useUIStore } from "../stores/ui.store";
-import { llmApi } from "./llm-api";
+import { llmApi, TAURI_STREAM_TERMINAL_CLEANUP_GRACE_MS } from "./llm-api";
 import { invokeTauri } from "./tauri-client";
 
 vi.mock("./tauri-client", () => ({
@@ -47,6 +47,7 @@ describe("llmApi stream cancellation", () => {
     warn.mockRestore();
     invokeMock.mockReset();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it("cancels remote streams against the target captured when streaming started", async () => {
@@ -180,6 +181,7 @@ describe("llmApi stream cancellation", () => {
   });
 
   it("cancels local native cleanup if the terminal event arrives before the native command settles", async () => {
+    vi.useFakeTimers();
     invokeMock.mockImplementation((command) => {
       if (command === "llm_stream_channel") {
         return pendingCommand();
@@ -196,6 +198,7 @@ describe("llmApi stream cancellation", () => {
     await expect(doneEvent).resolves.toMatchObject({ done: false, value: { type: "done" } });
     const final = iterator.next();
     await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(TAURI_STREAM_TERMINAL_CLEANUP_GRACE_MS);
     await expect(final).resolves.toMatchObject({ done: true });
     expect(invokeMock).toHaveBeenCalledWith(
       "llm_stream_cancel",
