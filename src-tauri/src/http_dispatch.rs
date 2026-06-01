@@ -508,6 +508,7 @@ pub async fn dispatch(state: &AppState, request: InvokeRequest) -> AppResult<Val
         }
         "chat_message_set_active_swipe" => chat_message_set_active_swipe(state, &args),
         "chat_message_delete_swipe" => chat_message_delete_swipe(state, &args),
+        "chat_evict_prompt_snapshots" => chat_evict_prompt_snapshots(state, &args),
         "chat_autonomous_unread_mark" => chat_autonomous_unread_mark(state, &args),
         "chat_autonomous_unread_clear" => chat_autonomous_unread_clear(state, &args),
         "tracker_snapshot_latest" => tracker_snapshot_latest(state, &args).await,
@@ -1075,6 +1076,14 @@ fn chat_message_delete_swipe(state: &AppState, args: &Map<String, Value>) -> App
         required_string(args, "messageId")?,
         required_string(args, "index")?,
     )?))
+}
+
+fn chat_evict_prompt_snapshots(state: &AppState, args: &Map<String, Value>) -> AppResult<Value> {
+    let keep_last = args
+        .get("keepLast")
+        .and_then(Value::as_u64)
+        .unwrap_or(2) as usize;
+    chats::evict_prompt_snapshots(state, required_string(args, "chatId")?, keep_last)
 }
 
 fn chat_autonomous_unread_mark(state: &AppState, args: &Map<String, Value>) -> AppResult<Value> {

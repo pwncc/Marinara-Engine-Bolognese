@@ -221,6 +221,7 @@ pub fn run() {
             storage_commands::chat_commands::chat_message_update_content_if_unchanged,
             storage_commands::chat_commands::chat_message_set_active_swipe,
             storage_commands::chat_commands::chat_message_delete_swipe,
+            storage_commands::chat_commands::chat_evict_prompt_snapshots,
             storage_commands::chat_commands::chat_connect,
             storage_commands::chat_commands::chat_disconnect,
             storage_commands::agent_commands::admin_expunge_command,

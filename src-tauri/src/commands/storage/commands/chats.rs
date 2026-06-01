@@ -194,6 +194,21 @@ pub fn chat_message_delete_swipe(
 }
 
 #[tauri::command]
+pub async fn chat_evict_prompt_snapshots(
+    state: State<'_, AppState>,
+    chat_id: String,
+    keep_last: Option<i64>,
+) -> Result<Value, AppError> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let keep_last = keep_last.unwrap_or(2).max(0) as usize;
+        chats::evict_prompt_snapshots(&state, &chat_id, keep_last)
+    })
+    .await
+    .map_err(|error| AppError::new("task_join_error", error.to_string()))?
+}
+
+#[tauri::command]
 pub fn chat_connect(
     state: State<'_, AppState>,
     chat_id: String,

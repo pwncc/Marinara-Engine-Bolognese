@@ -72,6 +72,13 @@ export interface StorageGateway {
   ): Promise<{ updated: boolean; message?: T }>;
   deleteChatMessage(messageId: string): Promise<{ deleted: boolean }>;
   patchChatMessageExtra<T = unknown>(messageId: string, patch: Record<string, unknown>): Promise<T>;
+  /**
+   * Evict saved generation prompt snapshots from older assistant messages,
+   * keeping only the most recent `keepLast` (default 2, matching v1.6.1). Bounds
+   * per-chat storage growth; non-destructive to other message data. Optional so
+   * lightweight/mock gateways need not implement it.
+   */
+  evictPromptSnapshots?(chatId: string, keepLast?: number): Promise<{ evicted: number }>;
   addChatMessageSwipe<T = unknown>(
     chatId: string,
     messageId: string,

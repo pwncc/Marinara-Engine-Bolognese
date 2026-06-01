@@ -230,6 +230,8 @@ export const storageApi: StorageGateway = {
       messageId,
       body: chatMessageSwipeBody(content, options),
     }),
+  evictPromptSnapshots: (chatId, keepLast) =>
+    invokeTauri("chat_evict_prompt_snapshots", { chatId, keepLast }) as Promise<{ evicted: number }>,
   patchChatMetadata: (chatId, patch) => patchChatObjectField(chatId, "metadata", patch),
   patchChatSummaries: (chatId, patch) => patchChatSummariesField(chatId, patch),
   listChatMemories: async (chatId) => {

@@ -23,6 +23,101 @@ pub(crate) fn messages_for_chat(state: &AppState, chat_id: &str) -> AppResult<Ve
     Ok(rows)
 }
 
+const PROMPT_SNAPSHOT_KEYS: [&str; 2] =
+    ["generationPromptSnapshot", "generationPromptSnapshotsBySwipe"];
+
+/// Drop saved prompt snapshots from an `extra` object, returning the rewritten
+/// object only when something was actually removed. Leaves every other field
+/// (including legacy `cachedPrompt`) untouched.
+fn strip_snapshot_from_extra(extra: Option<&Value>) -> Option<Value> {
+    let object = json_object_value(extra)?;
+    let mut next = object.as_object()?.clone();
+    let mut changed = false;
+    for key in PROMPT_SNAPSHOT_KEYS {
+        if next.remove(key).is_some() {
+            changed = true;
+        }
+    }
+    changed.then_some(Value::Object(next))
+}
+
+/// Build a minimal patch that clears prompt snapshots from a raw message record
+/// and from each of its embedded swipes. Returns `None` when the message holds
+/// no snapshot to evict.
+fn strip_prompt_snapshot_patch(message: &Value) -> Option<Value> {
+    let mut patch = Map::new();
+    if let Some(next_extra) = strip_snapshot_from_extra(message.get("extra")) {
+        patch.insert("extra".to_string(), next_extra);
+    }
+    if let Some(swipes) = message.get("swipes").and_then(Value::as_array) {
+        let mut next_swipes = swipes.clone();
+        let mut swipes_changed = false;
+        for swipe in next_swipes.iter_mut() {
+            if let Some(next_extra) = strip_snapshot_from_extra(swipe.get("extra")) {
+                if let Some(object) = swipe.as_object_mut() {
+                    object.insert("extra".to_string(), next_extra);
+                    swipes_changed = true;
+                }
+            }
+        }
+        if swipes_changed {
+            patch.insert("swipes".to_string(), Value::Array(next_swipes));
+        }
+    }
+    (!patch.is_empty()).then_some(Value::Object(patch))
+}
+
+/// Evict saved prompt snapshots from older assistant messages, retaining only
+/// the most recent `keep_last`. Mirrors v1.6.1, which kept `cachedPrompt` for
+/// just the last 2 assistant messages to bound storage growth; the refactor
+/// renamed the field to `generationPromptSnapshot` but never ported the
+/// eviction, so native chats accumulate a full snapshot per message/swipe.
+///
+/// Non-destructive to every other field, including legacy `cachedPrompt` (so
+/// imported v1.6.1 chats keep inspector fidelity via synthesis). Operates on raw
+/// message records (with embedded swipes), patching only messages that actually
+/// carry a snapshot.
+pub(crate) fn evict_prompt_snapshots(
+    state: &AppState,
+    chat_id: &str,
+    keep_last: usize,
+) -> AppResult<Value> {
+    let mut messages = state.storage.list_messages_for_chat(chat_id)?;
+    messages.sort_by(|a, b| {
+        let a_time = a.get("createdAt").and_then(Value::as_str).unwrap_or("");
+        let b_time = b.get("createdAt").and_then(Value::as_str).unwrap_or("");
+        a_time.cmp(b_time).then_with(|| {
+            let a_id = a.get("id").and_then(Value::as_str).unwrap_or("");
+            let b_id = b.get("id").and_then(Value::as_str).unwrap_or("");
+            a_id.cmp(b_id)
+        })
+    });
+    let assistant_ids: Vec<String> = messages
+        .iter()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .filter_map(|message| message.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    let stale_cutoff = assistant_ids.len().saturating_sub(keep_last);
+    let stale: HashSet<&str> = assistant_ids[..stale_cutoff]
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let mut evicted: u64 = 0;
+    for message in &messages {
+        let Some(id) = message.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if !stale.contains(id) {
+            continue;
+        }
+        if let Some(patch) = strip_prompt_snapshot_patch(message) {
+            state.storage.patch("messages", id, patch)?;
+            evicted += 1;
+        }
+    }
+    Ok(json!({ "evicted": evicted }))
+}
+
 fn message_content(message: &Value) -> String {
     message
         .get("content")
@@ -1525,6 +1620,100 @@ mod tests {
             persisted["extra"]["generationPromptSnapshotsBySwipe"]["1"]["promptPresetId"],
             json!("preset-second")
         );
+    }
+
+    #[test]
+    fn evict_prompt_snapshots_keeps_last_two_assistant_messages_and_spares_legacy_and_user_data() {
+        let state = test_state("evict-prompt-snapshots");
+        let snap = || json!({ "messages": [{ "role": "user", "content": "hi" }] });
+        for (id, role, created_at, extra) in [
+            (
+                "assistant-old",
+                "assistant",
+                "2024-01-01T00:00:00.000Z",
+                json!({
+                    "generationPromptSnapshot": snap(),
+                    "generationPromptSnapshotsBySwipe": { "0": snap() },
+                }),
+            ),
+            (
+                "user-1",
+                "user",
+                "2024-01-01T00:00:01.000Z",
+                json!({ "cachedPrompt": [{ "role": "user", "content": "hi" }] }),
+            ),
+            (
+                "assistant-mid",
+                "assistant",
+                "2024-01-01T00:00:02.000Z",
+                json!({ "generationPromptSnapshot": snap() }),
+            ),
+            (
+                "assistant-new",
+                "assistant",
+                "2024-01-01T00:00:03.000Z",
+                json!({ "generationPromptSnapshot": snap() }),
+            ),
+        ] {
+            state
+                .storage
+                .create(
+                    "messages",
+                    json!({
+                        "id": id,
+                        "chatId": "chat-1",
+                        "role": role,
+                        "content": "x",
+                        "createdAt": created_at,
+                        "extra": extra,
+                    }),
+                )
+                .expect("message should be created");
+        }
+        // Oldest assistant message also carries a swipe with its own snapshot.
+        state
+            .storage
+            .patch(
+                "messages",
+                "assistant-old",
+                json!({
+                    "swipes": [
+                        { "content": "x", "extra": { "generationPromptSnapshot": snap() } }
+                    ]
+                }),
+            )
+            .expect("swipe should be added");
+
+        let result =
+            evict_prompt_snapshots(&state, "chat-1", 2).expect("eviction should succeed");
+        assert_eq!(result["evicted"], json!(1));
+
+        let get = |id: &str| {
+            state
+                .storage
+                .get("messages", id)
+                .expect("lookup should succeed")
+                .expect("message should exist")
+        };
+
+        // Oldest assistant message: snapshot, by-swipe map, and swipe snapshot cleared.
+        let old = get("assistant-old");
+        assert!(old["extra"].get("generationPromptSnapshot").is_none());
+        assert!(old["extra"].get("generationPromptSnapshotsBySwipe").is_none());
+        assert!(old["swipes"][0]["extra"]
+            .get("generationPromptSnapshot")
+            .is_none());
+
+        // The two most recent assistant messages keep their snapshots.
+        assert!(get("assistant-mid")["extra"]
+            .get("generationPromptSnapshot")
+            .is_some());
+        assert!(get("assistant-new")["extra"]
+            .get("generationPromptSnapshot")
+            .is_some());
+
+        // User message and its legacy cached prompt are untouched (negative control).
+        assert_eq!(get("user-1")["extra"]["cachedPrompt"][0]["content"], json!("hi"));
     }
 
     #[test]

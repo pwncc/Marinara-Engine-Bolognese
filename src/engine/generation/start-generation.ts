@@ -1310,6 +1310,22 @@ async function persistTrackerSnapshotSafely(
   }
 }
 
+/**
+ * Snapshots are retained for only the most recent assistant messages to bound
+ * per-chat storage growth (parity with v1.6.1). Older assistant messages keep
+ * their text but drop the saved prompt; the inspector then shows "No saved
+ * prompt snapshot" for them, exactly as v1.6.1 did.
+ */
+const PROMPT_SNAPSHOT_KEEP_LAST = 2;
+
+async function evictStalePromptSnapshotsSafely(storage: StorageGateway, chatId: string): Promise<void> {
+  try {
+    await storage.evictPromptSnapshots?.(chatId, PROMPT_SNAPSHOT_KEEP_LAST);
+  } catch (error) {
+    console.warn("[generation] prompt snapshot eviction failed", error);
+  }
+}
+
 async function persistLorebookTimingStatesSafely(
   storage: StorageGateway,
   chatId: string,
@@ -2375,6 +2391,9 @@ export async function* startGeneration(
       });
     }
     if (saved) yield { type: savedGenerationEventType(input), data: savedGenerationEventData(saved) };
+    if (saved && input.impersonate !== true) {
+      await evictStalePromptSnapshotsSafely(deps.storage, chatId);
+    }
     throwIfAborted(signal);
 
     const parallelResults = await parallelAgents;
@@ -2541,6 +2560,9 @@ export async function* startGeneration(
     });
   }
   if (saved) yield { type: savedGenerationEventType(input), data: savedGenerationEventData(saved) };
+  if (saved && input.impersonate !== true) {
+    await evictStalePromptSnapshotsSafely(deps.storage, chatId);
+  }
   throwIfAborted(signal);
   if (saved && input.impersonate !== true) {
     const autoLorebookResults = await runLorebookKeeperBackfill(
