@@ -7,7 +7,7 @@ import { MessageSquare, BookOpen } from "lucide-react";
 import { useRecentChatSummaries, type ChatListItem } from "../../../catalog/chats/index";
 import { characterAvatarUrl, useCharacterSummariesByIds } from "../../../catalog/characters/index";
 import { useChatStore } from "../../../../shared/stores/chat.store";
-import { cn, getAvatarCropStyle, type AvatarCropValue } from "../../../../shared/lib/utils";
+import { cn, getAvatarCropStyle, parseAvatarCropJson, type AvatarCropValue } from "../../../../shared/lib/utils";
 
 const MODE_BADGE: Record<string, { icon: React.ReactNode; bg: string; label: string }> = {
   conversation: {
@@ -21,6 +21,17 @@ const MODE_BADGE: Record<string, { icon: React.ReactNode; bg: string; label: str
     label: "Roleplay",
   },
 };
+
+function readAvatarCrop(value: unknown): AvatarCropValue | null {
+  if (!value) return null;
+  if (typeof value === "string") return parseAvatarCropJson(value);
+  if (typeof value !== "object" || Array.isArray(value)) return null;
+  try {
+    return parseAvatarCropJson(JSON.stringify(value));
+  } catch {
+    return null;
+  }
+}
 
 export function RecentChats() {
   const { data: recentChats } = useRecentChatSummaries(3);
@@ -39,16 +50,20 @@ export function RecentChats() {
     if (!recentCharacters) return map;
     for (const char of recentCharacters as Array<{
       id: string;
-      data: Record<string, any>;
+      data: Record<string, unknown>;
       avatarPath?: string | null;
       avatarFilePath?: string | null;
       avatarFilename?: string | null;
     }>) {
       const parsed = char.data ?? {};
+      const extensions =
+        parsed.extensions && typeof parsed.extensions === "object" && !Array.isArray(parsed.extensions)
+          ? (parsed.extensions as Record<string, unknown>)
+          : {};
       map.set(char.id, {
-        name: parsed.name ?? "Unknown",
+        name: typeof parsed.name === "string" ? parsed.name : "Unknown",
         avatarUrl: characterAvatarUrl(char),
-        avatarCrop: parsed.extensions?.avatarCrop ?? null,
+        avatarCrop: readAvatarCrop(extensions.avatarCrop),
       });
     }
     return map;

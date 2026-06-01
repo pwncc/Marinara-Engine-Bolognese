@@ -21,7 +21,7 @@ import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { useChatStore } from "../../../../../shared/stores/chat.store";
 import { useUIStore } from "../../../../../shared/stores/ui.store";
 import { useGenerate } from "../../../../runtime/generation/index";
-import { useApplyRegex } from "../../../../catalog/agents/regex-application";
+import { readScopedRegexMode, useApplyRegex } from "../../../../catalog/agents/regex-application";
 import { useCreateMessage, useDeleteMessage, useUpdateMessageExtra, chatKeys } from "../../../../catalog/chats/index";
 import { characterKeys } from "../../../../catalog/characters/index";
 import { personaKeys } from "../../../../catalog/personas/index";
@@ -572,7 +572,10 @@ export const ChatInput = memo(function ChatInput({
     const cachedPersonas = qc.getQueryData<Array<Record<string, unknown>>>(personaKeys.list);
     const resolveInputMacros = createInputMacroResolverForChat(chat, cachedCharacters, cachedPersonas, normalized);
     const chatMeta = parseChatMetadata(chat?.metadata);
-    let message = applyToUserInput(normalized, { resolveMacros: resolveInputMacros, scopedMode: chatMeta.scopedRegexMode });
+    let message = applyToUserInput(normalized, {
+      resolveMacros: resolveInputMacros,
+      scopedMode: readScopedRegexMode(chatMeta.scopedRegexMode),
+    });
 
     // Input translation: translate user's message before sending
     if (chatMeta.translateInput && message.trim()) {
@@ -750,7 +753,10 @@ export const ChatInput = memo(function ChatInput({
     const cachedPersonas = qc.getQueryData<Array<Record<string, unknown>>>(personaKeys.list);
     const resolveInputMacros = createInputMacroResolverForChat(chat, cachedCharacters, cachedPersonas, normalized);
     const chatMeta2 = parseChatMetadata(chat?.metadata);
-    let message = applyToUserInput(normalized, { resolveMacros: resolveInputMacros, scopedMode: chatMeta2.scopedRegexMode });
+    let message = applyToUserInput(normalized, {
+      resolveMacros: resolveInputMacros,
+      scopedMode: readScopedRegexMode(chatMeta2.scopedRegexMode),
+    });
 
     if (chatMeta2.translateInput && message.trim()) {
       try {

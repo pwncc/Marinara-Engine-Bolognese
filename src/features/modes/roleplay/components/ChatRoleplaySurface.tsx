@@ -398,7 +398,19 @@ function SummaryButton({
   );
 }
 
-function AuthorNotesButton({ chatId, chatMeta }: { chatId: string | null; chatMeta: Record<string, any> }) {
+function metadataString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function metadataStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter((item): item is string => item.length > 0)
+    : [];
+}
+
+function AuthorNotesButton({ chatId, chatMeta }: { chatId: string | null; chatMeta: Record<string, unknown> }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
@@ -500,7 +512,7 @@ type RoleplaySurfaceProps = {
   activeChatId: string;
   chat: ChatData | null | undefined;
   allChats: Array<{ id: string; name: string; metadata?: string | Record<string, unknown> | null }> | undefined;
-  chatMeta: Record<string, any>;
+  chatMeta: Record<string, unknown>;
   chatMode: string;
   isRoleplay: boolean;
   centerCompact: boolean;
@@ -736,7 +748,7 @@ export function ChatRoleplaySurface({
   const hideEchoChamberOnMobile =
     sidebarOpen || rightPanelOpen || settingsOpen || filesOpen || galleryOpen || wizardOpen;
   const inactiveCharacterIdSet = useMemo(
-    () => new Set(Array.isArray(chatMeta.inactiveCharacterIds) ? chatMeta.inactiveCharacterIds : []),
+    () => new Set(metadataStringArray(chatMeta.inactiveCharacterIds)),
     [chatMeta.inactiveCharacterIds],
   );
   const activeChatCharIds = useMemo(
@@ -831,7 +843,7 @@ export function ChatRoleplaySurface({
                   <ToolbarMenu>
                     <SummaryButton
                       chatId={chat?.id ?? null}
-                      summary={chatMeta.summary ?? null}
+                      summary={metadataString(chatMeta.summary) || null}
                       summaryContextSize={summaryContextSize}
                       totalMessageCount={totalMessageCount}
                       onContextSizeChange={onSummaryContextSizeChange}
@@ -901,7 +913,7 @@ export function ChatRoleplaySurface({
                         />
                         <SummaryButton
                           chatId={chat?.id ?? null}
-                          summary={chatMeta.summary ?? null}
+                          summary={metadataString(chatMeta.summary) || null}
                           summaryContextSize={summaryContextSize}
                           totalMessageCount={totalMessageCount}
                           onContextSizeChange={onSummaryContextSizeChange}
@@ -942,7 +954,7 @@ export function ChatRoleplaySurface({
                       />
                       <SummaryButton
                         chatId={chat?.id ?? null}
-                        summary={chatMeta.summary ?? null}
+                        summary={metadataString(chatMeta.summary) || null}
                         summaryContextSize={summaryContextSize}
                         totalMessageCount={totalMessageCount}
                         onContextSizeChange={onSummaryContextSizeChange}
@@ -1115,7 +1127,7 @@ export function ChatRoleplaySurface({
                 {chatMeta.sceneStatus === "active" && (
                   <EndSceneBar
                     sceneChatId={activeChatId}
-                    originChatId={chatMeta.sceneOriginChatId}
+                    originChatId={metadataString(chatMeta.sceneOriginChatId) || undefined}
                     onConclude={onConcludeScene}
                     onAbandon={onAbandonScene}
                     onFork={onForkScene}
@@ -1125,8 +1137,8 @@ export function ChatRoleplaySurface({
                 {isConcludedScene && (
                   <SceneBanner
                     variant="scene"
-                    originChatId={chatMeta.sceneOriginChatId}
-                    description={chatMeta.sceneDescription}
+                    originChatId={metadataString(chatMeta.sceneOriginChatId) || undefined}
+                    description={metadataString(chatMeta.sceneDescription) || undefined}
                   />
                 )}
                 {!isConcludedScene && combatAgentEnabled && (
@@ -1148,7 +1160,7 @@ export function ChatRoleplaySurface({
                     characterNames={activeCharacterNames}
                     groupResponseOrder={
                       activeChatCharIds.length > 1 && groupChatMode === "individual"
-                        ? (chatMeta.groupResponseOrder ?? "sequential")
+                        ? metadataString(chatMeta.groupResponseOrder, "sequential")
                         : undefined
                     }
                     chatCharacters={activeChatCharIds
