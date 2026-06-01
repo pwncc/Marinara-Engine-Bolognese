@@ -1,7 +1,11 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCharacter, useCharacterSummaries, type CharacterSummary } from "../hooks/use-characters";
-import { characterHasAnyExcludedTag, parseCharacterSearchQuery } from "../lib/character-search";
+import {
+  characterHasAnyExcludedTag,
+  characterMatchesScopedSearchTerms,
+  parseCharacterSearchQuery,
+} from "../lib/character-search";
 import {
   getText,
   gridColumnCount,
@@ -108,9 +112,18 @@ export function CharacterLibraryView() {
       const isFavorite = !!char.parsed.extensions?.fav;
       if (favoritesOnly && !isFavorite) return false;
       if (characterHasAnyExcludedTag(char.parsed, searchQuery.excludedTags)) return false;
+      if (
+        !characterMatchesScopedSearchTerms({
+          data: char.parsed,
+          comment: char.comment,
+          scopedTerms: searchQuery.scopedTerms,
+        })
+      ) {
+        return false;
+      }
       return true;
     });
-  }, [favoritesOnly, parsedCharacters, searchQuery.excludedTags]);
+  }, [favoritesOnly, parsedCharacters, searchQuery.excludedTags, searchQuery.scopedTerms]);
 
   const sortedCharacters = useMemo(() => {
     const list = [...filteredCharacters];

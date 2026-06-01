@@ -1,8 +1,10 @@
 import { normalizeCharacterGroupMemberIds } from "./character-groups";
 import {
+  characterMatchesScopedSearchTerms,
   characterHasAnyExcludedTag,
   countIncludedTagMatches,
   getCharacterTagsFromData,
+  type CharacterScopedSearchTerm,
   type CharacterSearchData,
 } from "./character-search";
 
@@ -81,12 +83,14 @@ export function filterCharacterRows({
   includedTags,
   excludedTags,
   searchExcludedTags,
+  scopedTerms,
 }: {
   characters: ParsedCharacterRow[];
   favoriteFilter: FavoriteFilter;
   includedTags: ReadonlySet<string>;
   excludedTags: ReadonlySet<string>;
   searchExcludedTags: readonly string[];
+  scopedTerms: readonly CharacterScopedSearchTerm[];
 }): ParsedCharacterRow[] {
   let list = characters;
   if (favoriteFilter === "favorites") {
@@ -100,6 +104,9 @@ export function filterCharacterRows({
   const excludedTagFilters = new Set([...Array.from(excludedTags, (tag) => tag.toLowerCase()), ...searchExcludedTags]);
   if (excludedTagFilters.size > 0) {
     list = list.filter((c) => !characterHasAnyExcludedTag(c.parsed, excludedTagFilters));
+  }
+  if (scopedTerms.length > 0) {
+    list = list.filter((c) => characterMatchesScopedSearchTerms({ data: c.parsed, comment: c.comment, scopedTerms }));
   }
   return list;
 }

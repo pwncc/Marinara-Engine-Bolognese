@@ -117,6 +117,7 @@ export function CharactersPanel() {
     includedTags,
     parsedCharacters,
     searchExcludedTags: searchQuery.excludedTags,
+    scopedSearchTerms: searchQuery.scopedTerms,
     sort,
   });
 

@@ -92,7 +92,7 @@ export function CharacterLibraryToolbar({
           <input
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
-            placeholder='Search names, tags, descriptions, or -tag:"tag name"'
+            placeholder='Search, name:Dottore, tag:fatui, description:"doctor", or -tag:"tag name"'
             className="w-full rounded-2xl border border-[var(--border)]/60 bg-[var(--secondary)]/80 py-2 pl-8.5 pr-3 text-[0.8125rem] outline-none transition-colors placeholder:text-[var(--muted-foreground)]/70 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20 md:py-2.5 md:pl-9 md:text-sm"
           />
         </div>

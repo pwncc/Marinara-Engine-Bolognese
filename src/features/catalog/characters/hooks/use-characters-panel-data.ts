@@ -9,6 +9,7 @@ import {
   type ParsedCharacterRow,
   type SortOption,
 } from "../lib/characters-panel-model";
+import type { CharacterScopedSearchTerm } from "../lib/character-search";
 
 export function useCharactersPanelData({
   assigningToGroup,
@@ -18,6 +19,7 @@ export function useCharactersPanelData({
   includedTags,
   parsedCharacters,
   searchExcludedTags,
+  scopedSearchTerms,
   sort,
 }: {
   assigningToGroup: string | null;
@@ -27,6 +29,7 @@ export function useCharactersPanelData({
   includedTags: ReadonlySet<string>;
   parsedCharacters: ParsedCharacterRow[];
   searchExcludedTags: readonly string[];
+  scopedSearchTerms: readonly CharacterScopedSearchTerm[];
   sort: SortOption;
 }) {
   const charMap = useMemo(() => {
@@ -52,8 +55,9 @@ export function useCharactersPanelData({
       includedTags,
       excludedTags,
       searchExcludedTags,
+      scopedTerms: scopedSearchTerms,
     });
-  }, [parsedCharacters, favoriteFilter, includedTags, excludedTags, searchExcludedTags]);
+  }, [parsedCharacters, favoriteFilter, includedTags, excludedTags, searchExcludedTags, scopedSearchTerms]);
 
   const sortedCharacters = useMemo(
     () => sortCharacterRows(filteredCharacters, sort, includedTags),
