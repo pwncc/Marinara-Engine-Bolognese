@@ -301,10 +301,10 @@ fn connection_folder_defaults_for_create(
     value: Value,
 ) -> Result<Value, AppError> {
     let mut object = ensure_object(value)?;
-    if !object
+    if object
         .get("sortOrder")
         .and_then(Value::as_i64)
-        .is_some_and(|value| value > 0)
+        .is_none_or(|value| value <= 0)
     {
         let next_order = state
             .storage
