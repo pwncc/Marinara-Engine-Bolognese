@@ -29,3 +29,8 @@ pub fn professor_mari_resolve_approval(
 ) -> Result<Value, AppError> {
     mari::professor_mari_resolve_approval(&state, approval_id, approved)
 }
+
+#[tauri::command]
+pub fn professor_mari_reset_session(state: State<'_, AppState>) -> Result<Value, AppError> {
+    mari::professor_mari_reset_session(&state)
+}

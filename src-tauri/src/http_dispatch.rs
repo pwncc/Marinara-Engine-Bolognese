@@ -709,6 +709,7 @@ pub async fn dispatch(state: &AppState, request: InvokeRequest) -> AppResult<Val
         "professor_mari_apply_staged_changes" => {
             mari::professor_mari_apply_staged_changes(state, optional_value(&args, "action"))
         }
+        "professor_mari_reset_session" => mari::professor_mari_reset_session(state),
         "update_check" => updates::check_updates().await,
         "update_apply" => updates::apply_update(optional_value(&args, "input")),
         _ => Err(AppError::new(

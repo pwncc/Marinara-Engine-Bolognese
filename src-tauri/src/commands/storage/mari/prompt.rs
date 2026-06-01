@@ -1,8 +1,8 @@
 use super::types::{MariAttachment, MariPersonaContext, MariPromptRequest};
-use super::{MARI_SYSTEM_PROMPT, MARI_TEXT_ATTACHMENT_CHAR_LIMIT};
+use super::MARI_TEXT_ATTACHMENT_CHAR_LIMIT;
 
 pub(crate) fn build_task_prompt(input: &MariPromptRequest) -> String {
-    let mut sections = vec![format!("System instructions:\n{MARI_SYSTEM_PROMPT}")];
+    let mut sections = Vec::new();
 
     if let Some(persona) = build_persona_context(input.persona.as_ref()) {
         sections.push(format!("Selected user persona:\n{persona}"));
@@ -17,24 +17,6 @@ pub(crate) fn build_task_prompt(input: &MariPromptRequest) -> String {
         sections.push(format!("Compacted conversation so far:\n{summary}"));
     }
 
-    let history = input
-        .messages
-        .iter()
-        .rev()
-        .take(16)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .filter_map(|message| {
-            let content = message.content.trim();
-            (!content.is_empty()).then(|| format!("{}: {content}", message.role))
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    if !history.is_empty() {
-        sections.push(format!("Conversation history:\n{history}"));
-    }
-
     if !input.attachments.is_empty() {
         sections.push(format!(
             "Latest turn attachments:\n{}",
@@ -42,9 +24,14 @@ pub(crate) fn build_task_prompt(input: &MariPromptRequest) -> String {
         ));
     }
 
+    let latest = input.user_message.trim();
+    if sections.is_empty() {
+        return latest.to_string();
+    }
+
     sections.push(format!(
-        "Latest user message:\n{}",
-        input.user_message.trim()
+        "<latest_user_message>\n{}\n</latest_user_message>",
+        latest
     ));
     sections.join("\n\n")
 }

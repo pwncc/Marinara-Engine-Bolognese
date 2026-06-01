@@ -16,6 +16,17 @@ pub(crate) struct MariPromptRequest {
     pub(crate) attachments: Vec<MariAttachment>,
     #[serde(default)]
     pub(crate) workspace_files: Vec<MariWorkspaceFile>,
+    #[serde(default)]
+    pub(crate) preferences: MariRuntimePreferences,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MariRuntimePreferences {
+    #[serde(default)]
+    pub(crate) max_turns: Option<usize>,
+    #[serde(default)]
+    pub(crate) memory_window: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]

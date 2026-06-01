@@ -266,6 +266,7 @@ pub fn run() {
             storage_commands::mari_commands::professor_mari_prompt,
             storage_commands::mari_commands::professor_mari_apply_staged_changes,
             storage_commands::mari_commands::professor_mari_resolve_approval,
+            storage_commands::mari_commands::professor_mari_reset_session,
             storage_commands::update_commands::update_check,
             storage_commands::update_commands::update_apply,
         ])

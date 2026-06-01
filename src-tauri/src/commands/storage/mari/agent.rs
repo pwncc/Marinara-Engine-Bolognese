@@ -1,6 +1,6 @@
 use super::shell::MariShellSession;
 use super::util;
-use super::{MARI_MODEL_OUTPUT_TOKENS, MARI_SYSTEM_PROMPT};
+use super::{mari_system_prompt, MARI_MODEL_OUTPUT_TOKENS};
 use autoagents::async_trait;
 use autoagents::core::agent::AgentDeriveT;
 use autoagents::core::tool::{shared_tools_to_boxes, ToolT};
@@ -36,7 +36,7 @@ impl AgentDeriveT for ProfessorMariAgent {
     type Output = String;
 
     fn description(&self) -> &str {
-        MARI_SYSTEM_PROMPT
+        mari_system_prompt()
     }
 
     fn output_schema(&self) -> Option<Value> {
@@ -80,14 +80,33 @@ impl MarinaraLlmProvider {
             .iter()
             .map(|tool| serde_json::to_value(&tool.function).unwrap_or_else(|_| json!({})))
             .collect();
+        let mapped_messages = map_autoagents_messages(messages);
+        let parameters = sampling_parameters(sampling);
+        self.session.record_debug_log(
+            "llm_request",
+            json!({
+                "provider": &self.connection.provider,
+                "model": &self.connection.model,
+                "parameters": &parameters,
+                "tools": &request_tools,
+                "messages": &mapped_messages,
+            }),
+        );
         let response = marinara_llm::complete_rich(marinara_llm::LlmRequest {
             connection: self.connection.clone(),
-            messages: map_autoagents_messages(messages),
-            parameters: sampling_parameters(sampling),
+            messages: mapped_messages,
+            parameters,
             tools: request_tools,
         })
         .await
         .map_err(|error| LLMError::ProviderError(util::format_app_error_for_debug(&error)))?;
+        self.session.record_debug_log(
+            "llm_response",
+            json!({
+                "content": &response.content,
+                "toolCalls": &response.tool_calls,
+            }),
+        );
         self.session.record_trace(json!({
             "type": "model_turn",
             "label": "Model turn",
@@ -143,17 +162,30 @@ impl CompletionProvider for MarinaraLlmProvider {
             tool_call_id: None,
             tool_calls: None,
         };
+        let messages = vec![message];
+        let parameters = json!({
+            "temperature": req.temperature,
+            "maxTokens": req.max_tokens,
+        });
+        self.session.record_debug_log(
+            "completion_request",
+            json!({
+                "provider": &self.connection.provider,
+                "model": &self.connection.model,
+                "parameters": &parameters,
+                "messages": &messages,
+            }),
+        );
         let response = marinara_llm::complete(marinara_llm::LlmRequest {
             connection: self.connection.clone(),
-            messages: vec![message],
-            parameters: json!({
-                "temperature": req.temperature,
-                "maxTokens": req.max_tokens,
-            }),
+            messages,
+            parameters,
             tools: Vec::new(),
         })
         .await
         .map_err(|error| LLMError::ProviderError(util::format_app_error_for_debug(&error)))?;
+        self.session
+            .record_debug_log("completion_response", json!({ "content": &response }));
         Ok(CompletionResponse { text: response })
     }
 }

@@ -62,6 +62,7 @@ pub(crate) fn build_mari_workspace_seed(state: &AppState) -> AppResult<MariWorks
         allocator.used.insert(root.to_string());
     }
     add_workspace_format_guides(&mut seed);
+    add_workspace_skills(&mut seed);
 
     let characters = list_storage_or_empty(state, "characters")?;
     add_flat_collection(
@@ -162,6 +163,117 @@ fn add_workspace_format_guides(seed: &mut MariWorkspaceSeed) {
     }
 }
 
+fn add_workspace_skills(seed: &mut MariWorkspaceSeed) {
+    add_unbound_file(seed, "/workspace/skills/index.md", skills_index());
+    for (path, content) in [
+        ("/workspace/skills/lorebooks/SKILL.md", lorebooks_skill()),
+        ("/workspace/skills/characters/SKILL.md", characters_skill()),
+        ("/workspace/skills/personas/SKILL.md", personas_skill()),
+        ("/workspace/skills/prompts/SKILL.md", prompts_skill()),
+    ] {
+        add_unbound_file(seed, path, content);
+    }
+}
+
+fn skills_index() -> String {
+    [
+        "# Skills",
+        "",
+        "Load the relevant skill before specialized library work:",
+        "",
+        "- [lorebooks](/workspace/skills/lorebooks/SKILL.md): create/edit lorebooks and lorebook entries.",
+        "- [characters](/workspace/skills/characters/SKILL.md): create/edit character cards.",
+        "- [personas](/workspace/skills/personas/SKILL.md): create/edit user personas.",
+        "- [prompts](/workspace/skills/prompts/SKILL.md): create/edit prompt presets, sections, groups, and variables.",
+    ]
+    .join("\n")
+}
+
+fn lorebooks_skill() -> String {
+    [
+        "---",
+        "name: lorebooks",
+        "description: Create, edit, inspect, or organize lorebooks and lorebook entries.",
+        "---",
+        "",
+        "# Lorebooks",
+        "",
+        "Workflow:",
+        "1. Read `/workspace/lorebooks/FORMAT.md`.",
+        "2. Find or create the lorebook folder under `/workspace/lorebooks/`. When continuing prior work, read `/workspace/lorebooks/index.md` or list the folder to verify the current path before adding entries.",
+        "3. For entries, read `<lorebook>/entries/FORMAT.md` after the lorebook exists.",
+        "4. Each entry is a folder under `<lorebook>/entries/` with `metadata.json`, `content.md`, and usually `keys.txt`.",
+        "5. For many entries, use multiple `write` calls. Visible library changes are approval-gated after each write/edit/bash tool call.",
+        "6. Do not use Python or long bash here-docs for bulk content creation.",
+        "7. Use `keys.txt` for activation keys. `metadata.json` may include fields like `name`, `enabled`, `priority`, `insertionOrder`, `constant`, `selective`, `caseSensitive`, and `matchWholeWords`.",
+        "8. Do not stop early when the user requested a count. Count existing entries, add enough to hit the target, then report completed vs requested.",
+        "9. Do not claim entries were added unless the tool approval result or final review says they were saved.",
+        "10. Do not edit `FORMAT.md` or `index.md`.",
+    ]
+    .join("\n")
+}
+
+fn characters_skill() -> String {
+    [
+        "---",
+        "name: characters",
+        "description: Create, edit, inspect, or organize character records.",
+        "---",
+        "",
+        "# Characters",
+        "",
+        "Workflow:",
+        "1. Read `/workspace/characters/FORMAT.md`.",
+        "2. Existing characters are folders under `/workspace/characters/`.",
+        "3. Create or edit `metadata.json` for structured fields; set character name at `data.name`.",
+        "4. Put prose in the listed `.md` files, such as `description.md`, `personality.md`, `scenario.md`, `first_mes.md`, and `mes_example.md`.",
+        "5. Use exact edits for small changes; use multiple `write` calls for creating full cards with multiple files.",
+        "6. Do not edit `FORMAT.md` or `index.md`.",
+    ]
+    .join("\n")
+}
+
+fn personas_skill() -> String {
+    [
+        "---",
+        "name: personas",
+        "description: Create, edit, inspect, or organize user personas.",
+        "---",
+        "",
+        "# Personas",
+        "",
+        "Workflow:",
+        "1. Read `/workspace/personas/FORMAT.md`.",
+        "2. Existing personas are folders under `/workspace/personas/`.",
+        "3. Use `metadata.json` for name, tags, and flags.",
+        "4. Put prose in files like `description.md`, `personality.md`, `scenario.md`, `backstory.md`, `appearance.md`, `greeting.md`, and `notes.md`.",
+        "5. Do not edit `FORMAT.md` or `index.md`.",
+    ]
+    .join("\n")
+}
+
+fn prompts_skill() -> String {
+    [
+        "---",
+        "name: prompts",
+        "description: Create, edit, inspect, or organize prompt presets, sections, groups, and variables.",
+        "---",
+        "",
+        "# Prompts",
+        "",
+        "Workflow:",
+        "1. Read `/workspace/prompts/FORMAT.md`.",
+        "2. Prompt presets are folders under `/workspace/prompts/`.",
+        "3. For nested records, read the nearest `sections/FORMAT.md`, `groups/FORMAT.md`, or `variables/FORMAT.md` after the preset exists.",
+        "4. Sections live under `<preset>/sections/<section>/` and use `metadata.json` plus `content.md`.",
+        "5. Groups live under `<preset>/groups/<group>/` and variables under `<preset>/variables/<variable>/`.",
+        "6. For many nested records, use multiple `write` calls under the relevant nested folder; visible library changes are approval-gated after each mutating tool call.",
+        "7. Do not use Python or long bash here-docs for bulk content creation.",
+        "8. Do not edit `FORMAT.md` or `index.md`.",
+    ]
+    .join("\n")
+}
+
 fn root_format_guide() -> String {
     [
         "# Workspace format guide",
@@ -174,6 +286,8 @@ fn root_format_guide() -> String {
         "- Structured fields belong in `metadata.json`, which must be valid JSON.",
         "- Do not add storage IDs. Marinara maps friendly paths back to records internally.",
         "- Do not paste base64 images or binary blobs into workspace files.",
+        "- Do not edit generated `FORMAT.md` or `index.md` files.",
+        "- For bulk creation or editing, use multiple `write` calls instead of long shell quoting; visible library changes are approval-gated after mutating tool calls.",
         "- Deleting an existing text file clears that field. Deleting `metadata.json` or whole record folders is not an automatic record delete.",
         "",
         "## Creating top-level records",
@@ -181,11 +295,12 @@ fn root_format_guide() -> String {
         "- Use the exact file names shown in that folder's `FORMAT.md`.",
         "- Include `metadata.json` when you need names, tags, flags, ordering, or other structured fields.",
         "- For character names, set `data.name` in `metadata.json`. For most other records, set `name`.",
+        "- Nested records may be created under an existing parent or under a new parent folder in the same turn, as long as the final file set is valid.",
     ]
     .join("\n")
 }
 
-fn format_guide_for_entity(entity: &str) -> String {
+pub(crate) fn format_guide_for_entity(entity: &str) -> String {
     match entity {
         "characters" => [
             "# Character folder format",
@@ -273,7 +388,7 @@ fn format_guide_for_entity(entity: &str) -> String {
         "lorebook-entries" => [
             "# Lorebook entry folder format",
             "",
-            "Edit one folder per existing lorebook entry inside this `entries/` folder. Creating brand-new entries from new folders is not applied automatically yet.",
+            "Edit one folder per lorebook entry inside this `entries/` folder. To create an entry, make a new folder here with `metadata.json`, `content.md`, and/or `keys.txt`.",
             "",
             "## Metadata",
             "- `metadata.json`: valid JSON. Useful fields include `enabled`, `insertionOrder`, `priority`, `position`, `constant`, `selective`, `secondaryKeys`, `caseSensitive`, `matchWholeWords`.",
@@ -307,22 +422,22 @@ fn format_guide_for_entity(entity: &str) -> String {
         "prompt-sections" => [
             "# Prompt section folder format",
             "",
-            "Edit one folder per existing prompt section inside this `sections/` folder. Creating brand-new sections from new folders is not applied automatically yet.",
+            "Edit one folder per prompt section inside this `sections/` folder. To create a section, make a new folder here with `metadata.json` and `content.md`.",
             "",
             "## Metadata",
             "- `metadata.json`: valid JSON. Useful fields include `name`, `role`, `type`, `enabled`, `groupId`, `sortOrder`, `markerConfig`.",
             "",
             "## Text files",
-            "- `prompt.md`: section prompt text.",
-            "- `content.md`: section content if this shape uses content instead of prompt.",
-            "- `text.md`: section text if this shape uses text instead of prompt/content.",
+            "- `content.md`: normal section prompt text (canonical for new sections).",
+            "- `prompt.md`: legacy alias; for new sections Marinara stores it as `content`.",
+            "- `text.md`: legacy alias; for new sections Marinara stores it as `content`.",
             "- `description.md`: editor-facing explanation.",
         ]
         .join("\n"),
         "prompt-groups" => [
             "# Prompt group folder format",
             "",
-            "Edit one folder per existing prompt group inside this `groups/` folder. Creating brand-new groups from new folders is not applied automatically yet.",
+            "Edit one folder per prompt group inside this `groups/` folder. To create a group, make a new folder here with `metadata.json` and optional notes/description files.",
             "",
             "## Metadata",
             "- `metadata.json`: valid JSON. Useful fields include `name`, `label`, `enabled`, `parentGroupId`, `sortOrder`.",
@@ -335,7 +450,7 @@ fn format_guide_for_entity(entity: &str) -> String {
         "prompt-variables" => [
             "# Prompt variable folder format",
             "",
-            "Edit one folder per existing prompt variable inside this `variables/` folder. Creating brand-new variables from new folders is not applied automatically yet.",
+            "Edit one folder per prompt variable inside this `variables/` folder. To create a variable, make a new folder here and define its `variableName`, `question`, and `options` in `metadata.json`.",
             "",
             "## Metadata",
             "- `metadata.json`: valid JSON. Useful fields include `name`, `key`, `label`, `type`, `options`, `defaultValue`, `groupId`, `sortOrder`.",
@@ -418,58 +533,84 @@ fn add_lorebooks_to_workspace(
             lorebook,
             &["description", "content", "notes"],
         )?;
-        let entry_root = format!("{folder}/entries");
-        add_unbound_file(
-            seed,
-            format!("{entry_root}/FORMAT.md"),
-            format_guide_for_entity("lorebook-entries"),
-        );
-        let mut entry_index = Vec::new();
-        for entry in sorted_records(
+        let lorebook_entries = sorted_records(
             entries_by_lorebook
                 .get(id)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]),
-        ) {
-            let Some(entry_id) = record_id(entry) else {
-                continue;
-            };
-            let entry_label = lorebook_entry_label(entry);
-            let entry_folder = allocator.child(&entry_root, &entry_label, "Untitled Entry");
-            entry_index.push(format!(
-                "- [{}]({})",
-                display_label(&entry_label),
-                entry_folder.trim_start_matches("/workspace/")
-            ));
+        );
+        add_lorebook_entry_collection(seed, allocator, &folder, &lorebook_entries)?;
+
+        let alias_label = lorebook_folder_label(&label);
+        if alias_label != folder.rsplit('/').next().unwrap_or_default() {
+            let alias_folder =
+                allocator.child("/workspace/lorebooks", &alias_label, "untitled-lorebook");
             add_record_folder(
                 seed,
-                "lorebook-entries",
-                entry_id,
-                &entry_folder,
-                entry,
-                &["content", "comment", "description", "notes"],
+                "lorebooks",
+                id,
+                &alias_folder,
+                lorebook,
+                &["description", "content", "notes"],
             )?;
-            if let Some(keys) = keys_text(entry) {
-                add_bound_file(
-                    seed,
-                    format!("{entry_folder}/keys.txt"),
-                    keys,
-                    "lorebook-entries",
-                    entry_id,
-                    "keys",
-                );
-            }
+            add_lorebook_entry_collection(seed, allocator, &alias_folder, &lorebook_entries)?;
         }
-        add_unbound_file(
-            seed,
-            format!("{entry_root}/index.md"),
-            collection_index_title("entries", entry_index),
-        );
     }
     add_unbound_file(
         seed,
         "/workspace/lorebooks/index.md",
         collection_index_title("lorebooks", index),
+    );
+    Ok(())
+}
+
+fn add_lorebook_entry_collection(
+    seed: &mut MariWorkspaceSeed,
+    allocator: &mut PathAllocator,
+    folder: &str,
+    entries: &[&Value],
+) -> AppResult<()> {
+    let entry_root = format!("{folder}/entries");
+    add_unbound_file(
+        seed,
+        format!("{entry_root}/FORMAT.md"),
+        format_guide_for_entity("lorebook-entries"),
+    );
+    let mut entry_index = Vec::new();
+    for entry in entries {
+        let Some(entry_id) = record_id(entry) else {
+            continue;
+        };
+        let entry_label = lorebook_entry_label(entry);
+        let entry_folder = allocator.child(&entry_root, &entry_label, "Untitled Entry");
+        entry_index.push(format!(
+            "- [{}]({})",
+            display_label(&entry_label),
+            entry_folder.trim_start_matches("/workspace/")
+        ));
+        add_record_folder(
+            seed,
+            "lorebook-entries",
+            entry_id,
+            &entry_folder,
+            entry,
+            &["content", "comment", "description", "notes"],
+        )?;
+        if let Some(keys) = keys_text(entry) {
+            add_bound_file(
+                seed,
+                format!("{entry_folder}/keys.txt"),
+                keys,
+                "lorebook-entries",
+                entry_id,
+                "keys",
+            );
+        }
+    }
+    add_unbound_file(
+        seed,
+        format!("{entry_root}/index.md"),
+        collection_index_title("entries", entry_index),
     );
     Ok(())
 }
@@ -631,6 +772,8 @@ fn add_workspace_index(seed: &mut MariWorkspaceSeed, counts: &[(&str, usize)]) {
         "Internal storage IDs are hidden from paths; Professor Mari should use the folders below."
             .to_string(),
         "Format requirements live in [FORMAT.md](FORMAT.md) and the nearest folder-level FORMAT.md files."
+            .to_string(),
+        "Task workflows live in [skills](skills/index.md); load the relevant skill before specialized edits."
             .to_string(),
         String::new(),
     ];
@@ -903,6 +1046,39 @@ pub(crate) fn field_file_name(field: &str) -> String {
     sanitize_path_segment(&out)
 }
 
+fn lorebook_folder_label(label: &str) -> String {
+    let trimmed = label.trim();
+    let without_suffix = trimmed
+        .strip_suffix(" Lorebook")
+        .or_else(|| trimmed.strip_suffix(" lorebook"))
+        .unwrap_or(trimmed);
+    kebab_path_segment(if without_suffix.trim().is_empty() {
+        trimmed
+    } else {
+        without_suffix
+    })
+}
+
+fn kebab_path_segment(value: &str) -> String {
+    let mut out = String::new();
+    let mut previous_dash = false;
+    for ch in value.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            previous_dash = false;
+        } else if !previous_dash {
+            out.push('-');
+            previous_dash = true;
+        }
+    }
+    out = out.trim_matches('-').to_string();
+    if out.is_empty() {
+        "untitled".to_string()
+    } else {
+        sanitize_path_segment(&out)
+    }
+}
+
 fn sanitize_path_segment(value: &str) -> String {
     let mut out = value
         .trim()
@@ -926,7 +1102,7 @@ fn sanitize_path_segment(value: &str) -> String {
     out
 }
 
-fn collection_index_title(name: &str, entries: Vec<String>) -> String {
+pub(crate) fn collection_index_title(name: &str, entries: Vec<String>) -> String {
     let mut lines = vec![
         format!("# {}", title_case(name)),
         String::new(),
@@ -943,7 +1119,19 @@ fn collection_index_title(name: &str, entries: Vec<String>) -> String {
 }
 
 pub(crate) fn singular_title(name: &str) -> String {
-    title_case(name.trim_end_matches('s'))
+    match name {
+        "lorebook-entries" => "Lorebook Entry".to_string(),
+        "prompt-sections" => "Prompt Section".to_string(),
+        "prompt-groups" => "Prompt Group".to_string(),
+        "prompt-variables" => "Prompt Variable".to_string(),
+        "characters" => "Character".to_string(),
+        "personas" => "Persona".to_string(),
+        "lorebooks" => "Lorebook".to_string(),
+        "prompts" => "Prompt".to_string(),
+        "character-groups" => "Character Group".to_string(),
+        "persona-groups" => "Persona Group".to_string(),
+        _ => title_case(name.trim_end_matches('s')),
+    }
 }
 
 fn title_case(value: &str) -> String {

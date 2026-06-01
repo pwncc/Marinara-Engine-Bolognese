@@ -41,6 +41,11 @@ export type MariPersonaContext = {
   appearance?: string | null;
 };
 
+export type MariRuntimePreferences = {
+  maxTurns?: number | null;
+  memoryWindow?: number | null;
+};
+
 export type MariEntryRequest = {
   userMessage: string;
   messages: MariMessage[];
@@ -48,6 +53,7 @@ export type MariEntryRequest = {
   connectionId?: string | null;
   persona?: MariPersonaContext | null;
   attachments?: MariAttachment[];
+  preferences?: MariRuntimePreferences | null;
 };
 
 const MARI_ACTION_ENTITIES = [
@@ -183,6 +189,7 @@ export async function runProfessorMariEntry(input: MariEntryRequest, gateway: Ma
     attachments: input.attachments ?? [],
     connectionId: input.connectionId ?? null,
     persona: input.persona ?? null,
+    preferences: input.preferences ?? null,
   });
   const content = typeof response.content === "string" ? response.content : "";
   if (!content.trim()) {

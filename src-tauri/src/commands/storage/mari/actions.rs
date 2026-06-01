@@ -5,7 +5,7 @@ use super::workspace::{self, MariWorkspaceBinding};
 use super::MARI_STORAGE_ACTION_ENTITIES;
 use crate::state::AppState;
 use crate::storage_commands::shared;
-use marinara_core::{AppError, AppResult};
+use marinara_core::{new_id, AppError, AppResult};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -75,11 +75,21 @@ struct MariExistingRecordDraft {
 }
 
 #[derive(Debug, Clone)]
+struct MariParentLink {
+    entity: String,
+    id: String,
+    folder_path: String,
+    foreign_key: String,
+    order_field: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 struct MariNewRecordDraft {
     entity: String,
     label: String,
     draft: Value,
     paths: BTreeSet<String>,
+    parent: Option<MariParentLink>,
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +98,10 @@ struct MariNewRecordTarget {
     folder_path: String,
     label: String,
     field: String,
+    parent_folder_path: Option<String>,
+    parent_entity: Option<String>,
+    parent_foreign_key: Option<String>,
+    parent_order_field: Option<String>,
 }
 
 fn extract_storage_actions(action: &Value) -> AppResult<Vec<Value>> {
@@ -186,7 +200,18 @@ fn staged_storage_actions(
                 continue;
             }
 
-            match apply_new_record_change(&mut new_drafts, target, change) {
+            let parent = match resolve_new_record_parent(&manifest, &target) {
+                Ok(parent) => parent,
+                Err(_) => match resolve_pending_new_record_parent(&mut new_drafts, &target) {
+                    Ok(parent) => parent,
+                    Err(reason) => {
+                        issues.push(change_issue(change, None, reason));
+                        continue;
+                    }
+                },
+            };
+
+            match apply_new_record_change(&mut new_drafts, target, change, parent) {
                 Ok(()) => {}
                 Err(reason) => issues.push(change_issue(change, None, reason)),
             }
@@ -199,6 +224,8 @@ fn staged_storage_actions(
             "This workspace file is not mapped to a Marinara storage field.".to_string(),
         ));
     }
+
+    stage_prompt_parent_order_updates(state, &mut existing_drafts, &mut new_drafts)?;
 
     let mut actions = Vec::new();
     for ((entity, id), draft) in existing_drafts {
@@ -294,6 +321,7 @@ fn apply_new_record_change(
     drafts: &mut BTreeMap<String, MariNewRecordDraft>,
     target: MariNewRecordTarget,
     change: &MariFileChange,
+    parent: Option<MariParentLink>,
 ) -> Result<(), String> {
     if change.op == "delete" {
         return Err(
@@ -305,8 +333,9 @@ fn apply_new_record_change(
         .or_insert_with(|| MariNewRecordDraft {
             entity: target.entity.clone(),
             label: target.label.clone(),
-            draft: initial_draft_for_entity(&target.entity, &target.label),
+            draft: initial_draft_for_entity(&target.entity, &target.label, parent.as_ref()),
             paths: BTreeSet::new(),
+            parent,
         });
     apply_field_change(&mut draft.draft, &draft.entity, &target.field, change)?;
     draft.paths.insert(change.path.clone());
@@ -315,15 +344,16 @@ fn apply_new_record_change(
 
 fn apply_field_change(
     record: &mut Value,
-    _entity: &str,
+    entity: &str,
     field: &str,
     change: &MariFileChange,
 ) -> Result<(), String> {
     if field == "metadata" {
         let text = change_after_text(change)
             .ok_or_else(|| "Deleting metadata.json cannot be applied to storage.".to_string())?;
-        let metadata: Value = serde_json::from_str(&text)
+        let mut metadata: Value = serde_json::from_str(&text)
             .map_err(|error| format!("metadata.json is not valid JSON: {error}"))?;
+        normalize_metadata_aliases(entity, &mut metadata);
         merge_metadata_into_record(record, metadata)?;
         return Ok(());
     }
@@ -341,6 +371,17 @@ fn apply_field_change(
         Value::String(text)
     };
     set_field_path_value(record, field, value)
+}
+
+fn normalize_metadata_aliases(entity: &str, metadata: &mut Value) {
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    if entity == "lorebook-entries" && !object.contains_key("keys") {
+        if let Some(keywords) = object.remove("keywords") {
+            object.insert("keys".to_string(), keywords);
+        }
+    }
 }
 
 fn merge_metadata_into_record(record: &mut Value, mut metadata: Value) -> Result<(), String> {
@@ -430,55 +471,253 @@ fn change_after_text(change: &MariFileChange) -> Option<String> {
 fn new_record_target(path: &str) -> Option<MariNewRecordTarget> {
     let normalized = util::normalize_virtual_path(path);
     let parts = normalized.trim_matches('/').split('/').collect::<Vec<_>>();
-    if parts.len() != 4 || parts.first().copied() != Some("workspace") {
+    if parts.first().copied() != Some("workspace") {
         return None;
     }
-    let entity = parts[1];
-    if !matches!(
-        entity,
-        "characters" | "character-groups" | "personas" | "persona-groups" | "lorebooks" | "prompts"
-    ) {
-        return None;
+
+    if parts.len() == 4 {
+        let entity = parts[1];
+        if !matches!(
+            entity,
+            "characters"
+                | "character-groups"
+                | "personas"
+                | "persona-groups"
+                | "lorebooks"
+                | "prompts"
+        ) {
+            return None;
+        }
+        let field = workspace_field_for_file(entity, parts[3])?;
+        return Some(MariNewRecordTarget {
+            entity: entity.to_string(),
+            folder_path: format!("/workspace/{entity}/{}", parts[2]),
+            label: parts[2].to_string(),
+            field,
+            parent_folder_path: None,
+            parent_entity: None,
+            parent_foreign_key: None,
+            parent_order_field: None,
+        });
     }
-    let file_name = parts[3];
-    let field = if file_name == "metadata.json" {
-        "metadata".to_string()
-    } else {
-        text_field_for_workspace_file(entity, file_name)?.to_string()
-    };
-    Some(MariNewRecordTarget {
-        entity: entity.to_string(),
-        folder_path: format!("/workspace/{entity}/{}", parts[2]),
-        label: parts[2].to_string(),
-        field,
-    })
+
+    if parts.len() == 6 && parts[1] == "lorebooks" && parts[3] == "entries" {
+        let entity = "lorebook-entries";
+        let field = workspace_field_for_file(entity, parts[5])?;
+        return Some(MariNewRecordTarget {
+            entity: entity.to_string(),
+            folder_path: format!("/workspace/lorebooks/{}/entries/{}", parts[2], parts[4]),
+            label: parts[4].to_string(),
+            field,
+            parent_folder_path: Some(format!("/workspace/lorebooks/{}", parts[2])),
+            parent_entity: Some("lorebooks".to_string()),
+            parent_foreign_key: Some("lorebookId".to_string()),
+            parent_order_field: None,
+        });
+    }
+
+    if parts.len() == 6 && parts[1] == "prompts" {
+        let (entity, order_field) = match parts[3] {
+            "sections" => ("prompt-sections", Some("sectionOrder")),
+            "groups" => ("prompt-groups", Some("groupOrder")),
+            "variables" => ("prompt-variables", Some("variableOrder")),
+            _ => return None,
+        };
+        let field = workspace_field_for_file(entity, parts[5])?;
+        return Some(MariNewRecordTarget {
+            entity: entity.to_string(),
+            folder_path: format!("/workspace/prompts/{}/{}/{}", parts[2], parts[3], parts[4]),
+            label: parts[4].to_string(),
+            field: normalize_new_record_field(entity, &field),
+            parent_folder_path: Some(format!("/workspace/prompts/{}", parts[2])),
+            parent_entity: Some("prompts".to_string()),
+            parent_foreign_key: Some("presetId".to_string()),
+            parent_order_field: order_field.map(str::to_string),
+        });
+    }
+
+    None
 }
 
 fn existing_folder_binding<'a>(
     manifest: &'a BTreeMap<String, MariWorkspaceBinding>,
     folder_path: &str,
 ) -> Option<&'a MariWorkspaceBinding> {
-    let prefix = format!("{}/", folder_path.trim_end_matches('/'));
+    let folder_path = folder_path.trim_end_matches('/');
+    let metadata_path = format!("{folder_path}/metadata.json");
+    if let Some(binding) = manifest.get(&metadata_path) {
+        return Some(binding);
+    }
+
+    let prefix = format!("{folder_path}/");
     manifest
         .iter()
-        .find(|(path, binding)| {
-            path.starts_with(&prefix) && binding.field.as_deref() == Some("metadata")
-        })
+        .find(|(path, _)| path.starts_with(&prefix) && !path[prefix.len()..].contains('/'))
         .map(|(_, binding)| binding)
-        .or_else(|| {
-            manifest
-                .iter()
-                .find(|(path, _)| path.starts_with(&prefix))
-                .map(|(_, binding)| binding)
+}
+
+fn resolve_new_record_parent(
+    manifest: &BTreeMap<String, MariWorkspaceBinding>,
+    target: &MariNewRecordTarget,
+) -> Result<Option<MariParentLink>, String> {
+    let Some(parent_folder_path) = target.parent_folder_path.as_deref() else {
+        return Ok(None);
+    };
+    let parent_binding = existing_folder_binding(manifest, parent_folder_path).ok_or_else(|| {
+        "Nested entries, sections, groups, and variables need an existing parent folder or a new parent record in the same staged change."
+            .to_string()
+    })?;
+    if target
+        .parent_entity
+        .as_deref()
+        .is_some_and(|entity| parent_binding.entity != entity)
+    {
+        return Err(
+            "The nested record parent folder maps to the wrong storage entity.".to_string(),
+        );
+    }
+    Ok(Some(MariParentLink {
+        entity: parent_binding.entity.clone(),
+        id: parent_binding.id.clone(),
+        folder_path: parent_folder_path.to_string(),
+        foreign_key: target
+            .parent_foreign_key
+            .clone()
+            .ok_or_else(|| "Nested record target is missing its parent foreign key.".to_string())?,
+        order_field: target.parent_order_field.clone(),
+    }))
+}
+
+fn resolve_pending_new_record_parent(
+    new_drafts: &mut BTreeMap<String, MariNewRecordDraft>,
+    target: &MariNewRecordTarget,
+) -> Result<Option<MariParentLink>, String> {
+    let Some(parent_folder_path) = target.parent_folder_path.as_deref() else {
+        return Ok(None);
+    };
+    let parent_entity = target
+        .parent_entity
+        .as_deref()
+        .ok_or_else(|| "Nested record target is missing its parent entity.".to_string())?;
+    if !matches!(parent_entity, "lorebooks" | "prompts") {
+        return Err(
+            "Nested record parent cannot be created in the same staged change.".to_string(),
+        );
+    }
+    let parent_label = parent_folder_path
+        .rsplit('/')
+        .next()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("Untitled");
+    let parent_draft = new_drafts
+        .entry(parent_folder_path.to_string())
+        .or_insert_with(|| MariNewRecordDraft {
+            entity: parent_entity.to_string(),
+            label: parent_label.to_string(),
+            draft: initial_draft_for_entity(parent_entity, parent_label, None),
+            paths: BTreeSet::new(),
+            parent: None,
+        });
+    if parent_draft.entity != parent_entity {
+        return Err(
+            "The nested record parent folder maps to the wrong pending storage entity.".to_string(),
+        );
+    }
+    parent_draft
+        .paths
+        .insert(format!("{parent_folder_path}/metadata.json"));
+    let parent_id = parent_draft
+        .draft
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .ok_or_else(|| "Pending parent record is missing a generated id.".to_string())?
+        .to_string();
+    Ok(Some(MariParentLink {
+        entity: parent_entity.to_string(),
+        id: parent_id,
+        folder_path: parent_folder_path.to_string(),
+        foreign_key: target
+            .parent_foreign_key
+            .clone()
+            .ok_or_else(|| "Nested record target is missing its parent foreign key.".to_string())?,
+        order_field: target.parent_order_field.clone(),
+    }))
+}
+
+fn stage_prompt_parent_order_updates(
+    state: &AppState,
+    existing_drafts: &mut BTreeMap<(String, String), MariExistingRecordDraft>,
+    new_drafts: &mut BTreeMap<String, MariNewRecordDraft>,
+) -> AppResult<()> {
+    let updates = new_drafts
+        .values()
+        .filter_map(|draft| {
+            let parent = draft.parent.as_ref()?;
+            if parent.entity != "prompts" {
+                return None;
+            }
+            let order_field = parent.order_field.clone()?;
+            let new_id = draft.draft.get("id").and_then(Value::as_str)?.to_string();
+            Some((parent.clone(), order_field, new_id))
         })
+        .collect::<Vec<_>>();
+
+    for (parent, order_field, new_id) in updates {
+        if let Some(parent_draft) = new_drafts.get_mut(&parent.folder_path) {
+            append_order_id(&mut parent_draft.draft, &order_field, &new_id);
+            parent_draft
+                .paths
+                .insert(format!("{}/metadata.json", parent.folder_path));
+            continue;
+        }
+        let parent_draft = existing_record_draft(state, existing_drafts, "prompts", &parent.id)?;
+        append_order_id(&mut parent_draft.after, &order_field, &new_id);
+        parent_draft
+            .paths
+            .insert(format!("{}/metadata.json", parent.folder_path));
+    }
+    Ok(())
+}
+
+fn append_order_id(record: &mut Value, field: &str, id: &str) {
+    let Some(object) = record.as_object_mut() else {
+        return;
+    };
+    let mut ids = object
+        .get(field)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !ids.iter().any(|value| value.as_str() == Some(id)) {
+        ids.push(Value::String(id.to_string()));
+    }
+    object.insert(field.to_string(), Value::Array(ids));
+}
+
+fn workspace_field_for_file(entity: &str, file_name: &str) -> Option<String> {
+    if file_name == "metadata.json" {
+        return Some("metadata".to_string());
+    }
+    text_field_for_workspace_file(entity, file_name).map(str::to_string)
 }
 
 fn text_field_for_workspace_file(entity: &str, file_name: &str) -> Option<&'static str> {
+    if file_name == "keys.txt" && workspace_text_fields_for_entity(entity).contains(&"keys") {
+        return Some("keys");
+    }
     let stem = file_name.strip_suffix(".md")?;
     workspace_text_fields_for_entity(entity)
         .iter()
         .copied()
         .find(|field| workspace::field_file_name(field) == stem)
+}
+
+fn normalize_new_record_field(entity: &str, field: &str) -> String {
+    match (entity, field) {
+        ("prompt-sections", "prompt" | "text") => "content".to_string(),
+        _ => field.to_string(),
+    }
 }
 
 fn workspace_text_fields_for_entity(entity: &str) -> &'static [&'static str] {
@@ -517,9 +756,18 @@ fn workspace_text_fields_for_entity(entity: &str) -> &'static [&'static str] {
     }
 }
 
-fn initial_draft_for_entity(entity: &str, label: &str) -> Value {
+fn initial_draft_for_entity(entity: &str, label: &str, parent: Option<&MariParentLink>) -> Value {
+    let parent_field = |key: &str| -> Value {
+        let mut object = Map::new();
+        if let Some(parent) = parent {
+            object.insert(key.to_string(), Value::String(parent.id.clone()));
+            object.insert(parent.foreign_key.clone(), Value::String(parent.id.clone()));
+        }
+        Value::Object(object)
+    };
     match entity {
         "characters" => json!({
+            "id": new_id(),
             "name": label,
             "data": {
                 "name": label,
@@ -541,6 +789,7 @@ fn initial_draft_for_entity(entity: &str, label: &str) -> Value {
             "comment": ""
         }),
         "personas" => json!({
+            "id": new_id(),
             "name": label,
             "description": "",
             "comment": "",
@@ -549,10 +798,104 @@ fn initial_draft_for_entity(entity: &str, label: &str) -> Value {
             "backstory": "",
             "appearance": ""
         }),
+        "lorebook-entries" => merge_object_values(
+            json!({
+                "id": new_id(),
+                "name": label,
+                "content": "",
+                "description": "",
+                "keys": [],
+                "secondaryKeys": [],
+                "enabled": true,
+                "constant": false,
+                "selective": false,
+                "selectiveLogic": "and",
+                "position": 0,
+                "depth": 4,
+                "order": 100,
+                "role": "system",
+                "folderId": null,
+                "relationships": {},
+                "dynamicState": {},
+                "activationConditions": [],
+                "excludeFromVectorization": false
+            }),
+            parent_field("lorebookId"),
+        ),
+        "prompt-sections" => merge_object_values(
+            json!({
+                "id": new_id(),
+                "identifier": identifier_from_label(label),
+                "name": label,
+                "content": "",
+                "role": "system",
+                "enabled": true,
+                "isMarker": false,
+                "groupId": null,
+                "markerConfig": null,
+                "injectionPosition": "ordered",
+                "injectionDepth": 0,
+                "injectionOrder": 100,
+                "forbidOverrides": false
+            }),
+            parent_field("presetId"),
+        ),
+        "prompt-groups" => merge_object_values(
+            json!({
+                "id": new_id(),
+                "name": label,
+                "parentGroupId": null,
+                "order": 100,
+                "enabled": true
+            }),
+            parent_field("presetId"),
+        ),
+        "prompt-variables" => merge_object_values(
+            json!({
+                "id": new_id(),
+                "variableName": identifier_from_label(label),
+                "question": label,
+                "options": [{ "id": "option-1", "label": "Option", "value": "" }],
+                "multiSelect": false,
+                "separator": ", ",
+                "randomPick": false
+            }),
+            parent_field("presetId"),
+        ),
         "lorebooks" | "prompts" | "character-groups" | "persona-groups" => {
-            json!({ "name": label })
+            json!({ "id": new_id(), "name": label })
         }
-        _ => json!({ "name": label }),
+        _ => json!({ "id": new_id(), "name": label }),
+    }
+}
+
+fn merge_object_values(mut base: Value, overlay: Value) -> Value {
+    merge_json_value(&mut base, overlay);
+    base
+}
+
+fn identifier_from_label(label: &str) -> String {
+    let mut out = label
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    while out.contains("__") {
+        out = out.replace("__", "_");
+    }
+    out = out.trim_matches('_').to_string();
+    if out.is_empty() {
+        "custom".to_string()
+    } else if out.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
+        format!("custom_{out}")
+    } else {
+        out
     }
 }
 
@@ -618,6 +961,397 @@ pub(crate) async fn staged_mari_action_contract(
         "storageActions": storage_actions,
         "unmappedChanges": unmapped_changes,
         "workspaceManifest": session.manifest_summary(),
-        "approvalRequired": !storage_actions.is_empty() && unmapped_changes.is_empty(),
+        "approvalRequired": !storage_actions.is_empty(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::shell::MariShellSession;
+    use super::super::types::MariPromptRequest;
+    use super::super::workspace::build_mari_workspace_seed;
+    use super::*;
+    use crate::state::AppState;
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_state(label: &str) -> AppState {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("marinara-mari-actions-{label}-{nonce}"));
+        if path.exists() {
+            std::fs::remove_dir_all(&path).expect("stale temp dir should be removable");
+        }
+        AppState::from_data_dir(path, Vec::new()).expect("test app state should initialize")
+    }
+
+    fn request() -> MariPromptRequest {
+        MariPromptRequest {
+            user_message: "test".to_string(),
+            messages: Vec::new(),
+            compacted_summary: None,
+            connection_id: None,
+            persona: None,
+            attachments: Vec::new(),
+            workspace_files: Vec::new(),
+            preferences: Default::default(),
+        }
+    }
+
+    async fn session_for(state: &AppState) -> Arc<MariShellSession> {
+        let seed = build_mari_workspace_seed(state).expect("workspace seed should build");
+        MariShellSession::new(&request(), seed, None, None)
+            .await
+            .expect("session should initialize")
+    }
+
+    #[tokio::test]
+    async fn stages_new_lorebook_and_entries_in_one_valid_change() {
+        let state = test_state("new-lorebook-with-entries");
+        let session = session_for(&state).await;
+
+        session
+            .write_text(
+                "/workspace/lorebooks/One Piece/metadata.json",
+                r#"{"name":"One Piece","enabled":true}"#,
+            )
+            .await
+            .expect("lorebook metadata should write");
+        session
+            .write_text(
+                "/workspace/lorebooks/One Piece/entries/Luffy/metadata.json",
+                r#"{"name":"Monkey D. Luffy"}"#,
+            )
+            .await
+            .expect("entry metadata should write");
+        session
+            .write_text(
+                "/workspace/lorebooks/One Piece/entries/Luffy/content.md",
+                "Captain of the Straw Hat Pirates.",
+            )
+            .await
+            .expect("entry content should write");
+        session
+            .write_text(
+                "/workspace/lorebooks/One Piece/entries/Zoro/content.md",
+                "Swordsman of the Straw Hat Pirates.",
+            )
+            .await
+            .expect("second entry content should write");
+
+        let action = staged_mari_action_contract(&state, &session)
+            .await
+            .expect("action should stage");
+        assert!(action["unmappedChanges"].as_array().unwrap().is_empty());
+        let storage_actions = action["storageActions"]
+            .as_array()
+            .expect("storage actions");
+        assert_eq!(storage_actions.len(), 3);
+        let parent = storage_actions
+            .iter()
+            .find(|action| action["entity"] == "lorebooks")
+            .expect("parent lorebook action");
+        let parent_id = parent["draft"]["id"].as_str().expect("parent id");
+        let entries = storage_actions
+            .iter()
+            .filter(|action| action["entity"] == "lorebook-entries")
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 2);
+        assert!(entries
+            .iter()
+            .all(|entry| entry["draft"]["lorebookId"] == parent_id));
+    }
+
+    #[tokio::test]
+    async fn stages_new_lorebook_from_child_entry_only() {
+        let state = test_state("new-lorebook-from-child-only");
+        let session = session_for(&state).await;
+
+        session
+            .write_text(
+                "/workspace/lorebooks/One Piece/entries/Luffy/content.md",
+                "Captain of the Straw Hat Pirates.",
+            )
+            .await
+            .expect("entry content should write");
+
+        let action = staged_mari_action_contract(&state, &session)
+            .await
+            .expect("action should stage");
+        assert!(action["unmappedChanges"].as_array().unwrap().is_empty());
+        let storage_actions = action["storageActions"]
+            .as_array()
+            .expect("storage actions");
+        assert_eq!(storage_actions.len(), 2);
+        let parent = storage_actions
+            .iter()
+            .find(|action| action["entity"] == "lorebooks")
+            .expect("parent lorebook action");
+        let parent_id = parent["draft"]["id"].as_str().expect("parent id");
+        assert_eq!(parent["draft"]["name"], "One Piece");
+        let entry = storage_actions
+            .iter()
+            .find(|action| action["entity"] == "lorebook-entries")
+            .expect("entry action");
+        assert_eq!(entry["draft"]["lorebookId"], parent_id);
+        assert_eq!(entry["draft"]["name"], "Luffy");
+    }
+
+    #[tokio::test]
+    async fn stages_new_lorebook_entry_under_existing_lorebook() {
+        let state = test_state("new-lorebook-entry");
+        state
+            .storage
+            .create("lorebooks", json!({ "id": "book-1", "name": "World" }))
+            .expect("lorebook should be created");
+        let session = session_for(&state).await;
+
+        session
+            .write_text(
+                "/workspace/lorebooks/World/entries/Moon Gate/content.md",
+                "The Moon Gate opens only under silver rain.",
+            )
+            .await
+            .expect("content should write");
+        session
+            .write_text(
+                "/workspace/lorebooks/World/entries/Moon Gate/keys.txt",
+                "moon gate\nsilver rain",
+            )
+            .await
+            .expect("keys should write");
+
+        let action = staged_mari_action_contract(&state, &session)
+            .await
+            .expect("action should stage");
+        let storage_actions = action["storageActions"]
+            .as_array()
+            .expect("storage actions");
+        assert_eq!(storage_actions.len(), 1);
+        let create = &storage_actions[0];
+        assert_eq!(create["type"], "create_record");
+        assert_eq!(create["entity"], "lorebook-entries");
+        assert_eq!(create["draft"]["lorebookId"], "book-1");
+        assert_eq!(create["draft"]["name"], "Moon Gate");
+        assert_eq!(
+            create["draft"]["content"],
+            "The Moon Gate opens only under silver rain."
+        );
+        assert_eq!(create["draft"]["keys"], json!(["moon gate", "silver rain"]));
+        assert!(action["unmappedChanges"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn maps_lorebook_entry_metadata_keywords_alias_to_keys() {
+        let state = test_state("lorebook-entry-keywords-alias");
+        state
+            .storage
+            .create("lorebooks", json!({ "id": "book-1", "name": "World" }))
+            .expect("lorebook should be created");
+        let session = session_for(&state).await;
+
+        session
+            .write_text(
+                "/workspace/lorebooks/World/entries/Moon Gate/metadata.json",
+                r#"{"name":"Moon Gate","keywords":["moon gate","silver rain"]}"#,
+            )
+            .await
+            .expect("metadata should write");
+
+        let action = staged_mari_action_contract(&state, &session)
+            .await
+            .expect("action should stage");
+        assert!(action["unmappedChanges"].as_array().unwrap().is_empty());
+        let create = &action["storageActions"].as_array().expect("actions")[0];
+        assert_eq!(create["entity"], "lorebook-entries");
+        assert_eq!(create["draft"]["keys"], json!(["moon gate", "silver rain"]));
+        assert!(create["draft"].get("keywords").is_none());
+    }
+
+    #[tokio::test]
+    async fn stages_new_lorebook_entry_when_sibling_entry_exists() {
+        let state = test_state("new-lorebook-entry-with-sibling");
+        state
+            .storage
+            .create("lorebooks", json!({ "id": "book-1", "name": "World" }))
+            .expect("lorebook should be created");
+        state
+            .storage
+            .create(
+                "lorebook-entries",
+                json!({
+                    "id": "entry-1",
+                    "lorebookId": "book-1",
+                    "name": "Moon Gate",
+                    "content": "Existing sibling entry."
+                }),
+            )
+            .expect("sibling entry should be created");
+        let session = session_for(&state).await;
+
+        session
+            .write_text(
+                "/workspace/lorebooks/World/entries/Sun Gate/content.md",
+                "The Sun Gate opens at dawn.",
+            )
+            .await
+            .expect("content should write");
+
+        let action = staged_mari_action_contract(&state, &session)
+            .await
+            .expect("action should stage");
+        assert!(action["unmappedChanges"].as_array().unwrap().is_empty());
+        let storage_actions = action["storageActions"]
+            .as_array()
+            .expect("storage actions");
+        assert_eq!(storage_actions.len(), 1);
+        let create = &storage_actions[0];
+        assert_eq!(create["type"], "create_record");
+        assert_eq!(create["entity"], "lorebook-entries");
+        assert_eq!(create["draft"]["lorebookId"], "book-1");
+        assert_eq!(create["draft"]["name"], "Sun Gate");
+    }
+
+    #[tokio::test]
+    async fn stages_new_prompt_and_section_in_one_valid_change() {
+        let state = test_state("new-prompt-with-section");
+        let session = session_for(&state).await;
+
+        session
+            .write_text(
+                "/workspace/prompts/Story Preset/metadata.json",
+                r#"{"name":"Story Preset"}"#,
+            )
+            .await
+            .expect("prompt metadata should write");
+        session
+            .write_text(
+                "/workspace/prompts/Story Preset/sections/Narrator Voice/content.md",
+                "Narrate with vivid sensory detail.",
+            )
+            .await
+            .expect("section should write");
+
+        let action = staged_mari_action_contract(&state, &session)
+            .await
+            .expect("action should stage");
+        assert!(action["unmappedChanges"].as_array().unwrap().is_empty());
+        let storage_actions = action["storageActions"]
+            .as_array()
+            .expect("storage actions");
+        assert_eq!(storage_actions.len(), 2);
+        let parent = storage_actions
+            .iter()
+            .find(|action| action["entity"] == "prompts")
+            .expect("parent prompt action");
+        let parent_id = parent["draft"]["id"].as_str().expect("parent id");
+        let section_id = storage_actions
+            .iter()
+            .find(|action| action["entity"] == "prompt-sections")
+            .and_then(|action| action["draft"]["id"].as_str())
+            .expect("section id");
+        assert_eq!(parent["draft"]["sectionOrder"], json!([section_id]));
+        let section = storage_actions
+            .iter()
+            .find(|action| action["entity"] == "prompt-sections")
+            .expect("section action");
+        assert_eq!(section["draft"]["presetId"], parent_id);
+    }
+
+    #[tokio::test]
+    async fn stages_new_prompt_section_when_sibling_group_sorts_before_parent_metadata() {
+        let state = test_state("new-prompt-section-with-sibling-group");
+        state
+            .storage
+            .create(
+                "prompts",
+                json!({ "id": "preset-1", "name": "Story Preset", "sectionOrder": [], "groupOrder": ["group-1"] }),
+            )
+            .expect("prompt should be created");
+        state
+            .storage
+            .create(
+                "prompt-groups",
+                json!({ "id": "group-1", "presetId": "preset-1", "name": "Alpha Group" }),
+            )
+            .expect("group should be created");
+        let session = session_for(&state).await;
+
+        session
+            .write_text(
+                "/workspace/prompts/Story Preset/sections/Narrator Voice/content.md",
+                "Narrate with vivid sensory detail.",
+            )
+            .await
+            .expect("section should write");
+
+        let action = staged_mari_action_contract(&state, &session)
+            .await
+            .expect("action should stage");
+        assert!(action["unmappedChanges"].as_array().unwrap().is_empty());
+        let storage_actions = action["storageActions"]
+            .as_array()
+            .expect("storage actions");
+        assert_eq!(storage_actions.len(), 2);
+        let create = storage_actions
+            .iter()
+            .find(|action| action["type"] == "create_record")
+            .expect("create section action");
+        assert_eq!(create["entity"], "prompt-sections");
+        assert_eq!(create["draft"]["presetId"], "preset-1");
+        assert_eq!(create["draft"]["name"], "Narrator Voice");
+    }
+
+    #[tokio::test]
+    async fn stages_new_prompt_section_and_updates_parent_order() {
+        let state = test_state("new-prompt-section");
+        state
+            .storage
+            .create(
+                "prompts",
+                json!({ "id": "preset-1", "name": "Story Preset", "sectionOrder": [] }),
+            )
+            .expect("prompt should be created");
+        let session = session_for(&state).await;
+
+        session
+            .write_text(
+                "/workspace/prompts/Story Preset/sections/Narrator Voice/prompt.md",
+                "Narrate with vivid sensory detail.",
+            )
+            .await
+            .expect("section should write");
+
+        let action = staged_mari_action_contract(&state, &session)
+            .await
+            .expect("action should stage");
+        let storage_actions = action["storageActions"]
+            .as_array()
+            .expect("storage actions");
+        assert_eq!(storage_actions.len(), 2);
+        let create = storage_actions
+            .iter()
+            .find(|action| action["type"] == "create_record")
+            .expect("create section action");
+        let edit = storage_actions
+            .iter()
+            .find(|action| action["type"] == "edit_record")
+            .expect("edit parent prompt action");
+
+        assert_eq!(create["entity"], "prompt-sections");
+        assert_eq!(create["draft"]["presetId"], "preset-1");
+        assert_eq!(create["draft"]["name"], "Narrator Voice");
+        assert_eq!(
+            create["draft"]["content"],
+            "Narrate with vivid sensory detail."
+        );
+        let section_id = create["draft"]["id"].as_str().expect("section id");
+
+        assert_eq!(edit["entity"], "prompts");
+        assert_eq!(edit["id"], "preset-1");
+        assert_eq!(edit["patch"]["sectionOrder"], json!([section_id]));
+        assert!(action["unmappedChanges"].as_array().unwrap().is_empty());
+    }
 }

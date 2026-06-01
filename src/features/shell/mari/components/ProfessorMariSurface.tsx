@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronUp, CircleUser, FileText, Link, Plus, Send, X } from "lucide-react";
+import { Check, ChevronUp, CircleUser, FileText, Link, Plus, Send, Settings, X } from "lucide-react";
 import {
   normalizeMariApprovalOutcome,
   normalizeMariApprovalRequest,
@@ -8,6 +8,7 @@ import {
   type MariApprovalRequest,
   type MariAttachment,
   type MariMessage,
+  type MariStorageAction,
   type MariTraceEvent,
 } from "../../../../engine/mari/mari-entry";
 import {
@@ -19,7 +20,16 @@ import {
   type MariCompactionState,
 } from "../../../../engine/mari/mari-history";
 import { llmApi } from "../../../../shared/api/llm-api";
-import { mariApi, type ProfessorMariPreferences } from "../../../../shared/api/mari-api";
+import {
+  PROFESSOR_MARI_DEFAULT_MAX_TURNS,
+  PROFESSOR_MARI_DEFAULT_MEMORY_WINDOW,
+  PROFESSOR_MARI_MAX_MAX_TURNS,
+  PROFESSOR_MARI_MAX_MEMORY_WINDOW,
+  PROFESSOR_MARI_MIN_MAX_TURNS,
+  PROFESSOR_MARI_MIN_MEMORY_WINDOW,
+  mariApi,
+  type ProfessorMariPreferences,
+} from "../../../../shared/api/mari-api";
 import { useConnections } from "../../../catalog/connections/index";
 import { usePersonaSummaries } from "../../../catalog/personas/index";
 import { ConversationMessage } from "../../../modes/conversation/message-shell";
@@ -67,6 +77,11 @@ type MariPersona = {
 
 function newId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function clampIntegerPreference(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.round(value)));
 }
 
 function isMariImageFile(file: File) {
@@ -125,6 +140,9 @@ export function ProfessorMariSurface() {
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
+  const [maxTurns, setMaxTurns] = useState(PROFESSOR_MARI_DEFAULT_MAX_TURNS);
+  const [memoryWindow, setMemoryWindow] = useState(PROFESSOR_MARI_DEFAULT_MEMORY_WINDOW);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [connectionMenuOpen, setConnectionMenuOpen] = useState(false);
   const [personaMenuOpen, setPersonaMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -140,6 +158,8 @@ export function ProfessorMariSurface() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const persistedConnectionIdRef = useRef<ProfessorMariPreferences["selectedConnectionId"] | undefined>(undefined);
   const persistedPersonaIdRef = useRef<ProfessorMariPreferences["selectedPersonaId"] | undefined>(undefined);
+  const persistedMaxTurnsRef = useRef<ProfessorMariPreferences["maxTurns"] | undefined>(undefined);
+  const persistedMemoryWindowRef = useRef<ProfessorMariPreferences["memoryWindow"] | undefined>(undefined);
   const connectionSelectionTouchedRef = useRef(false);
   const personaSelectionTouchedRef = useRef(false);
   const preferencesReady = preferencesLoaded;
@@ -244,17 +264,23 @@ export function ProfessorMariSurface() {
         if (!active) return;
         persistedConnectionIdRef.current = preferences.selectedConnectionId;
         persistedPersonaIdRef.current = preferences.selectedPersonaId;
+        persistedMaxTurnsRef.current = preferences.maxTurns;
+        persistedMemoryWindowRef.current = preferences.memoryWindow;
         if (!connectionSelectionTouchedRef.current) {
           setSelectedConnectionId(preferences.selectedConnectionId);
         }
         if (!personaSelectionTouchedRef.current) {
           setSelectedPersonaId(preferences.selectedPersonaId);
         }
+        setMaxTurns(preferences.maxTurns);
+        setMemoryWindow(preferences.memoryWindow);
       })
       .catch((error) => {
         if (!active) return;
         persistedConnectionIdRef.current = null;
         persistedPersonaIdRef.current = null;
+        persistedMaxTurnsRef.current = PROFESSOR_MARI_DEFAULT_MAX_TURNS;
+        persistedMemoryWindowRef.current = PROFESSOR_MARI_DEFAULT_MEMORY_WINDOW;
         setSendError(error instanceof Error ? error.message : "Professor Mari preferences could not be loaded.");
       })
       .finally(() => {
@@ -268,22 +294,36 @@ export function ProfessorMariSurface() {
   useEffect(() => {
     if (
       !preferencesLoaded ||
-      (persistedConnectionIdRef.current === selectedConnectionId && persistedPersonaIdRef.current === selectedPersonaId)
+      (persistedConnectionIdRef.current === selectedConnectionId &&
+        persistedPersonaIdRef.current === selectedPersonaId &&
+        persistedMaxTurnsRef.current === maxTurns &&
+        persistedMemoryWindowRef.current === memoryWindow)
     ) {
       return;
     }
     const nextConnectionId = selectedConnectionId;
     const nextPersonaId = selectedPersonaId;
+    const nextMaxTurns = maxTurns;
+    const nextMemoryWindow = memoryWindow;
     persistedConnectionIdRef.current = nextConnectionId;
     persistedPersonaIdRef.current = nextPersonaId;
+    persistedMaxTurnsRef.current = nextMaxTurns;
+    persistedMemoryWindowRef.current = nextMemoryWindow;
     void mariApi.preferences
-      .save({ selectedConnectionId: nextConnectionId, selectedPersonaId: nextPersonaId })
+      .save({
+        selectedConnectionId: nextConnectionId,
+        selectedPersonaId: nextPersonaId,
+        maxTurns: nextMaxTurns,
+        memoryWindow: nextMemoryWindow,
+      })
       .catch((error) => {
         persistedConnectionIdRef.current = undefined;
         persistedPersonaIdRef.current = undefined;
+        persistedMaxTurnsRef.current = undefined;
+        persistedMemoryWindowRef.current = undefined;
         setSendError(error instanceof Error ? error.message : "Professor Mari preferences could not be saved.");
       });
-  }, [preferencesLoaded, selectedConnectionId, selectedPersonaId]);
+  }, [maxTurns, memoryWindow, preferencesLoaded, selectedConnectionId, selectedPersonaId]);
 
   useEffect(() => {
     if (!preferencesLoaded || rawConnections === undefined || !selectedConnectionId) return;
@@ -361,6 +401,7 @@ export function ProfessorMariSurface() {
       setResolvingApproval(null);
       setSending(true);
       try {
+        await mariApi.resetSession();
         await mariApi.history.reset();
         setMessages([]);
         setCompaction(EMPTY_MARI_COMPACTION);
@@ -444,6 +485,10 @@ export function ProfessorMariSurface() {
             size: attachment.size,
             content: attachment.content,
           })),
+          preferences: {
+            maxTurns,
+            memoryWindow,
+          },
         },
         {
           prompt: (request) =>
@@ -536,6 +581,29 @@ export function ProfessorMariSurface() {
       style={gradientStyle}
       aria-busy={!historyLoaded || sending}
     >
+      <button
+        type="button"
+        onClick={() => {
+          setSettingsOpen(true);
+          setConnectionMenuOpen(false);
+          setPersonaMenuOpen(false);
+          setMobileMenuOpen(false);
+        }}
+        className="absolute right-3 top-3 z-30 inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--card)]/90 text-[var(--muted-foreground)] shadow-sm backdrop-blur transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+        title="Professor Mari settings"
+        aria-label="Professor Mari settings"
+      >
+        <Settings size="1rem" />
+      </button>
+      {settingsOpen && (
+        <ProfessorMariSettingsSidebar
+          maxTurns={maxTurns}
+          memoryWindow={memoryWindow}
+          onClose={() => setSettingsOpen(false)}
+          onMaxTurnsChange={setMaxTurns}
+          onMemoryWindowChange={setMemoryWindow}
+        />
+      )}
       <div className="mari-messages-scroll flex-1 overflow-y-auto overflow-x-hidden">
         <div className="mari-professor-hero mx-auto flex w-full max-w-3xl justify-center px-4 pb-2 pt-5 sm:pt-7">
           <ProfessorMariPixelScene active={sending || !historyLoaded} />
@@ -781,6 +849,112 @@ export function ProfessorMariSurface() {
   );
 }
 
+function ProfessorMariSettingsSidebar({
+  maxTurns,
+  memoryWindow,
+  onMaxTurnsChange,
+  onMemoryWindowChange,
+  onClose,
+}: {
+  maxTurns: number;
+  memoryWindow: number;
+  onMaxTurnsChange: (value: number) => void;
+  onMemoryWindowChange: (value: number) => void;
+  onClose: () => void;
+}) {
+  const updateMaxTurns = (value: number) =>
+    onMaxTurnsChange(clampIntegerPreference(value, PROFESSOR_MARI_MIN_MAX_TURNS, PROFESSOR_MARI_MAX_MAX_TURNS));
+  const updateMemoryWindow = (value: number) =>
+    onMemoryWindowChange(
+      clampIntegerPreference(value, PROFESSOR_MARI_MIN_MEMORY_WINDOW, PROFESSOR_MARI_MAX_MEMORY_WINDOW),
+    );
+
+  return (
+    <div className="absolute inset-0 z-40 flex justify-end bg-black/20 backdrop-blur-[1px]" role="presentation">
+      <button type="button" className="min-w-0 flex-1 cursor-default" aria-label="Close settings" onClick={onClose} />
+      <aside
+        className="flex h-full w-full max-w-sm flex-col border-l border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] shadow-2xl"
+        aria-label="Professor Mari settings"
+      >
+        <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+          <div>
+            <div className="text-sm font-semibold">Professor Mari settings</div>
+            <div className="text-[0.6875rem] text-[var(--muted-foreground)]">Agent behavior for future runs</div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+            title="Close settings"
+            aria-label="Close settings"
+          >
+            <X size="0.9375rem" />
+          </button>
+        </div>
+
+        <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4 text-xs">
+          <label className="block space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-semibold">Max agent turns</span>
+              <input
+                type="number"
+                min={PROFESSOR_MARI_MIN_MAX_TURNS}
+                max={PROFESSOR_MARI_MAX_MAX_TURNS}
+                value={maxTurns}
+                onChange={(event) => updateMaxTurns(Number(event.target.value))}
+                className="h-8 w-20 rounded-lg border border-[var(--border)] bg-[var(--background)] px-2 text-right text-xs outline-none focus:border-sky-400"
+              />
+            </div>
+            <input
+              type="range"
+              min={PROFESSOR_MARI_MIN_MAX_TURNS}
+              max={PROFESSOR_MARI_MAX_MAX_TURNS}
+              value={maxTurns}
+              onChange={(event) => updateMaxTurns(Number(event.target.value))}
+              className="w-full accent-sky-500"
+            />
+            <p className="leading-relaxed text-[var(--muted-foreground)]">
+              Higher values let Mari keep using tools for large jobs before final approval. They can also increase cost and
+              runtime. Default: {PROFESSOR_MARI_DEFAULT_MAX_TURNS}.
+            </p>
+          </label>
+
+          <label className="block space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-semibold">Backend memory window</span>
+              <input
+                type="number"
+                min={PROFESSOR_MARI_MIN_MEMORY_WINDOW}
+                max={PROFESSOR_MARI_MAX_MEMORY_WINDOW}
+                value={memoryWindow}
+                onChange={(event) => updateMemoryWindow(Number(event.target.value))}
+                className="h-8 w-20 rounded-lg border border-[var(--border)] bg-[var(--background)] px-2 text-right text-xs outline-none focus:border-sky-400"
+              />
+            </div>
+            <input
+              type="range"
+              min={PROFESSOR_MARI_MIN_MEMORY_WINDOW}
+              max={PROFESSOR_MARI_MAX_MEMORY_WINDOW}
+              value={memoryWindow}
+              onChange={(event) => updateMemoryWindow(Number(event.target.value))}
+              className="w-full accent-sky-500"
+            />
+            <p className="leading-relaxed text-[var(--muted-foreground)]">
+              Controls how many native backend chat/tool messages Mari keeps across turns. Default:{" "}
+              {PROFESSOR_MARI_DEFAULT_MEMORY_WINDOW}.
+            </p>
+          </label>
+
+          <div className="rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-[0.6875rem] leading-relaxed text-[var(--muted-foreground)]">
+            Approval still happens once per finished run, and only for valid visible library updates. Hidden workspace
+            guide files are not approval items.
+          </div>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 function MariToolActivity({ events }: { events: MariTraceEvent[] }) {
   const latest = events.slice(-4);
   return (
@@ -825,27 +999,27 @@ function MariApprovalCard({
   onApprove: () => void;
   onReject: () => void;
 }) {
-  const changeCount = approval.action.changes.length;
   const storageActionCount = approval.action.storageActions.length;
   return (
     <div className="px-4 py-2">
       <div className="rounded-xl border border-amber-400/40 bg-[var(--card)] px-3 py-3 text-xs text-[var(--foreground)] shadow-lg shadow-amber-500/10">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <div className="font-semibold">Approve Professor Mari's workspace changes?</div>
+            <div className="font-semibold">Approve Professor Mari's library changes?</div>
             <div className="mt-1 text-[var(--muted-foreground)]">
-              {approval.label ?? approval.tool ?? "Tool call"} wants to save {changeCount} file change
-              {changeCount === 1 ? "" : "s"} as {storageActionCount} storage action
+              {approval.label ?? "Professor Mari"} wants to save {storageActionCount} visible library update
               {storageActionCount === 1 ? "" : "s"}.
             </div>
-            {approval.action.changes.length > 0 && (
-              <div className="mt-2 max-h-32 overflow-y-auto rounded-lg bg-foreground/5 p-2 font-mono text-[0.6875rem] text-[var(--muted-foreground)]">
-                {approval.action.changes.slice(0, 6).map((change) => (
-                  <div key={`${change.op}-${change.path}`} className="truncate">
-                    {change.op}: {change.path}
+            {approval.action.storageActions.length > 0 && (
+              <div className="mt-2 max-h-36 overflow-y-auto rounded-lg bg-foreground/5 p-2 text-[0.6875rem] text-[var(--muted-foreground)]">
+                {approval.action.storageActions.slice(0, 8).map((action, index) => (
+                  <div key={`${action.type}-${action.entity}-${index}`} className="truncate">
+                    {mariStorageActionLabel(action)}
                   </div>
                 ))}
-                {approval.action.changes.length > 6 && <div>...and {approval.action.changes.length - 6} more</div>}
+                {approval.action.storageActions.length > 8 && (
+                  <div>...and {approval.action.storageActions.length - 8} more</div>
+                )}
               </div>
             )}
             {error && <div className="mt-2 text-red-500">{error}</div>}
@@ -872,6 +1046,12 @@ function MariApprovalCard({
       </div>
     </div>
   );
+}
+
+function mariStorageActionLabel(action: MariStorageAction): string {
+  if (typeof action.label === "string" && action.label.trim()) return action.label;
+  const entity = action.entity.replace(/-/g, " ");
+  return action.type === "create_record" ? `Create ${entity}` : `Update ${entity}`;
 }
 
 function ProfessorMariLoadingState() {

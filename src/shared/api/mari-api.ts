@@ -17,9 +17,18 @@ import { invokeTauri } from "./tauri-client";
 
 const PROFESSOR_MARI_SETTINGS_ID = "professor-mari";
 
+export const PROFESSOR_MARI_MIN_MAX_TURNS = 4;
+export const PROFESSOR_MARI_MAX_MAX_TURNS = 128;
+export const PROFESSOR_MARI_DEFAULT_MAX_TURNS = 48;
+export const PROFESSOR_MARI_MIN_MEMORY_WINDOW = 20;
+export const PROFESSOR_MARI_MAX_MEMORY_WINDOW = 200;
+export const PROFESSOR_MARI_DEFAULT_MEMORY_WINDOW = 80;
+
 export type ProfessorMariPreferences = {
   selectedConnectionId: string | null;
   selectedPersonaId: string | null;
+  maxTurns: number;
+  memoryWindow: number;
 };
 
 type ProfessorMariSettingsRecord = {
@@ -58,6 +67,12 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+function normalizeIntegerPreference(value: unknown, fallback: number, min: number, max: number): number {
+  const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(numeric)));
+}
+
 function normalizePreferences(value: unknown): ProfessorMariPreferences {
   const object = asRecord(value);
   const selectedConnectionId =
@@ -66,7 +81,19 @@ function normalizePreferences(value: unknown): ProfessorMariPreferences {
       : null;
   const selectedPersonaId =
     typeof object.selectedPersonaId === "string" && object.selectedPersonaId.trim() ? object.selectedPersonaId : null;
-  return { selectedConnectionId, selectedPersonaId };
+  const maxTurns = normalizeIntegerPreference(
+    object.maxTurns,
+    PROFESSOR_MARI_DEFAULT_MAX_TURNS,
+    PROFESSOR_MARI_MIN_MAX_TURNS,
+    PROFESSOR_MARI_MAX_MAX_TURNS,
+  );
+  const memoryWindow = normalizeIntegerPreference(
+    object.memoryWindow,
+    PROFESSOR_MARI_DEFAULT_MEMORY_WINDOW,
+    PROFESSOR_MARI_MIN_MEMORY_WINDOW,
+    PROFESSOR_MARI_MAX_MEMORY_WINDOW,
+  );
+  return { selectedConnectionId, selectedPersonaId, maxTurns, memoryWindow };
 }
 
 function normalizeCompaction(value: unknown): MariCompactionState {
@@ -172,6 +199,7 @@ export const mariApi = {
       approvalId,
       approved,
     }),
+  resetSession: () => invokeTauri<{ reset: boolean }>("professor_mari_reset_session", {}),
   preferences: {
     get: async (): Promise<ProfessorMariPreferences> => {
       return normalizePreferences(await readSettingsValue());
@@ -181,6 +209,18 @@ export const mariApi = {
         await saveSettingsPatch({
           selectedConnectionId: preferences.selectedConnectionId,
           selectedPersonaId: preferences.selectedPersonaId,
+          maxTurns: normalizeIntegerPreference(
+            preferences.maxTurns,
+            PROFESSOR_MARI_DEFAULT_MAX_TURNS,
+            PROFESSOR_MARI_MIN_MAX_TURNS,
+            PROFESSOR_MARI_MAX_MAX_TURNS,
+          ),
+          memoryWindow: normalizeIntegerPreference(
+            preferences.memoryWindow,
+            PROFESSOR_MARI_DEFAULT_MEMORY_WINDOW,
+            PROFESSOR_MARI_MIN_MEMORY_WINDOW,
+            PROFESSOR_MARI_MAX_MEMORY_WINDOW,
+          ),
         }),
       );
     },

@@ -2,8 +2,8 @@ use super::file_changes::{self, MariFileChange};
 use super::prompt;
 use super::types::MariPromptRequest;
 use super::util;
-use super::workspace::{MariWorkspaceBinding, MariWorkspaceSeed};
-use super::MARI_SYSTEM_PROMPT;
+use super::workspace::{self, MariWorkspaceBinding, MariWorkspaceSeed};
+
 use bashkit::{
     async_trait as bashkit_async_trait, Bash, DirEntry, FileSystem, FileSystemExt, FileType,
     InMemoryFs, Metadata, VfsSnapshot,
@@ -12,8 +12,10 @@ use marinara_core::{AppError, AppResult};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::SystemTime;
 use tokio::sync::Mutex;
 
@@ -25,6 +27,8 @@ pub(crate) struct MariShellSession {
     manifest: Arc<RwLock<BTreeMap<String, MariWorkspaceBinding>>>,
     trace: Arc<RwLock<Vec<Value>>>,
     trace_channel: Option<tauri::ipc::Channel<Value>>,
+    debug_log_path: Option<PathBuf>,
+    debug_log_lock: Arc<StdMutex<()>>,
     tool_review_lock: Arc<Mutex<()>>,
     approval_sequence: Arc<std::sync::atomic::AtomicU64>,
 }
@@ -34,9 +38,9 @@ impl MariShellSession {
         input: &MariPromptRequest,
         workspace_seed: MariWorkspaceSeed,
         trace_channel: Option<tauri::ipc::Channel<Value>>,
+        debug_log_path: Option<PathBuf>,
     ) -> AppResult<Arc<Self>> {
         let fs = Arc::new(TrackingFs::new());
-        fs.add_text_file("/workspace/system-prompt.md", MARI_SYSTEM_PROMPT);
         fs.add_text_file("/workspace/README.md", PROF_MARI_WORKSPACE_README);
         if let Some(persona) = prompt::build_persona_context(input.persona.as_ref()) {
             fs.add_text_file("/workspace/active-persona.md", &persona);
@@ -70,6 +74,8 @@ impl MariShellSession {
             manifest: Arc::new(RwLock::new(workspace_seed.bindings)),
             trace: Arc::new(RwLock::new(Vec::new())),
             trace_channel,
+            debug_log_path,
+            debug_log_lock: Arc::new(StdMutex::new(())),
             tool_review_lock: Arc::new(Mutex::new(())),
             approval_sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         });
@@ -89,7 +95,8 @@ impl MariShellSession {
             "stdout": util::truncate_tool_text(&output.stdout),
             "stderr": util::truncate_tool_text(&output.stderr),
             "exitCode": output.exit_code,
-            "pendingChanges": self.pending_changes().await?,
+            "pendingChangeCount": self.pending_change_count().await?,
+            "staged": true,
         }))
     }
 
@@ -110,11 +117,14 @@ impl MariShellSession {
         limit: Option<usize>,
     ) -> AppResult<Value> {
         let path = util::resolve_virtual_path(path);
-        let metadata = self
-            .fs
-            .stat(Path::new(&path))
-            .await
-            .map_err(|error| AppError::new("mari_read_failed", error.to_string()))?;
+        let metadata = self.fs.stat(Path::new(&path)).await.map_err(|error| {
+            AppError::new(
+                "mari_read_failed",
+                format!(
+                    "Could not read `{path}`: {error}. If this is a remembered path from an earlier turn, inspect the parent directory or index because the virtual workspace is rebuilt from current storage each turn."
+                ),
+            )
+        })?;
 
         if metadata.file_type == FileType::Directory {
             return self.read_directory_for_tool(&path, offset, limit).await;
@@ -126,12 +136,71 @@ impl MariShellSession {
 
     pub(crate) async fn write_text(&self, path: &str, content: &str) -> AppResult<Value> {
         let path = util::resolve_virtual_path(path);
+        if is_generated_workspace_file(&path) {
+            return Ok(json!({
+                "path": path,
+                "skipped": true,
+                "reason": "Generated FORMAT.md and index.md workspace guide files are internal and are not saved to the library.",
+                "pendingChangeCount": self.pending_change_count().await?,
+                "staged": false,
+            }));
+        }
         ensure_parent_dirs(&self.fs, Path::new(&path)).await?;
         self.fs
             .write_file(Path::new(&path), content.as_bytes())
             .await
             .map_err(|error| AppError::new("mari_write_failed", error.to_string()))?;
-        Ok(json!({ "path": path, "pendingChanges": self.pending_changes().await? }))
+        self.add_generated_scaffolds_for_written_parent(&path);
+        Ok(json!({
+            "path": path,
+            "bytes": content.len(),
+            "pendingChangeCount": self.pending_change_count().await?,
+            "staged": true,
+        }))
+    }
+
+    pub(crate) fn add_generated_text_file(&self, path: impl AsRef<str>, content: impl AsRef<str>) {
+        self.fs
+            .add_text_file(&util::resolve_virtual_path(path.as_ref()), content.as_ref());
+    }
+
+    fn add_generated_scaffolds_for_written_parent(&self, path: &str) {
+        let Some(folder) = path.strip_suffix("/metadata.json") else {
+            return;
+        };
+        let parts = folder.trim_matches('/').split('/').collect::<Vec<_>>();
+        if parts.len() != 3 || parts.first() != Some(&"workspace") {
+            return;
+        }
+        match parts.get(1).copied() {
+            Some("lorebooks") => {
+                self.add_generated_text_file(
+                    format!("{folder}/entries/FORMAT.md"),
+                    workspace::format_guide_for_entity("lorebook-entries"),
+                );
+                self.add_generated_text_file(
+                    format!("{folder}/entries/index.md"),
+                    "# Entries\n\nNo records found.\n",
+                );
+            }
+            Some("prompts") => {
+                for (name, entity) in [
+                    ("sections", "prompt-sections"),
+                    ("groups", "prompt-groups"),
+                    ("variables", "prompt-variables"),
+                ] {
+                    self.add_generated_text_file(
+                        format!("{folder}/{name}/FORMAT.md"),
+                        workspace::format_guide_for_entity(entity),
+                    );
+                    self.add_generated_text_file(
+                        format!("{folder}/{name}/index.md"),
+                        format!("# {name}\n\nNo records found.\n"),
+                    );
+                }
+            }
+            _ => {}
+        }
     }
 
     pub(crate) async fn edit_text(
@@ -156,10 +225,6 @@ impl MariShellSession {
         let current = self.snapshot_review_files().await?;
         let initial = self.initial_files.read().unwrap().clone();
         Ok(file_changes::diff_file_maps_full(&initial, &current))
-    }
-
-    pub(crate) async fn review_files_snapshot(&self) -> AppResult<BTreeMap<String, Vec<u8>>> {
-        self.snapshot_review_files().await
     }
 
     pub(crate) fn vfs_snapshot(&self) -> AppResult<VfsSnapshot> {
@@ -187,19 +252,51 @@ impl MariShellSession {
         *self.initial_files.write().unwrap() = files;
     }
 
-    pub(crate) async fn pending_changes(&self) -> AppResult<Vec<Value>> {
-        Ok(self
-            .pending_file_changes()
-            .await?
-            .iter()
-            .map(file_changes::file_change_summary)
-            .collect())
+    pub(crate) async fn pending_change_count(&self) -> AppResult<usize> {
+        Ok(self.pending_file_changes().await?.len())
     }
 
     pub(crate) fn record_trace(&self, event: Value) {
         self.trace.write().unwrap().push(event.clone());
         if let Some(channel) = &self.trace_channel {
             let _ = channel.send(json!({ "type": "trace", "event": event }));
+        }
+    }
+
+    pub(crate) fn debug_log_path(&self) -> Option<&Path> {
+        self.debug_log_path.as_deref()
+    }
+
+    pub(crate) fn record_debug_log(&self, event_type: &str, payload: Value) {
+        let Some(path) = &self.debug_log_path else {
+            return;
+        };
+        let entry = json!({
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "type": event_type,
+            "payload": payload,
+        });
+        let line = match serde_json::to_string(&entry) {
+            Ok(line) => line,
+            Err(error) => {
+                log::warn!("Could not serialize Professor Mari debug log event: {error}");
+                return;
+            }
+        };
+        let _guard = match self.debug_log_lock.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                log::warn!("Could not lock Professor Mari debug log writer");
+                return;
+            }
+        };
+        match OpenOptions::new().create(true).append(true).open(path) {
+            Ok(mut file) => {
+                if let Err(error) = writeln!(file, "{line}") {
+                    log::warn!("Could not write Professor Mari debug log: {error}");
+                }
+            }
+            Err(error) => log::warn!("Could not open Professor Mari debug log: {error}"),
         }
     }
 
@@ -377,7 +474,7 @@ impl MariShellSession {
     }
 }
 
-const PROF_MARI_WORKSPACE_README: &str = "# Prof Mari virtual workspace\n\nThis is an isolated bash workspace populated from the user's Marinara creative library. Start at `/workspace/index.md`, then inspect folders such as `characters/`, `personas/`, `lorebooks/`, and `prompts/`. Paths are descriptive and duplicate-safe; Marinara tracks hidden storage IDs internally. When a tool changes files, Marinara pauses for user approval before that tool result is returned.\n\nThe `read` tool accepts files and directories. Reading a directory returns its `index.md` when present, otherwise an ls-style listing. For file layout requirements, read `/workspace/FORMAT.md` and the nearest folder-level `FORMAT.md`.\n";
+const PROF_MARI_WORKSPACE_README: &str = "# Prof Mari virtual workspace\n\nThis is an isolated bash workspace populated from the user's Marinara creative library. Start at `/workspace/index.md`, then inspect folders such as `characters/`, `personas/`, `lorebooks/`, and `prompts/`. Paths are descriptive and duplicate-safe; Marinara tracks hidden storage IDs internally. Tool changes stay in this internal workspace until Mari finishes the turn; then valid library updates are shown to the user for approval.\n\nThe `read` tool accepts files and directories. Reading a directory returns its `index.md` when present, otherwise an ls-style listing. For file layout requirements, read `/workspace/FORMAT.md` and the nearest folder-level `FORMAT.md`.\n";
 
 fn directory_entry_line(entry: DirEntry) -> String {
     let suffix = match entry.metadata.file_type {
@@ -517,6 +614,10 @@ async fn ensure_parent_dirs(fs: &TrackingFs, path: &Path) -> AppResult<()> {
     Ok(())
 }
 
+fn is_generated_workspace_file(path: &str) -> bool {
+    path.ends_with("/FORMAT.md") || path.ends_with("/index.md")
+}
+
 async fn collect_files_recursive(
     fs: &TrackingFs,
     path: &Path,
@@ -534,14 +635,15 @@ async fn collect_files_recursive(
         .await
         .map_err(|error| AppError::new("mari_fs_failed", error.to_string()))?;
     if meta.file_type == FileType::File {
+        let normalized = util::normalize_virtual_path(&path.to_string_lossy());
+        if is_generated_workspace_file(&normalized) {
+            return Ok(());
+        }
         let content = fs
             .read_file(path)
             .await
             .map_err(|error| AppError::new("mari_fs_failed", error.to_string()))?;
-        files.insert(
-            util::normalize_virtual_path(&path.to_string_lossy()),
-            content,
-        );
+        files.insert(normalized, content);
         return Ok(());
     }
     if meta.file_type == FileType::Directory {
