@@ -501,7 +501,11 @@ fn linked_embedded_lorebook_id(
         }
     }
 
-    let candidates = list_collection(state, "lorebooks", Some(("sourceCharacterId", character_id)))?;
+    let candidates = list_collection(
+        state,
+        "lorebooks",
+        Some(("sourceCharacterId", character_id)),
+    )?;
     let fallback = candidates
         .as_array()
         .into_iter()
@@ -535,7 +539,11 @@ fn remove_duplicate_embedded_lorebooks(
     character_id: &str,
     keep_lorebook_id: &str,
 ) -> AppResult<()> {
-    let candidates = list_collection(state, "lorebooks", Some(("sourceCharacterId", character_id)))?;
+    let candidates = list_collection(
+        state,
+        "lorebooks",
+        Some(("sourceCharacterId", character_id)),
+    )?;
     for lorebook in candidates.as_array().into_iter().flatten() {
         let Some(id) = lorebook.get("id").and_then(Value::as_str) else {
             continue;
@@ -1044,7 +1052,10 @@ mod tests {
             .and_then(Value::as_str)
             .expect("first import should return lorebook id")
             .to_string();
-        assert_eq!(first.get("reimported").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            first.get("reimported").and_then(Value::as_bool),
+            Some(false)
+        );
 
         state
             .storage
@@ -1120,13 +1131,21 @@ mod tests {
             second.get("lorebookId").and_then(Value::as_str),
             Some(lorebook_id.as_str())
         );
-        assert_eq!(second.get("reimported").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            second.get("reimported").and_then(Value::as_bool),
+            Some(true)
+        );
         let lorebook_ids = state
             .storage
             .list("lorebooks")
             .unwrap()
             .into_iter()
-            .filter_map(|lorebook| lorebook.get("id").and_then(Value::as_str).map(str::to_string))
+            .filter_map(|lorebook| {
+                lorebook
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
             .collect::<Vec<_>>();
         assert!(lorebook_ids.contains(&lorebook_id));
         assert!(lorebook_ids.contains(&"manual-character-book".to_string()));
@@ -1135,11 +1154,11 @@ mod tests {
 
         let entries = entries_for_lorebook(&state, &lorebook_id);
         assert_eq!(entries.len(), 2);
-        assert!(entries.iter().any(|entry| {
-            entry.get("content").and_then(Value::as_str) == Some("second sun")
-        }));
-        assert!(!entries.iter().any(|entry| {
-            entry.get("content").and_then(Value::as_str) == Some("first moon")
-        }));
+        assert!(entries
+            .iter()
+            .any(|entry| { entry.get("content").and_then(Value::as_str) == Some("second sun") }));
+        assert!(!entries
+            .iter()
+            .any(|entry| { entry.get("content").and_then(Value::as_str) == Some("first moon") }));
     }
 }

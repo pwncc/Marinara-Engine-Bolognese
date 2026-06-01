@@ -663,7 +663,11 @@ fn normalize_boolish_fields(object: &mut Map<String, Value>, fields: &[&str]) {
             _ => value
                 .as_i64()
                 .map(|number| number != 0)
-                .or_else(|| value.as_f64().map(|number| !number.is_nan() && number != 0.0))
+                .or_else(|| {
+                    value
+                        .as_f64()
+                        .map(|number| !number.is_nan() && number != 0.0)
+                })
                 .unwrap_or(false),
         };
         *value = Value::Bool(normalized);
@@ -1821,7 +1825,10 @@ mod tests {
         assert_eq!(object["keys"], json!(["moon"]));
         assert_eq!(object["secondaryKeys"], json!([]));
         assert_eq!(object["characterFilterIds"], json!(["c1"]));
-        assert_eq!(object["additionalMatchingSources"], json!(["character_name"]));
+        assert_eq!(
+            object["additionalMatchingSources"],
+            json!(["character_name"])
+        );
         assert_eq!(object["relationships"], json!({}));
         assert_eq!(object["schedule"], Value::Null);
     }

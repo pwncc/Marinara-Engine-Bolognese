@@ -242,9 +242,9 @@ fn storage_update_inner(
     patch: Value,
 ) -> Result<Value, AppError> {
     if entity == "messages" {
-        return Ok(shared::project_timeline_message(shared::patch_message_update(
-            state, &id, patch,
-        )?));
+        return Ok(shared::project_timeline_message(
+            shared::patch_message_update(state, &id, patch)?,
+        ));
     }
     if entity == "characters" {
         return characters::update_character(state, &id, patch);
@@ -574,7 +574,10 @@ mod tests {
         let state = test_state("lorebook-delete-cascade");
         state
             .storage
-            .create("lorebooks", json!({ "id": "book-delete", "name": "Delete me" }))
+            .create(
+                "lorebooks",
+                json!({ "id": "book-delete", "name": "Delete me" }),
+            )
             .expect("lorebook should be created");
         state
             .storage

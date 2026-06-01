@@ -1000,11 +1000,9 @@ fn storage_update(state: &AppState, args: &Map<String, Value>) -> AppResult<Valu
     let entity = required_string(args, "entity")?;
     let id = required_string(args, "id")?;
     if entity == "messages" {
-        return Ok(shared::project_timeline_message(shared::patch_message_update(
-            state,
-            id,
-            optional_value(args, "patch"),
-        )?));
+        return Ok(shared::project_timeline_message(
+            shared::patch_message_update(state, id, optional_value(args, "patch"))?,
+        ));
     }
     if entity == "characters" {
         return characters::update_character(state, id, optional_value(args, "patch"));
@@ -1521,9 +1519,18 @@ mod tests {
     #[tokio::test]
     async fn dispatch_rejects_remote_raw_server_path_commands() {
         for (command, args) in [
-            ("background_file_path", json!({ "filename": "background.png" })),
-            ("game_assets_file_path", json!({ "path": "folder/asset.png" })),
-            ("lorebook_image_file_path", json!({ "filename": "image.png" })),
+            (
+                "background_file_path",
+                json!({ "filename": "background.png" }),
+            ),
+            (
+                "game_assets_file_path",
+                json!({ "path": "folder/asset.png" }),
+            ),
+            (
+                "lorebook_image_file_path",
+                json!({ "filename": "image.png" }),
+            ),
         ] {
             let state = test_state(command);
             let error = dispatch(
