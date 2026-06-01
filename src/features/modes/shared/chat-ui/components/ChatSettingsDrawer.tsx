@@ -643,7 +643,10 @@ function ChatSettingsDrawerInner({
   const gameSpotifyArtist = typeof metadata.gameSpotifyArtist === "string" ? metadata.gameSpotifyArtist : "";
   const gameAgentFeatureCount =
     (metadata.enableAgents ? 1 : 0) + (gameLorebookKeeperEnabled ? 1 : 0) + (gameUseSpotifyMusic ? 1 : 0);
-  const spriteCharacterIds: string[] = Array.isArray(metadata.spriteCharacterIds) ? metadata.spriteCharacterIds : [];
+  const spriteCharacterIds = useMemo<string[]>(
+    () => (Array.isArray(metadata.spriteCharacterIds) ? metadata.spriteCharacterIds : []),
+    [metadata.spriteCharacterIds],
+  );
   const spriteDisplayModes = normalizeSpriteDisplayModes(metadata.spriteDisplayModes);
   const expressionAvatarsEnabled = metadata.expressionAvatarsEnabled === true;
   const spritePosition: "left" | "right" = metadata.spritePosition === "right" ? "right" : "left";
