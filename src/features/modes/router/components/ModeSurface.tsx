@@ -42,7 +42,7 @@ export function ModeSurface() {
   return (
     <Suspense fallback={fallback}>
       {chatMode === "game" ? (
-        <GameModeRoute activeChatId={activeChatId} />
+        <GameModeRoute key={activeChatId} activeChatId={activeChatId} />
       ) : chatMode === "conversation" ? (
         <ConversationModeRoute activeChatId={activeChatId} />
       ) : (
