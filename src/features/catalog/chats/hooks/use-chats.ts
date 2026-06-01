@@ -101,6 +101,20 @@ function removeCachedMessages(
   return changed ? { ...old, pages } : old;
 }
 
+function appendCachedMessage(
+  old: InfiniteData<Message[]> | undefined,
+  message: Message,
+): InfiniteData<Message[]> | undefined {
+  if (!old?.pages?.length) return old;
+  for (const page of old.pages) {
+    if (page.some((cached) => cached.id === message.id)) return old;
+  }
+  return {
+    ...old,
+    pages: old.pages.map((page, index) => (index === 0 ? [...page, message] : page)),
+  };
+}
+
 function updateCachedMessageCount(qc: QueryClient, chatId: string, delta: number) {
   qc.setQueryData<MessageCountResult | undefined>(chatKeys.messageCount(chatId), (current) => {
     if (!current || typeof current.count !== "number") return current;
@@ -411,8 +425,14 @@ export function useCreateMessage(chatId: string | null) {
       const payload = createMessageSchema.parse({ chatId: chatId!, ...data });
       return storageApi.createChatMessage<Message>(payload.chatId, payload);
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
       if (chatId) {
+        qc.setQueryData<InfiniteData<Message[]> | undefined>(chatKeys.messages(chatId), (old) =>
+          created
+            ? appendCachedMessage(old, preserveRecentMessageContentEdit(chatId, sanitizeTimelineMessage(created)))
+            : old,
+        );
+        if (created) updateCachedMessageCount(qc, chatId, 1);
         qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
         qc.invalidateQueries({ queryKey: chatKeys.messageCount(chatId) });
         qc.invalidateQueries({ queryKey: chatKeys.list() });

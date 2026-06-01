@@ -759,8 +759,11 @@ export function ChatRoleplaySurface({
   }, [activeChatId]);
 
   return (
-    <div data-component="ChatArea.Roleplay" className="flex h-full min-h-0 flex-1 basis-0 overflow-hidden">
-      <div className="rpg-chat-area mari-chat-area mari-card-css relative isolate flex h-full min-h-0 flex-1 basis-0 flex-col overflow-hidden" data-chat-mode="roleplay">
+    <div data-component="ChatArea.Roleplay" className="flex h-full min-h-0 flex-1 basis-0 overflow-clip">
+      <div
+        className="rpg-chat-area mari-chat-area mari-card-css relative isolate flex h-full min-h-0 flex-1 basis-0 flex-col overflow-clip"
+        data-chat-mode="roleplay"
+      >
         <CrossfadeBackground url={chatBackground} blurPx={chatBackgroundBlur} />
         <div className="rpg-overlay pointer-events-none absolute inset-0 z-0" />
         <div className="rpg-vignette pointer-events-none absolute inset-0 z-0" />
@@ -783,8 +786,8 @@ export function ChatRoleplaySurface({
           </Suspense>
         )}
 
-        <div className="relative z-20 flex h-full min-h-0 flex-1 basis-0 overflow-hidden">
-          <div className="flex h-full min-h-0 flex-1 basis-0 flex-col overflow-hidden">
+        <div className="relative z-20 flex h-full min-h-0 flex-1 basis-0 overflow-clip">
+          <div className="flex h-full min-h-0 flex-1 basis-0 flex-col overflow-clip">
             <>
               <div
                 data-tracker-panel-anchor="roleplay-hud"
@@ -973,7 +976,7 @@ export function ChatRoleplaySurface({
             )}
 
             <div
-              className={cn("relative z-10 min-h-0 flex-1 basis-0 overflow-hidden", TRACKER_SCROLL_AVOIDANCE_CLASS)}
+              className={cn("relative z-10 min-h-0 flex-1 basis-0 overflow-clip", TRACKER_SCROLL_AVOIDANCE_CLASS)}
               style={{
                 paddingLeft: "var(--tracker-chat-scroll-avoid-left)",
                 paddingRight: "var(--tracker-chat-scroll-avoid-right)",

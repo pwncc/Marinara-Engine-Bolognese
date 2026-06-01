@@ -111,11 +111,12 @@ export function RoleplayModeRoute({ activeChatId, fallbackChatMode = "roleplay" 
   if (data.messages !== undefined) {
     lastRenderableMessagesRef.current = { chatId: activeChatId, messages: data.messages };
   }
-  const renderMessages =
-    data.messages ??
-    (timeline.isStreaming && lastRenderableMessagesRef.current?.chatId === activeChatId
+  const cachedMessagesForActiveChat =
+    lastRenderableMessagesRef.current?.chatId === activeChatId
       ? lastRenderableMessagesRef.current.messages
-      : undefined);
+      : undefined;
+  const renderMessages = data.messages ?? cachedMessagesForActiveChat;
+  const isRenderingCachedMessages = data.messages === undefined && cachedMessagesForActiveChat !== undefined;
   const spriteState = useSpriteMetadataState({ chat: data.chat, chatMeta: data.chatMeta, messages: renderMessages });
   const { startEncounter } = useEncounter();
   const { concludeScene, abandonScene, forkScene, isForking } = useScene();
@@ -314,7 +315,7 @@ export function RoleplayModeRoute({ activeChatId, fallbackChatMode = "roleplay" 
         personaInfo={data.personaInfo}
         messages={renderMessages}
         msgPayload={msgPayload}
-        isLoading={data.isLoading}
+        isLoading={data.isLoading && !isRenderingCachedMessages}
         hasNextPage={!!data.hasNextPage}
         isFetchingNextPage={data.isFetchingNextPage}
         isStreaming={timeline.isStreaming}
