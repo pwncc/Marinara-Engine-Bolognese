@@ -1,5 +1,6 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import type { PresentCharacter } from "../../../../engine/contracts/types/game-state";
+import { makeManualTrackerRowId } from "../../../../engine/shared/game-state/tracker-row-ids";
 import { npcAvatarApi } from "../../../../shared/api/avatar-api";
 import { useAgentConfigs, useUpdateAgent, type AgentConfigRow } from "../../../catalog/agents/index";
 import { replaceTrackerListItem } from "../lib/tracker-state-edits";
@@ -47,6 +48,8 @@ export function useTrackerCharacterAvatarActions({
   onUpdateCharacters,
   agentConfigLookupEnabled = true,
 }: UseTrackerCharacterAvatarActionsOptions) {
+  const avatarUploadSerialRef = useRef(0);
+  const avatarUploadTokenByCharacterRef = useRef(new Map<string, number>());
   const { data: agentConfigs } = useAgentConfigs(agentConfigLookupEnabled);
   const updateAgent = useUpdateAgent();
   const characterTrackerConfig = useMemo(() => {
@@ -81,21 +84,35 @@ export function useTrackerCharacterAvatarActions({
       const character = currentCharacters[index] ?? characters[index];
       if (!character) return;
 
-      const targetCharacterId = character.characterId;
-      const fallbackIndex = index;
+      const existingCharacterId = character.characterId?.trim();
+      const targetCharacterId = existingCharacterId || makeManualTrackerRowId();
+      const uploadCharacter = existingCharacterId ? character : { ...character, characterId: targetCharacterId };
+      const currentCharactersForUpload = existingCharacterId
+        ? currentCharacters
+        : replaceTrackerListItem(currentCharacters, index, uploadCharacter);
+      if (!existingCharacterId) {
+        onUpdateCharacters(currentCharactersForUpload);
+      }
+      const uploadKey = `${chatId}:${targetCharacterId}`;
+      const uploadToken = avatarUploadSerialRef.current + 1;
+      avatarUploadSerialRef.current = uploadToken;
+      avatarUploadTokenByCharacterRef.current.set(uploadKey, uploadToken);
+      const isLatestUpload = () => avatarUploadTokenByCharacterRef.current.get(uploadKey) === uploadToken;
+      const clearUploadToken = () => {
+        if (isLatestUpload()) {
+          avatarUploadTokenByCharacterRef.current.delete(uploadKey);
+        }
+      };
 
       try {
         const dataUrl = await readFileAsDataUrl(file);
-        const response = await npcAvatarApi.upload(chatId, character.name, dataUrl);
+        if (!isLatestUpload()) return;
+        const response = await npcAvatarApi.upload(chatId, uploadCharacter.name, dataUrl);
+        if (!isLatestUpload()) return;
         const latestState = useGameStateStore.getState().current;
         const latestCharacters =
-          latestState?.chatId === chatId ? (latestState.presentCharacters ?? []) : currentCharacters;
-        let targetIndex = targetCharacterId
-          ? latestCharacters.findIndex((candidate) => candidate.characterId === targetCharacterId)
-          : -1;
-        if (targetIndex < 0 && latestCharacters[fallbackIndex]?.name === character.name) {
-          targetIndex = fallbackIndex;
-        }
+          latestState?.chatId === chatId ? (latestState.presentCharacters ?? []) : currentCharactersForUpload;
+        const targetIndex = latestCharacters.findIndex((candidate) => candidate.characterId === targetCharacterId);
         const latestCharacter = latestCharacters[targetIndex];
         if (!latestCharacter) return;
 
@@ -107,6 +124,8 @@ export function useTrackerCharacterAvatarActions({
         );
       } catch {
         // Avatar uploads are an optional tracker enhancement; failed uploads leave tracker data unchanged.
+      } finally {
+        clearUploadToken();
       }
     },
     [characters, chatId, onUpdateCharacters],
