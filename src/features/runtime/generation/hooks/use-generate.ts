@@ -1552,6 +1552,8 @@ export function useGenerate() {
             { storage: storageApi, llm: llmApi, integrations: reviewedIntegrationGateway, visuals: visualAssetsApi },
             {
               ...streamArgs,
+              userStatus: useUIStore.getState().userStatus,
+              userActivity: useUIStore.getState().userActivity,
               userTimeZone: resolveUserTimeZone(),
               imagePromptSettings: {
                 includeAppearances: useUIStore.getState().imagePromptIncludeAppearances,
