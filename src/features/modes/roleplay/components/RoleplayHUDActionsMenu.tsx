@@ -13,7 +13,12 @@ import {
 } from "lucide-react";
 import { BUILT_IN_AGENTS } from "../../../../engine/contracts/types/agent";
 import type { Message } from "../../../../engine/contracts/types/chat";
-import { useUpdateAgentRunData, type AgentConfigRow, type AgentRunRow } from "../../../catalog/agents/index";
+import {
+  agentConfigEnabled,
+  useUpdateAgentRunData,
+  type AgentConfigRow,
+  type AgentRunRow,
+} from "../../../catalog/agents/index";
 import {
   formatAgentFailureDetail,
   formatAgentFailureTitle,
@@ -516,10 +521,11 @@ function isCustomAgentConfig(config: AgentConfigRow): boolean {
 }
 
 function isAgentConfigActiveForMenu(config: AgentConfigRow, enabledAgentTypes?: Set<string>): boolean {
+  if (!agentConfigEnabled(config.enabled, true)) return false;
   if (enabledAgentTypes && enabledAgentTypes.size > 0) {
     return enabledAgentTypes.has(config.type) || enabledAgentTypes.has(config.id);
   }
-  return config.enabled === "true";
+  return true;
 }
 
 function getRunnableCustomAgents(configs: AgentConfigRow[], enabledAgentTypes?: Set<string>): AgentConfigRow[] {
