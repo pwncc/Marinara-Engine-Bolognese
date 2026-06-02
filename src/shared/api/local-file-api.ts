@@ -66,7 +66,7 @@ function filePathToAssetUrl(path: string | null | undefined): string {
   }
 }
 
-type RemoteManagedAssetKind = "avatar" | "avatar-thumbnail" | "background" | "font" | "game" | "lorebook";
+type RemoteManagedAssetKind = "avatar" | "avatar-thumbnail" | "background" | "font" | "gallery" | "game" | "lorebook";
 
 function remoteManagedAsset(kind: RemoteManagedAssetKind, path: string | null | undefined): RemoteManagedAsset | null {
   const target = remoteRuntimeTarget();
@@ -250,6 +250,13 @@ export function avatarFileUrlFromPath(
   return absolutePath ? filePathToAssetUrl(absolutePath) : null;
 }
 
+function galleryRemoteManagedPath(
+  filename: string | null | undefined,
+  absolutePath: string | null | undefined,
+): string | null {
+  return filename?.trim() || filenameFromPath(absolutePath);
+}
+
 export function avatarThumbnailFileUrlFromPath(
   filename: string | null | undefined,
   absolutePath?: string | null,
@@ -287,6 +294,15 @@ export async function resolveAvatarFileUrl(
   const remoteUrl = await remoteManagedAssetResolvableUrl("avatar", avatarRemoteManagedPath(filename, absolutePath));
   if (remoteUrl) return remoteUrl;
   return absolutePath ? filePathToAssetUrl(absolutePath) : null;
+}
+
+export async function resolveGalleryFileUrl(
+  filename: string | null | undefined,
+  absolutePath?: string | null,
+): Promise<string | null> {
+  const remoteUrl = await remoteManagedAssetResolvableUrl("gallery", galleryRemoteManagedPath(filename, absolutePath));
+  if (remoteUrl) return remoteUrl;
+  return absolutePath && isAbsoluteFilesystemPath(absolutePath) ? filePathToAssetUrl(absolutePath) : null;
 }
 
 export async function resolveAvatarThumbnailFileUrl(

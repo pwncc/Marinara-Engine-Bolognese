@@ -332,9 +332,17 @@ pub(crate) fn storage_create_inner(
 ) -> Result<Value, AppError> {
     validate_storage_entity(&entity)?;
     validate_connection_folder_for_create(state, &entity, &value)?;
-    let created = state
-        .storage
-        .create(&entity, prepare_entity_for_create(state, &entity, value)?)?;
+    let should_remove_prepared_gallery_file = gallery_create_persists_inline_image(&entity, &value);
+    let prepared = prepare_entity_for_create(state, &entity, value)?;
+    let created = match state.storage.create(&entity, prepared.clone()) {
+        Ok(created) => created,
+        Err(error) => {
+            if should_remove_prepared_gallery_file {
+                remove_gallery_file(state, &prepared);
+            }
+            return Err(error);
+        }
+    };
     if entity == "messages" {
         return Ok(shared::project_timeline_message(created));
     }
@@ -407,8 +415,46 @@ pub(crate) fn prepare_entity_for_create(
     match entity {
         "connections" => connection_secrets::prepare_connection_for_create(state, value),
         "connection-folders" => connection_folder_defaults_for_create(state, value),
+        "gallery" | "character-gallery" => gallery_defaults_for_create(state, value),
         _ => Ok(value),
     }
+}
+
+fn gallery_defaults_for_create(state: &AppState, value: Value) -> Result<Value, AppError> {
+    let mut object = ensure_object(value)?;
+    let Some(url) = object
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| value.starts_with("data:image/"))
+        .map(str::to_string)
+    else {
+        return Ok(Value::Object(object));
+    };
+
+    let (mime, bytes) = media_uploads::decode_image_payload(&url, "url")?;
+    let filename_hint = object
+        .get("filename")
+        .or_else(|| object.get("filePath"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("gallery-image");
+    let stored =
+        media_uploads::persist_image_bytes(state, "gallery", filename_hint, &bytes, &mime)?;
+
+    object.insert("url".to_string(), Value::String(stored.asset_url));
+    object.insert("filePath".to_string(), Value::String(stored.absolute_path));
+    object.insert("filename".to_string(), Value::String(stored.filename));
+    Ok(Value::Object(object))
+}
+
+fn gallery_create_persists_inline_image(entity: &str, value: &Value) -> bool {
+    matches!(entity, "gallery" | "character-gallery")
+        && value
+            .get("url")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| value.starts_with("data:image/"))
 }
 
 fn connection_folder_defaults_for_create(
@@ -1186,6 +1232,74 @@ mod tests {
         let read = storage_get_inner(&state, "characters".to_string(), "char-1".to_string(), None)
             .expect("supported get should succeed");
         assert_eq!(read["id"], "char-1");
+    }
+
+    #[test]
+    fn gallery_create_persists_data_url_as_managed_file() {
+        let state = test_state("gallery-create-managed-file");
+        let image =
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lTmZsgAAAABJRU5ErkJggg==";
+
+        let created = storage_create_inner(
+            &state,
+            "gallery".to_string(),
+            json!({
+                "chatId": "chat-1",
+                "filePath": "generated.png",
+                "filename": "generated.png",
+                "url": image,
+                "prompt": "scene",
+            }),
+        )
+        .expect("gallery row should be created");
+
+        let url = created
+            .get("url")
+            .and_then(Value::as_str)
+            .expect("gallery url should be present");
+        assert!(
+            !url.starts_with("data:image/"),
+            "gallery rows should not store inline image data"
+        );
+        let filename = created
+            .get("filename")
+            .and_then(Value::as_str)
+            .expect("managed filename should be present");
+        assert!(
+            state.data_dir.join("gallery").join(filename).exists(),
+            "managed gallery file should exist"
+        );
+    }
+
+    #[test]
+    fn gallery_create_removes_managed_file_when_row_create_fails() {
+        let state = test_state("gallery-create-managed-file-rollback");
+        let image =
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lTmZsgAAAABJRU5ErkJggg==";
+
+        storage_create_inner(
+            &state,
+            "gallery".to_string(),
+            json!({ "id": "image-1", "chatId": "chat-1", "url": "tauri-api:/gallery/existing.png" }),
+        )
+        .expect("seed gallery row should be created");
+
+        storage_create_inner(
+            &state,
+            "gallery".to_string(),
+            json!({
+                "id": "image-1",
+                "chatId": "chat-1",
+                "filename": "rollback.png",
+                "url": image,
+            }),
+        )
+        .expect_err("duplicate gallery row should fail after persisting the image");
+
+        assert!(
+            !state.data_dir.join("gallery").join("rollback.png").exists(),
+            "failed gallery create should remove the managed file it wrote"
+        );
     }
 
     #[test]

@@ -202,6 +202,7 @@ fn managed_asset_path(state: &AppState, kind: &str, path: &str) -> Result<PathBu
         "avatar-thumbnail" => avatar_thumbnail_asset_path(state, path),
         "background" => Ok(PathBuf::from(state.backgrounds.absolute_path_string(path)?)),
         "font" => fonts::font_file_path(state, path),
+        "gallery" => gallery_asset_path(state, path),
         "game" => Ok(PathBuf::from(state.game_assets.absolute_path_string(path)?)),
         "lorebook" => {
             let response = lorebook_images::lorebook_image_file_path(state, path)?;
@@ -213,6 +214,27 @@ fn managed_asset_path(state: &AppState, kind: &str, path: &str) -> Result<PathBu
         }
         _ => Err(AppError::not_found("Managed asset type was not found")),
     }
+}
+
+fn gallery_asset_path(state: &AppState, path: &str) -> Result<PathBuf, AppError> {
+    Ok(state
+        .data_dir
+        .join("gallery")
+        .join(managed_asset_filename(path, "Gallery asset was not found")?))
+}
+
+fn managed_asset_filename(path: &str, not_found_message: &'static str) -> Result<String, AppError> {
+    let filename = path.trim();
+    if filename.is_empty()
+        || filename == "."
+        || filename == ".."
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename.contains(':')
+    {
+        return Err(AppError::not_found(not_found_message));
+    }
+    Ok(filename.to_string())
 }
 
 fn avatar_asset_path(state: &AppState, path: &str) -> Result<PathBuf, AppError> {
@@ -255,17 +277,7 @@ fn avatar_thumbnail_request(path: &str) -> Result<(u32, &str), AppError> {
 }
 
 fn avatar_asset_filename(path: &str) -> Result<String, AppError> {
-    let filename = path.trim();
-    if filename.is_empty()
-        || filename == "."
-        || filename == ".."
-        || filename.contains('/')
-        || filename.contains('\\')
-        || filename.contains(':')
-    {
-        return Err(AppError::not_found("Avatar asset was not found"));
-    }
-    Ok(filename.to_string())
+    managed_asset_filename(path, "Avatar asset was not found")
 }
 
 fn avatar_asset_path_segments(path: &str) -> Result<Vec<String>, AppError> {
@@ -1331,6 +1343,27 @@ mod tests {
         );
         assert!(avatar_asset_path(&state, "sprites/mari.png").is_err());
         assert!(avatar_asset_path(&state, "personas/../avatar.png").is_err());
+    }
+
+    #[test]
+    fn gallery_asset_path_routes_managed_gallery_files() {
+        let state = test_state("gallery-assets");
+
+        assert_eq!(
+            gallery_asset_path(&state, "scene one.png").expect("gallery filename should resolve"),
+            state.data_dir.join("gallery").join("scene one.png")
+        );
+    }
+
+    #[test]
+    fn gallery_asset_path_rejects_path_tokens() {
+        let state = test_state("gallery-asset-sanitize");
+
+        assert!(gallery_asset_path(&state, "..").is_err());
+        assert!(gallery_asset_path(&state, ".").is_err());
+        assert!(gallery_asset_path(&state, "gallery/scene.png").is_err());
+        assert!(gallery_asset_path(&state, "gallery\\scene.png").is_err());
+        assert!(gallery_asset_path(&state, "C:scene.png").is_err());
     }
 
     #[test]

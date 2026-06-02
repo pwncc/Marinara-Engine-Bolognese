@@ -943,6 +943,71 @@ mod tests {
     }
 
     #[test]
+    fn upload_gallery_image_persists_managed_file() {
+        let root = temp_root("gallery-upload-managed-file");
+        let state = AppState::from_data_dir(&root.0, Vec::new()).expect("state should initialize");
+        let uploaded = upload_gallery_image(
+            &state,
+            "gallery",
+            "chatId",
+            "chat-1",
+            json!({
+                "file": {
+                    "name": "upload.png",
+                    "type": "image/png",
+                    "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lTmZsgAAAABJRU5ErkJggg=="
+                }
+            }),
+        )
+        .expect("gallery upload should be stored");
+
+        let url = uploaded
+            .get("url")
+            .and_then(Value::as_str)
+            .expect("gallery upload should return a url");
+        assert!(
+            !url.starts_with("data:image/"),
+            "gallery uploads should not store inline image data"
+        );
+        let filename = uploaded
+            .get("filename")
+            .and_then(Value::as_str)
+            .expect("managed filename should be present");
+        assert!(
+            state.data_dir.join("gallery").join(filename).exists(),
+            "managed gallery upload file should exist"
+        );
+    }
+
+    #[test]
+    fn upload_gallery_image_removes_managed_file_when_row_create_fails() {
+        let root = temp_root("gallery-upload-managed-file-rollback");
+        let state = AppState::from_data_dir(&root.0, Vec::new()).expect("state should initialize");
+        std::fs::create_dir_all(root.0.join("data").join("collections").join("gallery.json"))
+            .expect("collection path should be made unwritable as a file");
+
+        upload_gallery_image(
+            &state,
+            "gallery",
+            "chatId",
+            "chat-1",
+            json!({
+                "file": {
+                    "name": "rollback.png",
+                    "type": "image/png",
+                    "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lTmZsgAAAABJRU5ErkJggg=="
+                }
+            }),
+        )
+        .expect_err("gallery upload row create should fail");
+
+        assert!(
+            !state.data_dir.join("gallery").join("rollback.png").exists(),
+            "failed gallery upload should remove the managed file it wrote"
+        );
+    }
+
+    #[test]
     fn apply_storage_search_matches_character_prompt_fields() {
         let rows = vec![
             json!({
@@ -2282,22 +2347,36 @@ pub(crate) fn upload_gallery_image(
     body: Value,
 ) -> AppResult<Value> {
     let uploaded = decode_uploaded_image_file(&body)?;
-    let encoded = general_purpose::STANDARD.encode(&uploaded.bytes);
-    let data_url = format!("data:{};base64,{encoded}", uploaded.content_type);
+    let stored = media_uploads::persist_image_bytes(
+        state,
+        "gallery",
+        &uploaded.name,
+        &uploaded.bytes,
+        &uploaded.content_type,
+    )?;
     let mut record = Map::new();
     record.insert(
         parent_field.to_string(),
         Value::String(parent_id.to_string()),
     );
-    record.insert("filePath".to_string(), Value::String(uploaded.name.clone()));
-    record.insert("filename".to_string(), Value::String(uploaded.name));
-    record.insert("url".to_string(), Value::String(data_url));
+    record.insert("filePath".to_string(), Value::String(stored.absolute_path));
+    record.insert("filename".to_string(), Value::String(stored.filename));
+    record.insert("url".to_string(), Value::String(stored.asset_url));
     record.insert("prompt".to_string(), Value::Null);
     record.insert("provider".to_string(), Value::Null);
     record.insert("model".to_string(), Value::Null);
     record.insert("width".to_string(), Value::Null);
     record.insert("height".to_string(), Value::Null);
-    state.storage.create(collection, Value::Object(record))
+    let record = Value::Object(record);
+    match state.storage.create(collection, record.clone()) {
+        Ok(created) => Ok(created),
+        Err(error) => {
+            media_uploads::remove_managed_record_file(
+                state, "gallery", &record, "filePath", "filename",
+            );
+            Err(error)
+        }
+    }
 }
 
 pub(crate) fn project_list_rows(rows: Vec<Value>, options: Option<&Value>) -> Vec<Value> {
