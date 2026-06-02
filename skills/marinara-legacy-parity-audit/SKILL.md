@@ -41,10 +41,11 @@ Treat user-provided topic skills, local notes, GitHub issues, and PRs as optiona
 2. Search both codebases with `rg` using target terms, schema names, field names, UI labels, commands, routes, storage keys, and serialized formats.
 3. Trace the full path for runtime behavior: refactor UI to engine/shared API/Tauri/Rust, and legacy UI to client/server/shared. Do not stop at a visible button when persistence, prompt assembly, generation, import/export, or asset resolution matters.
 4. For contracts and storage formats, trace producers, consumers, migrations or compatibility repair, import/export, and user-visible workflows.
-5. Search open issues and PRs for the target when GitHub access or `gh` is available. Treat issue bodies as leads, not proof.
-6. Load `references/audit-checklists.md` when the target touches CRUD, editors, import/export, runtime behavior, media, storage, performance, UX, architecture, or proof coverage.
-7. Load `references/classification-guide.md` before classifying final findings.
-8. Load `references/report-template.md` when drafting the final audit.
+5. Check `docs/REFACTOR_PARITY_PIPELINE.md#known-intentional-divergences` before classifying a legacy/refactor difference as a gap.
+6. Search open issues and PRs for the target when GitHub access or `gh` is available. Treat issue bodies as leads, not proof.
+7. Load `references/audit-checklists.md` when the target touches CRUD, editors, import/export, runtime behavior, media, storage, performance, UX, architecture, or proof coverage.
+8. Load `references/classification-guide.md` before classifying final findings.
+9. Load `references/report-template.md` when drafting the final audit.
 
 Useful starting commands:
 

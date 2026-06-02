@@ -54,6 +54,14 @@ Work proceeds in these lanes, one slice at a time. A lane only moves to complete
 | UI parity                   | Stale controls, input buttons, loading surfaces, status indicators                               | In progress | Chat bulk export format menu and several missing settings restored. Need app/browser pass.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Integrations                | TTS, haptics, Spotify, knowledge sources, GIFs, image generation, sprites                        | In progress | Spotify mini player and TTS audio format restored; frontend and Rust checks pass.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
+## Known Intentional Divergences
+
+Use this ledger to keep future parity scans from re-raising documented product decisions as likely gaps.
+
+| Area | Legacy behavior | Refactor behavior | Reason | Source |
+| --- | --- | --- | --- | --- |
+| Agents: unset temperature | Legacy defaulted unset agent temperature to `0.3`. | Refactor leaves unset agent temperature undefined so connection/provider defaults apply unless the user configures an agent-specific temperature. | Connection setup now owns provider parameters, and a fixed low agent temperature worked poorly for some writing agents. | [#1899](https://github.com/Pasta-Devs/Marinara-Engine/issues/1899) |
+
 ## Completed Slice: Connected Conversation Notes And Influences
 
 This was the first completed parity slice because it crossed migration, prompt assembly, and generation behavior:
