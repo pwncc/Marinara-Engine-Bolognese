@@ -503,9 +503,9 @@ export function scanForActivatedEntries(
     const matchedLatestUserMessage =
       latestUserText.length > 0 && testPrimaryKeys(entry.keys, latestUserText, matchOptions).matched;
 
-    // Test secondary keys. Older imports can carry secondary keys without the
-    // selective flag, so the configured logic follows the keys themselves.
-    if (entry.secondaryKeys.length > 0) {
+    // Test secondary keys only for selective entries. Older imports can carry
+    // secondary keys while keeping selective disabled.
+    if (entry.selective && entry.secondaryKeys.length > 0) {
       if (!testSecondaryKeys(entry.secondaryKeys, entryScanText, entry.selectiveLogic, matchOptions)) {
         continue;
       }
