@@ -39,7 +39,7 @@ const agentResultTypeSchema = z.enum([
   "game_state_transition",
 ]);
 
-export const customAgentActivationSettingsSchema = z
+const customAgentActivationSettingsSchema = z
   .object({
     activationKeywords: z
       .preprocess(
