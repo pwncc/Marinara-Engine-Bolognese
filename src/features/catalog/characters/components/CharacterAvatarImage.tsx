@@ -96,6 +96,7 @@ export function CharacterAvatarImage({
   crop,
   className,
   thumbnailSize,
+  onError,
 }: {
   src?: string | null;
   avatarFilePath?: string | null;
@@ -104,6 +105,7 @@ export function CharacterAvatarImage({
   crop?: unknown;
   className?: string;
   thumbnailSize?: 64 | 96 | 128 | 256;
+  onError?: () => void;
 }) {
   const imageRef = useRef<HTMLImageElement | null>(null);
   const effectiveThumbnailSize =
@@ -115,10 +117,12 @@ export function CharacterAvatarImage({
   const hasResolvableAvatarInput = hasManagedAvatarInput || Boolean(effectiveThumbnailSize && src);
   const initialSrc = managedInitialSrc ?? src ?? null;
   const [asyncSrc, setAsyncSrc] = useState<string | null>(initialSrc);
+  const failedThumbnailSrcRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const abort = new AbortController();
+    failedThumbnailSrcRef.current = null;
     setAsyncSrc(initialSrc);
     if (!hasResolvableAvatarInput || (!effectiveThumbnailSize && managedInitialSrc && !isLikelyFilesystemPath(managedInitialSrc))) {
       return () => {
@@ -137,7 +141,9 @@ export function CharacterAvatarImage({
     };
     resolveUrl()
       .then((url) => {
-        if (!cancelled) setAsyncSrc(url ?? src ?? null);
+        if (cancelled) return;
+        const nextSrc = url ?? src ?? null;
+        setAsyncSrc(nextSrc && nextSrc !== failedThumbnailSrcRef.current ? nextSrc : src ?? null);
       })
       .catch(() => {
         if (!cancelled) setAsyncSrc(src ?? null);
@@ -151,6 +157,15 @@ export function CharacterAvatarImage({
   const resolvedSrc = asyncSrc ?? initialSrc;
   if (!resolvedSrc) return null;
 
+  const handleImageError = () => {
+    if (effectiveThumbnailSize && src && resolvedSrc !== src) {
+      failedThumbnailSrcRef.current = resolvedSrc;
+      setAsyncSrc(src);
+      return;
+    }
+    onError?.();
+  };
+
   return (
     <img
       ref={imageRef}
@@ -162,6 +177,7 @@ export function CharacterAvatarImage({
       draggable={false}
       className={cn("h-full w-full object-cover", className)}
       style={getAvatarCropStyle(resolveAvatarCrop(crop))}
+      onError={handleImageError}
     />
   );
 }
