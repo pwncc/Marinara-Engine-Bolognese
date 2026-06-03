@@ -215,15 +215,19 @@ async fn custom_tool_webhook_resolved_addresses(
     url: &reqwest::Url,
     allow_local_urls: bool,
 ) -> AppResult<Option<Vec<std::net::SocketAddr>>> {
-    if allow_local_urls {
-        return Ok(None);
-    }
     let Some(host) = url.host_str() else {
         return Err(AppError::invalid_input(
             "Custom tool webhook URL is missing a hostname",
         ));
     };
-    if host.parse::<std::net::IpAddr>().is_ok() {
+    let requires_local_target = url.scheme() == "http" && allow_local_urls;
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if requires_local_target && !is_local_or_reserved_ip(ip) {
+            return Err(public_http_webhook_error());
+        }
+        return Ok(None);
+    }
+    if allow_local_urls && !requires_local_target {
         return Ok(None);
     }
     let port = url.port_or_known_default().unwrap_or(443);
@@ -236,7 +240,11 @@ async fn custom_tool_webhook_resolved_addresses(
         })?;
     let mut resolved_addresses = Vec::new();
     for address in addresses.by_ref() {
-        if is_local_or_reserved_ip(address.ip()) {
+        let is_local_or_reserved = is_local_or_reserved_ip(address.ip());
+        if requires_local_target && !is_local_or_reserved {
+            return Err(public_http_webhook_error());
+        }
+        if !requires_local_target && is_local_or_reserved {
             return Err(AppError::invalid_input(format!(
                 "Custom tool webhook URL resolves to a local, private, or reserved address. Set {WEBHOOK_LOCAL_URLS_ENABLED_FLAG}=true only if you trust that target."
             )));
@@ -249,6 +257,12 @@ async fn custom_tool_webhook_resolved_addresses(
         )));
     }
     Ok(Some(resolved_addresses))
+}
+
+fn public_http_webhook_error() -> AppError {
+    AppError::invalid_input(
+        "Custom tool webhook URL uses public http. Use https for public webhooks; WEBHOOK_LOCAL_URLS_ENABLED=true only allows http for local or reserved targets.",
+    )
 }
 
 fn webhook_local_urls_enabled() -> bool {
@@ -455,6 +469,26 @@ mod tests {
             "error should identify local/private policy, got: {}",
             error.message
         );
+    }
+
+    #[tokio::test]
+    async fn webhook_local_opt_in_does_not_allow_public_http_targets() {
+        let public_http =
+            reqwest::Url::parse("http://93.184.216.34/hook").expect("test URL should parse");
+        let error = custom_tool_webhook_resolved_addresses(&public_http, true)
+            .await
+            .expect_err("public http target should stay rejected with local opt-in");
+        assert!(
+            error.message.contains("public http"),
+            "error should identify insecure public http, got: {}",
+            error.message
+        );
+
+        let local_http =
+            reqwest::Url::parse("http://127.0.0.1:32123/hook").expect("test URL should parse");
+        custom_tool_webhook_resolved_addresses(&local_http, true)
+            .await
+            .expect("local http target should be allowed with local opt-in");
     }
 
     #[test]

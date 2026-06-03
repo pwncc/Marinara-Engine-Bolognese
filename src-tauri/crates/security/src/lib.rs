@@ -97,7 +97,11 @@ pub fn is_allowed_outbound_url(raw: &str, allow_local: bool) -> bool {
 }
 
 fn is_local_or_reserved_host(host: &str) -> bool {
-    let normalized = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+    let normalized = host
+        .trim()
+        .trim_matches(['[', ']'])
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
     if normalized.is_empty()
         || matches!(
             normalized.as_str(),
@@ -106,6 +110,7 @@ fn is_local_or_reserved_host(host: &str) -> bool {
         || normalized.ends_with(".localhost")
         || normalized.ends_with(".local")
         || normalized.ends_with(".internal")
+        || normalized.ends_with(".onion")
     {
         return true;
     }
@@ -135,7 +140,7 @@ fn is_local_or_reserved_ipv4(address: Ipv4Addr) -> bool {
 }
 
 fn is_local_or_reserved_ipv6(address: Ipv6Addr) -> bool {
-    if let Some(mapped) = address.to_ipv4_mapped() {
+    if let Some(mapped) = embedded_ipv4(address) {
         return is_local_or_reserved_ipv4(mapped);
     }
     let segments = address.segments();
@@ -144,6 +149,7 @@ fn is_local_or_reserved_ipv6(address: Ipv6Addr) -> bool {
         || (segments[0] & 0xfe00) == 0xfc00
         || (segments[0] & 0xffc0) == 0xfe80
         || (segments[0] & 0xff00) == 0xff00
+        || (segments[0] == 0x2001 && segments[1] == 0)
         || (segments[0] == 0x2001 && segments[1] == 0x0db8)
         || (segments[0] == 0x0064
             && segments[1] == 0xff9b
@@ -151,6 +157,16 @@ fn is_local_or_reserved_ipv6(address: Ipv6Addr) -> bool {
             && segments[3] == 0
             && segments[4] == 0
             && segments[5] == 0)
+}
+
+fn embedded_ipv4(address: Ipv6Addr) -> Option<Ipv4Addr> {
+    let segments = address.segments();
+    if segments[..5] != [0, 0, 0, 0, 0] || !matches!(segments[5], 0 | 0xffff) {
+        return None;
+    }
+    let [a, b] = segments[6].to_be_bytes();
+    let [c, d] = segments[7].to_be_bytes();
+    Some(Ipv4Addr::new(a, b, c, d))
 }
 
 fn sensitive_pair_regex() -> &'static Regex {
@@ -425,6 +441,12 @@ mod tests {
             "http://169.254.169.254/latest/meta-data",
             "http://[::1]:3000/hook",
             "http://[fc00::1]/hook",
+            "http://[::127.0.0.1]/hook",
+            "http://[::ffff:127.0.0.1]/hook",
+            "http://[::ffff:10.0.0.1]/hook",
+            "http://[2001::1]/hook",
+            "https://hidden-service.onion/hook",
+            "https://hidden-service.onion./hook",
         ] {
             assert!(
                 !is_allowed_outbound_url(url, false),
