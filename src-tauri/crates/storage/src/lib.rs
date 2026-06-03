@@ -108,6 +108,24 @@ impl FileStorage {
         )
     }
 
+    pub fn list_where_in(
+        &self,
+        collection: &str,
+        filter_field: &str,
+        filter_values: &HashSet<String>,
+    ) -> AppResult<Vec<Value>> {
+        self.read_locked_or_recover(
+            || {
+                self.read_collection_where_in_no_recovery(
+                    collection,
+                    filter_field,
+                    filter_values,
+                )
+            },
+            || self.read_collection_where_in(collection, filter_field, filter_values),
+        )
+    }
+
     pub fn list_projected(
         &self,
         collection: &str,
@@ -878,6 +896,68 @@ impl FileStorage {
             .collect())
     }
 
+    fn read_collection_where_in(
+        &self,
+        collection: &str,
+        filter_field: &str,
+        filter_values: &HashSet<String>,
+    ) -> AppResult<Vec<Value>> {
+        self.read_collection_where_in_inner(collection, filter_field, filter_values, true)
+    }
+
+    fn read_collection_where_in_no_recovery(
+        &self,
+        collection: &str,
+        filter_field: &str,
+        filter_values: &HashSet<String>,
+    ) -> AppResult<Vec<Value>> {
+        self.read_collection_where_in_inner(collection, filter_field, filter_values, false)
+    }
+
+    fn read_collection_where_in_inner(
+        &self,
+        collection: &str,
+        filter_field: &str,
+        filter_values: &HashSet<String>,
+        recover_on_fallback: bool,
+    ) -> AppResult<Vec<Value>> {
+        if filter_values.is_empty() {
+            return Ok(Vec::new());
+        }
+        if let Some(rows) = self.cached_rows(collection)? {
+            return Ok(rows
+                .into_iter()
+                .filter(|row| row_string_field_matches_in(row, filter_field, filter_values))
+                .collect());
+        }
+
+        let path = self.collection_path(collection)?;
+        if !path.exists() || fs::metadata(&path)?.len() == 0 {
+            return Ok(Vec::new());
+        }
+
+        let file = fs::File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut deserializer = serde_json::Deserializer::from_reader(reader);
+        match deserializer.deserialize_seq(FilteredRowsWhereInVisitor {
+            filter_field,
+            filter_values,
+        }) {
+            Ok(rows) => Ok(rows),
+            Err(_) => {
+                let rows = if recover_on_fallback {
+                    self.read_collection(collection)?
+                } else {
+                    self.read_collection_no_recovery(collection)?
+                };
+                Ok(rows
+                    .into_iter()
+                    .filter(|row| row_string_field_matches_in(row, filter_field, filter_values))
+                    .collect())
+            }
+        }
+    }
+
     fn read_collection_projected(
         &self,
         collection: &str,
@@ -995,11 +1075,7 @@ impl FileStorage {
         if let Some(rows) = self.cached_dirty_rows(collection)? {
             return Ok(rows
                 .into_iter()
-                .filter(|row| {
-                    row.get(filter_field)
-                        .and_then(Value::as_str)
-                        .is_some_and(|value| filter_values.contains(value))
-                })
+                .filter(|row| row_string_field_matches_in(row, filter_field, filter_values))
                 .map(|row| project_row(row, &field_set, &nested_field_sets))
                 .collect());
         }
@@ -1027,11 +1103,7 @@ impl FileStorage {
                 };
                 Ok(rows
                     .into_iter()
-                    .filter(|row| {
-                        row.get(filter_field)
-                            .and_then(Value::as_str)
-                            .is_some_and(|value| filter_values.contains(value))
-                    })
+                    .filter(|row| row_string_field_matches_in(row, filter_field, filter_values))
                     .map(|row| project_row(row, &field_set, &nested_field_sets))
                     .collect())
             }
@@ -1863,6 +1935,22 @@ fn row_matches_filters(row: &Value, filters: &Map<String, Value>) -> bool {
         .all(|(key, expected)| object.get(key) == Some(expected))
 }
 
+fn row_string_field_matches_in(
+    row: &Value,
+    filter_field: &str,
+    filter_values: &HashSet<String>,
+) -> bool {
+    row.get(filter_field)
+        .is_some_and(|value| string_value_matches_in(value, filter_values))
+}
+
+fn string_value_matches_in(value: &Value, filter_values: &HashSet<String>) -> bool {
+    value
+        .as_str()
+        .map(str::trim)
+        .is_some_and(|value| filter_values.contains(value))
+}
+
 struct FindRowByIdVisitor<'a> {
     id: &'a str,
 }
@@ -2152,6 +2240,99 @@ fn object_value(value: &Value) -> Option<Map<String, Value>> {
     }
 }
 
+struct FilteredRowsWhereInVisitor<'a> {
+    filter_field: &'a str,
+    filter_values: &'a HashSet<String>,
+}
+
+impl<'de, 'a> Visitor<'de> for FilteredRowsWhereInVisitor<'a> {
+    type Value = Vec<Value>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON array of filtered records")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut rows = Vec::new();
+        while let Some(row) = seq.next_element_seed(FilteredRowWhereInSeed {
+            filter_field: self.filter_field,
+            filter_values: self.filter_values,
+        })? {
+            if let Some(row) = row {
+                rows.push(row);
+            }
+        }
+        Ok(rows)
+    }
+}
+
+struct FilteredRowWhereInSeed<'a> {
+    filter_field: &'a str,
+    filter_values: &'a HashSet<String>,
+}
+
+impl<'de, 'a> DeserializeSeed<'de> for FilteredRowWhereInSeed<'a> {
+    type Value = Option<Value>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_map(FilteredRowWhereInVisitor {
+            filter_field: self.filter_field,
+            filter_values: self.filter_values,
+        })
+    }
+}
+
+struct FilteredRowWhereInVisitor<'a> {
+    filter_field: &'a str,
+    filter_values: &'a HashSet<String>,
+}
+
+impl<'de, 'a> Visitor<'de> for FilteredRowWhereInVisitor<'a> {
+    type Value = Option<Value>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a filtered record object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut object = Map::new();
+        let mut matches_filter = None;
+        while let Some(key) = map.next_key::<String>()? {
+            if key == self.filter_field {
+                let value = map.next_value::<Value>()?;
+                let is_match = string_value_matches_in(&value, self.filter_values);
+                matches_filter = Some(is_match);
+                if is_match {
+                    object.insert(key, value);
+                } else {
+                    object.clear();
+                }
+                continue;
+            }
+
+            if matches_filter == Some(false) {
+                let _ = map.next_value::<serde::de::IgnoredAny>()?;
+                continue;
+            }
+
+            object.insert(key, map.next_value::<Value>()?);
+        }
+
+        Ok(matches_filter
+            .unwrap_or(false)
+            .then_some(Value::Object(object)))
+    }
+}
+
 struct ProjectedRowsVisitor<'a> {
     fields: &'a HashSet<String>,
     field_selections: &'a HashMap<String, HashSet<String>>,
@@ -2258,9 +2439,7 @@ impl<'de, 'a> Visitor<'de> for ProjectedRowWhereInVisitor<'a> {
         while let Some(key) = map.next_key::<String>()? {
             if key == self.filter_field {
                 let value = map.next_value::<Value>()?;
-                let is_match = value
-                    .as_str()
-                    .is_some_and(|value| self.filter_values.contains(value));
+                let is_match = string_value_matches_in(&value, self.filter_values);
                 matches_filter = Some(is_match);
                 if is_match && self.fields.contains(&key) {
                     object.insert(key, value);
@@ -4476,19 +4655,27 @@ mod tests {
                     "createdAt": "2026-01-01T00:00:01Z"
                 },
                 {
+                    "id": "message-1::swipe::2",
+                    "messageId": " message-1 ",
+                    "index": 2,
+                    "content": "trimmed legacy id",
+                    "extra": { "large": "ignored" },
+                    "createdAt": "2026-01-01T00:00:02Z"
+                },
+                {
                     "id": "message-2::swipe::0",
                     "messageId": "message-2",
                     "index": 0,
                     "content": "skip",
                     "extra": { "large": "ignored" },
-                    "createdAt": "2026-01-01T00:00:02Z"
+                    "createdAt": "2026-01-01T00:00:03Z"
                 },
                 {
                     "id": "missing-message-id",
                     "index": 0,
                     "content": "skip missing parent",
                     "extra": { "large": "ignored" },
-                    "createdAt": "2026-01-01T00:00:03Z"
+                    "createdAt": "2026-01-01T00:00:04Z"
                 }
             ]))
             .unwrap(),
@@ -4518,6 +4705,99 @@ mod tests {
                     "messageId": "message-1",
                     "index": 1,
                     "content": "second"
+                }),
+                json!({
+                    "messageId": " message-1 ",
+                    "index": 2,
+                    "content": "trimmed legacy id"
+                })
+            ]
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn list_where_in_streams_full_legacy_sidecar_rows() {
+        let root = temp_storage_root("list-where-in-full-sidecars");
+        FileStorage::new(&root).unwrap();
+        let sidecar = root.join("collections").join("message-swipes.json");
+        fs::write(
+            &sidecar,
+            serde_json::to_vec_pretty(&json!([
+                {
+                    "id": "message-1::swipe::0",
+                    "messageId": "message-1",
+                    "index": 0,
+                    "content": "first",
+                    "extra": { "thinking": "first thought" },
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "providerMetadata": { "finishReason": "stop" }
+                },
+                {
+                    "id": "message-2::swipe::0",
+                    "messageId": "message-2",
+                    "index": 0,
+                    "content": "skip",
+                    "extra": { "thinking": "skip thought" },
+                    "createdAt": "2026-01-01T00:00:01Z"
+                },
+                {
+                    "id": "message-1::swipe::1",
+                    "messageId": "message-1",
+                    "index": 1,
+                    "content": "second",
+                    "extra": { "thinking": "second thought" },
+                    "createdAt": "2026-01-01T00:00:02Z",
+                    "customField": "preserved"
+                },
+                {
+                    "id": "message-1::swipe::2",
+                    "messageId": " message-1 ",
+                    "index": 2,
+                    "content": "trimmed legacy id",
+                    "extra": { "thinking": "trimmed thought" },
+                    "createdAt": "2026-01-01T00:00:03Z"
+                }
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let storage = FileStorage::new(&root).unwrap();
+        let values = HashSet::from(["message-1".to_string()]);
+        let rows = storage
+            .list_where_in("message-swipes", "messageId", &values)
+            .expect("filtered full rows should read");
+
+        assert_eq!(
+            rows,
+            vec![
+                json!({
+                    "id": "message-1::swipe::0",
+                    "messageId": "message-1",
+                    "index": 0,
+                    "content": "first",
+                    "extra": { "thinking": "first thought" },
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "providerMetadata": { "finishReason": "stop" }
+                }),
+                json!({
+                    "id": "message-1::swipe::1",
+                    "messageId": "message-1",
+                    "index": 1,
+                    "content": "second",
+                    "extra": { "thinking": "second thought" },
+                    "createdAt": "2026-01-01T00:00:02Z",
+                    "customField": "preserved"
+                }),
+                json!({
+                    "id": "message-1::swipe::2",
+                    "messageId": " message-1 ",
+                    "index": 2,
+                    "content": "trimmed legacy id",
+                    "extra": { "thinking": "trimmed thought" },
+                    "createdAt": "2026-01-01T00:00:03Z"
                 })
             ]
         );
