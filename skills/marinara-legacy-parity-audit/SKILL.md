@@ -35,6 +35,17 @@ Before auditing:
 
 Treat user-provided topic skills, local notes, GitHub issues, and PRs as optional leads. Do not require personal skills or private notes. Confirm every finding with code, runtime, or artifact evidence.
 
+## Optional Local Parity Ledger
+
+If `scratch/parity/README.md` exists in the current refactor worktree, treat it as an optional local parity ledger for this operator:
+
+1. Read `scratch/parity/README.md` and `scratch/parity/INDEX.md` before numbered tracker scans.
+2. Read `scratch/parity/targets/<target>.md` when a matching target record exists.
+3. Use ledger state to distinguish `scan_status`, `parity_verdict`, and `proof_level`; do not treat a checked public tracker item or closed follow-up issue as proof that a target is on par.
+4. Update or create the local target record and `INDEX.md` only when the user asks to track, update, post, or preserve parityscan results.
+
+If `scratch/parity/README.md` is missing, skip this hook silently. Do not ask for it, create it, or require it on other checkouts.
+
 ## Audit Flow
 
 1. State the audit gate before deep comparison: target aliases, contract surface, refactor owner, legacy owner, risk level, proof target, issue/PR coverage, and included/excluded downstream consumers.
