@@ -65,7 +65,10 @@ import {
   buildSessionConclusionPrompt,
   buildSetupPrompt,
 } from "../../../../engine/modes/game/prompts/gm-prompts";
-import { loadCharacterSprites, type CharacterSpriteSubject } from "../../../../engine/modes/game/prompts/sprite.service";
+import {
+  loadCharacterSprites,
+  type CharacterSpriteSubject,
+} from "../../../../engine/modes/game/prompts/sprite.service";
 import {
   GAME_BACKGROUND_PROMPT_OVERRIDE,
   GAME_ILLUSTRATION_PROMPT_OVERRIDE,
@@ -78,16 +81,12 @@ import { dedupeSessionSummaryLists } from "../../../../engine/modes/game/state/s
 import { buildRecapPrompt, buildSessionCarryoverContext } from "../../../../engine/modes/game/state/session.service";
 import { validateTransition } from "../../../../engine/modes/game/state/state-machine.service";
 import {
-  addCombatEntry,
-  addEventEntry,
-  addInventoryEntry,
-  addLocationEntry,
-  addNoteEntry,
+  applyJournalEntry,
   buildDeterministicSummary,
   buildStructuredRecap,
   createJournal,
+  syncJournalFromGameState,
   type Journal,
-  type JournalEntry,
 } from "../../../../engine/modes/game/world/journal.service";
 import { buildMapGenerationPrompt } from "../../../../engine/modes/game/world/map.service";
 import { withActiveGameMapMeta } from "../../../../engine/modes/game/world/map-position.service";
@@ -103,6 +102,7 @@ import {
   type Season,
   type WeatherState,
 } from "../../../../engine/modes/game/world/weather.service";
+import { clonePlayerStats } from "../../../../engine/shared/game-state/player-stats";
 import { parsePartyDialogue } from "../lib/party-dialogue-parser";
 
 const DEFAULT_COMBAT_ENCOUNTER_SETTINGS: EncounterSettings = {
@@ -921,6 +921,21 @@ function journalFromMeta(meta: Record<string, unknown>): Journal {
   };
 }
 
+function journalFromChat(
+  chat: Chat,
+  meta: Record<string, unknown> = chatMeta(chat),
+  options: { includeCurrentLocation?: boolean } = {},
+): Journal {
+  const gameState = asRecord((chat as { gameState?: unknown }).gameState);
+  const playerStats = gameState.playerStats == null ? null : clonePlayerStats(gameState.playerStats);
+  return syncJournalFromGameState(journalFromMeta(meta), {
+    gameNpcs: Array.isArray(meta.gameNpcs) ? (meta.gameNpcs as GameNpc[]) : [],
+    playerStats,
+    currentLocation:
+      options.includeCurrentLocation === true && typeof gameState.location === "string" ? gameState.location : null,
+  });
+}
+
 function isGameSetupConfig(value: unknown): value is GameSetupConfig {
   const record = asRecord(value);
   return (
@@ -959,8 +974,8 @@ function gameSetupMetadataPatch(config: GameSetupConfig): Record<string, unknown
   };
 }
 
-function sessionSummary(sessionNumber: number, meta: Record<string, unknown>): SessionSummary {
-  const journal = journalFromMeta(meta);
+function sessionSummary(sessionNumber: number, chat: Chat, meta: Record<string, unknown>): SessionSummary {
+  const journal = journalFromChat(chat, meta, { includeCurrentLocation: true });
   const npcs = Array.isArray(meta.gameNpcs) ? (meta.gameNpcs as GameNpc[]) : [];
   const map = (meta.gameMap as GameMap | null) ?? null;
   return {
@@ -1123,66 +1138,6 @@ function gameStateCarryoverPatch(previousChat: Chat | null | undefined, nextChat
       createdAt: nowIso(),
     },
   };
-}
-
-function normalizeJournalEntry(
-  type: string,
-  data: Record<string, unknown>,
-): Pick<JournalEntry, "type" | "title" | "content"> {
-  const title =
-    typeof data.title === "string"
-      ? data.title
-      : typeof data.name === "string"
-        ? data.name
-        : type === "location"
-          ? "Location"
-          : type === "npc"
-            ? "NPC"
-            : type === "combat"
-              ? "Combat"
-              : type === "item"
-                ? "Item"
-                : type === "quest"
-                  ? "Quest"
-                  : type === "note"
-                    ? "Note"
-                    : "Event";
-  const content =
-    typeof data.content === "string" ? data.content : typeof data.description === "string" ? data.description : "";
-  return { type: type as JournalEntry["type"], title, content };
-}
-
-function applyJournalEntry(journal: Journal, type: string, data: Record<string, unknown>): Journal {
-  if (type === "location") {
-    const { title, content } = normalizeJournalEntry(type, data);
-    return addLocationEntry(journal, title, content);
-  }
-  if (type === "combat") {
-    const { content } = normalizeJournalEntry(type, data);
-    const outcome =
-      data.outcome === "defeat" || data.outcome === "fled" || data.result === "defeat" || data.result === "fled"
-        ? (data.outcome ?? data.result)
-        : "victory";
-    return addCombatEntry(journal, content, outcome as "victory" | "defeat" | "fled");
-  }
-  if (type === "item") {
-    const item = typeof data.name === "string" ? data.name : typeof data.title === "string" ? data.title : "Item";
-    const action =
-      data.action === "used" || data.action === "lost" || data.action === "removed" ? data.action : "acquired";
-    const quantity = Number(data.quantity ?? 1);
-    return addInventoryEntry(journal, item, action, Number.isFinite(quantity) ? quantity : 1);
-  }
-  if (type === "note") {
-    const { title, content } = normalizeJournalEntry(type, data);
-    const readableType = data.readableType === "book" ? "book" : "note";
-    return addNoteEntry(journal, title, content, {
-      readableType,
-      sourceMessageId: typeof data.sourceMessageId === "string" ? data.sourceMessageId : undefined,
-      sourceSegmentIndex: Number.isInteger(data.sourceSegmentIndex) ? (data.sourceSegmentIndex as number) : undefined,
-    });
-  }
-  const { title, content } = normalizeJournalEntry(type, data);
-  return addEventEntry(journal, title, content);
 }
 
 const PARTY_CARD_ATTRIBUTE_NAMES = ["STR", "DEX", "CON", "INT", "WIS", "CHA"] as const;
@@ -2168,7 +2123,7 @@ export const gameApi = {
     const chat = await getChat(data.chatId);
     const meta = chatMeta(chat);
     const sessionNumber = Number(meta.gameSessionNumber ?? 1);
-    const fallback = sessionSummary(sessionNumber, meta);
+    const fallback = sessionSummary(sessionNumber, chat, meta);
     let summary = normalizeSessionSummaryPayload(data.summary, fallback, data.nextSessionRequest ?? null);
     let campaignProgression = meta.gameCampaignProgression;
     let characterCards = Array.isArray(meta.gameCharacterCards) ? meta.gameCharacterCards : [];
@@ -2223,6 +2178,7 @@ export const gameApi = {
     const nextSummaries = summaries.filter((item) => item.sessionNumber !== sessionNumber).concat(summary);
     const sessionChat = await patchChatMetadata(data.chatId, {
       gameSessionStatus: "concluded",
+      gameJournal: journalFromChat(chat, meta, { includeCurrentLocation: false }),
       gamePreviousSessionSummaries: nextSummaries,
       gameCampaignProgression: campaignProgression,
       gameCharacterCards: characterCards,
@@ -2681,14 +2637,16 @@ export const gameApi = {
     data: Record<string, unknown>;
   }): Promise<{ journal: Journal; sessionChat: Chat }> {
     const chat = await getChat(data.chatId);
-    const journal = applyJournalEntry(journalFromMeta(chatMeta(chat)), data.type, data.data);
+    const meta = chatMeta(chat);
+    const journal = applyJournalEntry(journalFromChat(chat, meta, { includeCurrentLocation: false }), data.type, data.data);
     const sessionChat = await patchChatMetadata(data.chatId, { gameJournal: journal });
     return { journal, sessionChat };
   },
 
   async getJournal(chatId: string): Promise<GameJournalResponse> {
-    const meta = chatMeta(await getChat(chatId));
-    const journal = journalFromMeta(meta);
+    const chat = await getChat(chatId);
+    const meta = chatMeta(chat);
+    const journal = journalFromChat(chat, meta, { includeCurrentLocation: true });
     const sessionNumber = Number(meta.gameSessionNumber ?? 1);
     return {
       journal,
