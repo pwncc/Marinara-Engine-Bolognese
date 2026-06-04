@@ -57,6 +57,9 @@ export interface GenerationCharacterContext {
   id: string;
   name: string;
   description: string;
+  avatarUrl?: string;
+  avatarFilePath?: string;
+  avatarFilename?: string;
   personality?: string;
   scenario?: string;
   creatorNotes?: string;
@@ -79,6 +82,9 @@ interface GenerationCharacterDepthPrompt {
 export interface GenerationPersonaContext {
   name: string;
   description: string;
+  avatarUrl?: string;
+  avatarFilePath?: string;
+  avatarFilename?: string;
   personality?: string;
   backstory?: string;
   appearance?: string;
@@ -219,6 +225,10 @@ function field(source: JsonRecord, key: string): string {
   return cleanPromptText(readString(source[key]));
 }
 
+function rawField(source: JsonRecord, key: string): string {
+  return readString(source[key]).trim();
+}
+
 function stringRecord(value: unknown): Record<string, string> {
   const record = parseRecord(value);
   return Object.fromEntries(
@@ -284,6 +294,16 @@ function loadCharacterContext(record: JsonRecord): GenerationCharacterContext {
       cleanPromptText(getCharacterDescriptionWithExtensions(data as unknown as CharacterData)) ||
       field(data, "description") ||
       field(record, "description"),
+    avatarUrl:
+      rawField(data, "avatarPath") ||
+      rawField(data, "avatarUrl") ||
+      rawField(data, "avatar") ||
+      rawField(record, "avatarPath") ||
+      rawField(record, "avatarUrl") ||
+      rawField(record, "avatar") ||
+      undefined,
+    avatarFilePath: rawField(data, "avatarFilePath") || rawField(record, "avatarFilePath") || undefined,
+    avatarFilename: rawField(data, "avatarFilename") || rawField(record, "avatarFilename") || undefined,
     personality: field(data, "personality") || undefined,
     scenario: field(data, "scenario") || undefined,
     creatorNotes: field(data, "creator_notes") || field(data, "creatorNotes") || undefined,
@@ -327,6 +347,16 @@ function loadPersonaContext(record: JsonRecord): GenerationPersonaContext {
   return {
     name: field(data, "name") || field(record, "name") || "User",
     description: personaDescriptionWithActiveExtensions(data, record),
+    avatarUrl:
+      rawField(data, "avatarPath") ||
+      rawField(data, "avatarUrl") ||
+      rawField(data, "avatar") ||
+      rawField(record, "avatarPath") ||
+      rawField(record, "avatarUrl") ||
+      rawField(record, "avatar") ||
+      undefined,
+    avatarFilePath: rawField(data, "avatarFilePath") || rawField(record, "avatarFilePath") || undefined,
+    avatarFilename: rawField(data, "avatarFilename") || rawField(record, "avatarFilename") || undefined,
     personality: field(data, "personality") || undefined,
     backstory: field(data, "backstory") || undefined,
     appearance: field(data, "appearance") || undefined,
@@ -1379,10 +1409,7 @@ function formattedTrackersContent(sections: TrackerPromptSection[], wrapFormat: 
       .join("\n\n");
   }
 
-  return [
-    "Trackers",
-    ...sections.map((section) => `${section.label}\n${trackerSectionText(section)}`),
-  ]
+  return ["Trackers", ...sections.map((section) => `${section.label}\n${trackerSectionText(section)}`)]
     .filter((part) => part.trim())
     .join("\n\n")
     .slice(0, 6000);
@@ -2380,10 +2407,7 @@ function mergedPromptContextKind(
   next: ChatMLMessage["contextKind"] | undefined,
 ): ChatMLMessage["contextKind"] | undefined {
   if (previous === next) return previous;
-  if (
-    (previous === "history" && next === "injection") ||
-    (previous === "injection" && next === "history")
-  ) {
+  if ((previous === "history" && next === "injection") || (previous === "injection" && next === "history")) {
     return "history";
   }
   return undefined;
@@ -2461,10 +2485,7 @@ function scopedRoleplayGroupTarget(
   return requestedCharacterTarget(input, characters);
 }
 
-function requestedCharacterTarget(
-  input: PromptAssemblyInput,
-  characters: GenerationCharacterContext[],
-): string | null {
+function requestedCharacterTarget(input: PromptAssemblyInput, characters: GenerationCharacterContext[]): string | null {
   const requestedCharacterId = readString(input.request.forCharacterId).trim();
   if (!requestedCharacterId) return null;
   return characters.some((character) => character.id === requestedCharacterId) ? requestedCharacterId : null;
