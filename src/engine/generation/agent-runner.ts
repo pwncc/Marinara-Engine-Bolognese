@@ -759,6 +759,7 @@ function builtInAgentMeta(type: string) {
 function builtInAgentFallback(type: string): JsonRecord | null {
   const meta = builtInAgentMeta(type);
   if (!meta) return null;
+  if (!meta.enabledByDefault) return null;
   const settings = {
     ...getDefaultBuiltInAgentSettings(type),
     enabledTools: DEFAULT_AGENT_TOOLS[type] ?? [],
@@ -1036,6 +1037,7 @@ async function resolveAgents(deps: AgentDeps, input: GenerationAgentRuntimeInput
   const rows = agentRows.filter((agent) => {
     const type = builtInAgentType(agent);
     const id = readString(agent.id);
+    if (!boolish(agent.enabled, true)) return false;
     const requestedExplicitly = requestedAgentTypes && (requestedAgentTypes.has(type) || requestedAgentTypes.has(id));
     const scopedToChat = scopedAgentIds.size > 0 && (scopedAgentIds.has(type) || scopedAgentIds.has(id));
     if (
