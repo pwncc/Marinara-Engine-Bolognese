@@ -277,14 +277,12 @@ fn message_persona_snapshot_object(value: &Value) -> Option<Map<String, Value>> 
             .get("personaSnapshot")
             .and_then(Value::as_object)
             .cloned(),
-        Value::String(text) => serde_json::from_str::<Value>(text)
-            .ok()
-            .and_then(|parsed| {
-                parsed
-                    .get("personaSnapshot")
-                    .and_then(Value::as_object)
-                    .cloned()
-            }),
+        Value::String(text) => serde_json::from_str::<Value>(text).ok().and_then(|parsed| {
+            parsed
+                .get("personaSnapshot")
+                .and_then(Value::as_object)
+                .cloned()
+        }),
         _ => None,
     }
 }

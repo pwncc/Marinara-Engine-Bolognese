@@ -141,13 +141,7 @@ impl FileStorage {
         filter_values: &HashSet<String>,
     ) -> AppResult<Vec<Value>> {
         self.read_locked_or_recover(
-            || {
-                self.read_collection_where_in_no_recovery(
-                    collection,
-                    filter_field,
-                    filter_values,
-                )
-            },
+            || self.read_collection_where_in_no_recovery(collection, filter_field, filter_values),
             || self.read_collection_where_in(collection, filter_field, filter_values),
         )
     }
@@ -2344,14 +2338,19 @@ fn project_nested_value(value: Value, fields: &HashSet<String>) -> Value {
     match value {
         Value::Object(object) => Value::Object(project_object_nested_fields(&object, fields)),
         Value::String(raw) => match serde_json::from_str::<Value>(&raw) {
-            Ok(Value::Object(object)) => Value::Object(project_object_nested_fields(&object, fields)),
+            Ok(Value::Object(object)) => {
+                Value::Object(project_object_nested_fields(&object, fields))
+            }
             _ => Value::String(raw),
         },
         other => other,
     }
 }
 
-fn project_object_nested_fields(object: &Map<String, Value>, fields: &HashSet<String>) -> Map<String, Value> {
+fn project_object_nested_fields(
+    object: &Map<String, Value>,
+    fields: &HashSet<String>,
+) -> Map<String, Value> {
     let mut projected = Map::new();
     for field in fields {
         insert_projected_nested_field(&mut projected, object, field);
@@ -2359,7 +2358,11 @@ fn project_object_nested_fields(object: &Map<String, Value>, fields: &HashSet<St
     projected
 }
 
-fn insert_projected_nested_field(projected: &mut Map<String, Value>, source: &Map<String, Value>, path: &str) {
+fn insert_projected_nested_field(
+    projected: &mut Map<String, Value>,
+    source: &Map<String, Value>,
+    path: &str,
+) {
     let Some((head, tail)) = path.split_once('.') else {
         if let Some(value) = source.get(path) {
             projected.insert(path.to_string(), value.clone());
@@ -3341,9 +3344,12 @@ fn read_pretty_projected_message_page_from_file(
 
             let mut record_bytes = join_reverse_lines(&record_lines_newest_first);
             strip_trailing_json_comma(&mut record_bytes);
-            if let Some((row, created_at, id)) =
-                read_projected_pretty_message_record(&record_bytes, chat_id, fields, field_selections)?
-            {
+            if let Some((row, created_at, id)) = read_projected_pretty_message_record(
+                &record_bytes,
+                chat_id,
+                fields,
+                field_selections,
+            )? {
                 if message_parts_are_before_cursor(&created_at, &id, before_cursor.as_ref()) {
                     rows_newest_first.push(row);
                     if rows_newest_first.len() >= limit {
@@ -3400,9 +3406,11 @@ fn read_projected_pretty_message_record(
         }
 
         if is_pretty_top_level_record_end(&line) {
-            return Ok(matches_chat
-                .unwrap_or(false)
-                .then_some((Value::Object(projected), created_at, id)));
+            return Ok(matches_chat.unwrap_or(false).then_some((
+                Value::Object(projected),
+                created_at,
+                id,
+            )));
         }
 
         let Some((field, value_start)) = pretty_json_field(&line, 4)? else {
@@ -4029,7 +4037,10 @@ mod tests {
         let root = temp_storage_root("update-collections-atomically");
         let storage = FileStorage::new(&root).unwrap();
         storage
-            .replace_all("messages", vec![json!({ "id": "message-1", "content": "old" })])
+            .replace_all(
+                "messages",
+                vec![json!({ "id": "message-1", "content": "old" })],
+            )
             .unwrap();
         storage
             .replace_all(
@@ -4555,7 +4566,10 @@ mod tests {
         let first = storage
             .list_projected("characters", &fields, &selections)
             .expect("first projected list should read");
-        assert_eq!(first, vec![json!({ "id": "target", "data": { "name": "Disk" } })]);
+        assert_eq!(
+            first,
+            vec![json!({ "id": "target", "data": { "name": "Disk" } })]
+        );
 
         let second = storage
             .list_projected("characters", &reversed_fields, &selections)
@@ -4618,7 +4632,10 @@ mod tests {
         let first = storage
             .list_projected("characters", &fields, &selections)
             .expect("first projected list should read");
-        assert_eq!(first, vec![json!({ "id": "target", "data": { "name": "Alpha" } })]);
+        assert_eq!(
+            first,
+            vec![json!({ "id": "target", "data": { "name": "Alpha" } })]
+        );
 
         let collection = root.join("collections").join("characters.json");
         let replacement = serde_json::to_vec_pretty(&json!([
@@ -4724,7 +4741,10 @@ mod tests {
         let rows = storage
             .list_projected("characters", &fields, &selections)
             .expect("projected list should read updated dirty rows");
-        assert_eq!(rows, vec![json!({ "id": "target", "data": { "name": "After" } })]);
+        assert_eq!(
+            rows,
+            vec![json!({ "id": "target", "data": { "name": "After" } })]
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -4785,7 +4805,10 @@ mod tests {
         let rows = storage
             .list_projected("characters", &fields, &selections)
             .expect("projected list should read replaced rows");
-        assert_eq!(rows, vec![json!({ "id": "target", "data": { "name": "After" } })]);
+        assert_eq!(
+            rows,
+            vec![json!({ "id": "target", "data": { "name": "After" } })]
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

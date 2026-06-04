@@ -2734,8 +2734,7 @@ mod tests {
                     }
                 }
             }
-            let body =
-                r#"{"images":["iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="],"info":"{}"}"#;
+            let body = r#"{"images":["iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="],"info":"{}"}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -2916,7 +2915,10 @@ mod tests {
 
     #[test]
     fn arliai_and_sdapi_urls_infer_automatic1111_image_source() {
-        assert_eq!(infer_image_source("", "https://api.arliai.com"), "automatic1111");
+        assert_eq!(
+            infer_image_source("", "https://api.arliai.com"),
+            "automatic1111"
+        );
         assert_eq!(
             infer_image_source("", "https://api.example.test/sdapi/v1/txt2img"),
             "automatic1111"

@@ -1096,19 +1096,27 @@ fn import_persona_payload(
     }
     let mut created_persona_id = None;
     let result = (|| -> AppResult<Value> {
-        let record = state
-            .storage
-            .create("personas", with_entity_defaults("personas", Value::Object(object))?)?;
+        let record = state.storage.create(
+            "personas",
+            with_entity_defaults("personas", Value::Object(object))?,
+        )?;
         let persona_id = created_record_id(&record, "persona")?;
         created_persona_id = Some(persona_id.clone());
         flush_import_writes(state)?;
-        Ok(json!({ "success": true, "id": persona_id, "name": record.get("name").cloned().unwrap_or(Value::Null), "persona": record }))
+        Ok(
+            json!({ "success": true, "id": persona_id, "name": record.get("name").cloned().unwrap_or(Value::Null), "persona": record }),
+        )
     })();
 
     result.map_err(|error| {
         let mut rollback_errors = Vec::new();
         if let Some(persona_id) = created_persona_id.as_deref() {
-            rollback_created_records(state, "personas", &[persona_id.to_string()], &mut rollback_errors);
+            rollback_created_records(
+                state,
+                "personas",
+                &[persona_id.to_string()],
+                &mut rollback_errors,
+            );
         }
         append_rollback_errors(error, "persona import", rollback_errors)
     })

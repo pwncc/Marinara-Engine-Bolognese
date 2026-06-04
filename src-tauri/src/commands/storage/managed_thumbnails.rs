@@ -280,8 +280,9 @@ mod tests {
         let source = state.data_dir.join("backgrounds").join("still.avif");
         std::fs::write(&source, b"not-an-avif").expect("avif fixture should be written");
 
-        let error = managed_asset_thumbnail_file_path(&state, "background", "still.avif", Some(128))
-            .expect_err("avif thumbnails should currently reject");
+        let error =
+            managed_asset_thumbnail_file_path(&state, "background", "still.avif", Some(128))
+                .expect_err("avif thumbnails should currently reject");
 
         assert_eq!(error.code, "invalid_input");
         assert!(

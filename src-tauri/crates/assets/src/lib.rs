@@ -12,8 +12,7 @@ const MAX_TEXT_ASSET_BYTES: usize = 1_000_000;
 const MAX_MEDIA_ASSET_BYTES: usize = 75 * 1024 * 1024;
 const RASTER_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "avif"];
 const SPRITE_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "avif", "svg"];
-const AUDIO_EXTENSIONS: &[&str] =
-    &["mp3", "ogg", "wav", "flac", "m4a", "aac", "opus", "webm"];
+const AUDIO_EXTENSIONS: &[&str] = &["mp3", "ogg", "wav", "flac", "m4a", "aac", "opus", "webm"];
 const TEXT_EXTENSIONS: &[&str] = &[
     "txt", "md", "markdown", "json", "jsonl", "yaml", "yml", "csv", "log", "js", "ts", "tsx",
     "css", "html",
@@ -856,7 +855,9 @@ mod tests {
             .expect_err("background SVG uploads should stay sprite-only");
 
         assert_eq!(error.code, "invalid_input");
-        assert!(error.message.contains("Can't upload .svg files to backgrounds"));
+        assert!(error
+            .message
+            .contains("Can't upload .svg files to backgrounds"));
     }
 
     #[test]
@@ -929,9 +930,20 @@ mod tests {
             .and_then(|assets| assets.get("backgrounds:user:moonlit_lake"))
             .expect("bridged background entry");
 
-        assert_eq!(entry.get("path").and_then(serde_json::Value::as_str), Some("__user_bg__/moonlit_lake.jpg"));
-        assert_eq!(entry.get("category").and_then(serde_json::Value::as_str), Some("backgrounds"));
-        assert_eq!(entry.get("managedSource").and_then(serde_json::Value::as_str), Some("backgrounds"));
+        assert_eq!(
+            entry.get("path").and_then(serde_json::Value::as_str),
+            Some("__user_bg__/moonlit_lake.jpg")
+        );
+        assert_eq!(
+            entry.get("category").and_then(serde_json::Value::as_str),
+            Some("backgrounds")
+        );
+        assert_eq!(
+            entry
+                .get("managedSource")
+                .and_then(serde_json::Value::as_str),
+            Some("backgrounds")
+        );
 
         let _ = fs::remove_dir_all(sandbox);
     }
@@ -941,7 +953,8 @@ mod tests {
         let sandbox = temp_root("managed-background-bridge-collision");
         let game_root = sandbox.join("game-assets");
         let background_root = sandbox.join("backgrounds");
-        fs::create_dir_all(game_root.join("backgrounds/user")).expect("create game background folder");
+        fs::create_dir_all(game_root.join("backgrounds/user"))
+            .expect("create game background folder");
         fs::create_dir_all(&background_root).expect("create background root");
         fs::write(game_root.join("backgrounds/user/moonlit_lake.jpg"), b"")
             .expect("write game background");

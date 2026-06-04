@@ -531,8 +531,7 @@ fn should_use_anthropic_adaptive_thinking(
     if effort.is_some() {
         return true;
     }
-    param_boolish(parameters, &["showThoughts", "show_thoughts"], false)
-        .unwrap_or(false)
+    param_boolish(parameters, &["showThoughts", "show_thoughts"], false).unwrap_or(false)
 }
 
 fn should_send_top_k(request: &LlmRequest) -> bool {
@@ -548,11 +547,11 @@ fn provider_error_text(details: &Value) -> Option<String> {
         details.get("message").and_then(Value::as_str),
         details.pointer("/error").and_then(Value::as_str),
     ]
-        .into_iter()
-        .flatten()
-        .map(str::trim)
-        .find(|message| !message.is_empty())
-        .map(|message| redact_sensitive_text(message).chars().take(500).collect())
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .find(|message| !message.is_empty())
+    .map(|message| redact_sensitive_text(message).chars().take(500).collect())
 }
 
 fn provider_http_error(status: reqwest::StatusCode, details: Value) -> AppError {
@@ -638,7 +637,10 @@ fn openai_chatgpt_auth_missing_message(error: &std::io::Error) -> String {
 async fn load_openai_chatgpt_auth() -> AppResult<ChatGptAuth> {
     let path = codex_auth_file_path();
     let raw = fs::read_to_string(&path).map_err(|error| {
-        AppError::new("openai_chatgpt_auth_missing", openai_chatgpt_auth_missing_message(&error))
+        AppError::new(
+            "openai_chatgpt_auth_missing",
+            openai_chatgpt_auth_missing_message(&error),
+        )
     })?;
     let mut auth_json: Value = serde_json::from_str(&raw)
         .map_err(|error| AppError::new("openai_chatgpt_auth_error", error.to_string()))?;
@@ -823,10 +825,9 @@ async fn complete_openai_compatible_rich(request: LlmRequest) -> AppResult<LlmCo
             .header("HTTP-Referer", "https://marinara.local")
             .header("X-Title", "Marinara Engine");
     }
-    let response = req
-        .send()
-        .await
-        .map_err(|error| AppError::new("llm_network_error", provider_transport_error_message(error)))?;
+    let response = req.send().await.map_err(|error| {
+        AppError::new("llm_network_error", provider_transport_error_message(error))
+    })?;
     parse_json_response_rich(response).await
 }
 
@@ -874,10 +875,9 @@ async fn stream_openai_compatible(
             .header("HTTP-Referer", "https://marinara.local")
             .header("X-Title", "Marinara Engine");
     }
-    let response = req
-        .send()
-        .await
-        .map_err(|error| AppError::new("llm_network_error", provider_transport_error_message(error)))?;
+    let response = req.send().await.map_err(|error| {
+        AppError::new("llm_network_error", provider_transport_error_message(error))
+    })?;
     let status = response.status();
     if !status.is_success() {
         let error_body = response.json::<Value>().await.unwrap_or_else(|_| json!({}));
@@ -894,7 +894,8 @@ async fn stream_openai_compatible(
         })?;
         buffer.push_str(&String::from_utf8_lossy(&chunk));
         while let Some(block) = take_sse_block(&mut buffer) {
-            if process_openai_sse_block(&block, emit, &mut tool_calls)? == SseBlockStatus::Complete {
+            if process_openai_sse_block(&block, emit, &mut tool_calls)? == SseBlockStatus::Complete
+            {
                 completed = true;
                 break;
             }
@@ -1031,9 +1032,9 @@ async fn openai_responses_request(
     } else {
         apply_openai_auth_headers(req, request)
     };
-    req.send()
-        .await
-        .map_err(|error| AppError::new("llm_network_error", provider_transport_error_message(error)))
+    req.send().await.map_err(|error| {
+        AppError::new("llm_network_error", provider_transport_error_message(error))
+    })
 }
 
 async fn complete_openai_responses_rich(request: LlmRequest) -> AppResult<LlmCompletion> {
@@ -1938,7 +1939,9 @@ pub fn diagnose_claude_subscription_model(model: &str, fast_mode: bool) -> AppRe
         AppError::with_details(
             "claude_subscription_response_error",
             "Claude Code did not return diagnostic JSON.",
-            redact_sensitive_json(json!({ "stdout": stdout.chars().take(1000).collect::<String>() })),
+            redact_sensitive_json(
+                json!({ "stdout": stdout.chars().take(1000).collect::<String>() }),
+            ),
         )
     })?;
     let model_usage = value
@@ -2161,7 +2164,9 @@ async fn anthropic_request(
         .json(body)
         .send()
         .await
-        .map_err(|error| AppError::new("llm_network_error", provider_transport_error_message(error)))
+        .map_err(|error| {
+            AppError::new("llm_network_error", provider_transport_error_message(error))
+        })
 }
 
 async fn complete_anthropic(request: LlmRequest) -> AppResult<String> {
@@ -2496,7 +2501,9 @@ async fn complete_google(request: LlmRequest) -> AppResult<String> {
         .json(&body)
         .send()
         .await
-        .map_err(|error| AppError::new("llm_network_error", provider_transport_error_message(error)))?;
+        .map_err(|error| {
+            AppError::new("llm_network_error", provider_transport_error_message(error))
+        })?;
     parse_json_response(response, |json| {
         json.get("candidates")
             .and_then(Value::as_array)
@@ -2535,7 +2542,9 @@ async fn stream_google(
         .json(&body)
         .send()
         .await
-        .map_err(|error| AppError::new("llm_network_error", provider_transport_error_message(error)))?;
+        .map_err(|error| {
+            AppError::new("llm_network_error", provider_transport_error_message(error))
+        })?;
     let status = response.status();
     if !status.is_success() {
         let error_body = read_error_response_details(response).await?;
@@ -2660,12 +2669,12 @@ fn ensure_google_finish_reason_allows_complete(reason: &str) -> AppResult<()> {
 }
 
 async fn read_error_response_details(response: reqwest::Response) -> AppResult<Value> {
-    let text = response
-        .text()
-        .await
-        .map_err(|error| {
-            AppError::new("llm_response_error", provider_transport_error_message(error))
-        })?;
+    let text = response.text().await.map_err(|error| {
+        AppError::new(
+            "llm_response_error",
+            provider_transport_error_message(error),
+        )
+    })?;
     Ok(provider_error_details_from_text(&text))
 }
 
@@ -2673,12 +2682,12 @@ async fn read_json_response(
     response: reqwest::Response,
 ) -> AppResult<(reqwest::StatusCode, Value)> {
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|error| {
-            AppError::new("llm_response_error", provider_transport_error_message(error))
-        })?;
+    let text = response.text().await.map_err(|error| {
+        AppError::new(
+            "llm_response_error",
+            provider_transport_error_message(error),
+        )
+    })?;
     if !status.is_success() {
         return Ok((status, provider_error_details_from_text(&text)));
     }
@@ -3232,7 +3241,10 @@ data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output
         .expect("Gemini terminal metadata block should parse");
 
         assert_eq!(status, SseBlockStatus::Complete);
-        assert_eq!(emitted[0], json!({ "type": "usage", "data": { "totalTokenCount": 3 } }));
+        assert_eq!(
+            emitted[0],
+            json!({ "type": "usage", "data": { "totalTokenCount": 3 } })
+        );
     }
 
     #[test]
@@ -3263,7 +3275,9 @@ data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output
             .expect_err("abrupt Gemini stream close should fail");
 
         assert_eq!(error.code, "llm_stream_incomplete");
-        assert!(error.message.contains("ended before Gemini sent a finish reason"));
+        assert!(error
+            .message
+            .contains("ended before Gemini sent a finish reason"));
     }
 
     #[test]
