@@ -1,15 +1,19 @@
-use super::assets::{normalize_zip_entry_name, restore_profile_zip_assets};
+use super::assets::{
+    normalize_zip_entry_name, preview_profile_zip_assets, restore_profile_zip_assets,
+};
+use super::legacy::preview_legacy_profile_tables;
 use super::{
     finish_profile_import_assets, import_profile_collections_with_restored_assets,
     legacy::{import_legacy_profile_tables_with_restored_assets, legacy_array_profile_tables},
-    profile_format_error, validate_native_profile_import, with_profile_import_metadata,
-    ProfileImportSourceFormat,
+    preview_profile_collections_with_restored_assets, profile_format_error,
+    validate_native_profile_import, with_profile_import_metadata, with_profile_import_warnings,
+    ProfileImportMode, ProfileImportSourceFormat,
 };
 use crate::state::AppState;
 use marinara_core::{AppError, AppResult};
 use serde_json::Value;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 
 const PROFILE_JSON_ENTRY: &str = "marinara-profile.json";
@@ -20,9 +24,40 @@ const PROFILE_JSON_ENTRY: &str = "marinara-profile.json";
 // migrations through.
 const MAX_PROFILE_JSON_BYTES: u64 = 1024 * 1024 * 1024;
 
+struct ProfileZipAssetContext<'a> {
+    names: &'a [String],
+    profile_prefix: &'a str,
+    raw_assets: Option<&'a Value>,
+}
+
 pub(super) fn import_profile_zip(state: &AppState, path: &Path) -> AppResult<Value> {
-    let file = File::open(path)?;
-    let mut archive = zip::ZipArchive::new(file)
+    import_profile_zip_file(state, File::open(path)?)
+}
+
+pub(super) fn preview_profile_zip(state: &AppState, path: &Path) -> AppResult<Value> {
+    preview_profile_zip_file(state, File::open(path)?)
+}
+
+pub(super) fn import_profile_zip_file<R: Read + Seek>(
+    state: &AppState,
+    reader: R,
+) -> AppResult<Value> {
+    run_profile_zip_reader(state, reader, ProfileImportMode::Commit)
+}
+
+pub(super) fn preview_profile_zip_file<R: Read + Seek>(
+    state: &AppState,
+    reader: R,
+) -> AppResult<Value> {
+    run_profile_zip_reader(state, reader, ProfileImportMode::Preview)
+}
+
+fn run_profile_zip_reader<R: Read + Seek>(
+    state: &AppState,
+    reader: R,
+    mode: ProfileImportMode,
+) -> AppResult<Value> {
+    let mut archive = zip::ZipArchive::new(reader)
         .map_err(|error| AppError::invalid_input(format!("Could not read profile ZIP: {error}")))?;
     let names = zip_entry_names(&mut archive)?;
     let (profile_entry, profile_prefix) = profile_json_entry(&names)?;
@@ -44,18 +79,12 @@ pub(super) fn import_profile_zip(state: &AppState, path: &Path) -> AppResult<Val
             )
         })?;
         validate_native_profile_import(data, collections)?;
-        let mut restored_assets =
-            restore_profile_zip_assets(state, &mut archive, &names, &profile_prefix, files)?;
-        let restored_count = restored_assets.restored();
-        let result = import_profile_collections_with_restored_assets(
-            state,
-            collections,
-            restored_count,
-            || restored_assets.install(),
-        );
-        return finish_profile_import_assets(restored_assets, result).map(|value| {
-            with_profile_import_metadata(value, ProfileImportSourceFormat::RefactorNative)
-        });
+        let assets = ProfileZipAssetContext {
+            names: &names,
+            profile_prefix: &profile_prefix,
+            raw_assets: files,
+        };
+        return run_profile_zip_collections(state, &mut archive, assets, collections, mode);
     }
     if let Some(tables_value) = data
         .get("fileStorage")
@@ -67,41 +96,131 @@ pub(super) fn import_profile_zip(state: &AppState, path: &Path) -> AppResult<Val
                 "invalid-legacy-modern-fileStorage",
             )
         })?;
-        let mut restored_assets =
-            restore_profile_zip_assets(state, &mut archive, &names, &profile_prefix, files)?;
-        let restored_count = restored_assets.restored();
-        let staging_root = restored_assets.staging_root().map(Path::to_path_buf);
-        let result = import_legacy_profile_tables_with_restored_assets(
+        let assets = ProfileZipAssetContext {
+            names: &names,
+            profile_prefix: &profile_prefix,
+            raw_assets: files,
+        };
+        return run_profile_zip_legacy_tables(
             state,
+            &mut archive,
+            assets,
             tables,
-            restored_count,
-            staging_root.as_deref(),
-            || restored_assets.install(),
+            ProfileImportSourceFormat::LegacyFileStorage,
+            mode,
         );
-        return finish_profile_import_assets(restored_assets, result).map(|value| {
-            with_profile_import_metadata(value, ProfileImportSourceFormat::LegacyFileStorage)
-        });
     }
     if let Some(tables) = legacy_array_profile_tables(data)? {
-        let mut restored_assets =
-            restore_profile_zip_assets(state, &mut archive, &names, &profile_prefix, files)?;
-        let restored_count = restored_assets.restored();
-        let staging_root = restored_assets.staging_root().map(Path::to_path_buf);
-        let result = import_legacy_profile_tables_with_restored_assets(
+        let assets = ProfileZipAssetContext {
+            names: &names,
+            profile_prefix: &profile_prefix,
+            raw_assets: files,
+        };
+        return run_profile_zip_legacy_tables(
             state,
+            &mut archive,
+            assets,
             &tables,
-            restored_count,
-            staging_root.as_deref(),
-            || restored_assets.install(),
+            ProfileImportSourceFormat::LegacyArray,
+            mode,
         );
-        return finish_profile_import_assets(restored_assets, result).map(|value| {
-            with_profile_import_metadata(value, ProfileImportSourceFormat::LegacyArray)
-        });
     }
     Err(profile_format_error(
         "Profile ZIP must contain data.collections, data.fileStorage.tables, or legacy profile arrays",
         "unknown",
     ))
+}
+
+fn run_profile_zip_collections<R: Read + std::io::Seek>(
+    state: &AppState,
+    archive: &mut zip::ZipArchive<R>,
+    assets: ProfileZipAssetContext<'_>,
+    collections: &serde_json::Map<String, Value>,
+    mode: ProfileImportMode,
+) -> AppResult<Value> {
+    match mode {
+        ProfileImportMode::Preview => {
+            let (restored_assets, warnings) = preview_profile_zip_assets(
+                archive,
+                assets.raw_assets,
+                assets.names,
+                assets.profile_prefix,
+            )?;
+            let result = preview_profile_collections_with_restored_assets(
+                state,
+                collections,
+                restored_assets,
+            )?;
+            Ok(with_profile_import_warnings(
+                with_profile_import_metadata(result, ProfileImportSourceFormat::RefactorNative),
+                warnings,
+            ))
+        }
+        ProfileImportMode::Commit => {
+            let mut restored_assets = restore_profile_zip_assets(
+                state,
+                archive,
+                assets.names,
+                assets.profile_prefix,
+                assets.raw_assets,
+            )?;
+            let restored_count = restored_assets.restored();
+            let result = import_profile_collections_with_restored_assets(
+                state,
+                collections,
+                restored_count,
+                || restored_assets.install(),
+            );
+            finish_profile_import_assets(restored_assets, result).map(|value| {
+                with_profile_import_metadata(value, ProfileImportSourceFormat::RefactorNative)
+            })
+        }
+    }
+}
+
+fn run_profile_zip_legacy_tables<R: Read + std::io::Seek>(
+    state: &AppState,
+    archive: &mut zip::ZipArchive<R>,
+    assets: ProfileZipAssetContext<'_>,
+    tables: &serde_json::Map<String, Value>,
+    source_format: ProfileImportSourceFormat,
+    mode: ProfileImportMode,
+) -> AppResult<Value> {
+    match mode {
+        ProfileImportMode::Preview => {
+            let (restored_assets, warnings) = preview_profile_zip_assets(
+                archive,
+                assets.raw_assets,
+                assets.names,
+                assets.profile_prefix,
+            )?;
+            let result = preview_legacy_profile_tables(state, tables, restored_assets)?;
+            Ok(with_profile_import_warnings(
+                with_profile_import_metadata(result, source_format),
+                warnings,
+            ))
+        }
+        ProfileImportMode::Commit => {
+            let mut restored_assets = restore_profile_zip_assets(
+                state,
+                archive,
+                assets.names,
+                assets.profile_prefix,
+                assets.raw_assets,
+            )?;
+            let restored_count = restored_assets.restored();
+            let staging_root = restored_assets.staging_root().map(Path::to_path_buf);
+            let result = import_legacy_profile_tables_with_restored_assets(
+                state,
+                tables,
+                restored_count,
+                staging_root.as_deref(),
+                || restored_assets.install(),
+            );
+            finish_profile_import_assets(restored_assets, result)
+                .map(|value| with_profile_import_metadata(value, source_format))
+        }
+    }
 }
 
 fn zip_entry_names<R: Read + std::io::Seek>(
@@ -198,6 +317,34 @@ mod tests {
         writer
             .write_all(profile_json.as_bytes())
             .expect("zip entry should write");
+        writer.finish().expect("zip should finalize");
+        zip_path
+    }
+
+    fn write_profile_zip_with_asset(
+        label: &str,
+        profile_json: &str,
+        asset_path: &str,
+        asset_bytes: &[u8],
+    ) -> PathBuf {
+        let zip_path =
+            std::env::temp_dir().join(format!("marinara-zip-import-{label}-{}.zip", nonce()));
+        let file = File::create(&zip_path).expect("zip file should be creatable");
+        let mut writer = zip::ZipWriter::new(file);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer
+            .start_file(PROFILE_JSON_ENTRY, options)
+            .expect("profile zip entry should start");
+        writer
+            .write_all(profile_json.as_bytes())
+            .expect("profile zip entry should write");
+        writer
+            .start_file(asset_path, options)
+            .expect("asset zip entry should start");
+        writer
+            .write_all(asset_bytes)
+            .expect("asset zip entry should write");
         writer.finish().expect("zip should finalize");
         zip_path
     }
@@ -325,6 +472,115 @@ mod tests {
             .expect("chat lookup should not fail")
             .expect("recoverable profile data should import");
         assert_eq!(chat["name"], "Recovered Chat");
+
+        let _ = std::fs::remove_file(&zip_path);
+    }
+
+    #[test]
+    fn preview_profile_zip_reports_counts_and_warnings_without_importing() {
+        let state = test_state("preview-missing-asset");
+        let profile_json = json!({
+            "type": "marinara_profile",
+            "data": {
+                "fileStorage": {
+                    "tables": {
+                        "chats": [
+                            {
+                                "id": "chat-preview",
+                                "name": "Preview Chat",
+                                "mode": "conversation",
+                                "metadata": {},
+                                "characterIds": []
+                            }
+                        ]
+                    },
+                    "files": [
+                        {
+                            "path": "avatars/missing-from-zip.png",
+                            "size": 12
+                        }
+                    ]
+                }
+            }
+        })
+        .to_string();
+        let zip_path = write_profile_zip("preview-missing-asset", &profile_json);
+
+        let preview = preview_profile_zip(&state, &zip_path)
+            .expect("zip preview should preserve counts and warn about missing assets");
+
+        assert_eq!(preview["success"], true);
+        assert_eq!(preview["preview"], true);
+        assert_eq!(preview["sourceFormat"], "legacy-modern-fileStorage");
+        assert_eq!(preview["imported"]["chats"], 1);
+        assert_eq!(preview["imported"]["files"], 0);
+        assert_eq!(preview["warnings"][0]["type"], "missing_asset");
+        assert_eq!(
+            preview["warnings"][0]["path"],
+            "avatars/missing-from-zip.png"
+        );
+        assert!(state
+            .storage
+            .get("chats", "chat-preview")
+            .expect("chat lookup should not fail")
+            .is_none());
+
+        let _ = std::fs::remove_file(&zip_path);
+    }
+
+    #[test]
+    fn preview_profile_zip_rejects_corrupt_asset_entry_without_importing() {
+        let state = test_state("preview-corrupt-asset");
+        let asset_bytes = b"valid-asset-bytes";
+        let profile_json = json!({
+            "type": "marinara_profile",
+            "data": {
+                "fileStorage": {
+                    "tables": {
+                        "chats": [
+                            {
+                                "id": "chat-preview",
+                                "name": "Preview Chat",
+                                "mode": "conversation",
+                                "metadata": {},
+                                "characterIds": []
+                            }
+                        ]
+                    },
+                    "files": [
+                        {
+                            "path": "avatars/avatar.png",
+                            "size": asset_bytes.len()
+                        }
+                    ]
+                }
+            }
+        })
+        .to_string();
+        let zip_path = write_profile_zip_with_asset(
+            "preview-corrupt-asset",
+            &profile_json,
+            "avatars/avatar.png",
+            asset_bytes,
+        );
+        let mut zip_bytes = std::fs::read(&zip_path).expect("zip should be readable");
+        let offset = zip_bytes
+            .windows(asset_bytes.len())
+            .position(|window| window == asset_bytes)
+            .expect("asset bytes should be present in stored zip entry");
+        zip_bytes[offset] ^= 0xff;
+        std::fs::write(&zip_path, zip_bytes).expect("corrupted zip should write");
+
+        let error = preview_profile_zip(&state, &zip_path)
+            .expect_err("zip preview should reject corrupt asset entries");
+
+        assert_eq!(error.code, "invalid_input");
+        assert!(error.message.contains("Could not read profile asset"));
+        assert!(state
+            .storage
+            .get("chats", "chat-preview")
+            .expect("chat lookup should not fail")
+            .is_none());
 
         let _ = std::fs::remove_file(&zip_path);
     }
