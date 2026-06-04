@@ -52,6 +52,7 @@ export function useChatOverlays(activeChatId: string) {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [spriteArrangeMode, setSpriteArrangeMode] = useState(false);
+  const [newChatSetupChatId, setNewChatSetupChatId] = useState<string | null>(null);
   const pendingSetupOverlayOpenRef = useRef<PendingSetupOverlayOpen | null>(null);
 
   const newChatSetupIntent = useChatStore((state) => state.newChatSetupIntent);
@@ -83,6 +84,7 @@ export function useChatOverlays(activeChatId: string) {
 
   useEffect(() => {
     setSpriteArrangeMode(false);
+    setNewChatSetupChatId(null);
   }, [activeChatId]);
 
   useEffect(
@@ -98,6 +100,7 @@ export function useChatOverlays(activeChatId: string) {
 
     const intent = useChatStore.getState().consumeNewChatSetupIntent(activeChatId);
     if (intent) {
+      setNewChatSetupChatId(intent.chatId);
       queueSetupOverlayOpen(`intent:${intent.chatId}`, () => {
         if (intent.openWizard) {
           if (intent.shortcutMode) useChatStore.getState().setShouldOpenWizardInShortcutMode(true);
@@ -114,14 +117,19 @@ export function useChatOverlays(activeChatId: string) {
         useChatStore.getState().setShouldOpenWizard(false);
         useChatStore.getState().setShouldOpenSettings(false);
       };
+      const cancelLegacyOpen = () => {
+        clearLegacyFlags();
+        setNewChatSetupChatId(null);
+      };
       queueSetupOverlayOpen(
         `legacy:${activeChatId}:${shouldOpenWizard ? "wizard" : "settings"}`,
         () => {
+          if (shouldOpenWizard) setNewChatSetupChatId(activeChatId);
           if (shouldOpenWizard) setWizardOpen(true);
           else setSettingsOpen(true);
           clearLegacyFlags();
         },
-        clearLegacyFlags,
+        cancelLegacyOpen,
       );
     }
   }, [newChatSetupIntent, queueSetupOverlayOpen, shouldOpenSettings, shouldOpenWizard, activeChatId]);
@@ -132,11 +140,13 @@ export function useChatOverlays(activeChatId: string) {
     galleryOpen,
     wizardOpen,
     spriteArrangeMode,
+    newChatSetupChatId,
     setSettingsOpen,
     setFilesOpen,
     setGalleryOpen,
     setWizardOpen,
     setSpriteArrangeMode,
+    clearNewChatSetup: () => setNewChatSetupChatId(null),
     openSettings: () => setSettingsOpen(true),
     openFiles: () => setFilesOpen(true),
     openGallery: () => setGalleryOpen(true),
@@ -146,6 +156,7 @@ export function useChatOverlays(activeChatId: string) {
     finishWizard: () => {
       setWizardOpen(false);
       setSettingsOpen(true);
+      setNewChatSetupChatId(null);
     },
     toggleSpriteArrange: () => setSpriteArrangeMode((current) => !current),
   };

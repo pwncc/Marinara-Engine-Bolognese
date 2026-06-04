@@ -11,6 +11,7 @@ import {
   useChatTranscriptShortcuts,
   useChatTtsAutoplay,
   useSpriteMetadataState,
+  isEmptyNewChatSetup,
 } from "../../shared/chat-ui/index";
 import { useDeleteChat } from "../../../catalog/chats/index";
 import { ChatConversationSurface } from "./ChatConversationSurface";
@@ -111,12 +112,36 @@ export function ConversationModeRoute({ activeChatId }: ConversationModeRoutePro
     void deleteChat
       .mutateAsync(cancellingChatId)
       .then(() => {
+        overlays.clearNewChatSetup();
         if (useChatStore.getState().activeChatId === cancellingChatId) setActiveChatId(null);
       })
       .catch(() => {
         if (useChatStore.getState().activeChatId === cancellingChatId) overlays.setWizardOpen(true);
       });
   }, [activeChatId, deleteChat, overlays, setActiveChatId]);
+
+  const handleFinishNewConversationSetup = useCallback(() => {
+    if (
+      isEmptyNewChatSetup({
+        activeChatId,
+        setupChatId: overlays.newChatSetupChatId,
+        chatCharIds: data.chatCharIds,
+        totalMessageCount: data.totalMessageCount,
+        messagesLoaded: data.messages !== undefined,
+      })
+    ) {
+      handleCancelNewConversationSetup();
+      return;
+    }
+    overlays.finishWizard();
+  }, [
+    activeChatId,
+    data.chatCharIds,
+    data.messages,
+    data.totalMessageCount,
+    handleCancelNewConversationSetup,
+    overlays,
+  ]);
 
   const cardCssMode = (() => {
     const mode = data.chatMeta.cardCssMode;
@@ -178,7 +203,7 @@ export function ConversationModeRoute({ activeChatId }: ConversationModeRoutePro
         onCloseFiles={overlays.closeFiles}
         onCloseGallery={overlays.closeGallery}
         onIllustrate={timeline.handleIllustrate}
-        onWizardFinish={overlays.finishWizard}
+        onWizardFinish={handleFinishNewConversationSetup}
         onWizardCancel={handleCancelNewConversationSetup}
         onClosePeekPrompt={timeline.closePeekPrompt}
         onResetSpritePlacements={spriteState.handleResetSpritePlacements}
