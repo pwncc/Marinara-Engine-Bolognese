@@ -119,6 +119,23 @@ function isOpenAiResponsesUnsupportedCustomParameterKey(key: string): boolean {
   ].includes(key);
 }
 
+function isMistralUnsupportedCustomParameterKey(key: string): boolean {
+  return [
+    "seed",
+    "top_k",
+    "topK",
+    "safePrompt",
+    "randomSeed",
+    "promptCacheKey",
+    "promptMode",
+    "parallelToolCalls",
+    "reasoningEffort",
+    "responseFormat",
+    "service_tier",
+    "serviceTier",
+  ].includes(key);
+}
+
 function shouldSendTopK(provider: string): boolean {
   return !["openai", "openrouter", "xai", "mistral", "cohere", "nanogpt"].includes(provider);
 }
@@ -194,6 +211,23 @@ function openAiReasoningEffort(model: string, parameters: JsonRecord): string | 
   if (effort === "minimal") return supportsOpenAiMinimalReasoningModel(model) ? "minimal" : null;
   if (["low", "medium", "high"].includes(effort)) return effort;
   if (effort === "maximum" || effort === "xhigh") return supportsOpenAiXhighReasoningModel(model) ? "xhigh" : "high";
+  return null;
+}
+
+function supportsMistralAdjustableReasoning(model: string): boolean {
+  const normalized = model.toLowerCase();
+  return (
+    normalized === "mistral-small-latest" || normalized === "mistral-small-2603" || normalized === "mistral-medium-3-5"
+  );
+}
+
+function mistralReasoningEffort(model: string, parameters: JsonRecord): string | null {
+  if (!supportsMistralAdjustableReasoning(model)) return null;
+  const effort = parameterString(parameters, ["reasoningEffort", "reasoning_effort"])?.toLowerCase();
+  if (effort === "none" || effort === "minimal" || effort === "low") return "none";
+  if (effort === "high" || effort === "maximum" || effort === "xhigh") return "high";
+  const showThoughts = parameters.showThoughts ?? parameters.show_thoughts;
+  if (showThoughts != null) return boolish(showThoughts, false) ? "high" : "none";
   return null;
 }
 
@@ -486,7 +520,13 @@ function visibleOpenAiCompatibleParameters(
     if (presencePenalty !== null) body.presence_penalty = presencePenalty;
   }
   const seed = parameterInteger(parameters, ["seed"]);
-  if (seed !== null) body.seed = seed;
+  if (seed !== null) {
+    if (provider === "mistral") {
+      body.random_seed = seed;
+    } else {
+      body.seed = seed;
+    }
+  }
   if (sendSampling) {
     const stop = stopSequences(parameters);
     if (stop) body.stop = stop;
@@ -512,9 +552,26 @@ function visibleOpenAiCompatibleParameters(
   } else if (provider === "openai") {
     const serviceTier = parameterString(parameters, ["serviceTier", "service_tier"]);
     if (serviceTier && isOpenAiServiceTier(serviceTier)) body.service_tier = serviceTier;
+  } else if (provider === "mistral") {
+    const effort = mistralReasoningEffort(model, parameters);
+    if (effort) body.reasoning_effort = effort;
+    const safePrompt = parameters.safePrompt ?? parameters.safe_prompt;
+    if (safePrompt != null) body.safe_prompt = boolish(safePrompt, false);
+    const promptCacheKey = parameterString(parameters, ["promptCacheKey", "prompt_cache_key"]);
+    if (promptCacheKey) body.prompt_cache_key = promptCacheKey;
+    const promptMode = parameterString(parameters, ["promptMode", "prompt_mode"]);
+    if (promptMode === "reasoning") body.prompt_mode = promptMode;
+    const parallelToolCalls = parameters.parallelToolCalls ?? parameters.parallel_tool_calls;
+    if (parallelToolCalls != null) body.parallel_tool_calls = boolish(parallelToolCalls, true);
+    const prediction = parameters.prediction;
+    if (prediction != null) body.prediction = prediction;
   }
 
-  applyCustomParameters(body, parameters, { stripSampling: !sendSampling, stripStop: !sendSampling });
+  applyCustomParameters(body, parameters, {
+    stripSampling: !sendSampling,
+    stripStop: !sendSampling,
+    skipKey: provider === "mistral" ? isMistralUnsupportedCustomParameterKey : undefined,
+  });
   const openrouter = parameters.openrouter ?? parameters.openRouter;
   if (openrouter != null) body.provider = openrouter;
   const toolChoice = parameters.toolChoice ?? parameters.tool_choice;

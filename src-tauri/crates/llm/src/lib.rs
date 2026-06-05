@@ -474,6 +474,34 @@ fn openai_reasoning_effort(request: &LlmRequest) -> Option<String> {
     }
 }
 
+fn supports_mistral_adjustable_reasoning(model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    matches!(
+        model.as_str(),
+        "mistral-small-latest" | "mistral-small-2603" | "mistral-medium-3-5"
+    )
+}
+
+fn mistral_reasoning_effort(request: &LlmRequest) -> Option<&'static str> {
+    if !supports_mistral_adjustable_reasoning(&request.connection.model) {
+        return None;
+    }
+    if let Some(effort) = param_string(
+        &request.parameters,
+        &["reasoningEffort", "reasoning_effort"],
+    )
+    .map(|value| value.to_ascii_lowercase())
+    {
+        return match effort.as_str() {
+            "none" | "minimal" | "low" => Some("none"),
+            "high" | "maximum" | "xhigh" => Some("high"),
+            _ => None,
+        };
+    }
+    param_boolish(&request.parameters, &["showThoughts", "show_thoughts"], false)
+        .map(|show| if show { "high" } else { "none" })
+}
+
 fn model_contains(request: &LlmRequest, needle: &str) -> bool {
     request
         .connection
@@ -580,6 +608,24 @@ const OPENAI_RESPONSES_UNSUPPORTED_CUSTOM_PARAMETER_KEYS: &[&str] = &[
     "stopSequences",
     "stop_sequences",
 ];
+
+fn is_mistral_unsupported_custom_parameter_key(key: &str) -> bool {
+    matches!(
+        key,
+        "seed"
+            | "top_k"
+            | "topK"
+            | "safePrompt"
+            | "randomSeed"
+            | "promptCacheKey"
+            | "promptMode"
+            | "parallelToolCalls"
+            | "reasoningEffort"
+            | "responseFormat"
+            | "service_tier"
+            | "serviceTier"
+    )
+}
 
 fn is_openai_service_tier(value: &str) -> bool {
     matches!(value, "auto" | "default" | "flex" | "scale" | "priority")
@@ -1533,6 +1579,47 @@ impl OpenAiToolCallAccumulator {
     }
 }
 
+fn emit_openai_content_delta(
+    content: &Value,
+    emit: &mut (impl FnMut(Value) -> AppResult<()> + Send),
+) -> AppResult<()> {
+    match content {
+        Value::String(text) => {
+            if !text.is_empty() {
+                emit(json!({ "type": "token", "text": text, "data": text }))?;
+            }
+        }
+        Value::Array(parts) => {
+            for part in parts {
+                emit_openai_content_delta(part, emit)?;
+            }
+        }
+        Value::Object(_) if content.get("type").and_then(Value::as_str) == Some("thinking") => {
+            let thinking = content
+                .get("thinking")
+                .map(content_text)
+                .filter(|text| !text.trim().is_empty())
+                .or_else(|| {
+                    content
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            if !thinking.is_empty() {
+                emit(json!({ "type": "thinking", "text": thinking, "data": thinking }))?;
+            }
+        }
+        Value::Object(_) => {
+            if let Some(text) = content_part_text(content).filter(|text| !text.is_empty()) {
+                emit(json!({ "type": "token", "text": text, "data": text }))?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn process_openai_sse_block(
     block: &str,
     emit: &mut (impl FnMut(Value) -> AppResult<()> + Send),
@@ -1568,10 +1655,8 @@ fn process_openai_sse_block(
                 }
             }
         }
-        if let Some(content) = delta.get("content").and_then(Value::as_str) {
-            if !content.is_empty() {
-                emit(json!({ "type": "token", "text": content, "data": content }))?;
-            }
+        if let Some(content) = delta.get("content") {
+            emit_openai_content_delta(content, emit)?;
         }
         if choice
             .get("finish_reason")
@@ -1645,7 +1730,11 @@ fn apply_openai_parameters(body: &mut Value, request: &LlmRequest) {
         }
     }
     if let Some(seed) = param_i64(parameters, &["seed"]) {
-        body["seed"] = json!(seed);
+        if request.connection.provider == "mistral" {
+            body["random_seed"] = json!(seed);
+        } else {
+            body["seed"] = json!(seed);
+        }
     }
     let send_sampling = should_send_openai_sampling_parameters(request);
     if send_sampling {
@@ -1685,8 +1774,41 @@ fn apply_openai_parameters(body: &mut Value, request: &LlmRequest) {
         {
             body["service_tier"] = json!(service_tier);
         }
+    } else if request.connection.provider == "mistral" {
+        if let Some(effort) = mistral_reasoning_effort(request) {
+            body["reasoning_effort"] = json!(effort);
+        }
+        if let Some(safe_prompt) = param_boolish(parameters, &["safePrompt", "safe_prompt"], false)
+        {
+            body["safe_prompt"] = json!(safe_prompt);
+        }
+        if let Some(prompt_cache_key) =
+            param_string(parameters, &["promptCacheKey", "prompt_cache_key"])
+        {
+            body["prompt_cache_key"] = json!(prompt_cache_key);
+        }
+        if let Some(prompt_mode) =
+            param_string(parameters, &["promptMode", "prompt_mode"]).filter(|value| value == "reasoning")
+        {
+            body["prompt_mode"] = json!(prompt_mode);
+        }
+        if let Some(parallel_tool_calls) = param_boolish(
+            parameters,
+            &["parallelToolCalls", "parallel_tool_calls"],
+            true,
+        ) {
+            body["parallel_tool_calls"] = json!(parallel_tool_calls);
+        }
+        if let Some(prediction) = parameters.get("prediction").filter(|value| !value.is_null()) {
+            body["prediction"] = prediction.clone();
+        }
     }
     apply_custom_parameters_to_object(body, parameters, !send_sampling, !send_sampling, &[]);
+    if request.connection.provider == "mistral" {
+        if let Some(body) = body.as_object_mut() {
+            body.retain(|key, _| !is_mistral_unsupported_custom_parameter_key(key));
+        }
+    }
     if let Some(openrouter) = parameters
         .get("openrouter")
         .or_else(|| parameters.get("openRouter"))
@@ -3066,22 +3188,54 @@ where
     })
 }
 
+fn content_part_text(value: &Value) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        return Some(text.to_string());
+    }
+    if value.get("type").and_then(Value::as_str) == Some("thinking") {
+        return None;
+    }
+    value
+        .get("text")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("content").and_then(Value::as_str))
+        .map(str::to_string)
+}
+
 fn content_text(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
         Value::Array(parts) => parts
             .iter()
-            .filter_map(|part| {
-                if let Some(text) = part.as_str() {
-                    return Some(text.to_string());
-                }
-                part.get("text")
-                    .and_then(Value::as_str)
-                    .or_else(|| part.get("content").and_then(Value::as_str))
-                    .map(str::to_string)
-            })
+            .filter_map(content_part_text)
             .collect::<Vec<_>>()
             .join(""),
+        Value::Object(_) => content_part_text(value).unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+fn content_thinking_text(value: &Value) -> String {
+    match value {
+        Value::Array(parts) => parts
+            .iter()
+            .map(content_thinking_text)
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join(""),
+        Value::Object(_) if value.get("type").and_then(Value::as_str) == Some("thinking") => {
+            value
+                .get("thinking")
+                .map(content_text)
+                .filter(|text| !text.trim().is_empty())
+                .or_else(|| {
+                    value
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .unwrap_or_default()
+        }
         _ => String::new(),
     }
 }
@@ -3099,6 +3253,13 @@ fn assistant_message_text(message: &Value) -> String {
 }
 
 fn response_reasoning_text(choice: &Value, message: &Value) -> String {
+    if let Some(content_reasoning) = message
+        .get("content")
+        .map(content_thinking_text)
+        .filter(|text| !text.trim().is_empty())
+    {
+        return content_reasoning;
+    }
     [
         message.get("reasoning"),
         message.get("reasoning_content"),

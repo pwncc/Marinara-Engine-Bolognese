@@ -282,9 +282,27 @@ const GOOGLE_MODELS: KnownModel[] = [
   { id: "gemini-robotics-er-1.5-preview", name: "gemini-robotics-er-1.5-preview", context: 1000000, maxOutput: 8192 },
 ];
 
-// ── MistralAI (loaded dynamically from API in SillyTavern — no static list) ──
+// ── MistralAI (loaded dynamically from API when available) ──
 
-const MISTRAL_MODELS: KnownModel[] = [];
+const MISTRAL_MODELS: KnownModel[] = [
+  { id: "mistral-medium-3-5", name: "mistral-medium-3-5", context: 256000, maxOutput: 8192 },
+  { id: "mistral-medium-latest", name: "mistral-medium-latest", context: 256000, maxOutput: 8192 },
+  { id: "mistral-small-latest", name: "mistral-small-latest", context: 256000, maxOutput: 8192 },
+  { id: "mistral-small-2603", name: "mistral-small-2603", context: 256000, maxOutput: 8192 },
+  { id: "mistral-large-latest", name: "mistral-large-latest", context: 256000, maxOutput: 8192 },
+  { id: "mistral-large-2512", name: "mistral-large-2512", context: 256000, maxOutput: 8192 },
+  { id: "mistral-medium-2508", name: "mistral-medium-2508", context: 256000, maxOutput: 8192 },
+  { id: "ministral-14b-2512", name: "ministral-14b-2512", context: 256000, maxOutput: 8192 },
+  { id: "ministral-8b-2512", name: "ministral-8b-2512", context: 256000, maxOutput: 8192 },
+  { id: "ministral-3b-2512", name: "ministral-3b-2512", context: 256000, maxOutput: 8192 },
+  { id: "magistral-medium-latest", name: "magistral-medium-latest", context: 128000, maxOutput: 8192 },
+  { id: "magistral-medium-2509", name: "magistral-medium-2509", context: 128000, maxOutput: 8192 },
+  { id: "magistral-small-latest", name: "magistral-small-latest", context: 128000, maxOutput: 8192 },
+  { id: "magistral-small-2509", name: "magistral-small-2509", context: 128000, maxOutput: 8192 },
+  { id: "codestral-latest", name: "codestral-latest", context: 128000, maxOutput: 8192 },
+  { id: "codestral-2508", name: "codestral-2508", context: 128000, maxOutput: 8192 },
+  { id: "devstral-2512", name: "devstral-2512", context: 256000, maxOutput: 8192 },
+];
 
 // ── Cohere (from #model_cohere_select) ──
 
