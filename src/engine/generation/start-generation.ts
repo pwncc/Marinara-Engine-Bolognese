@@ -45,7 +45,6 @@ import {
 } from "./context";
 import {
   appendReadableAttachmentsToContent,
-  extractImageAttachmentDataUrls,
   getAttachmentFilename,
   resolveRegenerationGameStateAnchor,
   resolveRegenerationGameStateFallbackMessageIds,
@@ -53,6 +52,13 @@ import {
   shouldPreferLatestVisibleGameState,
   type PromptAttachment,
 } from "./generate-route-utils";
+import {
+  deletePreparedManagedImageAttachments,
+  isImageAttachment,
+  prepareManagedImageAttachmentBatch,
+  resolveImageAttachmentDataUrls,
+  type PreparedManagedImageAttachments,
+} from "../shared/attachments/image-attachments";
 import type { GenerationEvent } from "./generation-events";
 import {
   applyGenerationReplayToRegenerateInput,
@@ -147,6 +153,7 @@ export interface RetryAgentsInput extends JsonRecord {
 interface PreparedUserInput {
   content: string;
   attachments: PromptAttachment[];
+  preparedAttachments: PreparedManagedImageAttachments;
   images: string[];
   mentionedCharacterNames: string[];
 }
@@ -271,9 +278,7 @@ function assertChatCanGenerate(chat: JsonRecord, input?: { forCharacterId?: unkn
 }
 
 function imageAttachmentNotes(attachments: PromptAttachment[]): string {
-  const names = attachments
-    .filter((attachment) => readString(attachment.type).toLowerCase().startsWith("image/"))
-    .map(getAttachmentFilename);
+  const names = attachments.filter(isImageAttachment).map(getAttachmentFilename);
   if (names.length === 0) return "";
   return names.map((name) => `[Attached image: ${name}]`).join("\n");
 }
@@ -281,19 +286,44 @@ function imageAttachmentNotes(attachments: PromptAttachment[]): string {
 async function prepareUserInput(storage: StorageGateway, input: StartGenerationInput): Promise<PreparedUserInput> {
   const raw = inputUserMessage(input).trim();
   const attachments = inputAttachments(input);
-  const images = extractImageAttachmentDataUrls(attachments);
-  const mentionedCharacterNames = stringArray(input.mentionedCharacterNames).filter((name) => name.trim().length > 0);
-  const regexed = raw ? await applyRuntimeRegexScripts(storage, "user_input", raw) : "";
-  const withReadableAttachments = appendReadableAttachmentsToContent(regexed, attachments);
-  const imageNotes = imageAttachmentNotes(attachments);
-  return {
-    content: collapseExcessBlankLines(
-      [withReadableAttachments, imageNotes].filter((part) => part.trim().length > 0).join("\n\n"),
-    ),
-    attachments,
-    images,
-    mentionedCharacterNames,
-  };
+  const images = await resolveImageAttachmentDataUrls(storage, attachments);
+  const preparedAttachments = await prepareManagedImageAttachmentBatch(storage, input.chatId, attachments);
+  try {
+    const managedAttachments = preparedAttachments.attachments;
+    const mentionedCharacterNames = stringArray(input.mentionedCharacterNames).filter((name) => name.trim().length > 0);
+    const regexed = raw ? await applyRuntimeRegexScripts(storage, "user_input", raw) : "";
+    const withReadableAttachments = appendReadableAttachmentsToContent(regexed, managedAttachments);
+    const imageNotes = imageAttachmentNotes(managedAttachments);
+    return {
+      content: collapseExcessBlankLines(
+        [withReadableAttachments, imageNotes].filter((part) => part.trim().length > 0).join("\n\n"),
+      ),
+      attachments: managedAttachments,
+      preparedAttachments,
+      images,
+      mentionedCharacterNames,
+    };
+  } catch (error) {
+    if (preparedAttachments.createdGalleryIds.length > 0) {
+      await deletePreparedManagedImageAttachments(storage, preparedAttachments).catch((rollbackError) => {
+        console.warn("[generation] Failed to roll back prepared image attachments after input preparation failure", rollbackError);
+      });
+    }
+    throw error;
+  }
+}
+
+async function deletePreparedUserInputAttachmentsSafely(
+  storage: StorageGateway,
+  prepared: PreparedUserInput,
+  reason: string,
+): Promise<void> {
+  if (prepared.preparedAttachments.createdGalleryIds.length === 0) return;
+  try {
+    await deletePreparedManagedImageAttachments(storage, prepared.preparedAttachments);
+  } catch (error) {
+    console.warn(`[generation] Failed to roll back prepared image attachments after ${reason}`, error);
+  }
 }
 
 function shouldSaveUserMessage(
@@ -302,7 +332,11 @@ function shouldSaveUserMessage(
   internalOptions: InternalStartGenerationOptions = {},
 ): boolean {
   if (internalOptions.skipUserMessageSave === true) return false;
-  return !!prepared.content.trim() && input.impersonate !== true && !readString(input.regenerateMessageId).trim();
+  return (
+    (!!prepared.content.trim() || prepared.attachments.length > 0) &&
+    input.impersonate !== true &&
+    !readString(input.regenerateMessageId).trim()
+  );
 }
 
 async function saveUserMessage(
@@ -2648,17 +2682,27 @@ export async function* startGeneration(
 
   yield { type: "phase", data: "Saving message..." };
   const preparedUserInput = await prepareUserInput(deps.storage, input);
-  throwIfAborted(signal);
-  const savesUserMessage = shouldSaveUserMessage(input, preparedUserInput, internalOptions);
-  const messageLoadOptions = generationMessageLoadOptions(chat, input);
+  let savesUserMessage = false;
+  let savedUserMessage: unknown | null = null;
   let storedMessages: JsonRecord[] | null = null;
-  if (savesUserMessage) {
-    storedMessages = await loadChatMessages(deps.storage, chatId, messageLoadOptions);
+  const messageLoadOptions = generationMessageLoadOptions(chat, input);
+  try {
     throwIfAborted(signal);
-    await commitVisibleTrackerSnapshotSafely(deps.storage, chatId, storedMessages);
-    throwIfAborted(signal);
+    savesUserMessage = shouldSaveUserMessage(input, preparedUserInput, internalOptions);
+    if (!savesUserMessage) {
+      await deletePreparedUserInputAttachmentsSafely(deps.storage, preparedUserInput, "non-persisted generation setup");
+    }
+    if (savesUserMessage) {
+      storedMessages = await loadChatMessages(deps.storage, chatId, messageLoadOptions);
+      throwIfAborted(signal);
+      await commitVisibleTrackerSnapshotSafely(deps.storage, chatId, storedMessages);
+      throwIfAborted(signal);
+    }
+    savedUserMessage = await saveUserMessage(deps.storage, chat, input, preparedUserInput, internalOptions);
+  } catch (error) {
+    await deletePreparedUserInputAttachmentsSafely(deps.storage, preparedUserInput, "failed user message save");
+    throw error;
   }
-  const savedUserMessage = await saveUserMessage(deps.storage, chat, input, preparedUserInput, internalOptions);
   throwIfAborted(signal);
   if (savedUserMessage) yield { type: "user_message", data: savedGenerationEventData(savedUserMessage) };
   const connection = await resolveGenerationConnection(deps.storage, chat, input);
