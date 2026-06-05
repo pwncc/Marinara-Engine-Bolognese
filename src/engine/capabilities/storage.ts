@@ -1,4 +1,4 @@
-const GENERIC_STORAGE_ENTITIES = [
+const _GENERIC_STORAGE_ENTITIES = [
   "characters",
   "character-groups",
   "character-versions",
@@ -18,6 +18,7 @@ const GENERIC_STORAGE_ENTITIES = [
   "agent-memory",
   "themes",
   "extensions",
+  "plugin-memory",
   "connections",
   "connection-folders",
   "chats",
@@ -35,7 +36,7 @@ const GENERIC_STORAGE_ENTITIES = [
   "game-checkpoints",
 ] as const;
 
-export type StorageEntity = (typeof GENERIC_STORAGE_ENTITIES)[number];
+export type StorageEntity = (typeof _GENERIC_STORAGE_ENTITIES)[number];
 
 export interface StorageListBaseOptions {
   orderBy?: string;
