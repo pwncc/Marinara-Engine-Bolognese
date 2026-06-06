@@ -1,3 +1,5 @@
+use base64::{engine::general_purpose, Engine as _};
+use chrono::{DateTime, SecondsFormat, Utc};
 use futures_util::StreamExt;
 use marinara_core::{AppError, AppResult};
 use marinara_security::{
@@ -11,7 +13,7 @@ use std::{
     env, fs,
     io::Write,
     net::{IpAddr, SocketAddr},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     time::Duration,
 };
@@ -20,6 +22,8 @@ use uuid::Uuid;
 const OPENAI_CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const OPENAI_CHATGPT_REFRESH_URL: &str = "https://auth.openai.com/oauth/token";
 const OPENAI_CHATGPT_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const OPENAI_CHATGPT_TOKEN_REFRESH_INTERVAL_DAYS: i64 = 8;
+const OPENAI_CHATGPT_EXPIRY_REFRESH_SKEW_SECONDS: i64 = 60;
 const APP_VERSION: &str = "1.6.1";
 const CLAUDE_SUBSCRIPTION_1M_SUFFIX: &str = "[1m]";
 const CLAUDE_SUBSCRIPTION_1M_BETA: &str = "context-1m-2025-08-07";
@@ -1521,10 +1525,9 @@ async fn load_openai_chatgpt_auth() -> AppResult<ChatGptAuth> {
     })?;
     let mut auth_json: Value = serde_json::from_str(&raw)
         .map_err(|error| AppError::new("openai_chatgpt_auth_error", error.to_string()))?;
-    let should_refresh = openai_chatgpt_auth_is_stale(&auth_json);
     let tokens = auth_json
-        .get_mut("tokens")
-        .and_then(Value::as_object_mut)
+        .get("tokens")
+        .and_then(Value::as_object)
         .ok_or_else(|| {
             AppError::new(
                 "openai_chatgpt_auth_error",
@@ -1538,34 +1541,25 @@ async fn load_openai_chatgpt_auth() -> AppResult<ChatGptAuth> {
         )
     })?;
     let account_id = string_value(tokens.get("account_id"));
+    let should_refresh = openai_chatgpt_auth_should_refresh(&auth_json, &access_token);
     if should_refresh {
-        if let Some(refresh_token) = string_value(tokens.get("refresh_token")) {
-            let refreshed = refresh_openai_chatgpt_auth(&refresh_token).await?;
-            if let Some(next_access_token) = string_value(refreshed.get("access_token")) {
-                tokens.insert(
-                    "access_token".to_string(),
-                    Value::String(next_access_token.clone()),
-                );
-                access_token = next_access_token;
-            }
-            if let Some(next_refresh_token) = string_value(refreshed.get("refresh_token")) {
-                tokens.insert(
-                    "refresh_token".to_string(),
-                    Value::String(next_refresh_token),
-                );
-            }
-            if let Some(next_id_token) = string_value(refreshed.get("id_token")) {
-                tokens.insert("id_token".to_string(), Value::String(next_id_token));
-            }
-            auth_json["last_refresh"] = Value::String(chrono_like_now_iso());
-            let _ = fs::write(
-                &path,
-                format!(
-                    "{}\n",
-                    serde_json::to_string_pretty(&auth_json).unwrap_or(raw)
-                ),
-            );
+        let tokens = auth_json
+            .get_mut("tokens")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                AppError::new(
+                    "openai_chatgpt_auth_error",
+                    "Codex auth is not ChatGPT OAuth. Run `codex login`.",
+                )
+            })?;
+        let refresh_token = string_value(tokens.get("refresh_token"))
+            .ok_or_else(openai_chatgpt_refresh_token_error)?;
+        let refreshed = refresh_openai_chatgpt_auth(&refresh_token).await?;
+        if let Some(next_access_token) = apply_openai_chatgpt_refreshed_tokens(tokens, &refreshed) {
+            access_token = next_access_token;
         }
+        auth_json["last_refresh"] = Value::String(chrono_like_now_iso());
+        persist_openai_chatgpt_auth(&path, &auth_json)?;
     }
     Ok(ChatGptAuth {
         access_token,
@@ -1589,14 +1583,88 @@ pub async fn check_openai_chatgpt_auth() -> AppResult<String> {
     ))
 }
 
-fn openai_chatgpt_auth_is_stale(auth_json: &Value) -> bool {
-    let Some(last_refresh) = auth_json.get("last_refresh").and_then(Value::as_str) else {
+fn decode_jwt_payload_json(token: &str) -> Option<Value> {
+    let payload = token.split('.').nth(1).filter(|value| !value.is_empty())?;
+    let decoded = general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| general_purpose::URL_SAFE.decode(payload))
+        .ok()?;
+    serde_json::from_slice::<Value>(&decoded).ok()
+}
+
+fn openai_chatgpt_access_token_expires_soon(access_token: &str) -> bool {
+    let Some(payload) = decode_jwt_payload_json(access_token) else {
         return false;
     };
-    // Keep the same refresh cadence as the original provider without pulling in a date crate:
-    // if the timestamp string is present but old parsing is unavailable, provider requests will
-    // still work until the access token expires and the user can refresh through `codex login`.
-    last_refresh.trim().is_empty()
+    let Some(exp) = payload.get("exp").and_then(Value::as_f64) else {
+        return false;
+    };
+    if !exp.is_finite() {
+        return false;
+    }
+    let now = Utc::now().timestamp() as f64;
+    exp <= now + OPENAI_CHATGPT_EXPIRY_REFRESH_SKEW_SECONDS as f64
+}
+
+fn openai_chatgpt_last_refresh_is_stale(last_refresh: Option<&Value>) -> bool {
+    let Some(raw) = string_value(last_refresh) else {
+        return false;
+    };
+    let Ok(parsed) = DateTime::parse_from_rfc3339(&raw) else {
+        return false;
+    };
+    let age = Utc::now().signed_duration_since(parsed.with_timezone(&Utc));
+    age > chrono::Duration::days(OPENAI_CHATGPT_TOKEN_REFRESH_INTERVAL_DAYS)
+}
+
+fn openai_chatgpt_auth_should_refresh(auth_json: &Value, access_token: &str) -> bool {
+    openai_chatgpt_access_token_expires_soon(access_token)
+        || openai_chatgpt_last_refresh_is_stale(auth_json.get("last_refresh"))
+}
+
+fn openai_chatgpt_refresh_token_error() -> AppError {
+    AppError::new(
+        "openai_chatgpt_auth_error",
+        "Codex ChatGPT access token is stale, but no refresh token is available. Run `codex login`.",
+    )
+}
+
+fn apply_openai_chatgpt_refreshed_tokens(
+    tokens: &mut serde_json::Map<String, Value>,
+    refreshed: &Value,
+) -> Option<String> {
+    let next_access_token = string_value(refreshed.get("access_token"));
+    if let Some(next_access_token) = next_access_token.clone() {
+        tokens.insert(
+            "access_token".to_string(),
+            Value::String(next_access_token.clone()),
+        );
+    }
+    if let Some(next_refresh_token) = string_value(refreshed.get("refresh_token")) {
+        tokens.insert(
+            "refresh_token".to_string(),
+            Value::String(next_refresh_token),
+        );
+    }
+    if let Some(next_id_token) = string_value(refreshed.get("id_token")) {
+        tokens.insert("id_token".to_string(), Value::String(next_id_token));
+    }
+    next_access_token
+}
+
+fn persist_openai_chatgpt_auth(path: &Path, auth_json: &Value) -> AppResult<()> {
+    let serialized = serde_json::to_string_pretty(auth_json).map_err(|error| {
+        AppError::new(
+            "openai_chatgpt_auth_error",
+            format!("Failed to serialize Codex ChatGPT auth refresh: {error}"),
+        )
+    })?;
+    fs::write(path, format!("{serialized}\n")).map_err(|error| {
+        AppError::new(
+            "openai_chatgpt_auth_error",
+            format!("Failed to update local Codex auth.json credential file: {error}"),
+        )
+    })
 }
 
 async fn refresh_openai_chatgpt_auth(refresh_token: &str) -> AppResult<Value> {
@@ -1622,7 +1690,7 @@ async fn refresh_openai_chatgpt_auth(refresh_token: &str) -> AppResult<Value> {
 }
 
 fn chrono_like_now_iso() -> String {
-    format!("{:?}", std::time::SystemTime::now())
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn apply_openai_auth_headers(
@@ -4552,6 +4620,12 @@ mod tests {
         }
     }
 
+    fn unsigned_jwt_with_exp(exp: i64) -> String {
+        let header = general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+        let payload = general_purpose::URL_SAFE_NO_PAD.encode(format!(r#"{{"exp":{exp}}}"#));
+        format!("{header}.{payload}.signature")
+    }
+
     async fn serve_response(
         status: &'static str,
         content_type: &'static str,
@@ -4811,6 +4885,104 @@ data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output
             base_url("openai_chatgpt", "https://api.example.com/v1"),
             OPENAI_CHATGPT_CODEX_BASE_URL
         );
+    }
+
+    #[test]
+    fn openai_chatgpt_auth_skips_fresh_recent_token() {
+        let token = unsigned_jwt_with_exp(Utc::now().timestamp() + 3600);
+        let auth = json!({
+            "tokens": { "access_token": token },
+            "last_refresh": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+        });
+
+        assert!(!openai_chatgpt_auth_should_refresh(
+            &auth,
+            auth.pointer("/tokens/access_token")
+                .and_then(Value::as_str)
+                .expect("token should be present")
+        ));
+    }
+
+    #[test]
+    fn openai_chatgpt_auth_refreshes_for_near_expiry_token() {
+        let token = unsigned_jwt_with_exp(
+            Utc::now().timestamp() + OPENAI_CHATGPT_EXPIRY_REFRESH_SKEW_SECONDS,
+        );
+        let auth = json!({
+            "tokens": { "access_token": token },
+            "last_refresh": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+        });
+
+        assert!(openai_chatgpt_auth_should_refresh(
+            &auth,
+            auth.pointer("/tokens/access_token")
+                .and_then(Value::as_str)
+                .expect("token should be present")
+        ));
+    }
+
+    #[test]
+    fn openai_chatgpt_auth_refreshes_for_stale_last_refresh() {
+        let token = unsigned_jwt_with_exp(Utc::now().timestamp() + 3600);
+        let auth = json!({
+            "tokens": { "access_token": token },
+            "last_refresh": (Utc::now()
+                - chrono::Duration::days(OPENAI_CHATGPT_TOKEN_REFRESH_INTERVAL_DAYS + 1))
+            .to_rfc3339_opts(SecondsFormat::Millis, true)
+        });
+
+        assert!(openai_chatgpt_auth_should_refresh(
+            &auth,
+            auth.pointer("/tokens/access_token")
+                .and_then(Value::as_str)
+                .expect("token should be present")
+        ));
+    }
+
+    #[test]
+    fn openai_chatgpt_missing_refresh_token_error_is_secret_safe() {
+        let error = openai_chatgpt_refresh_token_error();
+
+        assert_eq!(error.code, "openai_chatgpt_auth_error");
+        assert!(error.message.contains("no refresh token is available"));
+        assert!(!error.message.contains("sk-"));
+        assert!(!error.message.contains("refresh-secret"));
+    }
+
+    #[test]
+    fn openai_chatgpt_refresh_response_updates_tokens_for_persistence() {
+        let mut auth = json!({
+            "tokens": {
+                "access_token": "old-access-secret",
+                "refresh_token": "old-refresh-secret",
+                "id_token": "old-id-secret"
+            },
+            "last_refresh": "2026-01-01T00:00:00.000Z"
+        });
+        let tokens = auth
+            .get_mut("tokens")
+            .and_then(Value::as_object_mut)
+            .expect("tokens should be mutable");
+
+        let access = apply_openai_chatgpt_refreshed_tokens(
+            tokens,
+            &json!({
+                "access_token": "new-access-secret",
+                "refresh_token": "new-refresh-secret",
+                "id_token": "new-id-secret"
+            }),
+        )
+        .expect("refreshed access token should be returned");
+        auth["last_refresh"] = Value::String("2026-06-06T00:00:00.000Z".to_string());
+        let serialized = serde_json::to_string_pretty(&auth).expect("auth should serialize");
+
+        assert_eq!(access, "new-access-secret");
+        assert!(serialized.contains("new-access-secret"));
+        assert!(serialized.contains("new-refresh-secret"));
+        assert!(serialized.contains("new-id-secret"));
+        assert!(!serialized.contains("old-access-secret"));
+        assert!(!serialized.contains("old-refresh-secret"));
+        assert!(!serialized.contains("old-id-secret"));
     }
 
     #[test]
