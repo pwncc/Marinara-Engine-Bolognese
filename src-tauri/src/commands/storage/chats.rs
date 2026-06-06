@@ -9,7 +9,7 @@ use crate::builtins::is_protected_record;
 use std::collections::HashSet;
 
 const MEMORY_CHUNK_SIZE: usize = 5;
-const MEMORY_EMBEDDING_DIMS: usize = 256;
+const MEMORY_EMBEDDING_DIMS: usize = 512;
 
 pub(crate) fn messages_for_chat(state: &AppState, chat_id: &str) -> AppResult<Vec<Value>> {
     let mut rows = state.storage.list_messages_for_chat(chat_id)?;
@@ -137,19 +137,145 @@ fn message_content(message: &Value) -> String {
         .to_string()
 }
 
+fn memory_recall_is_stopword(token: &str) -> bool {
+    matches!(
+        token,
+        "about"
+            | "and"
+            | "are"
+            | "been"
+            | "but"
+            | "did"
+            | "does"
+            | "find"
+            | "for"
+            | "from"
+            | "had"
+            | "has"
+            | "have"
+            | "her"
+            | "him"
+            | "his"
+            | "how"
+            | "its"
+            | "know"
+            | "like"
+            | "look"
+            | "make"
+            | "more"
+            | "our"
+            | "out"
+            | "remember"
+            | "said"
+            | "say"
+            | "she"
+            | "show"
+            | "tell"
+            | "that"
+            | "the"
+            | "their"
+            | "them"
+            | "then"
+            | "there"
+            | "they"
+            | "this"
+            | "was"
+            | "what"
+            | "when"
+            | "where"
+            | "which"
+            | "who"
+            | "why"
+            | "with"
+            | "you"
+            | "your"
+    )
+}
+
+fn lexical_memory_tokens(text: &str) -> Vec<String> {
+    text.split(|ch: char| !ch.is_alphanumeric())
+        .map(|token| token.trim().to_lowercase())
+        .filter(|token| token.chars().count() > 1)
+        .collect()
+}
+
+fn lexical_feature_hash(feature: &str) -> u32 {
+    let mut hash = 2166136261_u32;
+    for ch in feature.chars() {
+        hash ^= ch as u32;
+        hash = hash.wrapping_mul(16777619);
+    }
+    hash
+}
+
+fn add_lexical_feature(vector: &mut [f64], feature: &str, weight: f64) {
+    if feature.is_empty() || weight <= 0.0 {
+        return;
+    }
+    let hash = lexical_feature_hash(feature);
+    let sign = if hash & 0x80000000 == 0 { 1.0 } else { -1.0 };
+    let index = (hash as usize) % MEMORY_EMBEDDING_DIMS;
+    vector[index] += weight * sign;
+}
+
+fn memory_recall_meaningful_token(token: &str) -> bool {
+    !memory_recall_is_stopword(token)
+}
+
+fn memory_recall_token_weight(token: &str) -> f64 {
+    if !memory_recall_meaningful_token(token) {
+        return 0.0;
+    }
+    1.0 + ((token.chars().count().saturating_sub(4)) as f64 * 0.05).min(0.75)
+}
+
+fn add_memory_recall_token_features(vector: &mut [f64], token: &str) {
+    let weight = memory_recall_token_weight(token);
+    if weight <= 0.0 {
+        return;
+    }
+    let chars = token.chars().collect::<Vec<_>>();
+    add_lexical_feature(vector, &format!("w:{token}"), weight);
+    if chars.len() >= 5 {
+        add_lexical_feature(
+            vector,
+            &format!("p:{}", chars[..4].iter().copied().collect::<String>()),
+            0.25,
+        );
+        add_lexical_feature(
+            vector,
+            &format!(
+                "s:{}",
+                chars[chars.len() - 4..].iter().copied().collect::<String>()
+            ),
+            0.25,
+        );
+    }
+    for index in 0..chars.len().saturating_sub(2) {
+        add_lexical_feature(
+            vector,
+            &format!(
+                "g:{}",
+                chars[index..index + 3].iter().copied().collect::<String>()
+            ),
+            0.15,
+        );
+    }
+}
+
 fn lexical_memory_embedding(text: &str) -> Vec<f64> {
     let mut vector = vec![0.0_f64; MEMORY_EMBEDDING_DIMS];
-    for token in text
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|token| token.len() > 1)
-    {
-        let mut hash = 2166136261_u32;
-        for byte in token.to_ascii_lowercase().bytes() {
-            hash ^= byte as u32;
-            hash = hash.wrapping_mul(16777619);
+    let mut meaningful_tokens = Vec::new();
+    for token in lexical_memory_tokens(text) {
+        add_memory_recall_token_features(&mut vector, &token);
+        if memory_recall_meaningful_token(&token) {
+            meaningful_tokens.push(token);
         }
-        let index = (hash as usize) % MEMORY_EMBEDDING_DIMS;
-        vector[index] += 1.0;
+    }
+    for pair in meaningful_tokens.windows(2) {
+        if let [left, right] = pair {
+            add_lexical_feature(&mut vector, &format!("b:{left} {right}"), 1.4);
+        }
     }
     let magnitude = vector.iter().map(|value| value * value).sum::<f64>().sqrt();
     if magnitude > 0.0 {
@@ -4487,6 +4613,29 @@ mod tests {
         assert_eq!(result.embedding.len(), MEMORY_EMBEDDING_DIMS);
         assert!(result.connection_id.is_none());
         assert!(result.model.is_none());
+    }
+
+    #[test]
+    fn lexical_memory_embedding_rewards_related_and_unicode_features() {
+        fn cosine(left: &[f64], right: &[f64]) -> f64 {
+            let dot = left.iter().zip(right).map(|(a, b)| a * b).sum::<f64>();
+            let left_mag = left.iter().map(|value| value * value).sum::<f64>().sqrt();
+            let right_mag = right.iter().map(|value| value * value).sum::<f64>().sqrt();
+            if left_mag > 0.0 && right_mag > 0.0 {
+                dot / (left_mag * right_mag)
+            } else {
+                0.0
+            }
+        }
+
+        let query = lexical_memory_embedding("Dottore remembered the freezing Snezhnaya facility");
+        let related =
+            lexical_memory_embedding("The Snezhnaya facility stayed frozen while Dottore observed");
+        let unrelated = lexical_memory_embedding("Sunny beach playlist for a cheerful picnic");
+        let polish = lexical_memory_embedding("Zażółć gęślą jaźń and Snezhnaya");
+
+        assert!(cosine(&query, &related) > cosine(&query, &unrelated));
+        assert!(polish.iter().any(|value| value.abs() > 0.0));
     }
 
     #[test]

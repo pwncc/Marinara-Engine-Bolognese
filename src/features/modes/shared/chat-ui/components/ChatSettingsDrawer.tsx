@@ -722,7 +722,10 @@ function ChatSettingsDrawerInner({
     typeof metadata.lorebookTokenBudget === "number" && Number.isFinite(metadata.lorebookTokenBudget)
       ? Math.max(0, Math.floor(metadata.lorebookTokenBudget))
       : LIMITS.DEFAULT_LOREBOOK_TOKEN_BUDGET;
-  const activeAgentIds = useMemo<string[]>(() => metadataStringArray(metadata.activeAgentIds), [metadata.activeAgentIds]);
+  const activeAgentIds = useMemo<string[]>(
+    () => metadataStringArray(metadata.activeAgentIds),
+    [metadata.activeAgentIds],
+  );
   const inactiveCharacterIds = useMemo<string[]>(
     () =>
       Array.isArray(metadata.inactiveCharacterIds)
@@ -1587,9 +1590,7 @@ function ChatSettingsDrawerInner({
   );
   const [extraPromptDraft, setExtraPromptDraft] = useState(gameExtraPrompt);
   const [extraPromptExpanded, setExtraPromptExpanded] = useState(false);
-  const [gameImagePromptInstructionsDraft, setGameImagePromptInstructionsDraft] = useState(
-    gameImagePromptInstructions,
-  );
+  const [gameImagePromptInstructionsDraft, setGameImagePromptInstructionsDraft] = useState(gameImagePromptInstructions);
   const [spotifyArtistDraft, setSpotifyArtistDraft] = useState(spotifyArtist);
   const [gameSpotifyArtistDraft, setGameSpotifyArtistDraft] = useState(gameSpotifyArtist);
 
@@ -1992,7 +1993,7 @@ function ChatSettingsDrawerInner({
           <div className="flex-1 min-w-0">
             <span className="text-[0.6875rem] font-medium">Enable Memory Recall</span>
             <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-              Recall relevant fragments from earlier in this chat and inject them as context.
+              Recall earlier chat fragments with provider embeddings when configured, otherwise local lexical matching.
             </p>
           </div>
           <div
@@ -2021,9 +2022,7 @@ function ChatSettingsDrawerInner({
               const nextValue = e.target.value === "" ? 1 : Number.parseInt(e.target.value, 10);
               updateMeta.mutate({
                 id: chat.id,
-                memoryRecallReadBehindMessages: Number.isFinite(nextValue)
-                  ? Math.max(0, Math.min(100, nextValue))
-                  : 1,
+                memoryRecallReadBehindMessages: Number.isFinite(nextValue) ? Math.max(0, Math.min(100, nextValue)) : 1,
               });
             }}
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-2 text-xs text-[var(--foreground)]"
@@ -2366,9 +2365,7 @@ function ChatSettingsDrawerInner({
                   </button>
                 </div>
                 <p className="px-0.5 text-[0.5625rem] text-[var(--muted-foreground)]/70">
-                  {narratorStyleDraft
-                    ? `${narratorStyleDraft.length}/2000 characters`
-                    : "No narrator style set"}
+                  {narratorStyleDraft ? `${narratorStyleDraft.length}/2000 characters` : "No narrator style set"}
                 </p>
                 {narratorStyleDraft && (
                   <button
@@ -5335,7 +5332,7 @@ function ChatSettingsDrawerInner({
                                               updateMeta.mutate({
                                                 id: chat.id,
                                                 showSecretPlotPanel: metadata.showSecretPlotPanel !== true,
-                                              })
+                                              });
                                             }}
                                             aria-pressed={metadata.showSecretPlotPanel === true}
                                             className="ml-auto mt-1.5 flex w-fit max-w-full items-center gap-2 rounded-md bg-[var(--background)]/20 px-1.5 py-1 text-left text-[0.5625rem] text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)]/35 hover:text-[var(--foreground)]"
@@ -5493,7 +5490,7 @@ function ChatSettingsDrawerInner({
             <Section
               label="Memory Recall"
               icon={<Brain size="0.875rem" />}
-              help="When enabled, relevant fragments from this chat are recalled with local lexical matching and injected into the prompt as memories."
+              help="When enabled, relevant fragments from this chat are recalled with provider embeddings when configured, otherwise local lexical matching, then injected into the prompt as memories."
             >
               {renderMemoryRecallControls(true)}
             </Section>
@@ -5795,7 +5792,7 @@ function ChatSettingsDrawerInner({
             <Section
               label="Memory Recall"
               icon={<Brain size="0.875rem" />}
-              help="When enabled, relevant fragments from this chat are recalled with local lexical matching and injected into the prompt as memories."
+              help="When enabled, relevant fragments from this chat are recalled with provider embeddings when configured, otherwise local lexical matching, then injected into the prompt as memories."
             >
               {renderMemoryRecallControls(metadata.sceneStatus === "active")}
             </Section>
@@ -6467,6 +6464,48 @@ function estimateMemoryTokens(memories: ChatMemoryChunk[]): number {
   return Math.ceil(text.length / 4);
 }
 
+function memoryEmbeddingLabel(memory: ChatMemoryChunk): string {
+  const source = String(memory.embeddingSource ?? "").toLowerCase();
+  if (source === "provider") {
+    return memory.embeddingModel ? `Semantic: ${memory.embeddingModel}` : "Semantic provider";
+  }
+  if (source === "lexical") return "Lexical fallback";
+  if (!memory.hasEmbedding && memory.embeddingStatus === "unavailable") return "Embedding unavailable";
+  if (!memory.hasEmbedding) return "Waiting for vector";
+  return "Vectorized";
+}
+
+function memoryEmbeddingTitle(memory: ChatMemoryChunk): string {
+  const source = String(memory.embeddingSource ?? "").toLowerCase();
+  if (source === "provider") {
+    return memory.embeddingConnectionId
+      ? `Semantic embeddings from connection ${memory.embeddingConnectionId}`
+      : "Semantic embeddings from the configured embedding connection";
+  }
+  if (source === "lexical") {
+    return "Local lexical fallback is being used because no embedding-capable connection vectorized this memory.";
+  }
+  return memoryEmbeddingLabel(memory);
+}
+
+function memoryEmbeddingSummary(memories: ChatMemoryChunk[]): string {
+  const providerCount = memories.filter(
+    (memory) => String(memory.embeddingSource ?? "").toLowerCase() === "provider",
+  ).length;
+  const lexicalCount = memories.filter(
+    (memory) => String(memory.embeddingSource ?? "").toLowerCase() === "lexical",
+  ).length;
+  const unavailableCount = memories.filter(
+    (memory) => !memory.hasEmbedding && String(memory.embeddingStatus ?? "").toLowerCase() === "unavailable",
+  ).length;
+  const parts = [
+    providerCount > 0 ? `${providerCount} semantic` : "",
+    lexicalCount > 0 ? `${lexicalCount} lexical fallback` : "",
+    unavailableCount > 0 ? `${unavailableCount} unavailable` : "",
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
 const MEMORY_CONTENT_CLASS =
   "max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg bg-[var(--secondary)]/50 px-3 py-2 text-[0.6875rem] leading-relaxed text-[var(--foreground)]";
 
@@ -6480,6 +6519,7 @@ function MemoryRecallMemoriesModal({ chatId, open, onClose }: { chatId: string; 
   const importInputRef = useRef<HTMLInputElement>(null);
   const memories = useMemo(() => memoriesQuery.data ?? [], [memoriesQuery.data]);
   const totalTokens = useMemo(() => estimateMemoryTokens(memories), [memories]);
+  const embeddingSummary = useMemo(() => memoryEmbeddingSummary(memories), [memories]);
 
   const handleExport = async () => {
     if (memories.length === 0) {
@@ -6542,6 +6582,12 @@ function MemoryRecallMemoriesModal({ chatId, open, onClose }: { chatId: string; 
               <>
                 {" "}
                 · <span className="tabular-nums">~{totalTokens.toLocaleString()} tokens</span>
+              </>
+            )}
+            {embeddingSummary && (
+              <>
+                {" "}
+                · <span>{embeddingSummary}</span>
               </>
             )}
           </div>
@@ -6614,7 +6660,7 @@ function MemoryRecallMemoriesModal({ chatId, open, onClose }: { chatId: string; 
         {!memoriesQuery.isLoading && !memoriesQuery.error && memories.length === 0 && (
           <div className="rounded-xl bg-[var(--secondary)]/60 px-4 py-8 text-center text-xs text-[var(--muted-foreground)]">
             No recall memories have been created for this chat yet. Marinara creates them after generation in groups of
-            5 messages.
+            5 messages. Configure an embedding model for semantic recall, or use the local lexical fallback.
           </div>
         )}
 
@@ -6629,13 +6675,7 @@ function MemoryRecallMemoriesModal({ chatId, open, onClose }: { chatId: string; 
                     </div>
                     <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5">
                       <span>{memory.messageCount} messages</span>
-                      <span>
-                        {memory.hasEmbedding
-                          ? "Vectorized"
-                          : memory.embeddingStatus === "unavailable"
-                            ? "Embedding unavailable"
-                            : "Waiting for vector"}
-                      </span>
+                      <span title={memoryEmbeddingTitle(memory)}>{memoryEmbeddingLabel(memory)}</span>
                       <span>Created {formatMemoryDate(memory.createdAt)}</span>
                     </div>
                   </div>

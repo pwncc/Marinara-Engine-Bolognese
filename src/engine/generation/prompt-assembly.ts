@@ -284,7 +284,11 @@ function hasOwnChoice(record: JsonRecord, name: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, name);
 }
 
-function normalizedSelectionValue(value: unknown, block: PromptChoiceBlockRecord, hasSelection: boolean): string | null {
+function normalizedSelectionValue(
+  value: unknown,
+  block: PromptChoiceBlockRecord,
+  hasSelection: boolean,
+): string | null {
   const optionValues = promptChoiceOptionValues(block);
   if (optionValues.length === 0) return null;
 
@@ -1779,7 +1783,7 @@ function compactedHistoryLimit(meta: JsonRecord, fallbackLimit: number, shouldCo
   return Math.min(fallbackLimit, tail);
 }
 
-const MEMORY_EMBEDDING_DIMS = 256;
+const MEMORY_EMBEDDING_DIMS = 512;
 const DEFAULT_MEMORY_RECALL_BUDGET_TOKENS = 1024;
 const MIN_MEMORY_RECALL_BUDGET_TOKENS = 256;
 const MAX_MEMORY_RECALL_BUDGET_TOKENS = 2048;
@@ -1844,26 +1848,73 @@ function estimateTextTokens(text: string): number {
   return trimmed ? Math.max(1, Math.ceil(trimmed.length / 4)) : 0;
 }
 
+function lexicalMemoryTokens(text: string): string[] {
+  return Array.from(text.toLowerCase().matchAll(/[\p{Letter}\p{Number}]{2,}/gu), (match) => match[0]);
+}
+
+function lexicalFeatureHash(feature: string): number {
+  let hash = 2166136261;
+  for (const char of Array.from(feature)) {
+    hash ^= char.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash;
+}
+
+function addLexicalFeature(vector: number[], feature: string, weight: number): void {
+  if (!feature || weight <= 0) return;
+  const hash = lexicalFeatureHash(feature);
+  const sign = (hash & 0x80000000) === 0 ? 1 : -1;
+  vector[hash % MEMORY_EMBEDDING_DIMS] += weight * sign;
+}
+
+function tokenCharLength(token: string): number {
+  return Array.from(token).length;
+}
+
+function memoryRecallMeaningfulToken(token: string): boolean {
+  return !MEMORY_RECALL_QUERY_STOPWORDS.has(token);
+}
+
+function memoryRecallTokenWeight(token: string): number {
+  if (!memoryRecallMeaningfulToken(token)) return 0;
+  return 1 + Math.min(0.75, Math.max(0, tokenCharLength(token) - 4) * 0.05);
+}
+
+function addMemoryRecallTokenFeatures(vector: number[], token: string): void {
+  const weight = memoryRecallTokenWeight(token);
+  if (weight <= 0) return;
+  const chars = Array.from(token);
+  addLexicalFeature(vector, `w:${token}`, weight);
+  if (chars.length >= 5) {
+    addLexicalFeature(vector, `p:${chars.slice(0, 4).join("")}`, 0.25);
+    addLexicalFeature(vector, `s:${chars.slice(-4).join("")}`, 0.25);
+  }
+  for (let index = 0; index + 3 <= chars.length; index += 1) {
+    addLexicalFeature(vector, `g:${chars.slice(index, index + 3).join("")}`, 0.15);
+  }
+}
+
 function lexicalMemoryEmbedding(text: string): number[] {
   const vector = Array.from({ length: MEMORY_EMBEDDING_DIMS }, () => 0);
-  for (const match of text.toLowerCase().matchAll(/[a-z0-9]{2,}/g)) {
-    let hash = 2166136261;
-    for (let index = 0; index < match[0].length; index += 1) {
-      hash ^= match[0].charCodeAt(index);
-      hash = Math.imul(hash, 16777619) >>> 0;
-    }
-    vector[hash % MEMORY_EMBEDDING_DIMS] += 1;
+  const meaningfulTokens: string[] = [];
+  for (const token of lexicalMemoryTokens(text)) {
+    addMemoryRecallTokenFeatures(vector, token);
+    if (memoryRecallMeaningfulToken(token)) meaningfulTokens.push(token);
+  }
+  for (let index = 0; index + 1 < meaningfulTokens.length; index += 1) {
+    addLexicalFeature(vector, `b:${meaningfulTokens[index]} ${meaningfulTokens[index + 1]}`, 1.4);
   }
   const magnitude = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
   return magnitude > 0 ? vector.map((value) => value / magnitude) : vector;
 }
 
 function memoryRecallTokenSet(text: string): Set<string> {
-  return new Set(text.toLowerCase().match(/[a-z0-9]{2,}/g) ?? []);
+  return new Set(lexicalMemoryTokens(text));
 }
 
 function memoryRecallQueryTokens(text: string): string[] {
-  return Array.from(memoryRecallTokenSet(text)).filter((token) => !MEMORY_RECALL_QUERY_STOPWORDS.has(token));
+  return Array.from(memoryRecallTokenSet(text)).filter(memoryRecallMeaningfulToken);
 }
 
 function memoryRecallLexicalOverlap(queryTokens: string[], contentTokens: Set<string>): number {
@@ -3345,8 +3396,7 @@ export async function assembleGenerationPrompt(
     messages = scopeIndividualGroupHistoryRoles(messages, conversationGroupTarget);
   }
   const previewMessages = previewMessagesForPrompt(messages);
-  const shouldEnforceStrictRoles =
-    boolish(promptParameters?.strictRoleFormatting, true) && !individualGroupTarget;
+  const shouldEnforceStrictRoles = boolish(promptParameters?.strictRoleFormatting, true) && !individualGroupTarget;
   messages = shouldEnforceStrictRoles ? enforceStrictRoles(messages) : mergeAdjacentMessages(messages);
   if (!shouldEnforceStrictRoles && boolish(promptParameters?.squashSystemMessages, false)) {
     messages = squashLeadingSystemMessages(messages);
