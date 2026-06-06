@@ -2943,6 +2943,19 @@ pub(crate) fn upload_global_gallery_image(
     body: Value,
 ) -> AppResult<Value> {
     let uploaded = decode_uploaded_image_file(&body)?;
+    // Resolve the destination folder BEFORE persisting bytes. Only file under a
+    // folder that actually exists. A stale UI race or a remote caller could
+    // otherwise strand the row under a folder that was never created (or was just
+    // deleted) — and folder-delete cleanup only unfiles children of folders it
+    // actually deletes, leaving the orphan unreachable; fall back to root. Doing the
+    // lookup first also means a storage error here can't leak an already-persisted
+    // managed file (only the row-create path below has file cleanup).
+    let folder_value = match folder_id.map(str::trim) {
+        Some(id) if !id.is_empty() && state.storage.get("gallery-folders", id)?.is_some() => {
+            Value::String(id.to_string())
+        }
+        _ => Value::Null,
+    };
     let stored = media_uploads::persist_image_bytes(
         state,
         "gallery",
@@ -2951,16 +2964,6 @@ pub(crate) fn upload_global_gallery_image(
         &uploaded.content_type,
     )?;
     let mut record = Map::new();
-    // Only file under a folder that actually exists. A stale UI race or a remote
-    // caller could otherwise strand the row under a folder that was never created
-    // (or was just deleted) — and folder-delete cleanup only unfiles children of
-    // folders it actually deletes, leaving the orphan unreachable. Fall back to root.
-    let folder_value = match folder_id.map(str::trim) {
-        Some(id) if !id.is_empty() && state.storage.get("gallery-folders", id)?.is_some() => {
-            Value::String(id.to_string())
-        }
-        _ => Value::Null,
-    };
     record.insert("folderId".to_string(), folder_value);
     record.insert("filePath".to_string(), Value::String(stored.absolute_path));
     record.insert("filename".to_string(), Value::String(stored.filename));
