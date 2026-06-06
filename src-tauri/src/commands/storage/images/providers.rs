@@ -23,6 +23,7 @@ const NOVELAI_V4_PROMPT_CHAR_LIMIT: usize = 1800;
 const IMAGE_PROVIDER_ERROR_MAX_BYTES: usize = 256 * 1024;
 const IMAGE_PROVIDER_JSON_ENVELOPE_MAX_BYTES: usize = 48 * 1024 * 1024;
 const IMAGE_PROVIDER_RAW_IMAGE_MAX_BYTES: usize = 32 * 1024 * 1024;
+const IMAGE_PROVIDER_LOCAL_URLS_ENABLED_FLAG: &str = "IMAGE_PROVIDER_LOCAL_URLS_ENABLED";
 const COMFYUI_PLACEHOLDER_REFERENCE_BASE64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
@@ -62,6 +63,7 @@ pub(crate) async fn generate_image_with_options(
         ));
     }
     let source = image_source(connection);
+    validate_image_provider_base_url(connection, &source).await?;
     match source.as_str() {
         "pollinations" => {
             generate_pollinations(
@@ -297,6 +299,33 @@ pub(crate) fn connection_base_url(connection: &Value, source: &str) -> String {
         .unwrap_or(fallback)
         .trim_end_matches('/')
         .to_string()
+}
+
+fn image_provider_local_urls_allowed(source: &str) -> bool {
+    provider_local_urls_enabled(IMAGE_PROVIDER_LOCAL_URLS_ENABLED_FLAG)
+        || matches!(source, "automatic1111" | "drawthings" | "comfyui")
+}
+
+async fn validate_image_provider_base_url(connection: &Value, source: &str) -> AppResult<()> {
+    let base = connection_base_url(connection, source);
+    validate_provider_url_for_request(
+        &base,
+        image_provider_local_urls_allowed(source),
+        IMAGE_PROVIDER_LOCAL_URLS_ENABLED_FLAG,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn validate_image_download_url(url: &str, allow_private_or_reserved: bool) -> AppResult<()> {
+    validate_provider_url_for_request(
+        url,
+        allow_private_or_reserved
+            || provider_local_urls_enabled(IMAGE_PROVIDER_LOCAL_URLS_ENABLED_FLAG),
+        IMAGE_PROVIDER_LOCAL_URLS_ENABLED_FLAG,
+    )
+    .await?;
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -773,7 +802,12 @@ fn image_response_too_large_error(max_bytes: usize) -> AppError {
     )
 }
 
-async fn fetch_image_url(client: &reqwest::Client, url: &str) -> AppResult<(String, String)> {
+async fn fetch_image_url(
+    client: &reqwest::Client,
+    url: &str,
+    allow_private_or_reserved: bool,
+) -> AppResult<(String, String)> {
+    validate_image_download_url(url, allow_private_or_reserved).await?;
     let response = client.get(url).send().await.map_err(|error| {
         AppError::new("image_network_error", image_transport_error_message(error))
     })?;
@@ -805,7 +839,7 @@ async fn generate_pollinations(
         url.push_str("&negative=");
         url.push_str(&percent_encode_component(negative));
     }
-    fetch_image_url(&http_client(120)?, &url).await
+    fetch_image_url(&http_client(120)?, &url, false).await
 }
 
 async fn generate_openai_compatible_image(
@@ -862,12 +896,14 @@ async fn generate_openai_compatible_image(
             AppError::new("image_network_error", image_transport_error_message(error))
         })?;
         let json = response_json(response, source).await?;
-        return parse_image_json(&client, &json).await?.ok_or_else(|| {
-            AppError::new(
-                "image_response_error",
-                format!("{source} returned no image data"),
-            )
-        });
+        return parse_image_json(&client, &json, false)
+            .await?
+            .ok_or_else(|| {
+                AppError::new(
+                    "image_response_error",
+                    format!("{source} returned no image data"),
+                )
+            });
     }
 
     let mut payload = Map::new();
@@ -905,12 +941,14 @@ async fn generate_openai_compatible_image(
     .await
     .map_err(|error| AppError::new("image_network_error", image_transport_error_message(error)))?;
     let json = response_json(response, source).await?;
-    parse_image_json(&client, &json).await?.ok_or_else(|| {
-        AppError::new(
-            "image_response_error",
-            format!("{source} returned no image data"),
-        )
-    })
+    parse_image_json(&client, &json, false)
+        .await?
+        .ok_or_else(|| {
+            AppError::new(
+                "image_response_error",
+                format!("{source} returned no image data"),
+            )
+        })
 }
 
 pub(crate) fn is_openai_gpt_image_model(model: &str) -> bool {
@@ -1018,7 +1056,7 @@ async fn generate_xai(
     .await
     .map_err(|error| AppError::new("image_network_error", image_transport_error_message(error)))?;
     let json = response_json(response, "xai").await?;
-    parse_image_json(&client, &json)
+    parse_image_json(&client, &json, false)
         .await?
         .ok_or_else(|| AppError::new("image_response_error", "xAI returned no image data"))
 }
@@ -1151,7 +1189,7 @@ async fn generate_nanogpt_image(
     .await
     .map_err(|error| AppError::new("image_network_error", image_transport_error_message(error)))?;
     let json = response_json(response, "nanogpt").await?;
-    parse_image_json(&client, &json)
+    parse_image_json(&client, &json, false)
         .await?
         .ok_or_else(|| AppError::new("image_response_error", "NanoGPT returned no image data"))
 }
@@ -1197,7 +1235,7 @@ async fn generate_together_image(
     .await
     .map_err(|error| AppError::new("image_network_error", image_transport_error_message(error)))?;
     let json = response_json(response, "togetherai").await?;
-    parse_image_json(&client, &json)
+    parse_image_json(&client, &json, false)
         .await?
         .ok_or_else(|| AppError::new("image_response_error", "Together AI returned no image data"))
 }
@@ -1247,12 +1285,14 @@ async fn generate_chat_image(
     .await
     .map_err(|error| AppError::new("image_network_error", image_transport_error_message(error)))?;
     let json = response_json(response, &source).await?;
-    parse_image_json(&client, &json).await?.ok_or_else(|| {
-        AppError::new(
-            "image_response_error",
-            format!("{source} returned no image data"),
-        )
-    })
+    parse_image_json(&client, &json, false)
+        .await?
+        .ok_or_else(|| {
+            AppError::new(
+                "image_response_error",
+                format!("{source} returned no image data"),
+            )
+        })
 }
 
 const GOOGLE_IMAGE_PROVIDER: &str = "google_image";
@@ -1528,6 +1568,7 @@ fn chat_completions_url(base: &str) -> String {
 async fn parse_image_json(
     client: &reqwest::Client,
     json: &Value,
+    allow_private_or_reserved_downloads: bool,
 ) -> AppResult<Option<(String, String)>> {
     if let Some(base64) = json
         .pointer("/data/0/b64_json")
@@ -1545,7 +1586,9 @@ async fn parse_image_json(
             let (base64, mime) = strip_data_url(url);
             return validated_base64_image(base64, mime).map(Some);
         }
-        return fetch_image_url(client, url).await.map(Some);
+        return fetch_image_url(client, url, allow_private_or_reserved_downloads)
+            .await
+            .map(Some);
     }
     if let Some(value) = find_image_string(json) {
         if value.starts_with("data:image/") {
@@ -1553,7 +1596,9 @@ async fn parse_image_json(
             return validated_base64_image(base64, mime).map(Some);
         }
         if is_http_image_url(value) {
-            return fetch_image_url(client, value).await.map(Some);
+            return fetch_image_url(client, value, allow_private_or_reserved_downloads)
+                .await
+                .map(Some);
         }
     }
     Ok(None)
@@ -2178,7 +2223,7 @@ async fn generate_horde(
             .and_then(Value::as_str)
         {
             if img.starts_with("http://") || img.starts_with("https://") {
-                return fetch_image_url(&client, img).await;
+                return fetch_image_url(&client, img, false).await;
             }
             let (base64, mime) = strip_data_url(img);
             return validated_base64_image(base64, mime);
@@ -2296,7 +2341,7 @@ async fn generate_comfyui(
                     percent_encode_component(subfolder),
                     percent_encode_component(kind)
                 );
-                return fetch_image_url(&client, &url).await;
+                return fetch_image_url(&client, &url, true).await;
             }
         }
     }
@@ -2851,7 +2896,7 @@ async fn parse_novelai_image_response(
         return normalized_image_bytes(bytes, Some(content_type));
     }
     if let Ok(json) = serde_json::from_slice::<Value>(&bytes) {
-        if let Some(result) = parse_image_json(client, &json).await? {
+        if let Some(result) = parse_image_json(client, &json, false).await? {
             return Ok(result);
         }
         if let Some(error) = image_provider_json_error(&json) {
@@ -3131,6 +3176,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn image_provider_blocks_metadata_base_url() {
+        let connection = json!({
+            "provider": "image_generation",
+            "imageGenerationSource": "openai",
+            "baseUrl": "http://169.254.169.254/v1?api_key=sk-test-secret"
+        });
+
+        let error = generate_image_with_options(
+            &connection,
+            "blocked metadata target",
+            64,
+            64,
+            ImageGenerationOptions::default(),
+        )
+        .await
+        .expect_err("metadata image provider URL should be blocked before request dispatch");
+
+        assert_eq!(error.code, "invalid_input");
+        assert!(error
+            .message
+            .contains("private, LAN, metadata, or reserved target"));
+        assert!(error
+            .message
+            .contains(IMAGE_PROVIDER_LOCAL_URLS_ENABLED_FLAG));
+        assert!(!error.message.contains("sk-test-secret"));
+    }
+
+    #[tokio::test]
+    async fn image_provider_blocks_metadata_download_url() {
+        let payload = json!({
+            "data": [{
+                "url": "http://169.254.169.254/image.png?api_key=sk-test-secret"
+            }]
+        });
+
+        let error = parse_image_json(
+            &http_client(1).expect("test image client should build"),
+            &payload,
+            false,
+        )
+        .await
+        .expect_err("metadata image download URL should be blocked before fetch");
+
+        assert_eq!(error.code, "invalid_input");
+        assert!(error
+            .message
+            .contains("private, LAN, metadata, or reserved target"));
+        assert!(error
+            .message
+            .contains(IMAGE_PROVIDER_LOCAL_URLS_ENABLED_FLAG));
+        assert!(!error.message.contains("sk-test-secret"));
+    }
+
+    #[tokio::test]
     async fn image_provider_response_body_is_capped() {
         let response = response_from_body(
             "500 Internal Server Error",
@@ -3193,7 +3292,7 @@ mod tests {
         let json = response_json(response, "test-provider")
             .await
             .expect("large JSON envelope should parse within envelope cap");
-        let result = parse_image_json(&http_client(1).expect("client should build"), &json)
+        let result = parse_image_json(&http_client(1).expect("client should build"), &json, false)
             .await
             .expect("decoded image should be within raw image cap")
             .expect("image data should be found");
@@ -3220,7 +3319,7 @@ mod tests {
         let base64 = general_purpose::STANDARD.encode(&image);
         let json = json!({ "data": [{ "b64_json": base64 }] });
 
-        let error = parse_image_json(&http_client(1).expect("client should build"), &json)
+        let error = parse_image_json(&http_client(1).expect("client should build"), &json, false)
             .await
             .expect_err("decoded image above raw cap should fail");
 
@@ -3293,7 +3392,7 @@ mod tests {
         )
         .await;
         let json = json!({ "data": [{ "url": url }] });
-        let error = parse_image_json(&http_client(1).expect("client should build"), &json)
+        let error = parse_image_json(&http_client(1).expect("client should build"), &json, false)
             .await
             .expect_err("oversized fetched image should surface");
 
@@ -3313,7 +3412,7 @@ mod tests {
             .await
         );
         let json = json!({ "message": format!("image at {url}") });
-        let error = parse_image_json(&http_client(1).expect("client should build"), &json)
+        let error = parse_image_json(&http_client(1).expect("client should build"), &json, false)
             .await
             .expect_err("oversized nested fetched image should surface");
 
@@ -3327,7 +3426,7 @@ mod tests {
         image[..8].copy_from_slice(&[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n']);
         let url = serve_bytes_response("200 OK", "image/png", image).await;
         let json = json!({ "data": [{ "url": url }] });
-        let result = parse_image_json(&http_client(1).expect("client should build"), &json)
+        let result = parse_image_json(&http_client(1).expect("client should build"), &json, false)
             .await
             .expect("image URL fetch should succeed")
             .expect("image URL should return image data");
