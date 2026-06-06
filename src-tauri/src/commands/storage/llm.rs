@@ -973,6 +973,11 @@ async fn fetch_provider_models(connection: &Value) -> AppResult<Vec<Value>> {
         .unwrap_or("")
         .trim()
         .to_string();
+    let google_vertex_auth_headers = if provider == "google_vertex" {
+        marinara_llm::google_vertex_auth_headers_for_credential(&api_key).await?
+    } else {
+        std::collections::BTreeMap::new()
+    };
     let response = send_provider_get(
         &url,
         policy,
@@ -986,6 +991,12 @@ async fn fetch_provider_models(connection: &Value) -> AppResult<Vec<Value>> {
                 request
                     .header("x-api-key", &api_key)
                     .header("anthropic-version", "2023-06-01")
+            } else if provider == "google_vertex" {
+                google_vertex_auth_headers
+                    .iter()
+                    .fold(request, |request, (name, value)| {
+                        request.header(name.as_str(), value.as_str())
+                    })
             } else if !api_key.is_empty() && provider != "google" {
                 request.bearer_auth(&api_key)
             } else {

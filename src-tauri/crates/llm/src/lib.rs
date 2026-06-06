@@ -6,6 +6,7 @@ use marinara_security::{
     is_allowed_provider_url, is_forbidden_provider_resolved_ip, is_loopback_provider_host,
     redact_sensitive_json, redact_sensitive_text,
 };
+use ring::{rand::SystemRandom, rsa, signature};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -15,6 +16,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::{Mutex, OnceLock},
     time::Duration,
 };
 use uuid::Uuid;
@@ -30,6 +32,13 @@ const CLAUDE_SUBSCRIPTION_1M_BETA: &str = "context-1m-2025-08-07";
 const PROVIDER_LOCAL_URLS_ENABLED_FLAG: &str = "PROVIDER_LOCAL_URLS_ENABLED";
 const PROVIDER_RESPONSE_MAX_BYTES: usize = 5 * 1024 * 1024;
 const PROVIDER_RESPONSE_HEADERS_TIMEOUT_SECS: u64 = 5 * 60;
+const GOOGLE_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+const GOOGLE_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+const GOOGLE_JWT_BEARER_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:jwt-bearer";
+const GOOGLE_VERTEX_TOKEN_REFRESH_SKEW_SECONDS: i64 = 60;
+
+static GOOGLE_VERTEX_TOKEN_CACHE: OnceLock<Mutex<BTreeMap<String, GoogleVertexCachedToken>>> =
+    OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SseBlockStatus {
@@ -4424,6 +4433,268 @@ fn google_vertex_endpoint(base: &str, model: &str, endpoint: &str) -> String {
     format!("{base}/publishers/google/models/{model}:{endpoint}")
 }
 
+#[derive(Debug, Clone)]
+struct GoogleServiceAccountKey {
+    client_email: String,
+    private_key: String,
+    private_key_id: Option<String>,
+    token_uri: String,
+}
+
+#[derive(Debug, Clone)]
+struct GoogleVertexCachedToken {
+    access_token: String,
+    expires_at: i64,
+}
+
+fn google_vertex_token_cache() -> &'static Mutex<BTreeMap<String, GoogleVertexCachedToken>> {
+    GOOGLE_VERTEX_TOKEN_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn parse_google_service_account_key(
+    credential: &str,
+) -> AppResult<Option<GoogleServiceAccountKey>> {
+    let trimmed = credential.trim();
+    if !trimmed.starts_with('{') {
+        return Ok(None);
+    }
+    let value = serde_json::from_str::<Value>(trimmed).map_err(|error| {
+        AppError::invalid_input(format!(
+            "Google Vertex service account credential is invalid JSON: {error}"
+        ))
+    })?;
+    let client_email = value
+        .get("client_email")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::invalid_input(
+                "Google Vertex service account credential is missing client_email",
+            )
+        })?
+        .to_string();
+    let private_key = value
+        .get("private_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::invalid_input(
+                "Google Vertex service account credential is missing private_key",
+            )
+        })?
+        .replace("\\n", "\n");
+    let private_key_id = value
+        .get("private_key_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let token_uri = value
+        .get("token_uri")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(GOOGLE_OAUTH_TOKEN_URL)
+        .to_string();
+    Ok(Some(GoogleServiceAccountKey {
+        client_email,
+        private_key,
+        private_key_id,
+        token_uri,
+    }))
+}
+
+fn looks_like_google_bearer_token(credential: &str) -> bool {
+    let credential = credential.trim();
+    credential.starts_with("ya29.")
+        || credential.split('.').count() == 3
+            && credential
+                .chars()
+                .all(|item| item.is_ascii_alphanumeric() || matches!(item, '-' | '_' | '.'))
+}
+
+fn google_vertex_cache_key(service_account: &GoogleServiceAccountKey) -> String {
+    format!(
+        "{}:{}:{}",
+        service_account.client_email,
+        service_account.token_uri,
+        service_account.private_key_id.as_deref().unwrap_or("")
+    )
+}
+
+fn cached_google_vertex_access_token(cache_key: &str) -> Option<String> {
+    let now = Utc::now().timestamp();
+    let cache = google_vertex_token_cache().lock().ok()?;
+    cache
+        .get(cache_key)
+        .filter(|token| token.expires_at - now > GOOGLE_VERTEX_TOKEN_REFRESH_SKEW_SECONDS)
+        .map(|token| token.access_token.clone())
+}
+
+fn store_google_vertex_access_token(cache_key: String, access_token: String, expires_in: i64) {
+    let expires_in = expires_in.max(60);
+    let token = GoogleVertexCachedToken {
+        access_token,
+        expires_at: Utc::now().timestamp() + expires_in,
+    };
+    if let Ok(mut cache) = google_vertex_token_cache().lock() {
+        cache.insert(cache_key, token);
+    }
+}
+
+fn base64_url_json(value: &Value) -> AppResult<String> {
+    let serialized = serde_json::to_vec(value)
+        .map_err(|error| AppError::new("google_vertex_auth_error", error.to_string()))?;
+    Ok(general_purpose::URL_SAFE_NO_PAD.encode(serialized))
+}
+
+fn google_service_account_private_key_der(private_key: &str) -> AppResult<Vec<u8>> {
+    let pem_body = private_key
+        .replace("\\n", "\n")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with("-----"))
+        .collect::<String>();
+    general_purpose::STANDARD.decode(pem_body).map_err(|_| {
+        AppError::invalid_input(
+            "Google Vertex service account private_key is not a valid PEM private key",
+        )
+    })
+}
+
+fn sign_google_service_account_jwt(service_account: &GoogleServiceAccountKey) -> AppResult<String> {
+    let mut header = json!({ "alg": "RS256", "typ": "JWT" });
+    if let Some(private_key_id) = service_account.private_key_id.as_deref() {
+        header["kid"] = json!(private_key_id);
+    }
+    let now = Utc::now().timestamp();
+    let claims = json!({
+        "iss": service_account.client_email,
+        "scope": GOOGLE_CLOUD_PLATFORM_SCOPE,
+        "aud": service_account.token_uri,
+        "exp": now + 3600,
+        "iat": now,
+    });
+    let unsigned_jwt = format!(
+        "{}.{}",
+        base64_url_json(&header)?,
+        base64_url_json(&claims)?
+    );
+    let der = google_service_account_private_key_der(&service_account.private_key)?;
+    let key_pair = rsa::KeyPair::from_pkcs8(&der)
+        .or_else(|_| rsa::KeyPair::from_der(&der))
+        .map_err(|_| {
+            AppError::invalid_input(
+                "Google Vertex service account private_key could not be used for RS256 signing",
+            )
+        })?;
+    let rng = SystemRandom::new();
+    let mut signature_bytes = vec![0; key_pair.public().modulus_len()];
+    key_pair
+        .sign(
+            &signature::RSA_PKCS1_SHA256,
+            &rng,
+            unsigned_jwt.as_bytes(),
+            &mut signature_bytes,
+        )
+        .map_err(|_| {
+            AppError::new(
+                "google_vertex_auth_error",
+                "Failed to sign Google Vertex service account JWT",
+            )
+        })?;
+    Ok(format!(
+        "{unsigned_jwt}.{}",
+        general_purpose::URL_SAFE_NO_PAD.encode(signature_bytes)
+    ))
+}
+
+fn google_vertex_auth_error(status: reqwest::StatusCode, details: Value) -> AppError {
+    let details = redact_sensitive_json(details);
+    let message = provider_error_text(&details)
+        .map(|detail| format!("Google Vertex service account auth failed HTTP {status}: {detail}"))
+        .unwrap_or_else(|| format!("Google Vertex service account auth failed HTTP {status}"));
+    AppError::with_details("google_vertex_auth_error", message, details)
+}
+
+async fn fetch_google_vertex_access_token(
+    service_account: &GoogleServiceAccountKey,
+) -> AppResult<String> {
+    let cache_key = google_vertex_cache_key(service_account);
+    if let Some(access_token) = cached_google_vertex_access_token(&cache_key) {
+        return Ok(access_token);
+    }
+    let assertion = sign_google_service_account_jwt(service_account)?;
+    let response = send_provider_request_with_error_code(
+        provider_http_client_for_url(&service_account.token_uri)
+            .await?
+            .post(&service_account.token_uri)
+            .form(&[
+                ("grant_type", GOOGLE_JWT_BEARER_GRANT_TYPE),
+                ("assertion", assertion.as_str()),
+            ]),
+        "google_vertex_auth_network_error",
+    )
+    .await?;
+    let (status, json) = read_json_response(response).await?;
+    if !status.is_success() {
+        return Err(google_vertex_auth_error(status, json));
+    }
+    let access_token = json
+        .get("access_token")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::with_details(
+                "google_vertex_auth_error",
+                "Google Vertex service account auth response did not contain access_token",
+                redact_sensitive_json(json.clone()),
+            )
+        })?
+        .to_string();
+    let expires_in = json
+        .get("expires_in")
+        .and_then(Value::as_i64)
+        .unwrap_or(3600);
+    store_google_vertex_access_token(cache_key, access_token.clone(), expires_in);
+    Ok(access_token)
+}
+
+pub async fn google_vertex_auth_headers_for_credential(
+    credential: &str,
+) -> AppResult<BTreeMap<String, String>> {
+    let credential = credential.trim();
+    let mut headers = BTreeMap::new();
+    if credential.is_empty() {
+        return Ok(headers);
+    }
+    if let Some(service_account) = parse_google_service_account_key(credential)? {
+        let access_token = fetch_google_vertex_access_token(&service_account).await?;
+        headers.insert(
+            "Authorization".to_string(),
+            format!("Bearer {access_token}"),
+        );
+    } else if looks_like_google_bearer_token(credential) {
+        headers.insert("Authorization".to_string(), format!("Bearer {credential}"));
+    } else {
+        headers.insert("x-goog-api-key".to_string(), credential.to_string());
+    }
+    Ok(headers)
+}
+
+async fn apply_google_vertex_auth_headers(
+    mut request: reqwest::RequestBuilder,
+    credential: &str,
+) -> AppResult<reqwest::RequestBuilder> {
+    for (name, value) in google_vertex_auth_headers_for_credential(credential).await? {
+        request = request.header(name, value);
+    }
+    Ok(request)
+}
+
 fn normalize_google_base_url(base: String) -> String {
     let trimmed = base.trim_end_matches('/').to_string();
     let Ok(mut url) = reqwest::Url::parse(&trimmed) else {
@@ -4636,13 +4907,15 @@ async fn complete_google_rich(request: LlmRequest) -> AppResult<LlmCompletion> {
     let url = google_endpoint(&request, "generateContent", false);
     let body = google_generate_body(&request);
     log_prompt_connection_request("google.generateContent", &url, &request, &body);
-    let response = send_provider_request(
-        provider_http_client_for_url(&url)
-            .await?
-            .post(url)
-            .json(&body),
-    )
-    .await?;
+    let mut request_builder = provider_http_client_for_url(&url)
+        .await?
+        .post(url)
+        .json(&body);
+    if request.connection.provider == "google_vertex" {
+        request_builder =
+            apply_google_vertex_auth_headers(request_builder, &request.connection.api_key).await?;
+    }
+    let response = send_provider_request(request_builder).await?;
     let (status, json) = read_json_response(response).await?;
     if !status.is_success() {
         return Err(provider_http_error(status, json));
@@ -4702,13 +4975,15 @@ async fn stream_google(
     let url = google_endpoint(&request, "streamGenerateContent", true);
     let body = google_generate_body(&request);
     log_prompt_connection_request("google.streamGenerateContent", &url, &request, &body);
-    let response = send_provider_request(
-        provider_http_client_for_url(&url)
-            .await?
-            .post(url)
-            .json(&body),
-    )
-    .await?;
+    let mut request_builder = provider_http_client_for_url(&url)
+        .await?
+        .post(url)
+        .json(&body);
+    if request.connection.provider == "google_vertex" {
+        request_builder =
+            apply_google_vertex_auth_headers(request_builder, &request.connection.api_key).await?;
+    }
+    let response = send_provider_request(request_builder).await?;
     let status = response.status();
     if !status.is_success() {
         let error_body = read_error_response_details(response).await?;
