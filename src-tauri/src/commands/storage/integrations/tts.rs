@@ -1090,6 +1090,51 @@ mod tests {
         format!("http://{address}")
     }
 
+    async fn serve_chunked_pockettts_audio_over_cap() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test TTS server should bind");
+        let address = listener
+            .local_addr()
+            .expect("test TTS server address should be readable");
+        tokio::spawn(async move {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("test TTS server should accept one request");
+            let mut buffer = [0_u8; 8192];
+            let bytes = stream
+                .read(&mut buffer)
+                .await
+                .expect("test TTS server should read request");
+            let request = String::from_utf8_lossy(&buffer[..bytes]);
+            assert!(request.starts_with("POST /tts "));
+
+            if stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let chunk = vec![b'a'; 1024 * 1024];
+            let chunk_count = (MAX_TTS_AUDIO_BYTES / chunk.len()) + 1;
+            for _ in 0..chunk_count {
+                let header = format!("{:x}\r\n", chunk.len());
+                if stream.write_all(header.as_bytes()).await.is_err()
+                    || stream.write_all(&chunk).await.is_err()
+                    || stream.write_all(b"\r\n").await.is_err()
+                {
+                    return;
+                }
+            }
+            let _ = stream.write_all(b"0\r\n\r\n").await;
+        });
+        format!("http://{address}")
+    }
+
     #[tokio::test]
     async fn openai_compatible_voice_lookup_passes_configured_model() {
         let state = test_state("openai-voices-model");
@@ -1243,6 +1288,34 @@ mod tests {
         assert!(result["audioBase64"]
             .as_str()
             .is_some_and(|audio| !audio.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn tts_speak_rejects_chunked_audio_over_cap() {
+        let state = test_state("pockettts-speak-over-cap");
+        let base_url = serve_chunked_pockettts_audio_over_cap().await;
+        state
+            .storage
+            .upsert_with_id(
+                "app-settings",
+                TTS_SETTINGS_KEY,
+                json!({
+                    "value": {
+                        "enabled": true,
+                        "source": "pockettts",
+                        "baseUrl": base_url,
+                        "voice": "alba"
+                    }
+                }),
+            )
+            .expect("TTS settings should be stored");
+
+        let error = speak(&state, json!({ "text": "Too much audio." }))
+            .await
+            .expect_err("chunked audio above cap should be rejected");
+
+        assert_eq!(error.code, "invalid_input");
+        assert_eq!(error.message, "TTS audio response is too large");
     }
 
     #[test]
