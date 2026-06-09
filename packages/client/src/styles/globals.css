@@ -1890,13 +1890,6 @@ summary[class*="cursor-pointer"],
    ───────────────────────────────────────────── */
 .texting-bubble {
   word-break: break-word;
-  transition:
-    transform 0.15s,
-    box-shadow 0.15s;
-}
-
-.texting-bubble:hover {
-  transform: scale(1.005);
 }
 
 .texting-bubble-user {
@@ -1911,6 +1904,7 @@ summary[class*="cursor-pointer"],
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
+
 
 /* ─────────────────────────────────────────────
    15. CHAT: ROLEPLAY MODE

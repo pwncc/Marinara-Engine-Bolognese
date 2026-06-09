@@ -6,6 +6,7 @@ import {
   TRACKER_DATA_PANEL_SECTIONS,
   useUIStore,
   getTrackerPanelWidthForProfile,
+  type ConversationMessageStyle,
   type GameDialogueDisplayMode,
   type RoleplayAvatarStyle,
   type TrackerDataPanelSection,
@@ -1655,6 +1656,8 @@ function AppearanceSettings() {
   const setFontSize = useUIStore((s) => s.setFontSize);
   const chatFontSize = useUIStore((s) => s.chatFontSize);
   const setChatFontSize = useUIStore((s) => s.setChatFontSize);
+  const conversationMessageStyle = useUIStore((s) => s.conversationMessageStyle);
+  const setConversationMessageStyle = useUIStore((s) => s.setConversationMessageStyle);
   const weatherEffects = useUIStore((s) => s.weatherEffects);
   const setWeatherEffects = useUIStore((s) => s.setWeatherEffects);
   const trackerPanelEnabled = useUIStore((s) => s.trackerPanelEnabled);
@@ -1897,6 +1900,68 @@ function AppearanceSettings() {
           <span className="text-xs tabular-nums text-[var(--muted-foreground)] w-8 text-right">{chatFontSize}px</span>
         </div>
       </label>
+
+      <div className="flex flex-col gap-2 rounded-lg border border-[var(--border)]/70 bg-[var(--secondary)]/25 p-3">
+        <div className="flex items-center gap-1.5">
+          <MessageCircle size="0.75rem" className="text-[var(--muted-foreground)]" />
+          <span className="text-xs font-medium">Chat Layout</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {(
+            [
+              { id: "classic" as ConversationMessageStyle, label: "Linear", desc: "Chat-style rows" },
+              { id: "bubble" as ConversationMessageStyle, label: "Bubbles", desc: "Messenger-style bubbles" },
+            ] as const
+          ).map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => setConversationMessageStyle(opt.id)}
+              className={cn(
+                "flex flex-col items-start gap-1 rounded-lg border p-3 text-left text-xs transition-all",
+                conversationMessageStyle === opt.id
+                  ? "border-[var(--primary)] bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]"
+                  : "border-[var(--border)] bg-[var(--background)]/35 hover:border-[var(--primary)]/40",
+              )}
+              aria-pressed={conversationMessageStyle === opt.id}
+            >
+              <span className="font-semibold">{opt.label}</span>
+              <span className="text-[0.625rem] leading-tight text-[var(--muted-foreground)]">{opt.desc}</span>
+            </button>
+          ))}
+        </div>
+        <div className="rounded-lg border border-[var(--border)]/60 bg-[var(--background)]/35 p-2.5 text-[0.6875rem]">
+          {conversationMessageStyle === "bubble" ? (
+            <div className="space-y-1.5">
+              <div className="flex justify-end">
+                <div className="mari-message-bubble texting-bubble texting-bubble-user max-w-[78%] rounded-2xl rounded-br-md px-3 py-1.5 text-xs shadow-sm">
+                  Hey, how's it going?
+                </div>
+              </div>
+              <div className="flex items-end gap-1.5 justify-start">
+                <div className="h-5 w-5 shrink-0 rounded-full bg-[var(--accent)]" />
+                <div className="mari-message-bubble texting-bubble texting-bubble-other max-w-[78%] rounded-2xl rounded-bl-md px-3 py-1.5 text-xs shadow-sm">
+                  Pretty good, thanks!
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex gap-2 text-xs">
+              <div className="h-6 w-6 shrink-0 rounded-full bg-[var(--accent)]" />
+              <div className="min-w-0 flex-1">
+                <div className="mb-0.5 flex items-baseline gap-2">
+                  <span className="font-semibold">Character</span>
+                  <span className="text-[0.625rem] text-[var(--muted-foreground)]">12:45</span>
+                </div>
+                <div className="space-y-0.5 text-[var(--foreground)]/90">
+                  <div>Messages appear as rows,</div>
+                  <div>grouped by sender.</div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* ── Text Appearance ── */}
       <div className="flex flex-col gap-3">
