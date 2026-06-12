@@ -192,13 +192,17 @@ export function ConversationMessageBubble({ ctx }: { ctx: MessageRenderContext }
             </div>
           )}
 
-          <ConversationMessageTranslation translatedText={translatedText} isTranslating={isTranslating} />
-          <ConversationMessageAttachments
-            attachments={extra.attachments ?? []}
-            renderedContent={renderedContent}
-            onImageOpen={onImageOpen}
-            onRemove={onRemoveAttachment}
-          />
+          {!isHiddenCollapsed && (
+            <>
+              <ConversationMessageTranslation translatedText={translatedText} isTranslating={isTranslating} />
+              <ConversationMessageAttachments
+                attachments={extra.attachments ?? []}
+                renderedContent={renderedContent}
+                onImageOpen={onImageOpen}
+                onRemove={onRemoveAttachment}
+              />
+            </>
+          )}
         </div>
       </div>
 

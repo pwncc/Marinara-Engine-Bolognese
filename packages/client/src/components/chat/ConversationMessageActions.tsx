@@ -60,29 +60,35 @@ export function ConversationMessageActions({
   onShowGenerationReplay,
   onShowThinking,
 }: ConversationMessageActionsProps) {
+  const visible = showActions || forceShowActions;
+  const tabIdx = visible ? undefined : -1;
   return (
     <div
       className={cn(
         "mari-message-actions absolute -top-3 flex items-center gap-0.5 rounded-md border border-[var(--border)] bg-[var(--card)]/90 px-1 py-0.5 shadow-sm backdrop-blur-sm transition-all dark:border-white/20 dark:bg-black/40",
-        "opacity-0 group-hover:opacity-100",
-        (showActions || forceShowActions) && "opacity-100",
+        visible
+          ? "visible pointer-events-auto opacity-100"
+          : "invisible pointer-events-none opacity-0 group-hover:visible group-hover:pointer-events-auto group-hover:opacity-100 focus-within:visible focus-within:pointer-events-auto focus-within:opacity-100",
         isBubbleStyle && !isUser ? "left-12" : "right-4",
       )}
+      aria-hidden={!visible}
     >
-      <MsgAction icon={copied ? "✓" : <Copy size="0.75rem" />} onClick={onCopy} title="Copy" />
+      <MsgAction icon={copied ? "✓" : <Copy size="0.75rem" />} onClick={onCopy} title="Copy" tabIndex={tabIdx} />
       <MsgAction
         icon={<Languages size="0.75rem" />}
         onClick={onTranslate}
         title={translatedText ? "Hide translation" : "Translate"}
         className={translatedText ? "text-blue-400" : undefined}
+        tabIndex={tabIdx}
       />
-      <MsgAction icon={<Pencil size="0.75rem" />} onClick={onEdit} title="Edit" />
+      <MsgAction icon={<Pencil size="0.75rem" />} onClick={onEdit} title="Edit" tabIndex={tabIdx} />
       {canRegenerate && onRegenerate && (
         <MsgAction
           icon={<RefreshCw size="0.75rem" />}
           onClick={onRegenerate}
           title={regenerateButtonTitle}
           className={regenerateGuidedClass}
+          tabIndex={tabIdx}
         />
       )}
       {onToggleHiddenFromAI && (
@@ -91,16 +97,17 @@ export function ConversationMessageActions({
           onClick={onToggleHiddenFromAI}
           title={isHiddenFromAI ? "Unhide from AI" : "Hide from AI"}
           className={isHiddenFromAI ? "text-amber-400" : undefined}
+          tabIndex={tabIdx}
         />
       )}
       {isLastAssistantMessage && !isUser && onPeekPrompt && (
-        <MsgAction icon={<Search size="0.75rem" />} onClick={onPeekPrompt} title="Peek prompt" />
+        <MsgAction icon={<Search size="0.75rem" />} onClick={onPeekPrompt} title="Peek prompt" tabIndex={tabIdx} />
       )}
       {generationReplay && (
-        <MsgAction icon={<ScrollText size="0.75rem" />} onClick={onShowGenerationReplay} title="Stored guidance" />
+        <MsgAction icon={<ScrollText size="0.75rem" />} onClick={onShowGenerationReplay} title="Stored guidance" tabIndex={tabIdx} />
       )}
       {thinking && !isUser && (
-        <MsgAction icon={<Brain size="0.75rem" />} onClick={onShowThinking} title="View thoughts" />
+        <MsgAction icon={<Brain size="0.75rem" />} onClick={onShowThinking} title="View thoughts" tabIndex={tabIdx} />
       )}
       {onDelete && (
         <MsgAction
@@ -108,6 +115,7 @@ export function ConversationMessageActions({
           onClick={onDelete}
           title="Delete"
           className="hover:text-[var(--destructive)]"
+          tabIndex={tabIdx}
         />
       )}
     </div>

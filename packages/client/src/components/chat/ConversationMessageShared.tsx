@@ -52,7 +52,7 @@ export interface MessageData {
 export interface MessageRenderContext {
   // raw
   message: MessageData;
-  extra: Record<string, any>;
+  extra: MessageData["extra"];
   isUser: boolean;
   isGrouped: boolean;
   // identity
@@ -109,6 +109,7 @@ export interface MessageRenderContext {
   // multi-select
   multiSelectMode?: boolean;
   isSelected?: boolean;
+  onToggleSelect?: () => void;
   // handlers
   handleMobileTap: (e: React.MouseEvent) => void;
   onCopy: () => void;
@@ -349,16 +350,19 @@ export function MsgAction({
   onClick,
   title,
   className,
+  tabIndex,
 }: {
   icon: React.ReactNode;
   onClick: () => void;
   title: string;
   className?: string;
+  tabIndex?: number;
 }) {
   return (
     <button
       onClick={(e) => { e.stopPropagation(); onClick(); }}
       title={title}
+      tabIndex={tabIndex}
       className={cn("rounded p-1 text-foreground/70 transition-colors hover:bg-foreground/20 hover:text-foreground", className)}
     >
       {icon}

@@ -54,6 +54,7 @@ export function ConversationMessageLine({ ctx }: { ctx: MessageRenderContext }) 
     isTranslating,
     multiSelectMode,
     isSelected,
+    onToggleSelect,
     messageTextStyle,
     shouldHideUserAvatar,
   } = ctx;
@@ -63,7 +64,12 @@ export function ConversationMessageLine({ ctx }: { ctx: MessageRenderContext }) 
       {/* Multi-select checkbox */}
       {multiSelectMode && (
         <div className="flex items-center flex-shrink-0">
-          <div
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={isSelected}
+            aria-label={isSelected ? "Deselect message" : "Select message"}
+            onClick={(e) => { e.stopPropagation(); onToggleSelect?.(); }}
             className={cn(
               "h-5 w-5 rounded border-2 flex items-center justify-center transition-colors cursor-pointer",
               isSelected
@@ -72,7 +78,7 @@ export function ConversationMessageLine({ ctx }: { ctx: MessageRenderContext }) 
             )}
           >
             {isSelected && <span className="text-white text-xs font-bold">✓</span>}
-          </div>
+          </button>
         </div>
       )}
 
@@ -163,23 +169,27 @@ export function ConversationMessageLine({ ctx }: { ctx: MessageRenderContext }) 
           </div>
         )}
 
-        <ConversationMessageTranslation translatedText={translatedText} isTranslating={isTranslating} />
-        <ConversationMessageAttachments
-          attachments={extra.attachments ?? []}
-          renderedContent={renderedContent}
-          onImageOpen={onImageOpen}
-          onRemove={onRemoveAttachment}
-        />
-
-        {!hideActions && hasSwipes && (
-          <div className="mt-1.5">
-            <ConversationMessageSwipes
-              messageId={message.id}
-              activeSwipeIndex={message.activeSwipeIndex}
-              swipeCount={swipeCount}
-              onSetActiveSwipe={(idx) => onSetActiveSwipe?.(message.id, idx)}
+        {!isHiddenCollapsed && (
+          <>
+            <ConversationMessageTranslation translatedText={translatedText} isTranslating={isTranslating} />
+            <ConversationMessageAttachments
+              attachments={extra.attachments ?? []}
+              renderedContent={renderedContent}
+              onImageOpen={onImageOpen}
+              onRemove={onRemoveAttachment}
             />
-          </div>
+
+            {!hideActions && hasSwipes && (
+              <div className="mt-1.5">
+                <ConversationMessageSwipes
+                  messageId={message.id}
+                  activeSwipeIndex={message.activeSwipeIndex}
+                  swipeCount={swipeCount}
+                  onSetActiveSwipe={(idx) => onSetActiveSwipe?.(message.id, idx)}
+                />
+              </div>
+            )}
+          </>
         )}
       </div>
     </>

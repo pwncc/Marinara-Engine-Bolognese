@@ -169,7 +169,9 @@ export const ConversationMessage = memo(function ConversationMessage({
     }
     return null;
   }, [chatCharacterIds, scopedCharacterMap]);
-  const resolvedCharacterInfo = charInfo ?? fallbackChatCharacterEntry?.info ?? null;
+  const resolvedCharacterInfo = message.characterId !== null
+    ? (charInfo ?? fallbackChatCharacterEntry?.info ?? null)
+    : null;
   const primaryCharInfo =
     resolvedCharacterInfo ??
     (scopedCharacterMap
@@ -447,6 +449,9 @@ export const ConversationMessage = memo(function ConversationMessage({
     hasSwipes: (message.swipeCount ?? 0) > 1,
     swipeCount: message.swipeCount ?? 0,
     multiSelectMode, isSelected,
+    onToggleSelect: multiSelectMode && onToggleSelect
+      ? () => onToggleSelect({ messageId: message.id, orderIndex: messageOrderIndex ?? 0, checked: !isSelected, shiftKey: false })
+      : undefined,
     handleMobileTap,
     onCopy: handleCopy,
     onTranslate: handleTranslate,

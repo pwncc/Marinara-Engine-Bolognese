@@ -71,6 +71,7 @@ export function ConversationMessageGrouped({
     onDelete,
     onShowGenerationReplay,
     onShowThinking,
+    onToggleSelect,
   } = ctx;
 
   return (
@@ -93,6 +94,7 @@ export function ConversationMessageGrouped({
             role="checkbox"
             aria-checked={isSelected}
             aria-label={isSelected ? "Deselect message" : "Select message"}
+            onClick={(e) => { e.stopPropagation(); onToggleSelect?.(); }}
             className={cn(
               "h-5 w-5 rounded border-2 flex items-center justify-center transition-colors cursor-pointer",
               isSelected
@@ -205,25 +207,29 @@ export function ConversationMessageGrouped({
         </div>
       )}
 
-      {/* Image attachments */}
-      <div className="ml-14">
-        <ConversationMessageAttachments
-          attachments={extra.attachments ?? []}
-          renderedContent={renderedContent}
-          onImageOpen={onImageOpen}
-          onRemove={onRemoveAttachment}
-        />
-      </div>
+      {!isHiddenCollapsed && (
+        <>
+          {/* Image attachments */}
+          <div className="ml-14">
+            <ConversationMessageAttachments
+              attachments={extra.attachments ?? []}
+              renderedContent={renderedContent}
+              onImageOpen={onImageOpen}
+              onRemove={onRemoveAttachment}
+            />
+          </div>
 
-      {!hideActions && hasSwipes && (
-        <div className="ml-14 mt-1.5">
-          <ConversationMessageSwipes
-            messageId={message.id}
-            activeSwipeIndex={message.activeSwipeIndex}
-            swipeCount={swipeCount}
-            onSetActiveSwipe={(idx) => onSetActiveSwipe?.(message.id, idx)}
-          />
-        </div>
+          {!hideActions && hasSwipes && (
+            <div className="ml-14 mt-1.5">
+              <ConversationMessageSwipes
+                messageId={message.id}
+                activeSwipeIndex={message.activeSwipeIndex}
+                swipeCount={swipeCount}
+                onSetActiveSwipe={(idx) => onSetActiveSwipe?.(message.id, idx)}
+              />
+            </div>
+          )}
+        </>
       )}
 
       {/* Action bar */}
