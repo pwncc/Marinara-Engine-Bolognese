@@ -1,6 +1,7 @@
 import {
   PROVIDERS,
   generationParametersSchema,
+  normalizeThinkingTagPairs,
   type GameState,
   type GenerationParameters,
 } from "@marinara-engine/shared";
@@ -672,6 +673,9 @@ export function parseStoredGenerationParameters(raw: unknown): StoredGenerationP
     out.serviceTier = source.serviceTier as StoredGenerationParameters["serviceTier"];
   }
   if (typeof source.assistantPrefill === "string") out.assistantPrefill = source.assistantPrefill;
+  if (Array.isArray(source.customThinkingTags)) {
+    out.customThinkingTags = normalizeThinkingTagPairs(source.customThinkingTags);
+  }
   if (isPlainRecord(source.customParameters)) {
     out.customParameters = source.customParameters;
   }

@@ -22,10 +22,12 @@ import type { ExportEnvelope } from "@marinara-engine/shared";
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
+import { createGameStateStorage } from "../services/storage/game-state.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
 import { processLorebooks } from "../services/lorebook/index.js";
 import { resolveGameLorebookScopeExclusions } from "../services/lorebook/game-lorebook-scope.js";
 import { buildPromptMacroContext, resolveMacrosWithVariableSnapshot } from "../services/prompt/index.js";
+import { parseGameStateRow, resolveVisibleGameStateAnchor } from "./generate/generate-route-utils.js";
 import {
   syncCharacterBookFromLorebook,
   clearCharacterEmbeddedLorebook,
@@ -650,6 +652,23 @@ export async function lorebooksRoutes(app: FastifyInstance) {
       content: typeof m.content === "string" ? m.content : "",
     }));
     const lastInput = [...scanMessages].reverse().find((message) => message.role === "user")?.content;
+    const gameStateForScan =
+      chat?.mode === "game"
+        ? await (async () => {
+            try {
+              const visibleAnchor = resolveVisibleGameStateAnchor(chatMessages);
+              const row = await createGameStateStorage(app.db).getForGeneration(chatId, {
+                preferLatestVisible: true,
+                visibleAnchor,
+              });
+              return row
+                ? (parseGameStateRow(row as Record<string, unknown>) as unknown as Record<string, unknown>)
+                : null;
+            } catch {
+              return null;
+            }
+          })()
+        : null;
 
     const lorebookMacroResolvers = await (async () => {
       try {
@@ -688,7 +707,7 @@ export async function lorebooksRoutes(app: FastifyInstance) {
       }
     })();
 
-    const result = await processLorebooks(app.db, scanMessages, null, {
+    const result = await processLorebooks(app.db, scanMessages, gameStateForScan, {
       chatId,
       characterIds,
       personaId,

@@ -14,9 +14,12 @@ import type { PendingCardUpdate } from "../stores/agent.store";
 import {
   applyQuestUpdatesToPlayerStats,
   BUILT_IN_AGENTS,
+  createInlineThinkingStreamFilter,
   EDITABLE_CHARACTER_CARD_FIELDS,
+  normalizeThinkingTagPairs,
   type CharacterCardFieldUpdate,
   type EditableCharacterCardField,
+  type ThinkingTagPair,
 } from "@marinara-engine/shared";
 
 type RetryAgentsOptions = {
@@ -282,10 +285,11 @@ import {
   preserveRecentMessageContentEdit,
 } from "./use-chats";
 import { characterKeys } from "./use-characters";
+import { connectionKeys } from "./use-connections";
 import { lorebookKeys } from "./use-lorebooks";
 import { playNotificationPing } from "../lib/notification-sound";
 import { stripGmTagsKeepReadables } from "../lib/game-tag-parser";
-import type { Chat, GameMap, Message } from "@marinara-engine/shared";
+import type { APIConnection, Chat, GameMap, Message } from "@marinara-engine/shared";
 
 function sortMessagesByCreatedAt(messages: Message[]): Message[] {
   return [...messages].sort((a, b) => {
@@ -446,6 +450,50 @@ function parseChatMetadata(metadata: Chat["metadata"] | string | null | undefine
     }
   }
   return metadata as Record<string, unknown>;
+}
+
+function parseStoredParameterRecord(raw: unknown): Record<string, unknown> | null {
+  if (!raw) return null;
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  return typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+}
+
+function readCustomThinkingTags(raw: unknown): ThinkingTagPair[] | undefined {
+  const parsed = parseStoredParameterRecord(raw);
+  if (!parsed || !Object.prototype.hasOwnProperty.call(parsed, "customThinkingTags")) return undefined;
+  return normalizeThinkingTagPairs(parsed.customThinkingTags);
+}
+
+function getCachedConnectionForGeneration(qc: QueryClient, connectionId: string | null | undefined) {
+  if (!connectionId) return undefined;
+  const detail = qc.getQueryData<APIConnection>(connectionKeys.detail(connectionId));
+  if (detail) return detail;
+  const list = qc.getQueryData<APIConnection[]>(connectionKeys.list());
+  return list?.find((connection) => connection.id === connectionId);
+}
+
+function resolveCachedCustomThinkingTags(
+  qc: QueryClient,
+  chatId: string,
+  connectionId: string | null | undefined,
+): ThinkingTagPair[] {
+  const chat = getCachedChatForGeneration(qc, chatId);
+  const chatMeta = parseChatMetadata(chat?.metadata);
+  const effectiveConnectionId = connectionId ?? chat?.connectionId ?? null;
+  const connectionTags = readCustomThinkingTags(
+    getCachedConnectionForGeneration(qc, effectiveConnectionId)?.defaultParameters,
+  );
+  const chatTags = readCustomThinkingTags(chatMeta.chatParameters);
+  return chatTags ?? connectionTags ?? [];
 }
 
 function getCachedChatMode(qc: QueryClient, chatId: string): Chat["mode"] | undefined {
@@ -924,20 +972,16 @@ export function useGenerate() {
       };
 
       // ── Streaming think-tag filter ──
-      // Models may emit <think>...</think>, <thinking>...</thinking>, or
-      // <|channel>thought ... <channel|> at the start of their response.
-      // We intercept these tokens during streaming so
-      // the user never sees the raw tags — the server will extract the content
-      // into message.extra.thinking and emit a content_replace event.
-      //
-      // States: "detect" (start of response, looking for opening tag),
-      //         "inside" (inside a think block, suppressing tokens),
-      //         "done" (think block closed or no think tag found — passthrough).
-      let thinkState: string = streamingEnabled ? "detect" : "done";
-      let thinkBuf = ""; // Raw token accumulator during detect/inside phases
-      let thinkCloseTag = "</think>";
-      const THINK_OPEN_RE = /^(\s*)(<(think(?:ing)?)>|<\|channel>thought\b)/i;
-      const THINK_OPEN_PREFIXES = ["<thinking>", "<think>", "<|channel>thought"];
+      // Inline reasoning tags are suppressed during streaming so raw markers
+      // never flash in the message before the server sends final cleanup.
+      const thinkingStreamFilter = createInlineThinkingStreamFilter(
+        streamingEnabled ? resolveCachedCustomThinkingTags(qc, params.chatId, params.connectionId) : [],
+      );
+      const flushThinkingStreamFilter = () => {
+        const flushed = thinkingStreamFilter.flush();
+        if (flushed.thinking) appendThinkingBuffer(flushed.thinking, params.chatId);
+        if (flushed.visible) appendGeneratedChunk(flushed.visible);
+      };
 
       // Compute visible characters per second from the user's streamingSpeed setting (1–100).
       // Read per-tick so changes to the slider take effect immediately.
@@ -1144,50 +1188,10 @@ export function useGenerate() {
               let chunk = event.data as string;
 
               // ── Think-tag streaming filter ──
-              if (thinkState === "detect") {
-                // Still at the start — accumulate and look for an opening tag
-                thinkBuf += chunk;
-                const openMatch = thinkBuf.match(THINK_OPEN_RE);
-                if (openMatch) {
-                  // Found opening tag — enter suppression mode
-                  thinkState = "inside";
-                  thinkBuf = thinkBuf.slice(openMatch[0].length);
-                  thinkCloseTag = openMatch[3] ? `</${openMatch[3].toLowerCase()}>` : "<channel|>";
-                  chunk = ""; // suppress
-                } else if (
-                  thinkBuf.length > 30 ||
-                  (!THINK_OPEN_PREFIXES.some((prefix) => prefix.startsWith(thinkBuf.trimStart().toLowerCase())) &&
-                    thinkBuf.trimStart().length > 0)
-                ) {
-                  // Not a think tag — flush accumulated buffer as regular content
-                  thinkState = "done";
-                  chunk = thinkBuf;
-                  thinkBuf = "";
-                } else {
-                  // Still ambiguous (partial tag like "<thi") — keep buffering
-                  chunk = "";
-                }
-              }
-
-              if (thinkState === "inside") {
-                thinkBuf += chunk;
-                const closeIdx = thinkBuf.toLowerCase().indexOf(thinkCloseTag.toLowerCase());
-                if (closeIdx !== -1) {
-                  // Found closing tag — everything after it is visible content
-                  const thinkingChunk = thinkBuf.slice(0, closeIdx);
-                  if (thinkingChunk) appendThinkingBuffer(thinkingChunk, params.chatId);
-                  thinkState = "done";
-                  chunk = thinkBuf.slice(closeIdx + thinkCloseTag.length).trimStart();
-                  thinkBuf = "";
-                } else {
-                  const holdback = Math.max(0, thinkCloseTag.length - 1);
-                  const emitLength = Math.max(0, thinkBuf.length - holdback);
-                  if (emitLength > 0) {
-                    appendThinkingBuffer(thinkBuf.slice(0, emitLength), params.chatId);
-                    thinkBuf = thinkBuf.slice(emitLength);
-                  }
-                  chunk = ""; // still inside — suppress
-                }
+              if (streamingEnabled) {
+                const filtered = thinkingStreamFilter.push(chunk);
+                if (filtered.thinking) appendThinkingBuffer(filtered.thinking, params.chatId);
+                chunk = filtered.visible;
               }
 
               if (!chunk) break;
@@ -1476,9 +1480,7 @@ export function useGenerate() {
                 fullBuffer = "";
                 pendingText = "";
                 leadingSpeakerPrefixFilter.reset();
-                thinkState = streamingEnabled ? "detect" : "done";
-                thinkBuf = "";
-                thinkCloseTag = "</think>";
+                thinkingStreamFilter.reset();
                 setStreamBuffer("", params.chatId);
                 clearThinkingBuffer(params.chatId);
               }
@@ -1545,6 +1547,7 @@ export function useGenerate() {
             case "content_replace": {
               // Server stripped character commands — replace the displayed content
               leadingSpeakerPrefixFilter.discard();
+              thinkingStreamFilter.reset();
               const cleanContent = event.data as string;
               replaceGeneratedContentWithTypewriter(cleanContent);
               break;
@@ -1866,6 +1869,7 @@ export function useGenerate() {
         }
 
         // Wait for typewriter to finish draining pending text (streaming mode only)
+        flushThinkingStreamFilter();
         flushLeadingSpeakerPrefix();
         if (streamingEnabled && shouldDisplayRawStream && isActiveChat() && (pendingText.length > 0 || typingActive)) {
           await new Promise<void>((resolve) => {

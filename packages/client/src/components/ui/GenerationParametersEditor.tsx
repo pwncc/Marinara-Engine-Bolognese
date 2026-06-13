@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { GenerationParameters } from "@marinara-engine/shared";
+import { normalizeThinkingTagPairs, type GenerationParameters, type ThinkingTagPair } from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
 import { HelpTooltip } from "./HelpTooltip";
 
@@ -15,6 +15,7 @@ export type EditableGenerationParameters = Pick<
   | "verbosity"
   | "serviceTier"
   | "assistantPrefill"
+  | "customThinkingTags"
   | "customParameters"
 >;
 
@@ -36,6 +37,7 @@ export const CHAT_PARAMETER_DEFAULTS: EditableGenerationParameters = {
   verbosity: "high",
   serviceTier: null,
   assistantPrefill: "",
+  customThinkingTags: [],
   customParameters: {},
 };
 
@@ -50,6 +52,7 @@ export const ROLEPLAY_PARAMETER_DEFAULTS: EditableGenerationParameters = {
   verbosity: "high",
   serviceTier: null,
   assistantPrefill: "",
+  customThinkingTags: [],
   customParameters: {},
 };
 
@@ -97,6 +100,9 @@ export function parseEditableGenerationParameters(raw: unknown): EditableGenerat
   }
   if (typeof source.assistantPrefill === "string") {
     next.assistantPrefill = source.assistantPrefill;
+  }
+  if (Array.isArray(source.customThinkingTags)) {
+    next.customThinkingTags = normalizeThinkingTagPairs(source.customThinkingTags);
   }
   if (
     source.customParameters &&
@@ -207,6 +213,10 @@ export function GenerationParametersFields({
             placeholder="e.g. <thinking>\n"
           />
         </div>
+        <ThinkingTagsInput
+          value={value.customThinkingTags}
+          onChange={(nextValue) => set("customThinkingTags", nextValue)}
+        />
         <CustomParametersInput
           value={value.customParameters}
           onChange={(nextValue) => set("customParameters", nextValue)}
@@ -292,6 +302,106 @@ export function GenerationParametersFields({
       </div>
     </div>
   );
+}
+
+function ThinkingTagsInput({
+  value,
+  onChange,
+}: {
+  value: ThinkingTagPair[];
+  onChange: (next: ThinkingTagPair[]) => void;
+}) {
+  const serialized = stringifyThinkingTags(value);
+  const [draft, setDraft] = useState(serialized);
+  const [error, setError] = useState<string | null>(null);
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) {
+      setDraft(serialized);
+      setError(null);
+    }
+  }, [focused, serialized]);
+
+  const commit = () => {
+    const parsed = parseThinkingTagsDraft(draft);
+    if (!parsed.ok) {
+      setError(parsed.error);
+      return;
+    }
+    setError(null);
+    onChange(parsed.value);
+    setDraft(stringifyThinkingTags(parsed.value));
+  };
+
+  return (
+    <div>
+      <span className="inline-flex items-center gap-1 text-[0.625rem] font-medium text-[var(--muted-foreground)]">
+        Thinking Tags
+        <HelpTooltip
+          text="Optional custom opening and closing markers for models that inline reasoning. Built-in think, thinking, thought, pipe, channel, and bracket pairs are already recognized."
+          size="0.625rem"
+        />
+      </span>
+      <textarea
+        value={draft}
+        onFocus={() => setFocused(true)}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setError(null);
+        }}
+        onBlur={() => {
+          setFocused(false);
+          commit();
+        }}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            event.currentTarget.blur();
+          }
+        }}
+        rows={2}
+        spellCheck={false}
+        className="mt-1 w-full resize-y rounded-lg bg-[var(--secondary)] px-3 py-2 font-mono text-xs leading-relaxed ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)]/60 focus:outline-none focus:ring-[var(--ring)]"
+        placeholder={focused ? "" : "[THINK] => [/THINK]"}
+      />
+      {error ? (
+        <p className="mt-1 text-[0.5625rem] text-amber-500">{error}</p>
+      ) : (
+        <p className="mt-1 text-[0.5625rem] text-[var(--muted-foreground)]/70">
+          One pair per line: opening marker =&gt; closing marker.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function stringifyThinkingTags(value: ThinkingTagPair[] | null | undefined): string {
+  const normalized = normalizeThinkingTagPairs(value);
+  return normalized.map((pair) => `${pair.open} => ${pair.close}`).join("\n");
+}
+
+function parseThinkingTagsDraft(draft: string): { ok: true; value: ThinkingTagPair[] } | { ok: false; error: string } {
+  const lines = draft
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return { ok: true, value: [] };
+
+  const pairs: ThinkingTagPair[] = [];
+  for (const line of lines) {
+    const separatorIndex = line.indexOf("=>");
+    if (separatorIndex < 0) {
+      return { ok: false, error: "Use opening marker => closing marker on each line." };
+    }
+    const open = line.slice(0, separatorIndex).trim();
+    const close = line.slice(separatorIndex + 2).trim();
+    if (!open || !close) {
+      return { ok: false, error: "Both opening and closing markers are required." };
+    }
+    pairs.push({ open, close });
+  }
+
+  return { ok: true, value: normalizeThinkingTagPairs(pairs) };
 }
 
 function CustomParametersInput({
