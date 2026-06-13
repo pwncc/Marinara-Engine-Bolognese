@@ -47,6 +47,15 @@ export const generationParametersSchema = z.object({
   verbosity: z.enum(["low", "medium", "high"]).nullable().default(null),
   serviceTier: z.enum(["flex", "priority"]).nullable().default(null),
   assistantPrefill: z.string().default(""),
+  customThinkingTags: z
+    .array(
+      z.object({
+        open: z.string().trim().min(1).max(120),
+        close: z.string().trim().min(1).max(120),
+      }),
+    )
+    .max(20)
+    .default([]),
   customParameters: z.record(z.unknown()).default({}),
   squashSystemMessages: z.boolean().default(true),
   showThoughts: z.boolean().default(true),

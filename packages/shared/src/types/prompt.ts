@@ -2,6 +2,8 @@
 // Prompt System Types
 // ──────────────────────────────────────────────
 
+import type { ThinkingTagPair } from "../utils/thinking-tags.js";
+
 /** Role for a prompt section. */
 export type PromptRole = "system" | "user" | "assistant";
 
@@ -178,6 +180,8 @@ export interface GenerationParameters {
   serviceTier: "flex" | "priority" | null;
   /** Optional assistant-role prefill appended after the final user message. */
   assistantPrefill: string;
+  /** Extra inline thinking tag pairs to strip from streamed and saved responses. */
+  customThinkingTags: ThinkingTagPair[];
   /** Raw provider request parameters merged into the outgoing request body. */
   customParameters: Record<string, unknown>;
   /** Merge consecutive system messages */

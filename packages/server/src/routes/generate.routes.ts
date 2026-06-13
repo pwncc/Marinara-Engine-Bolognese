@@ -25,6 +25,7 @@ import {
   buildQuestJournalData,
   compactQuestProgressForContext,
   isClaudeAdaptiveOnlyNoSamplingModel,
+  normalizeThinkingTagPairs,
   supportsXhighReasoningEffort,
 } from "@marinara-engine/shared";
 import type {
@@ -40,6 +41,7 @@ import type {
   PlayerStats,
   LorebookEntryTimingState,
   ChatSummaryEntry,
+  ThinkingTagPair,
 } from "@marinara-engine/shared";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
@@ -2291,6 +2293,7 @@ export async function generateRoutes(app: FastifyInstance) {
         let verbosity: "low" | "medium" | "high" | null = null;
         let serviceTier: "flex" | "priority" | null = null;
         let assistantPrefill = "";
+        let customThinkingTags: ThinkingTagPair[] = [];
         let customParameters: Record<string, unknown> = {};
         let wrapFormat: "xml" | "markdown" | "none" = "xml";
         const runtimeAgentSectionTypes = new Set<RuntimeAgentSectionType>();
@@ -2638,6 +2641,7 @@ export async function generateRoutes(app: FastifyInstance) {
           verbosity = assembled.parameters.verbosity ?? null;
           serviceTier = assembled.parameters.serviceTier ?? null;
           assistantPrefill = assembled.parameters.assistantPrefill ?? "";
+          customThinkingTags = normalizeThinkingTagPairs(assembled.parameters.customThinkingTags);
           customParameters = mergeCustomParameters(customParameters, assembled.parameters.customParameters);
 
           const presetMaxContext = assembled.parameters.useMaxContext
@@ -3923,6 +3927,9 @@ export async function generateRoutes(app: FastifyInstance) {
           if (params.verbosity !== undefined) verbosity = params.verbosity;
           if (params.serviceTier !== undefined) serviceTier = normalizeServiceTier(params.serviceTier);
           if (typeof params.assistantPrefill === "string") assistantPrefill = params.assistantPrefill;
+          if (params.customThinkingTags !== undefined) {
+            customThinkingTags = normalizeThinkingTagPairs(params.customThinkingTags);
+          }
           customParameters = mergeCustomParameters(customParameters, params.customParameters);
 
           const paramsMaxContext = params.useMaxContext ? knownModelContext : normalizeMaxContext(params.maxContext);
@@ -5401,8 +5408,9 @@ export async function generateRoutes(app: FastifyInstance) {
         }
         const getLatestUserExpressionSource = () =>
           (
-            [...agentContext.recentMessages].reverse().find((message) => message.role === "user" && message.content.trim())
-              ?.content ??
+            [...agentContext.recentMessages]
+              .reverse()
+              .find((message) => message.role === "user" && message.content.trim())?.content ??
             currentUserInputContent() ??
             input.userMessage ??
             ""
@@ -6309,7 +6317,9 @@ export async function generateRoutes(app: FastifyInstance) {
           }
           const writableIds = agentSettings.writableLorebookIds;
           if (Array.isArray(writableIds)) {
-            const first = writableIds.find((value): value is string => typeof value === "string" && value.trim().length > 0);
+            const first = writableIds.find(
+              (value): value is string => typeof value === "string" && value.trim().length > 0,
+            );
             if (first) return first.trim();
           }
           return null;
@@ -6371,7 +6381,9 @@ export async function generateRoutes(app: FastifyInstance) {
                   ? existingContent
                   : `${existingContent.trim()}\n\n${entry.content}`
                 : entry.content;
-            const existingKeys = Array.isArray(existing.keys) ? existing.keys.filter((key: unknown): key is string => typeof key === "string") : [];
+            const existingKeys = Array.isArray(existing.keys)
+              ? existing.keys.filter((key: unknown): key is string => typeof key === "string")
+              : [];
             const updated = await lorebooksStore.updateEntry(existing.id, {
               content: nextContent,
               description: entry.description ?? existing.description ?? "",
@@ -7081,9 +7093,7 @@ export async function generateRoutes(app: FastifyInstance) {
 
               if (wrapFormat === "xml") {
                 const ctxIdx = finalMessages.findIndex(
-                  (m) =>
-                    (m.contextKind === "injection" || m.role === "system") &&
-                    m.content.includes("<context>"),
+                  (m) => (m.contextKind === "injection" || m.role === "system") && m.content.includes("<context>"),
                 );
                 if (ctxIdx >= 0) {
                   const ctxMsg = finalMessages[ctxIdx]!;
@@ -7104,9 +7114,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 }
               } else if (wrapFormat === "markdown") {
                 const ctxIdx = finalMessages.findIndex(
-                  (m) =>
-                    (m.contextKind === "injection" || m.role === "system") &&
-                    m.content.includes("# Context"),
+                  (m) => (m.contextKind === "injection" || m.role === "system") && m.content.includes("# Context"),
                 );
                 if (ctxIdx >= 0) {
                   const ctxMsg = finalMessages[ctxIdx]!;
@@ -7251,7 +7259,8 @@ export async function generateRoutes(app: FastifyInstance) {
         let allResponses: string[] = [];
         const generatedExpressionTargetIds = new Set<string>();
         const recordExpressionTarget = (savedMsg: any, fallbackCharacterId: string | null) => {
-          const savedRole = typeof savedMsg?.role === "string" ? savedMsg.role : input.impersonate ? "user" : "assistant";
+          const savedRole =
+            typeof savedMsg?.role === "string" ? savedMsg.role : input.impersonate ? "user" : "assistant";
           if (savedRole === "assistant" && fallbackCharacterId) {
             generatedExpressionTargetIds.add(fallbackCharacterId);
           } else if (savedRole === "user" && personaId) {
@@ -7647,8 +7656,8 @@ export async function generateRoutes(app: FastifyInstance) {
             if (isDebug || requestDebug) {
               const effModel = conn.model.toLowerCase();
               const tempSuppressed =
-                (conn.provider === "openai" || conn.provider === "openrouter") &&
-                (/^(o1|o3|o4)/.test(effModel) || (effModel.startsWith("gpt-5") && !!resolvedEffort)) ||
+                ((conn.provider === "openai" || conn.provider === "openrouter") &&
+                  (/^(o1|o3|o4)/.test(effModel) || (effModel.startsWith("gpt-5") && !!resolvedEffort))) ||
                 isClaudeNoSampling;
               const effTemp = tempSuppressed ? "N/A" : temperature;
               const effTopP = tempSuppressed ? "N/A" : topP;
@@ -8012,7 +8021,7 @@ export async function generateRoutes(app: FastifyInstance) {
 
             // Some models inline reasoning blocks instead of using provider-native
             // thinking channels. Lift those blocks into message.extra.thinking.
-            const inlineThinking = extractLeadingThinkingBlocks(fullResponse);
+            const inlineThinking = extractLeadingThinkingBlocks(fullResponse, customThinkingTags);
             if (inlineThinking.stripped) {
               if (inlineThinking.thinking) {
                 fullThinking = fullThinking ? fullThinking + "\n\n" + inlineThinking.thinking : inlineThinking.thinking;
@@ -8200,10 +8209,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 const cName = charRow.name;
                 const escapedName = cName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
                 // Strip <speaker="Name">...</speaker> wrapper if present
-                const speakerWrap = new RegExp(
-                  `^\\s*<speaker="${escapedName}">[\\s\\S]*?<\\/speaker>\\s*$`,
-                  "i",
-                );
+                const speakerWrap = new RegExp(`^\\s*<speaker="${escapedName}">[\\s\\S]*?<\\/speaker>\\s*$`, "i");
                 const speakerMatch = fullResponse.match(speakerWrap);
                 if (speakerMatch) {
                   fullResponse = fullResponse
@@ -8844,7 +8850,9 @@ export async function generateRoutes(app: FastifyInstance) {
                       )
                     : null;
                 const phaseRetryContext: AgentContext =
-                  agentCfg.phase === "post_processing" ? { ...agentContext, mainResponse: combinedResponse } : agentContext;
+                  agentCfg.phase === "post_processing"
+                    ? { ...agentContext, mainResponse: combinedResponse }
+                    : agentContext;
                 const retryCtx: AgentContext = historicalLorebookTarget
                   ? (buildHistoricalLorebookKeeperContext(
                       agentContext,
@@ -9909,8 +9917,12 @@ export async function generateRoutes(app: FastifyInstance) {
                 );
                 const imagePositivePrompt = ((illustratorAgent?.settings?.imagePositivePrompt as string) ?? "").trim();
                 const savedNegativePrompt = ((illustratorAgent?.settings?.imageNegativePrompt as string) ?? "").trim();
-                const imageConnectionOverride = ((illustratorAgent?.settings?.imageConnectionId as string) ?? "").trim();
-                let imgConnFull = imageConnectionOverride ? await connections.getWithKey(imageConnectionOverride) : null;
+                const imageConnectionOverride = (
+                  (illustratorAgent?.settings?.imageConnectionId as string) ?? ""
+                ).trim();
+                let imgConnFull = imageConnectionOverride
+                  ? await connections.getWithKey(imageConnectionOverride)
+                  : null;
                 if (imageConnectionOverride && !imgConnFull) {
                   logger.warn(
                     "[illustrator] Image connection override %s could not be resolved; falling back to default Illustrator connection",
@@ -9991,7 +10003,8 @@ export async function generateRoutes(app: FastifyInstance) {
                         });
                         if (referenceResolution.referenceImages.length > 0) {
                           illustratorRefImages = referenceResolution.referenceImages;
-                          if (referenceResolution.referenceLine) fullPrompt += `\n\n${referenceResolution.referenceLine}`;
+                          if (referenceResolution.referenceLine)
+                            fullPrompt += `\n\n${referenceResolution.referenceLine}`;
                           logger.debug(
                             "[illustrator] Sending %d character reference(s) for: %s",
                             referenceResolution.referenceImages.length,
