@@ -378,7 +378,7 @@ export function AppShell() {
   const adjustSidebarWidth = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
       const step = event.shiftKey ? PANEL_RESIZE_LARGE_STEP : PANEL_RESIZE_STEP;
-      let nextWidth = sharedSidebarWidth;
+      let nextWidth: number;
 
       if (event.key === "ArrowLeft") nextWidth = sharedSidebarWidth - step;
       else if (event.key === "ArrowRight") nextWidth = sharedSidebarWidth + step;
