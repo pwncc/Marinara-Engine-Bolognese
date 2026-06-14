@@ -3830,6 +3830,8 @@ export async function generateRoutes(app: FastifyInstance) {
           agentContext,
           emitMetadataPatch: (patch) => trySendSseEvent(reply, { type: "metadata_patch", data: patch }),
         });
+        // Pre-generation prompt-patch agents read the assembled prompt here; this is overwritten
+        // with the fitted provider prompt before each main model call.
         agentContext.memory._mainPromptPreview = promptPreviewForAgents(finalMessages);
         const pipeline = createAgentPipeline(pipelineAgents, agentContext, sendAgentEvent);
 
@@ -4949,6 +4951,9 @@ export async function generateRoutes(app: FastifyInstance) {
           };
 
           let finalPromptSent: ChatMessage[] = [];
+          const rememberMainPromptPreviewForAgents = (messages: ChatMessage[]) => {
+            agentContext.memory._mainPromptPreview = promptPreviewForAgents(messages);
+          };
           let effectiveMaxTokensForSend = maxTokens;
           const fitPromptForSend = (candidateMessages: ChatMessage[]): ChatMessage[] => {
             const fit = fitMessagesToContext(
@@ -4965,6 +4970,7 @@ export async function generateRoutes(app: FastifyInstance) {
             fitPromptForSend(toProviderMessages(preparedMessagesForGen)),
           );
           finalPromptSent = initialProviderMessages;
+          rememberMainPromptPreviewForAgents(initialProviderMessages);
 
           // Reset per-character accumulators
           fullResponse = "";
@@ -5098,6 +5104,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 let result;
                 try {
                   loopMessages = fitPromptForSend(loopMessages);
+                  rememberMainPromptPreviewForAgents(loopMessages);
                   logPromptSentToModel(
                     loopMessages,
                     round === 0 ? "Prompt sent to model" : `Prompt sent to model (tool round ${round + 1})`,
@@ -5249,6 +5256,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   // Reset per-character accumulator for final round content
                   const prevLen = fullResponse.length;
                   loopMessages = fitPromptForSend(loopMessages);
+                  rememberMainPromptPreviewForAgents(loopMessages);
                   logPromptSentToModel(loopMessages, "Prompt sent to model (final tool follow-up)");
                   const finalResult = await provider.chatComplete(loopMessages, {
                     model: conn.model,
@@ -7063,7 +7071,13 @@ export async function generateRoutes(app: FastifyInstance) {
             }
 
             // Quest Tracker agent → merge quest updates into playerStats.activeQuests
-            if (result.success && result.type === "quest_update" && result.data && typeof result.data === "object") {
+            if (
+              result.success &&
+              result.type === "quest_update" &&
+              result.data &&
+              typeof result.data === "object" &&
+              customAgentCanApplyResult(result, resolvedAgents, builtInAgentTypes, "edit_trackers")
+            ) {
               try {
                 const qData = result.data as Record<string, unknown>;
                 const updates = Array.isArray(qData.updates) ? qData.updates : [];

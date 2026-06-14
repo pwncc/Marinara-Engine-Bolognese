@@ -112,7 +112,6 @@ export function RoleplayHUDActionsMenu({
   const currentTab = tabs[safeTabIndex] ?? tabs[0];
   const activeTab = currentTab.id;
   const showTrackerActions = activeTab === "activity";
-  const showRetryFailedAction = !!(onRetryFailedAgents && failedAgentTypes && failedAgentTypes.length > 0);
   const displayedFailures = useMemo(
     () =>
       failedAgentFailures && failedAgentFailures.length > 0
@@ -120,6 +119,8 @@ export function RoleplayHUDActionsMenu({
         : (failedAgentTypes ?? []).map((agentType) => toAgentFailure({ agentType })),
     [failedAgentFailures, failedAgentTypes],
   );
+  const failureCount = displayedFailures.length;
+  const showRetryFailedAction = !!onRetryFailedAgents && failureCount > 0;
   const showFooterActions = showEcho || showTrackerActions || showRetryFailedAction;
 
   useEffect(() => {
@@ -347,7 +348,7 @@ export function RoleplayHUDActionsMenu({
               className="flex w-full items-center gap-2 px-3 py-2 text-[0.625rem] font-medium text-amber-300 transition-colors hover:bg-amber-500/10 disabled:opacity-50"
             >
               <AlertTriangle size="0.6875rem" className={isGenerationBusy ? "animate-pulse" : ""} />
-              {isGenerationBusy ? "Busy..." : `Retry Failed Agents (${failedAgentTypes?.length ?? 0})`}
+              {isGenerationBusy ? "Busy..." : `Retry Failed Agents (${failureCount})`}
             </button>
           )}
         </div>
@@ -552,8 +553,12 @@ function CustomAgentRunItem({ run }: { run: AgentRunRow }) {
       return;
     }
     setError(null);
-    await updateRun.mutateAsync({ id: run.id, chatId: run.chatId, resultData: parsed.value });
-    setEditing(false);
+    try {
+      await updateRun.mutateAsync({ id: run.id, chatId: run.chatId, resultData: parsed.value });
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save output");
+    }
   };
 
   return (

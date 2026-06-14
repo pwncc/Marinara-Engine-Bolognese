@@ -136,7 +136,6 @@ import {
   DEFAULT_AGENT_PROMPTS,
   getChatModeCapabilities,
   LIMITS,
-  MAX_AGENT_MAX_TOKENS,
   MIN_AGENT_MAX_TOKENS,
   estimateAgentLoadCost,
   getAgentPromptTemplateOptions,
@@ -278,12 +277,12 @@ function normalizePositiveInteger(value: unknown, fallback: number, max: number)
 
 function normalizeAgentMaxTokens(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_AGENT_MAX_TOKENS;
-  return Math.max(MIN_AGENT_MAX_TOKENS, Math.min(MAX_AGENT_MAX_TOKENS, Math.trunc(value)));
+  return Math.max(MIN_AGENT_MAX_TOKENS, Math.trunc(value));
 }
 
 function normalizeAgentMaxTokensInputValue(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 1;
-  return Math.max(1, Math.min(MAX_AGENT_MAX_TOKENS, Math.trunc(value)));
+  return Math.max(1, Math.trunc(value));
 }
 
 function normalizeSpriteDisplayValue(value: unknown, fallback: number, min: number, max: number): number {
@@ -4903,7 +4902,7 @@ export function ChatSettingsDrawer({
             </Section>
           )}
 
-          {/* Memory Recall — conversation mode: show here; roleplay: shown after Function Calling */}
+          {/* Memory Recall — conversation mode: placed before Function Calling by section order */}
           {isConversation && import.meta.env.VITE_MARINARA_LITE !== "true" && (
             <Section
               style={{ order: CHAT_SETTINGS_ORDER.memoryRecall }}
@@ -5032,7 +5031,7 @@ export function ChatSettingsDrawer({
             />
           </div>
 
-          {/* Memory Recall — roleplay/game modes: show after Function Calling */}
+          {/* Memory Recall — roleplay/game modes: placed before Function Calling by section order */}
           {!isConversation && import.meta.env.VITE_MARINARA_LITE !== "true" && (
             <Section
               style={{ order: CHAT_SETTINGS_ORDER.memoryRecall }}
@@ -5172,7 +5171,6 @@ export function ChatSettingsDrawer({
                     <input
                       type="number"
                       min={MIN_AGENT_MAX_TOKENS}
-                      max={MAX_AGENT_MAX_TOKENS}
                       value={agentAddPreview.maxTokens}
                       onChange={(e) => {
                         const value = parseInt(e.target.value, 10);

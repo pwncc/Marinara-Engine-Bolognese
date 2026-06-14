@@ -434,14 +434,14 @@ export function normalizeCustomAgentCapabilities(settings: Record<string, unknow
   const capabilities = normalizeCapabilityMap(settings?.customCapabilities ?? settings?.capabilities);
   const enabledToolsValue = settings?.enabledTools;
   const enabledTools = Array.isArray(enabledToolsValue) ? enabledToolsValue : [];
-  const resultType = typeof settings?.resultType === "string" ? (settings.resultType as AgentResultType) : null;
+  const resultType = typeof settings?.resultType === "string" ? settings.resultType : null;
 
   if (settings?.lorebookWriteEnabled === true || enabledTools.includes("save_lorebook_entry")) {
     capabilities.edit_lorebooks = true;
   }
 
-  if (resultType) {
-    const capability = CUSTOM_AGENT_RESULT_CAPABILITY[resultType];
+  if (resultType && Object.prototype.hasOwnProperty.call(CUSTOM_AGENT_RESULT_CAPABILITY, resultType)) {
+    const capability = CUSTOM_AGENT_RESULT_CAPABILITY[resultType as AgentResultType];
     if (capability) capabilities[capability] = true;
   }
 

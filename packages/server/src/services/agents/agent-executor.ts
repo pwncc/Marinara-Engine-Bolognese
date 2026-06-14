@@ -13,7 +13,6 @@ import {
   compactQuestProgressForContext,
   DEFAULT_AGENT_CONTEXT_SIZE,
   DEFAULT_AGENT_MAX_TOKENS,
-  MAX_AGENT_MAX_TOKENS,
   MIN_AGENT_MAX_TOKENS,
   normalizeCustomAgentCapabilities,
   getDefaultAgentPrompt,
@@ -34,6 +33,15 @@ function stripHtmlTags(text: string): string {
     .replace(/<\/?[a-zA-Z][^>]*>/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 /** Minimal agent config needed for execution. */
@@ -132,8 +140,10 @@ export function formatToolPayloadForLog(payload: string, maxLength = 400): strin
 }
 
 function normalizeAgentMaxTokens(value: unknown, fallback = DEFAULT_AGENT_MAX_TOKENS): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  return Math.max(MIN_AGENT_MAX_TOKENS, Math.min(MAX_AGENT_MAX_TOKENS, Math.trunc(value)));
+  const parsed =
+    typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : fallback;
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(MIN_AGENT_MAX_TOKENS, Math.trunc(parsed));
 }
 
 function applyProviderMaxTokensOverride(provider: BaseLLMProvider, maxTokens: number): number {
@@ -573,10 +583,7 @@ export async function executeAgentBatch(
   const startTime = Date.now();
   const perAgentTokens = configs.map((c) => normalizeAgentMaxTokens(c.settings.maxTokens));
   const temperature = Math.min(...configs.map((c) => (c.settings.temperature as number) ?? 0.3));
-  const rawBatchMaxTokens = Math.min(
-    perAgentTokens.reduce((sum, tokens) => sum + tokens, 0),
-    MAX_AGENT_MAX_TOKENS,
-  );
+  const rawBatchMaxTokens = perAgentTokens.reduce((sum, tokens) => sum + tokens, 0);
   const batchMaxTokens = applyProviderMaxTokensOverride(provider, rawBatchMaxTokens);
 
   try {
@@ -958,7 +965,7 @@ function buildCustomAgentCapabilityBlock(config: AgentExecConfig, context: Agent
     const promptPreview = typeof context.memory._mainPromptPreview === "string" ? context.memory._mainPromptPreview : "";
     if (promptPreview.trim()) {
       parts.push(`<main_generation_prompt_preview>`);
-      parts.push(promptPreview);
+      parts.push(escapeXml(promptPreview));
       parts.push(`</main_generation_prompt_preview>`);
     }
   }
@@ -1465,13 +1472,6 @@ function buildAvailableSpritesBlock(context: AgentContext): string {
 function buildAgentExtras(context: AgentContext, agentTypes: string[] = []): string {
   const parts: string[] = [];
 
-  const escapeXml = (value: string) =>
-    value
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&apos;");
   // Card Evolution Auditor needs the FULL character card (not just description)
   // so it can emit exact-match oldText edits. Gated on agent type because
   // forwarding every field would bloat context for agents that don't need it.

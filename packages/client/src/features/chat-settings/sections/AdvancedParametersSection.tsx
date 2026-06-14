@@ -96,6 +96,8 @@ export function AdvancedParametersSection({
               />
             </div>
             <button
+              type="button"
+              aria-pressed={Boolean(contextMessageLimit)}
               onClick={() => {
                 if (contextMessageLimit) {
                   onContextMessageLimitChange(null);
@@ -134,6 +136,7 @@ export function AdvancedParametersSection({
               <div className="flex items-center gap-2 px-1">
                 <input
                   type="number"
+                  aria-label="Context message limit"
                   min={1}
                   max={9999}
                   value={contextMessageLimit}
@@ -149,6 +152,8 @@ export function AdvancedParametersSection({
               </div>
             )}
             <button
+              type="button"
+              aria-pressed={excludeReasoningEnabled}
               onClick={() => onExcludePastReasoningChange(!excludeReasoningEnabled)}
               className={cn(
                 "flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition-all",

@@ -77,7 +77,6 @@ import {
   CUSTOM_AGENT_CAPABILITY_IDS,
   DEFAULT_CUSTOM_AGENT_ACTIVATION_SCAN_DEPTH,
   LOCAL_SIDECAR_CONNECTION_ID,
-  MAX_AGENT_MAX_TOKENS,
   MAX_CUSTOM_AGENT_ACTIVATION_SCAN_DEPTH,
   MIN_AGENT_MAX_TOKENS,
   getDefaultBuiltInAgentSettings,
@@ -163,11 +162,11 @@ function normalizeAgentMaxTokensInput(value: string): number | "" {
   if (value === "") return "";
   const parsed = parseInt(value, 10);
   if (!Number.isFinite(parsed)) return "";
-  return Math.max(1, Math.min(MAX_AGENT_MAX_TOKENS, parsed));
+  return Math.max(1, parsed);
 }
 
 function clampAgentMaxTokens(value: number): number {
-  return Math.max(MIN_AGENT_MAX_TOKENS, Math.min(MAX_AGENT_MAX_TOKENS, Math.trunc(value)));
+  return Math.max(MIN_AGENT_MAX_TOKENS, Math.trunc(value));
 }
 
 type CustomAgentResultType = Extract<
@@ -253,7 +252,7 @@ const CUSTOM_AGENT_RESULT_TYPE_OPTIONS: Array<{
     id: "lorebook_update",
     label: "Lorebook Update",
     description: 'Expects JSON with an "updates" array to create or update lorebook entries.',
-    requiredAnyCapability: ["create_lorebooks", "edit_lorebooks"],
+    requiredCapability: "edit_lorebooks",
   },
   {
     id: "character_tracker_update",
@@ -1807,7 +1806,6 @@ export function AgentEditor() {
                   <input
                     type="number"
                     min={MIN_AGENT_MAX_TOKENS}
-                    max={MAX_AGENT_MAX_TOKENS}
                     value={localMaxTokens}
                     onChange={(e) => {
                       setLocalMaxTokens(normalizeAgentMaxTokensInput(e.target.value));
