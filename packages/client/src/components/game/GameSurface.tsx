@@ -1833,6 +1833,8 @@ export function GameSurface({
   const gameSnapshot = useGameStateStore((s) => (s.current?.chatId === activeChatId ? s.current : null));
   const chatCharacterIds = useMemo(() => getChatCharacterIds(chat.characterIds), [chat.characterIds]);
   const useSpotifyGameMusic = chatMeta.gameUseSpotifyMusic === true;
+  const useYoutubeGameMusic =
+    Array.isArray(chatMeta.activeAgentIds) && (chatMeta.activeAgentIds as string[]).includes("youtube");
   const activeGameMetaId = typeof chatMeta.gameId === "string" ? chatMeta.gameId : "";
   const sceneRuntimeScopeKey = `${activeChatId}:${activeGameMetaId}`;
   const { data: connectionsList } = useConnections();
@@ -2006,6 +2008,7 @@ export function GameSurface({
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [combatLogsOpen, setCombatLogsOpen] = useState(false);
   const [spotifyRetryPending, setSpotifyRetryPending] = useState(false);
+  const [youtubeRetryPending, setYoutubeRetryPending] = useState(false);
   const combatLogScrolledRef = useRef(false);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
   const [mobileRetryMenuOpen, setMobileRetryMenuOpen] = useState(false);
@@ -2516,7 +2519,7 @@ export function GameSurface({
             const resolved = resolveAssetTag(fx.background, "backgrounds", assetMap);
             useGameAssetStore.getState().setCurrentBackground(resolved);
           }
-          if (fx.music && !useSpotifyGameMusic) {
+          if (fx.music && !useSpotifyGameMusic && !useYoutubeGameMusic) {
             const resolved = resolveAssetTag(fx.music, "music", assetMap);
             audioManager.playMusic(resolved, assetMap);
             useGameAssetStore.getState().setCurrentMusic(resolved);
@@ -2551,6 +2554,7 @@ export function GameSurface({
       applyInventoryUpdates,
       playDirections,
       useSpotifyGameMusic,
+      useYoutubeGameMusic,
     ],
   );
 
@@ -2589,13 +2593,19 @@ export function GameSurface({
         useGameAssetStore.getState().setCurrentBackground(savedBg);
       }
     }
-    if (!useSpotifyGameMusic && currentMusic && assetMap?.[currentMusic] && !audioManager.getState().musicTag) {
+    if (
+      !useSpotifyGameMusic &&
+      !useYoutubeGameMusic &&
+      currentMusic &&
+      assetMap?.[currentMusic] &&
+      !audioManager.getState().musicTag
+    ) {
       audioManager.playMusic(currentMusic, assetMap);
     }
     if (currentAmbient && assetMap?.[currentAmbient] && !audioManager.getState().ambientTag) {
       audioManager.playAmbient(currentAmbient, assetMap);
     }
-  }, [assetManifest, chatMeta.gameSceneBackground, scopedAssetMap, useSpotifyGameMusic]);
+  }, [assetManifest, chatMeta.gameSceneBackground, scopedAssetMap, useSpotifyGameMusic, useYoutubeGameMusic]);
 
   const gameCharacterIds = useMemo(() => {
     const ids = new Set<string>();
@@ -3026,6 +3036,8 @@ export function GameSurface({
   const canRetryAssets = !!retryableAssetGeneration && (assetGenerationFailed || !pendingAssetGeneration);
   const canRetrySpotifyMusic =
     useSpotifyGameMusic && !!activeChatId && !isStreaming && !sceneAnalysis.isPending && !spotifyRetryPending;
+  const canRetryYoutubeMusic =
+    useYoutubeGameMusic && !!activeChatId && !isStreaming && !sceneAnalysis.isPending && !youtubeRetryPending;
 
   const fetchSpotifySceneCandidates = useCallback(
     async (
@@ -3215,7 +3227,7 @@ export function GameSurface({
     // same-chat remount (store may already match) and different-chat mount.
     useGameAssetStore.getState().setCurrentBackground(savedBg ?? null);
 
-    if (savedMusic && !useSpotifyGameMusic && assetMap?.[savedMusic]) {
+    if (savedMusic && !useSpotifyGameMusic && !useYoutubeGameMusic && assetMap?.[savedMusic]) {
       useGameAssetStore.getState().setCurrentMusic(savedMusic);
       // Play music — may be blocked by autoplay, audioManager queues retry on gesture
       if (audioManager.getState().musicTag !== savedMusic) {
@@ -4012,7 +4024,7 @@ export function GameSurface({
       recentMusic: recentMusicHistoryRef.current,
       availableMusic: musicTags,
     });
-    if (scoredMusic && !useSpotifyGameMusic) {
+    if (scoredMusic && !useSpotifyGameMusic && !useYoutubeGameMusic) {
       audioManager.playMusic(scoredMusic, assetMap);
       useGameAssetStore.getState().setCurrentMusic(scoredMusic);
     }
@@ -4252,7 +4264,7 @@ export function GameSurface({
         useGameAssetStore.getState().setCurrentBackground(pick);
       }
     }
-    if (result.music && !useSpotifyGameMusic) {
+    if (result.music && !useSpotifyGameMusic && !useYoutubeGameMusic) {
       const resolved = resolveAssetTag(result.music, "music", assetMap);
       audioManager.playMusic(resolved, assetMap);
       useGameAssetStore.getState().setCurrentMusic(resolved);
@@ -4280,7 +4292,7 @@ export function GameSurface({
             const resolved = resolveAssetTag(fx.background, "backgrounds", assetMap);
             useGameAssetStore.getState().setCurrentBackground(resolved);
           }
-          if (fx.music && !useSpotifyGameMusic) {
+          if (fx.music && !useSpotifyGameMusic && !useYoutubeGameMusic) {
             const resolved = resolveAssetTag(fx.music, "music", assetMap);
             audioManager.playMusic(resolved, assetMap);
             useGameAssetStore.getState().setCurrentMusic(resolved);
@@ -4657,6 +4669,26 @@ export function GameSurface({
       /* generate handles its own error toast */
     }
   }, [activeChatId, generate, isStreaming]);
+
+  const handleRetryYoutubeMusic = useCallback(async () => {
+    if (!activeChatId || !useYoutubeGameMusic || isStreaming || sceneAnalysis.isPending) return;
+    setRetryMenuOpen(false);
+    setMobileRetryMenuOpen(false);
+    setMobileActionsOpen(false);
+    setYoutubeRetryPending(true);
+    try {
+      // YouTube DJ needs no scene-candidate flow — re-running the agent (with the
+      // manualRetry constraint the server injects) emits a fresh play intent that
+      // the in-app player swaps in.
+      await retryAgents(activeChatId, ["youtube"]);
+      toast.success("YouTube DJ picking a fresh track…", { duration: 1800 });
+    } catch (error) {
+      console.warn("[youtube/game] Retry failed:", error);
+      toast.error("YouTube DJ retry failed.");
+    } finally {
+      setYoutubeRetryPending(false);
+    }
+  }, [activeChatId, isStreaming, retryAgents, sceneAnalysis.isPending, useYoutubeGameMusic]);
 
   const handleRetrySpotifyMusic = useCallback(async () => {
     if (!activeChatId || !useSpotifyGameMusic || isStreaming || sceneAnalysis.isPending) return;
@@ -8183,6 +8215,20 @@ export function GameSurface({
                             <span>Retry Spotify DJ Music Generation</span>
                           </button>
                         )}
+                        {useYoutubeGameMusic && (
+                          <button
+                            onClick={handleRetryYoutubeMusic}
+                            disabled={!canRetryYoutubeMusic}
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-white/85 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
+                          >
+                            {youtubeRetryPending ? (
+                              <RefreshCw size={13} className="animate-spin" />
+                            ) : (
+                              <Volume2 size={13} />
+                            )}
+                            <span>Retry YouTube DJ Music</span>
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             setRetryMenuOpen(false);
@@ -8395,6 +8441,20 @@ export function GameSurface({
                                     <Volume2 size={13} />
                                   )}
                                   <span>Retry Spotify DJ Music Generation</span>
+                                </button>
+                              )}
+                              {useYoutubeGameMusic && (
+                                <button
+                                  onClick={handleRetryYoutubeMusic}
+                                  disabled={!canRetryYoutubeMusic}
+                                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-white/85 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
+                                >
+                                  {youtubeRetryPending ? (
+                                    <RefreshCw size={13} className="animate-spin" />
+                                  ) : (
+                                    <Volume2 size={13} />
+                                  )}
+                                  <span>Retry YouTube DJ Music</span>
                                 </button>
                               )}
                               <button
