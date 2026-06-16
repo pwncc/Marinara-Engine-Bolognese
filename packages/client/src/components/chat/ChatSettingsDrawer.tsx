@@ -33,6 +33,7 @@ import {
   Maximize2,
   Vibrate,
   Feather,
+  Paintbrush,
   Activity,
   Puzzle,
   Save,
@@ -108,6 +109,7 @@ import {
   stepCadenceValue,
 } from "../../lib/agent-cadence";
 import { getCharacterTitle, parseCharacterDisplayData } from "../../lib/character-display";
+import { extractCreatorNotesCss } from "../../lib/creator-notes-css";
 import { isLorebookScopeActiveForChat } from "../../lib/lorebook-scope";
 import { useUIStore } from "../../stores/ui.store";
 import {
@@ -310,6 +312,7 @@ const CHAT_SETTINGS_ORDER = {
   advancedParameters: -1100,
   persona: -1000,
   characters: -900,
+  cardTheming: -850,
   groupChat: -800,
   connectedChat: -700,
   connectedNotes: -690,
@@ -530,6 +533,30 @@ export function ChatSettingsDrawer({
     () => (typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {})),
     [chat.metadata],
   );
+
+  // Creator-notes card CSS: the current per-chat mode (default "chat"), and
+  // whether any active character actually ships CSS — the Card Theming control
+  // only appears when one does, so it never clutters chats it can't affect.
+  const cardCssMode: "disabled" | "exclusive" | "chat" =
+    metadata.cardCssMode === "exclusive" || metadata.cardCssMode === "chat" ? metadata.cardCssMode : "disabled";
+  const activeCardsHaveCss = useMemo(() => {
+    if (!allCharacters) return false;
+    const byId = new Map((allCharacters as Array<{ id: string; data: unknown }>).map((c) => [c.id, c]));
+    return chatCharIds.some((id) => {
+      const row = byId.get(id);
+      if (!row) return false;
+      let parsed: Record<string, unknown>;
+      try {
+        if (typeof row.data === "string") parsed = JSON.parse(row.data) as Record<string, unknown>;
+        else if (row.data && typeof row.data === "object") parsed = row.data as Record<string, unknown>;
+        else return false;
+      } catch {
+        return false;
+      }
+      const notes = (parsed as { creator_notes?: string }).creator_notes;
+      return typeof notes === "string" && extractCreatorNotesCss(notes).css.trim().length > 0;
+    });
+  }, [allCharacters, chatCharIds]);
   const conversationCommandToggles = useMemo(
     () => readConversationCommandToggles(metadata.conversationCommandToggles),
     [metadata.conversationCommandToggles],
@@ -3015,6 +3042,61 @@ export function ChatSettingsDrawer({
               customPrompt={(metadata.customSystemPrompt as string) ?? ""}
               onCustomPromptChange={(id, customSystemPrompt) => updateMeta.mutate({ id, customSystemPrompt })}
             />
+          )}
+
+          {/* Card Theming — only shown when an active character ships creator-notes CSS */}
+          {activeCardsHaveCss && (
+            <Section
+              style={{ order: CHAT_SETTINGS_ORDER.cardTheming }}
+              label="Card Theming"
+              icon={<Paintbrush size="0.875rem" />}
+              help="Apply CSS embedded in a character's Creator Notes. Exclusive keeps each character's styling to their own messages; Chat applies it to the whole area."
+            >
+              <div className="space-y-2">
+                <div className="flex rounded-lg ring-1 ring-[var(--border)]">
+                  <button
+                    onClick={() => updateMeta.mutate({ id: chat.id, cardCssMode: "disabled" })}
+                    className={cn(
+                      "flex-1 px-3 py-2 text-[0.6875rem] font-medium transition-colors rounded-l-lg",
+                      cardCssMode === "disabled"
+                        ? "bg-[var(--primary)] text-white"
+                        : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]",
+                    )}
+                  >
+                    Disabled
+                  </button>
+                  <button
+                    onClick={() => updateMeta.mutate({ id: chat.id, cardCssMode: "exclusive" })}
+                    className={cn(
+                      "flex-1 px-3 py-2 text-[0.6875rem] font-medium transition-colors",
+                      cardCssMode === "exclusive"
+                        ? "bg-[var(--primary)] text-white"
+                        : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]",
+                    )}
+                  >
+                    Exclusive
+                  </button>
+                  <button
+                    onClick={() => updateMeta.mutate({ id: chat.id, cardCssMode: "chat" })}
+                    className={cn(
+                      "flex-1 px-3 py-2 text-[0.6875rem] font-medium transition-colors rounded-r-lg",
+                      cardCssMode === "chat"
+                        ? "bg-[var(--primary)] text-white"
+                        : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]",
+                    )}
+                  >
+                    Chat
+                  </button>
+                </div>
+                <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                  {cardCssMode === "disabled"
+                    ? "Card CSS is off — no character styling is applied."
+                    : cardCssMode === "exclusive"
+                      ? "Each character's CSS only affects their own messages."
+                      : "All card CSS affects the entire chat area, including UI elements."}
+                </p>
+              </div>
+            </Section>
           )}
 
           {/* Group Chat Settings — only when 2+ characters, game mode handles it internally */}

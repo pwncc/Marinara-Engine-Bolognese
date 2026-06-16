@@ -76,6 +76,8 @@ import { HomeCreditsModal } from "./HomeCreditsModal";
 import { HomeProfessorMariChat } from "./HomeProfessorMariChat";
 import { NewChatConnectionGate } from "./NewChatConnectionGate";
 import { ChatCommonOverlays } from "./ChatCommonOverlays";
+import { CreatorNotesCssInjector, type CardCssMode } from "./CreatorNotesCssInjector";
+import type { ChatModeFilter } from "../../lib/card-css";
 
 export type { CharacterMap };
 
@@ -538,6 +540,22 @@ export function ChatArea() {
 
   const updateMeta = useUpdateChatMetadata();
   const summaryContextSize: number = (chatMeta.summaryContextSize as number) ?? 50;
+
+  // Creator-notes card CSS: resolve the per-chat mode (default "chat") and map
+  // the chat mode onto the @chat-mode filter surface (visual novel shares the
+  // roleplay surface). One injector element, reused across every render path.
+  const cardCssMode: CardCssMode =
+    chatMeta.cardCssMode === "exclusive" || chatMeta.cardCssMode === "chat" ? chatMeta.cardCssMode : "disabled";
+  const cardCssChatMode: ChatModeFilter =
+    chatMode === "conversation" ? "conversation" : chatMode === "game" ? "game" : "roleplay";
+  const cardCssInjector = (
+    <CreatorNotesCssInjector
+      characterIds={chatCharIds}
+      allCharacters={allCharacters as CharacterRow[] | undefined}
+      mode={cardCssMode}
+      chatMode={cardCssChatMode}
+    />
+  );
 
   // Sync translation config from chat metadata to the translation store
   useEffect(() => {
@@ -2010,6 +2028,7 @@ export function ChatArea() {
   if (chatMode === "conversation") {
     return (
       <>
+        {cardCssInjector}
         <Suspense fallback={surfaceFallback}>
           <ChatConversationSurface
             activeChatId={activeChatId}
@@ -2094,6 +2113,7 @@ export function ChatArea() {
 
   return (
     <>
+      {cardCssInjector}
       <Suspense fallback={surfaceFallback}>
         <ChatRoleplaySurface
           activeChatId={activeChatId}
