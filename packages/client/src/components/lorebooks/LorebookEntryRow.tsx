@@ -323,9 +323,38 @@ export function LorebookEntryRow({
   const handleDuplicate = useCallback(
     (e: ReactMouseEvent) => {
       e.stopPropagation();
-      duplicateEntry.mutate({ lorebookId, entry });
+      // Clone from the row's current inline state (not the prop snapshot) so an edit made
+      // just before duplicating isn't dropped while its update/refetch is still in flight.
+      const { constant, selective } = statusToFlags(localStatus);
+      duplicateEntry.mutate({
+        lorebookId,
+        entry: {
+          ...entry,
+          name: localName,
+          enabled: localEnabled,
+          constant,
+          selective,
+          position: localPosition,
+          depth: localDepth,
+          order: localOrder,
+          probability: localProbability === 100 ? null : localProbability,
+          useRegex: localUseRegex,
+        },
+      });
     },
-    [lorebookId, entry, duplicateEntry],
+    [
+      lorebookId,
+      entry,
+      localName,
+      localEnabled,
+      localStatus,
+      localPosition,
+      localDepth,
+      localOrder,
+      localProbability,
+      localUseRegex,
+      duplicateEntry,
+    ],
   );
 
   const showDepthInput = localPosition === 2;
