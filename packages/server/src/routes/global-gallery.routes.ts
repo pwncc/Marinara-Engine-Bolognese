@@ -175,6 +175,10 @@ export async function globalGalleryRoutes(app: FastifyInstance) {
     if (kind !== null && !name) {
       return reply.status(400).send({ error: "customName is required when tagging" });
     }
+    // Cap length server-side to match the client slug limit — a direct API call could bypass it.
+    if (name.length > 32) {
+      return reply.status(400).send({ error: "customName too long (max 32 characters)" });
+    }
     return storage.setTag(req.params.id, {
       customKind: kind,
       customName: kind === null ? null : name,

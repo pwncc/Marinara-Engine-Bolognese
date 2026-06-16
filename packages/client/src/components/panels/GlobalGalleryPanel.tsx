@@ -88,7 +88,7 @@ export function GlobalGalleryPanel() {
       ) {
         return;
       }
-      removeImage.mutate(image.id);
+      removeImage.mutate(image.id, { onError: (err) => toast.error(err.message) });
       if (lightbox?.id === image.id) setLightbox(null);
     },
     [lightbox?.id, removeImage],
@@ -96,7 +96,7 @@ export function GlobalGalleryPanel() {
 
   const handleMove = useCallback(
     (imageId: string, folderId: string | null) => {
-      moveImage.mutate({ id: imageId, folderId });
+      moveImage.mutate({ id: imageId, folderId }, { onError: (err) => toast.error(err.message) });
       setLightbox((current) => (current?.id === imageId ? { ...current, folderId } : current));
     },
     [moveImage],
@@ -341,7 +341,10 @@ export function GlobalGalleryPanel() {
                 dragImageId === image.id && "opacity-50",
               )}
             >
-              <CustomEmojiTagButton image={image} onApply={(patch) => tag.mutate({ imageId: image.id, patch })} />
+              <CustomEmojiTagButton
+                image={image}
+                onApply={(patch) => tag.mutate({ imageId: image.id, patch }, { onError: (err) => toast.error(err.message) })}
+              />
               <button
                 type="button"
                 className="block aspect-square w-full bg-[var(--secondary)]"

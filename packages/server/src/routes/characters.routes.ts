@@ -570,6 +570,10 @@ export async function charactersRoutes(app: FastifyInstance) {
     if (kind !== null && !name) {
       return reply.status(400).send({ error: "customName is required when tagging" });
     }
+    // Cap length server-side to match the client slug limit — a direct API call could bypass it.
+    if (name.length > 32) {
+      return reply.status(400).send({ error: "customName too long (max 32 characters)" });
+    }
     return characterGallery.setTag(imageId, {
       customKind: kind,
       customName: kind === null ? null : name,
@@ -1001,6 +1005,10 @@ export async function charactersRoutes(app: FastifyInstance) {
     const name = typeof req.body?.customName === "string" ? req.body.customName.trim() : "";
     if (kind !== null && !name) {
       return reply.status(400).send({ error: "customName is required when tagging" });
+    }
+    // Cap length server-side to match the client slug limit — a direct API call could bypass it.
+    if (name.length > 32) {
+      return reply.status(400).send({ error: "customName too long (max 32 characters)" });
     }
     return personaGallery.setTag(imageId, {
       customKind: kind,

@@ -33,7 +33,7 @@ export const characterKeys = {
   detail: (id: string) => [...characterKeys.all, "detail", id] as const,
   versions: (id: string) => [...characterKeys.detail(id), "versions"] as const,
   gallery: (id: string) => [...characterKeys.all, "gallery", id] as const,
-  personaGallery: (id: string) => ["personas", "gallery", id] as const,
+  personaGallery: (id: string) => ["persona-gallery", id] as const,
   personas: ["personas"] as const,
   groups: ["character-groups"] as const,
   groupDetail: (id: string) => ["character-groups", "detail", id] as const,
