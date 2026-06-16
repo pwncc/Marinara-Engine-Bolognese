@@ -6,6 +6,7 @@ import { useGameStatePatcher } from "../../../hooks/use-game-state-patcher";
 import { getCssBackgroundStyle, getCssColorFallback, isCssGradient } from "../../../lib/css-colors";
 import { cn } from "../../../lib/utils";
 import { useTrackerGameState } from "../hooks/use-tracker-game-state";
+import { useTrackerFieldLockUpdater } from "../hooks/use-tracker-field-lock-updater";
 import { useTrackerPanelModel } from "../hooks/use-tracker-panel-model";
 import { EmptySection } from "./controls/SectionControls";
 import { TrackerSectionList } from "./TrackerSectionList";
@@ -55,9 +56,10 @@ export function TrackerDataSidebar({ fillHeight = false }: { fillHeight?: boolea
   const [addMode, setAddMode] = useState(false);
   const [lockMode, setLockMode] = useState(false);
   const fieldLocks = currentGameState?.fieldLocks ?? null;
+  const updateFieldLocks = useTrackerFieldLockUpdater({ chatId: activeChatId, fieldLocks, patchField });
   const toggleFieldLock = useCallback((key: string) => {
-    patchField("fieldLocks", toggleTrackerFieldLock(fieldLocks, key));
-  }, [fieldLocks, patchField]);
+    updateFieldLocks((locks) => toggleTrackerFieldLock(locks, key));
+  }, [updateFieldLocks]);
   const hasFixedTrackerPanel = orderedTrackerSections.length > 0;
   const showTrackerSections = !!activeChatId && !isLoadingGameState && !!currentGameState && hasFixedTrackerPanel;
   const trackerPanelHasCustomBackground =
@@ -102,6 +104,7 @@ export function TrackerDataSidebar({ fillHeight = false }: { fillHeight?: boolea
         lockMode={lockMode}
         onSetLockMode={setLockMode}
         onToggleFieldLock={toggleFieldLock}
+        onUpdateFieldLocks={updateFieldLocks}
       >
         <TrackerSidebarHeader
           trackerPanelSide={trackerPanelSide}

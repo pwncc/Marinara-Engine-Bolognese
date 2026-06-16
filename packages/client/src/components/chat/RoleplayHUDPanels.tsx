@@ -47,13 +47,20 @@ import type {
 import {
   characterStatTrackerLockKey,
   characterTrackerLockKey,
+  customTrackerLockPrefix,
   customTrackerLockKey,
+  inventoryTrackerLockPrefix,
   inventoryTrackerLockKey,
   isTrackerFieldLocked,
+  personaStatsTrackerLockPrefix,
   personaStatTrackerLockKey,
   personaStatusTrackerLockKey,
+  questObjectivesTrackerLockPrefix,
   questObjectiveTrackerLockKey,
   questTrackerLockKey,
+  removeTrackerArrayItemLocks,
+  removeTrackerCharacterLocks,
+  removeTrackerQuestLocks,
   worldTrackerLockKey,
 } from "@marinara-engine/shared";
 import { useTrackerLockContext } from "../../features/tracker-panel/components/TrackerLockContext";
@@ -71,6 +78,7 @@ interface CombinedPlayerPanelProps {
   onUpdateCharacters: (chars: PresentCharacter[]) => void;
   inventory: InventoryItem[];
   onUpdateInventory: (items: InventoryItem[]) => void;
+  onRemoveInventoryItem?: (index: number) => void;
   quests: QuestProgress[];
   onUpdateQuests: (quests: QuestProgress[]) => void;
   customTrackerFields: CustomTrackerField[];
@@ -201,6 +209,7 @@ export function CombinedPlayerPanel({
   onUpdateCharacters,
   inventory,
   onUpdateInventory,
+  onRemoveInventoryItem,
   quests,
   onUpdateQuests,
   customTrackerFields,
@@ -209,6 +218,7 @@ export function CombinedPlayerPanel({
   onRerunSingleTracker,
   isTrackerRetryBusy,
 }: CombinedPlayerPanelProps) {
+  const { onUpdateFieldLocks } = useTrackerLockContext();
   const updateBar = (idx: number, field: "value" | "max" | "name", val: number | string) => {
     const next = [...personaStats];
     next[idx] = { ...next[idx]!, [field]: val };
@@ -231,7 +241,11 @@ export function CombinedPlayerPanel({
       },
     ]);
   };
-  const removeCharacter = (idx: number) => onUpdateCharacters(characters.filter((_, i) => i !== idx));
+  const removeCharacter = (idx: number) => {
+    const removed = characters[idx];
+    if (removed) onUpdateFieldLocks?.((locks) => removeTrackerCharacterLocks(locks, removed, idx));
+    onUpdateCharacters(characters.filter((_, i) => i !== idx));
+  };
   const updateCharacter = (idx: number, updated: PresentCharacter) => {
     const next = [...characters];
     next[idx] = updated;
@@ -241,7 +255,14 @@ export function CombinedPlayerPanel({
   const addItem = () => {
     onUpdateInventory([...inventory, { name: "New Item", description: "", quantity: 1, location: "on_person" }]);
   };
-  const removeItem = (idx: number) => onUpdateInventory(inventory.filter((_, i) => i !== idx));
+  const removeItem = (idx: number) => {
+    if (onRemoveInventoryItem) {
+      onRemoveInventoryItem(idx);
+      return;
+    }
+    onUpdateFieldLocks?.((locks) => removeTrackerArrayItemLocks(locks, inventoryTrackerLockPrefix(), idx));
+    onUpdateInventory(inventory.filter((_, i) => i !== idx));
+  };
   const updateItem = (idx: number, updated: InventoryItem) => {
     const next = [...inventory];
     next[idx] = updated;
@@ -260,7 +281,11 @@ export function CombinedPlayerPanel({
       },
     ]);
   };
-  const removeQuest = (idx: number) => onUpdateQuests(quests.filter((_, i) => i !== idx));
+  const removeQuest = (idx: number) => {
+    const removed = quests[idx];
+    if (removed) onUpdateFieldLocks?.((locks) => removeTrackerQuestLocks(locks, removed, idx));
+    onUpdateQuests(quests.filter((_, i) => i !== idx));
+  };
   const updateQuest = (idx: number, updated: QuestProgress) => {
     const next = [...quests];
     next[idx] = updated;
@@ -270,7 +295,10 @@ export function CombinedPlayerPanel({
   const addCustomField = () => {
     onUpdateCustomTracker([...customTrackerFields, { name: "New Field", value: "" }]);
   };
-  const removeCustomField = (idx: number) => onUpdateCustomTracker(customTrackerFields.filter((_, i) => i !== idx));
+  const removeCustomField = (idx: number) => {
+    onUpdateFieldLocks?.((locks) => removeTrackerArrayItemLocks(locks, customTrackerLockPrefix(), idx));
+    onUpdateCustomTracker(customTrackerFields.filter((_, i) => i !== idx));
+  };
   const updateCustomField = (idx: number, updated: CustomTrackerField) => {
     const next = [...customTrackerFields];
     next[idx] = updated;
@@ -639,12 +667,14 @@ export function PersonaStatsPanel({
   onRerunSingleTracker,
   isTrackerRetryBusy,
 }: PersonaStatsPanelProps) {
+  const { onUpdateFieldLocks } = useTrackerLockContext();
   const updateBar = (idx: number, field: "value" | "max" | "name", val: number | string) => {
     const next = [...bars];
     next[idx] = { ...next[idx]!, [field]: val };
     onUpdate(next);
   };
   const removeBar = (idx: number) => {
+    onUpdateFieldLocks?.((locks) => removeTrackerArrayItemLocks(locks, personaStatsTrackerLockPrefix(), idx));
     onUpdate(bars.filter((_, index) => index !== idx));
   };
   const lockFor = useHudFieldLockResolver();
@@ -714,6 +744,7 @@ export function CharactersPanel({
   onRerunSingleTracker,
   isTrackerRetryBusy,
 }: CharactersPanelProps) {
+  const { onUpdateFieldLocks } = useTrackerLockContext();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadIdx, setUploadIdx] = useState<number | null>(null);
 
@@ -783,6 +814,8 @@ export function CharactersPanel({
   };
 
   const removeCharacter = (idx: number) => {
+    const removed = characters[idx];
+    if (removed) onUpdateFieldLocks?.((locks) => removeTrackerCharacterLocks(locks, removed, idx));
     onUpdate(characters.filter((_, i) => i !== idx));
   };
 
@@ -833,6 +866,7 @@ export function CharactersPanel({
       <div className="p-2 space-y-2">
         {characters.length === 0 && <div className={cn(EMPTY_STATE, "py-2")}>No characters in scene</div>}
         {characters.map((char, idx) => {
+          const emojiLock = lockFor(characterTrackerLockKey(char, idx, "emoji"));
           const nameLock = lockFor(characterTrackerLockKey(char, idx, "name"));
           const moodLock = lockFor(characterTrackerLockKey(char, idx, "mood"));
           const appearanceLock = lockFor(characterTrackerLockKey(char, idx, "appearance"));
@@ -865,6 +899,14 @@ export function CharactersPanel({
                   <ImagePlus size="0.75rem" />
                 </button>
               )}
+              <InlineEdit
+                value={char.emoji || "👤"}
+                onSave={(value) => updateCharacter(idx, { ...char, emoji: value || "👤" })}
+                className="h-8 w-8 shrink-0 justify-center text-center !text-sm"
+                placeholder="👤"
+                locked={emojiLock.locked}
+              />
+              <HudFieldLockButton {...emojiLock} label={`${char.name || "character"} emoji`} />
               <InlineEdit
                 value={char.name}
                 onSave={(value) => updateCharacter(idx, { ...char, name: value })}
@@ -962,17 +1004,25 @@ export function CharactersPanel({
 interface InventoryPanelProps {
   items: InventoryItem[];
   onUpdate: (items: InventoryItem[]) => void;
+  onRemoveItem?: (index: number) => void;
 }
 
 export function InventoryPanel({
   items,
   onUpdate,
+  onRemoveItem,
 }: InventoryPanelProps) {
+  const { onUpdateFieldLocks } = useTrackerLockContext();
   const addItem = () => {
     onUpdate([...items, { name: "New Item", description: "", quantity: 1, location: "on_person" }]);
   };
 
   const removeItem = (idx: number) => {
+    if (onRemoveItem) {
+      onRemoveItem(idx);
+      return;
+    }
+    onUpdateFieldLocks?.((locks) => removeTrackerArrayItemLocks(locks, inventoryTrackerLockPrefix(), idx));
     onUpdate(items.filter((_, i) => i !== idx));
   };
 
@@ -1051,6 +1101,7 @@ export function QuestsPanel({
   onRerunSingleTracker,
   isTrackerRetryBusy,
 }: QuestsPanelProps) {
+  const { onUpdateFieldLocks } = useTrackerLockContext();
   const addQuest = () => {
     onUpdate([
       ...quests,
@@ -1065,6 +1116,8 @@ export function QuestsPanel({
   };
 
   const removeQuest = (idx: number) => {
+    const removed = quests[idx];
+    if (removed) onUpdateFieldLocks?.((locks) => removeTrackerQuestLocks(locks, removed, idx));
     onUpdate(quests.filter((_, i) => i !== idx));
   };
 
@@ -1122,11 +1175,13 @@ export function CustomTrackerPanel({
   onRerunSingleTracker,
   isTrackerRetryBusy,
 }: CustomTrackerPanelProps) {
+  const { onUpdateFieldLocks } = useTrackerLockContext();
   const addField = () => {
     onUpdate([...fields, { name: "New Field", value: "" }]);
   };
 
   const removeField = (idx: number) => {
+    onUpdateFieldLocks?.((locks) => removeTrackerArrayItemLocks(locks, customTrackerLockPrefix(), idx));
     onUpdate(fields.filter((_, i) => i !== idx));
   };
 
@@ -1739,6 +1794,7 @@ function QuestCardEditable({
   onUpdate: (q: QuestProgress) => void;
   onRemove: () => void;
 }) {
+  const { onUpdateFieldLocks } = useTrackerLockContext();
   const addObjective = () => {
     onUpdate({
       ...quest,
@@ -1753,6 +1809,9 @@ function QuestCardEditable({
   };
 
   const removeObjective = (idx: number) => {
+    onUpdateFieldLocks?.((locks) =>
+      removeTrackerArrayItemLocks(locks, questObjectivesTrackerLockPrefix(quest, questIndex), idx),
+    );
     onUpdate({ ...quest, objectives: quest.objectives.filter((_, objectiveIndex) => objectiveIndex !== idx) });
   };
 

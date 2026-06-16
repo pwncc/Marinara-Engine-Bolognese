@@ -1,8 +1,10 @@
 import { CheckCircle2, Lock, Plus, Target, Unlock, X } from "lucide-react";
 import {
   isTrackerFieldLocked,
+  questObjectivesTrackerLockPrefix,
   questObjectiveTrackerLockKey,
   questTrackerLockKey,
+  removeTrackerArrayItemLocks,
   type QuestProgress,
 } from "@marinara-engine/shared";
 import { cn } from "../../../../../lib/utils";
@@ -54,7 +56,7 @@ export function QuestRow({
   addMode?: boolean;
   textLineCount?: QuestTextLineCount;
 }) {
-  const { fieldLocks, lockMode, onToggleFieldLock } = useTrackerLockContext();
+  const { fieldLocks, lockMode, onToggleFieldLock, onUpdateFieldLocks } = useTrackerLockContext();
   const completed = quest.objectives.filter((objective) => objective.completed).length;
   const totalObjectives = quest.objectives.length;
   const completionPercent = quest.completed ? 100 : totalObjectives > 0 ? (completed / totalObjectives) * 100 : 0;
@@ -83,6 +85,9 @@ export function QuestRow({
   };
   const removeObjective = (index: number) => {
     if (!onUpdate) return;
+    onUpdateFieldLocks?.((locks) =>
+      removeTrackerArrayItemLocks(locks, questObjectivesTrackerLockPrefix(quest, questIndex), index),
+    );
     onUpdate({ ...quest, objectives: quest.objectives.filter((_, objectiveIndex) => objectiveIndex !== index) });
   };
   const addObjective = () => {

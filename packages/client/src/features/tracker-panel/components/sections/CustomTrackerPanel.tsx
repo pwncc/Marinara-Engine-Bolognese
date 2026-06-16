@@ -1,6 +1,12 @@
 import type { ReactNode } from "react";
 import { SlidersHorizontal, X } from "lucide-react";
-import { customTrackerLockKey, isTrackerFieldLocked, type CustomTrackerField } from "@marinara-engine/shared";
+import {
+  customTrackerLockKey,
+  customTrackerLockPrefix,
+  isTrackerFieldLocked,
+  removeTrackerArrayItemLocks,
+  type CustomTrackerField,
+} from "@marinara-engine/shared";
 import type { TrackerPanelSizeProfile } from "../../../../stores/ui.store";
 import { cn } from "../../../../lib/utils";
 import { visibleText } from "../../lib/tracker-display";
@@ -36,7 +42,7 @@ function CustomFieldList({
   deleteMode?: boolean;
   trackerPanelSizeProfile: TrackerPanelSizeProfile;
 }) {
-  const { fieldLocks, lockMode, onToggleFieldLock } = useTrackerLockContext();
+  const { fieldLocks, lockMode, onToggleFieldLock, onUpdateFieldLocks } = useTrackerLockContext();
   if (fields.length === 0 && !onUpdate) return <EmptySection>No custom stats tracked.</EmptySection>;
   const readableValues = trackerPanelSizeProfile !== "compact";
   const useFieldColumns = shouldUseCustomFieldColumns(fields, trackerPanelSizeProfile);
@@ -48,6 +54,7 @@ function CustomFieldList({
   };
   const removeField = (index: number) => {
     if (!onUpdate) return;
+    onUpdateFieldLocks?.((locks) => removeTrackerArrayItemLocks(locks, customTrackerLockPrefix(), index));
     onUpdate(fields.filter((_, fieldIndex) => fieldIndex !== index));
   };
   return (

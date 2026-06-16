@@ -35,6 +35,7 @@ import {
   parseTemperatureValue,
 } from "../../features/tracker-panel/lib/world-state-display";
 import { TrackerLockProvider } from "../../features/tracker-panel/components/TrackerLockContext";
+import { useTrackerFieldLockUpdater } from "../../features/tracker-panel/hooks/use-tracker-field-lock-updater";
 import { ROLEPLAY_POPOVER_SCROLL_AREA, ROLEPLAY_POPOVER_SHELL } from "./roleplay-popover-styles";
 import { getChatToolbarButtonClass } from "./ChatToolbarControls";
 import type {
@@ -46,10 +47,15 @@ import type {
   CustomTrackerField,
   Message,
 } from "@marinara-engine/shared";
-import { toggleTrackerFieldLock } from "@marinara-engine/shared";
+import {
+  inventoryTrackerLockPrefix,
+  removeTrackerArrayItemLocks,
+  toggleTrackerFieldLock,
+} from "@marinara-engine/shared";
 import type { HudPosition, TrackerTemperatureUnit } from "../../stores/ui.store";
 
 const ACTIONS_DROPDOWN_WIDTH_PX = 288;
+const EMPTY_INVENTORY: InventoryItem[] = [];
 
 interface RoleplayHUDProps {
   chatId: string;
@@ -226,15 +232,27 @@ export function RoleplayHUD({
   const personaStatBars = gameState?.personaStats ?? [];
   const playerStats = gameState?.playerStats ?? null;
   const personaStatus = playerStats?.status ?? "";
-  const inventory = playerStats?.inventory ?? [];
+  const inventory = playerStats?.inventory ?? EMPTY_INVENTORY;
   const activeQuests = playerStats?.activeQuests ?? [];
   const customTrackerFields = playerStats?.customTrackerFields ?? [];
   const fieldLocks = gameState?.fieldLocks ?? null;
+  const updateFieldLocks = useTrackerFieldLockUpdater({ chatId, fieldLocks, patchField });
+  const updateInventoryItems = useCallback(
+    (items: InventoryItem[]) => patchPlayerStats("inventory", items),
+    [patchPlayerStats],
+  );
+  const removeInventoryItem = useCallback(
+    (index: number) => {
+      updateInventoryItems(inventory.filter((_, itemIndex) => itemIndex !== index));
+      updateFieldLocks((locks) => removeTrackerArrayItemLocks(locks, inventoryTrackerLockPrefix(), index));
+    },
+    [inventory, updateFieldLocks, updateInventoryItems],
+  );
   const toggleFieldLock = useCallback(
     (key: string) => {
-      patchField("fieldLocks", toggleTrackerFieldLock(fieldLocks, key));
+      updateFieldLocks((locks) => toggleTrackerFieldLock(locks, key));
     },
-    [fieldLocks, patchField],
+    [updateFieldLocks],
   );
   const hasPersonaStatsTracker = enabledAgentTypes.has("persona-stats");
   const hasPlayerTrackerSections =
@@ -252,6 +270,7 @@ export function RoleplayHUD({
       lockMode={lockMode}
       onSetLockMode={setLockMode}
       onToggleFieldLock={toggleFieldLock}
+      onUpdateFieldLocks={updateFieldLocks}
     >
       <div
         className={cn(
@@ -321,7 +340,8 @@ export function RoleplayHUD({
               characters={presentCharacters}
               onUpdateCharacters={(chars) => patchField("presentCharacters", chars)}
               inventory={inventory}
-              onUpdateInventory={(items) => patchPlayerStats("inventory", items)}
+              onUpdateInventory={updateInventoryItems}
+              onRemoveInventoryItem={removeInventoryItem}
               quests={activeQuests}
               onUpdateQuests={(q) => patchPlayerStats("activeQuests", q)}
               customTrackerFields={customTrackerFields}
@@ -399,7 +419,8 @@ export function RoleplayHUD({
           {hasPersonaStatsTracker && (
             <InventoryWidget
               items={inventory}
-              onUpdate={(items) => patchPlayerStats("inventory", items)}
+              onUpdate={updateInventoryItems}
+              onRemoveItem={removeInventoryItem}
               layout={layout}
             />
           )}
@@ -723,6 +744,7 @@ function CombinedPlayerWidget({
   onUpdateCharacters,
   inventory,
   onUpdateInventory,
+  onRemoveInventoryItem,
   quests,
   onUpdateQuests,
   customTrackerFields,
@@ -743,6 +765,7 @@ function CombinedPlayerWidget({
   onUpdateCharacters: (chars: PresentCharacter[]) => void;
   inventory: InventoryItem[];
   onUpdateInventory: (items: InventoryItem[]) => void;
+  onRemoveInventoryItem?: (index: number) => void;
   quests: QuestProgress[];
   onUpdateQuests: (quests: QuestProgress[]) => void;
   customTrackerFields: CustomTrackerField[];
@@ -788,6 +811,7 @@ function CombinedPlayerWidget({
             onUpdateCharacters={onUpdateCharacters}
             inventory={inventory}
             onUpdateInventory={onUpdateInventory}
+            onRemoveInventoryItem={onRemoveInventoryItem}
             quests={quests}
             onUpdateQuests={onUpdateQuests}
             customTrackerFields={customTrackerFields}
@@ -1151,10 +1175,12 @@ function CustomTrackerWidget({
 function InventoryWidget({
   items,
   onUpdate,
+  onRemoveItem,
   layout = "top",
 }: {
   items: InventoryItem[];
   onUpdate: (items: InventoryItem[]) => void;
+  onRemoveItem?: (index: number) => void;
   layout?: HudPosition;
 }) {
   const [open, setOpen] = useState(false);
@@ -1221,6 +1247,7 @@ function InventoryWidget({
           <InventoryPanel
             items={items}
             onUpdate={onUpdate}
+            onRemoveItem={onRemoveItem}
           />
         </Suspense>
       </WidgetPopover>

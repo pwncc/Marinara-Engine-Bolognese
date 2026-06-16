@@ -201,6 +201,7 @@ export function CharacterTrackerCard({
   const hasDenseContent = characterStats.length > 0 || customFields.length > 0;
   const readableDetailRows = hasDenseContent;
   const readableCustomFields = trackerPanelSizeProfile === "expanded";
+  const emojiLockKey = characterTrackerLockKey(character, characterIndex, "emoji");
   const avatarSize = hasDenseContent
     ? "z-[5] mt-0 w-[clamp(2.25rem,28%,3rem)] -translate-y-0.5"
     : "z-[5] mt-0 w-[clamp(3rem,36%,3.75rem)] -translate-y-0.5";
@@ -295,6 +296,10 @@ export function CharacterTrackerCard({
           avatarMedia={avatarMedia}
           avatarSize={avatarSize}
           onUploadAvatar={compactAvatarUpload}
+          onSaveEmoji={onUpdate ? (emoji) => onUpdate({ ...character, emoji }) : undefined}
+          emojiLocked={isTrackerFieldLocked(fieldLocks, emojiLockKey)}
+          lockMode={lockMode}
+          onToggleEmojiLock={onToggleFieldLock ? () => onToggleFieldLock(emojiLockKey) : undefined}
         />
         <div className={CHARACTER_HEADER_COPY_CLASS}>
           {showThoughts && (

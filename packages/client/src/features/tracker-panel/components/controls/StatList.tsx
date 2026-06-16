@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { isTrackerFieldLocked, type CharacterStat } from "@marinara-engine/shared";
+import { isTrackerFieldLocked, removeTrackerArrayItemLocks, type CharacterStat } from "@marinara-engine/shared";
 import { cn } from "../../../../lib/utils";
 import { TRACKER_BAR, TRACKER_TEXT_ROW } from "../../lib/tracker-panel.constants";
 import type { TrackerStatDensity, TrackerStatDisplayScale } from "../../tracker-panel.types";
@@ -326,7 +326,7 @@ export function StatList({
   visualTone?: StatListVisualTone;
   getLockKey?: (index: number, field: "name" | "value" | "max") => string;
 }) {
-  const { fieldLocks, lockMode, onToggleFieldLock } = useTrackerLockContext();
+  const { fieldLocks, lockMode, onToggleFieldLock, onUpdateFieldLocks } = useTrackerLockContext();
   if (stats.length === 0) {
     return onAdd && addMode ? (
       <InlineAddRow onClick={onAdd} title="Add stat" className="border-t-0" />
@@ -342,6 +342,12 @@ export function StatList({
   };
   const removeStat = (index: number) => {
     if (!onUpdate) return;
+    const nameLockKey = getLockKey?.(index, "name");
+    const nameSuffix = `.${index}.name`;
+    if (nameLockKey?.endsWith(nameSuffix)) {
+      const prefix = nameLockKey.slice(0, -nameSuffix.length);
+      onUpdateFieldLocks?.((locks) => removeTrackerArrayItemLocks(locks, prefix, index));
+    }
     onUpdate(stats.filter((_, statIndex) => statIndex !== index));
   };
   const buildLockToggle = (index: number, field: "name" | "value" | "max") =>

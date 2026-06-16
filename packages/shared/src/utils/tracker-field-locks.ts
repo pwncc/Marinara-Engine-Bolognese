@@ -64,6 +64,17 @@ export function trackerFieldLocksAreEmpty(locks: TrackerFieldLocks | null | unde
   return !locks || !Object.values(locks).some(Boolean);
 }
 
+export function trackerFieldLocksAreEqual(
+  left: TrackerFieldLocks | null | undefined,
+  right: TrackerFieldLocks | null | undefined,
+) {
+  const leftLocks = normalizeTrackerFieldLocks(left);
+  const rightLocks = normalizeTrackerFieldLocks(right);
+  const leftKeys = Object.keys(leftLocks);
+  const rightKeys = Object.keys(rightLocks);
+  return leftKeys.length === rightKeys.length && leftKeys.every((key) => rightLocks[key] === true);
+}
+
 export function isTrackerFieldLocked(locks: TrackerFieldLocks | null | undefined, key: string) {
   return locks?.[key] === true;
 }
@@ -78,6 +89,83 @@ export function toggleTrackerFieldLock(locks: TrackerFieldLocks | null | undefin
   return next;
 }
 
+export function removeTrackerArrayItemLocks(
+  locks: TrackerFieldLocks | null | undefined,
+  prefix: string,
+  removedIndex: number,
+) {
+  return removeIndexedTrackerLocks(locks, prefix.trim() ? `${prefix.trim()}.` : "", removedIndex);
+}
+
+function removeIndexedTrackerLocks(
+  locks: TrackerFieldLocks | null | undefined,
+  indexedPrefix: string,
+  removedIndex: number,
+) {
+  const normalized = normalizeTrackerFieldLocks(locks);
+  if (!Number.isSafeInteger(removedIndex) || removedIndex < 0 || !indexedPrefix.trim()) return normalized;
+
+  const next: TrackerFieldLocks = {};
+
+  for (const [key, enabled] of Object.entries(normalized)) {
+    if (enabled !== true) continue;
+    if (!key.startsWith(indexedPrefix)) {
+      next[key] = true;
+      continue;
+    }
+
+    const suffix = key.slice(indexedPrefix.length);
+    const match = /^(\d+)(\.|$)/.exec(suffix);
+    if (!match) {
+      next[key] = true;
+      continue;
+    }
+
+    const indexText = match[1] ?? "";
+    const index = Number(indexText);
+    if (!Number.isSafeInteger(index)) {
+      next[key] = true;
+      continue;
+    }
+    if (index === removedIndex) continue;
+    if (index < removedIndex) {
+      next[key] = true;
+      continue;
+    }
+
+    next[`${indexedPrefix}${index - 1}${suffix.slice(indexText.length)}`] = true;
+  }
+
+  return next;
+}
+
+export function removeTrackerFieldLockPrefix(locks: TrackerFieldLocks | null | undefined, prefix: string) {
+  const normalized = normalizeTrackerFieldLocks(locks);
+  const lockPrefix = prefix.trim();
+  if (!lockPrefix) return normalized;
+
+  const childPrefix = `${lockPrefix}.`;
+  const next: TrackerFieldLocks = {};
+  for (const [key, enabled] of Object.entries(normalized)) {
+    if (enabled !== true) continue;
+    if (key === lockPrefix || key.startsWith(childPrefix)) continue;
+    next[key] = true;
+  }
+  return next;
+}
+
+function shiftIndexedReferenceLocks(
+  locks: TrackerFieldLocks | null | undefined,
+  collectionPrefix: string,
+  removedIndex: number,
+) {
+  return removeIndexedTrackerLocks(
+    locks,
+    collectionPrefix.trim() ? `${collectionPrefix.trim()}.index:` : "",
+    removedIndex,
+  );
+}
+
 export function worldTrackerLockKey(field: WorldTrackerField) {
   return `world.${field}`;
 }
@@ -90,8 +178,16 @@ export function personaStatTrackerLockKey(index: number, field: StatField) {
   return `persona.stats.${index}.${field}`;
 }
 
+export function personaStatsTrackerLockPrefix() {
+  return "persona.stats";
+}
+
 export function inventoryTrackerLockKey(index: number, field: InventoryField) {
   return `player.inventory.${index}.${field}`;
+}
+
+export function inventoryTrackerLockPrefix() {
+  return "player.inventory";
 }
 
 function characterLockRef(character: Pick<PresentCharacter, "characterId" | "name"> | null | undefined, index: number) {
@@ -103,12 +199,19 @@ function characterLockRef(character: Pick<PresentCharacter, "characterId" | "nam
   return `index:${index}`;
 }
 
+export function characterTrackerLockPrefix(
+  character: Pick<PresentCharacter, "characterId" | "name"> | null | undefined,
+  index: number,
+) {
+  return `characters.${characterLockRef(character, index)}`;
+}
+
 export function characterTrackerLockKey(
   character: Pick<PresentCharacter, "characterId" | "name"> | null | undefined,
   index: number,
   field: TextCharacterField,
 ) {
-  return `characters.${characterLockRef(character, index)}.${field}`;
+  return `${characterTrackerLockPrefix(character, index)}.${field}`;
 }
 
 export function characterStatTrackerLockKey(
@@ -117,7 +220,26 @@ export function characterStatTrackerLockKey(
   statIndex: number,
   field: StatField,
 ) {
-  return `characters.${characterLockRef(character, characterIndex)}.stats.${statIndex}.${field}`;
+  return `${characterStatsTrackerLockPrefix(character, characterIndex)}.${statIndex}.${field}`;
+}
+
+export function characterStatsTrackerLockPrefix(
+  character: Pick<PresentCharacter, "characterId" | "name"> | null | undefined,
+  index: number,
+) {
+  return `${characterTrackerLockPrefix(character, index)}.stats`;
+}
+
+export function removeTrackerCharacterLocks(
+  locks: TrackerFieldLocks | null | undefined,
+  character: Pick<PresentCharacter, "characterId" | "name"> | null | undefined,
+  removedIndex: number,
+) {
+  return shiftIndexedReferenceLocks(
+    removeTrackerFieldLockPrefix(locks, characterTrackerLockPrefix(character, removedIndex)),
+    "characters",
+    removedIndex,
+  );
 }
 
 export function characterCustomFieldTrackerLockKey(
@@ -126,7 +248,7 @@ export function characterCustomFieldTrackerLockKey(
   fieldName: string,
   field: CustomTrackerFieldKey,
 ) {
-  return `characters.${characterLockRef(character, characterIndex)}.custom.${encodeSegment(fieldName)}.${field}`;
+  return `${characterTrackerLockPrefix(character, characterIndex)}.custom.${encodeSegment(fieldName)}.${field}`;
 }
 
 function questLockRef(quest: Pick<QuestProgress, "questEntryId" | "name"> | null | undefined, index: number) {
@@ -138,12 +260,19 @@ function questLockRef(quest: Pick<QuestProgress, "questEntryId" | "name"> | null
   return `index:${index}`;
 }
 
+export function questTrackerLockPrefix(
+  quest: Pick<QuestProgress, "questEntryId" | "name"> | null | undefined,
+  index: number,
+) {
+  return `quests.${questLockRef(quest, index)}`;
+}
+
 export function questTrackerLockKey(
   quest: Pick<QuestProgress, "questEntryId" | "name"> | null | undefined,
   index: number,
   field: QuestField,
 ) {
-  return `quests.${questLockRef(quest, index)}.${field}`;
+  return `${questTrackerLockPrefix(quest, index)}.${field}`;
 }
 
 export function questObjectiveTrackerLockKey(
@@ -152,11 +281,34 @@ export function questObjectiveTrackerLockKey(
   objectiveIndex: number,
   field: QuestObjectiveField,
 ) {
-  return `quests.${questLockRef(quest, questIndex)}.objectives.${objectiveIndex}.${field}`;
+  return `${questObjectivesTrackerLockPrefix(quest, questIndex)}.${objectiveIndex}.${field}`;
+}
+
+export function questObjectivesTrackerLockPrefix(
+  quest: Pick<QuestProgress, "questEntryId" | "name"> | null | undefined,
+  index: number,
+) {
+  return `${questTrackerLockPrefix(quest, index)}.objectives`;
+}
+
+export function removeTrackerQuestLocks(
+  locks: TrackerFieldLocks | null | undefined,
+  quest: Pick<QuestProgress, "questEntryId" | "name"> | null | undefined,
+  removedIndex: number,
+) {
+  return shiftIndexedReferenceLocks(
+    removeTrackerFieldLockPrefix(locks, questTrackerLockPrefix(quest, removedIndex)),
+    "quests",
+    removedIndex,
+  );
 }
 
 export function customTrackerLockKey(index: number, field: CustomTrackerFieldKey) {
   return `player.custom.${index}.${field}`;
+}
+
+export function customTrackerLockPrefix() {
+  return "player.custom";
 }
 
 function normalizeEffectiveTrackerFieldLocks(
