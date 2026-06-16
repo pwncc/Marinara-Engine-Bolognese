@@ -177,6 +177,7 @@ export const FILE_BACKED_TABLES = [
   "api_connection_folders",
   "custom_themes",
   "app_settings",
+  "achievement_unlocks",
   "chat_presets",
   "prompt_overrides",
   "installed_extensions",

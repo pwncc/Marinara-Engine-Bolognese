@@ -995,9 +995,22 @@ function readPositiveInteger(value: unknown): number | undefined {
 
 function readOpenAICompatibleModelLimits(model: Record<string, unknown>): Pick<RemoteModel, "context" | "maxOutput"> {
   const topProvider = readProviderMetadataRecord(model.top_provider);
-  const context = readPositiveInteger(model.context_length) ?? readPositiveInteger(topProvider?.context_length);
+  const context =
+    readPositiveInteger(model.context_length) ??
+    readPositiveInteger(model.context_window) ??
+    readPositiveInteger(model.contextWindow) ??
+    readPositiveInteger(model.max_input_tokens) ??
+    readPositiveInteger(model.input_token_limit) ??
+    readPositiveInteger(model.inputTokenLimit) ??
+    readPositiveInteger(topProvider?.context_length);
   const maxOutput =
-    readPositiveInteger(topProvider?.max_completion_tokens) ?? readPositiveInteger(model.max_completion_tokens);
+    readPositiveInteger(topProvider?.max_completion_tokens) ??
+    readPositiveInteger(model.max_completion_tokens) ??
+    readPositiveInteger(model.max_output_tokens) ??
+    readPositiveInteger(model.max_tokens) ??
+    readPositiveInteger(model.maxOutputTokens) ??
+    readPositiveInteger(model.output_token_limit) ??
+    readPositiveInteger(model.outputTokenLimit);
 
   return {
     ...(context ? { context } : {}),
@@ -1013,12 +1026,15 @@ function normalizeModelsResponse(provider: string, json: Record<string, unknown>
         name?: string;
         displayName?: string;
         supportedGenerationMethods?: string[];
+        inputTokenLimit?: number;
+        outputTokenLimit?: number;
       }>;
       return models
         .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
         .map((m) => ({
           id: (m.name ?? "").replace(/^models\//, ""),
           name: m.displayName ?? (m.name ?? "").replace(/^models\//, ""),
+          ...readOpenAICompatibleModelLimits(m as Record<string, unknown>),
         }))
         .filter((m) => m.id);
     }
@@ -1029,12 +1045,15 @@ function normalizeModelsResponse(provider: string, json: Record<string, unknown>
         name?: string;
         displayName?: string;
         supportedActions?: { viewRestApi?: unknown };
+        inputTokenLimit?: number;
+        outputTokenLimit?: number;
       }>;
       return models
         .filter((m) => m.name?.includes("/models/"))
         .map((m) => ({
           id: (m.name ?? "").replace(/^.*\/models\//, ""),
           name: m.displayName ?? (m.name ?? "").replace(/^.*\/models\//, ""),
+          ...readOpenAICompatibleModelLimits(m as Record<string, unknown>),
         }))
         .filter((m) => m.id);
     }
@@ -1045,12 +1064,15 @@ function normalizeModelsResponse(provider: string, json: Record<string, unknown>
         id?: string;
         display_name?: string;
         type?: string;
+        context_window?: number;
+        max_output_tokens?: number;
       }>;
       return data
         .filter((m) => m.type === "model" || m.id)
         .map((m) => ({
           id: m.id ?? "",
           name: m.display_name ?? m.id ?? "",
+          ...readOpenAICompatibleModelLimits(m as Record<string, unknown>),
         }))
         .filter((m) => m.id);
     }
@@ -1061,20 +1083,33 @@ function normalizeModelsResponse(provider: string, json: Record<string, unknown>
       const data = (json.data ?? []) as Array<{
         id?: string;
         name?: string;
+        context_length?: number;
+        max_output_tokens?: number;
+        max_completion_tokens?: number;
       }>;
       if (data.length > 0) {
-        return data.map((m) => ({ id: m.id ?? "", name: m.name ?? m.id ?? "" })).filter((m) => m.id);
+        return data
+          .map((m) => ({
+            id: m.id ?? "",
+            name: m.name ?? m.id ?? "",
+            ...readOpenAICompatibleModelLimits(m as Record<string, unknown>),
+          }))
+          .filter((m) => m.id);
       }
 
       const models = (json.models ?? []) as Array<{
         name?: string;
         endpoints?: string[];
+        context_length?: number;
+        max_output_tokens?: number;
+        max_completion_tokens?: number;
       }>;
       return models
         .filter((m) => m.endpoints?.includes("chat"))
         .map((m) => ({
           id: m.name ?? "",
           name: m.name ?? "",
+          ...readOpenAICompatibleModelLimits(m as Record<string, unknown>),
         }))
         .filter((m) => m.id);
     }

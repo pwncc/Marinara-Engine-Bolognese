@@ -72,11 +72,7 @@ function extractPlayerStatsPatch(patch: Record<string, unknown>): Record<string,
   return extractPatchRecord(patch, "playerStats") ?? {};
 }
 
-function extractPlayerStatsPatchArray<T>(
-  patch: Record<string, unknown>,
-  field: keyof PlayerStats,
-  fallback: T[],
-): T[] {
+function extractPlayerStatsPatchArray<T>(patch: Record<string, unknown>, field: keyof PlayerStats, fallback: T[]): T[] {
   const value = extractPlayerStatsPatch(patch)[field];
   return Array.isArray(value) ? (value as T[]) : fallback;
 }

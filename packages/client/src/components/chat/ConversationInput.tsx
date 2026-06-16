@@ -1304,7 +1304,7 @@ export function ConversationInput({
     status === "offline" ? "Offline" : status === "dnd" ? "Busy" : status === "idle" ? "Away" : null;
 
   return (
-    <div className="relative px-3 pb-3">
+    <div className="relative px-2 pb-3 sm:px-3">
       {/* Slash command autocomplete */}
       {completions.length > 0 && (
         <div className="absolute bottom-full left-3 right-3 z-40 mb-1 max-h-[min(18rem,45dvh)] overflow-y-auto rounded-lg border border-foreground/10 bg-[var(--card)] shadow-lg [-webkit-overflow-scrolling:touch]">
@@ -1433,8 +1433,10 @@ export function ConversationInput({
         </button>
 
         {/* Quick Switchers — desktop: inline, mobile: chevron */}
-        <QuickConnectionSwitcher className="hidden sm:flex" />
-        <QuickPersonaSwitcher className="hidden sm:flex" />
+        <div className="hidden shrink-0 items-center gap-1 sm:flex">
+          <QuickConnectionSwitcher />
+          <QuickPersonaSwitcher />
+        </div>
         <div className="flex shrink-0 sm:hidden">
           <QuickSwitcherMobile />
         </div>

@@ -26,6 +26,7 @@ export * from "./types/sidecar.js";
 export * from "./types/image-generation-defaults.js";
 export * from "./types/image-style-profile.js";
 export * from "./types/professor-mari-workspace.js";
+export * from "./types/achievement.js";
 
 // Schemas
 export * from "./schemas/chat.schema.js";
@@ -56,6 +57,7 @@ export * from "./constants/security.js";
 export * from "./constants/game-assets.js";
 export * from "./constants/conversation-prompt.js";
 export * from "./constants/game-prompt.js";
+export * from "./constants/achievements.js";
 
 // Feature registries
 export * from "./features/agents/agent-manifest.types.js";

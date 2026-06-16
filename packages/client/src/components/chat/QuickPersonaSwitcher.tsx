@@ -144,7 +144,7 @@ export function QuickPersonaSwitcher({ className }: { className?: string }) {
   useEffect(() => {
     if (!open || !btnRef.current) return;
     const rect = btnRef.current.getBoundingClientRect();
-    const inputBox = btnRef.current.closest(".rounded-2xl") as HTMLElement | null;
+    const inputBox = btnRef.current.closest(".marinara-chat-input-shell") as HTMLElement | null;
     const anchorTop = inputBox ? inputBox.getBoundingClientRect().top : rect.top;
     requestAnimationFrame(() => {
       const menuEl = menuRef.current;
@@ -161,6 +161,7 @@ export function QuickPersonaSwitcher({ className }: { className?: string }) {
     const isActive = persona.id === activePersonaId;
     return (
       <button
+        type="button"
         key={persona.id}
         onClick={() => handleSwitch(persona.id)}
         className={cn(
@@ -201,6 +202,7 @@ export function QuickPersonaSwitcher({ className }: { className?: string }) {
   return (
     <>
       <button
+        type="button"
         ref={btnRef}
         onClick={() => setOpen((v) => !v)}
         title={
@@ -240,6 +242,7 @@ export function QuickPersonaSwitcher({ className }: { className?: string }) {
           <div className="overflow-y-auto p-1">
             {/* None option */}
             <button
+              type="button"
               onClick={() => handleSwitch(null)}
               className={cn(
                 "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors",

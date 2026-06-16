@@ -12,7 +12,7 @@ import {
   type LLMToolDefinition,
   type LLMUsage,
 } from "../base-provider.js";
-import { isClaudeAdaptiveOnlyNoSamplingModel } from "@marinara-engine/shared";
+import { isClaudeAdaptiveOnlyNoSamplingModel, shouldSuppressUnknownModelParameters } from "@marinara-engine/shared";
 import { logger } from "../../../lib/logger.js";
 
 /**
@@ -101,6 +101,12 @@ export class OpenAIProvider extends BaseLLMProvider {
       const message = jsonErr instanceof Error ? jsonErr.message : "Unknown JSON parse failure";
       throw new Error(`${context}: Failed to parse JSON response (${message}). Body starts with: ${preview}`);
     }
+  }
+
+  private shouldSuppressModelParameters(options: ChatOptions): boolean {
+    return (
+      options.suppressModelParameters === true || shouldSuppressUnknownModelParameters(this.providerKind, options.model)
+    );
   }
 
   private static extractSseJsonPayload(raw: string): string | null {
@@ -412,6 +418,10 @@ export class OpenAIProvider extends BaseLLMProvider {
 
   private isGpt55Model(model: string): boolean {
     return model.toLowerCase().startsWith("gpt-5.5");
+  }
+
+  private isResponsesStreamingUnsupportedModel(model: string): boolean {
+    return model.toLowerCase().startsWith("gpt-5.5-pro");
   }
 
   /** Check if a model ID represents an OpenAI reasoning model */
@@ -727,11 +737,15 @@ export class OpenAIProvider extends BaseLLMProvider {
   }
 
   async *chat(messages: ChatMessage[], options: ChatOptions): AsyncGenerator<string, LLMUsage | void, unknown> {
-    const configuredMaxTokens = this.applyMaxTokensCap(options.maxTokens ?? 4096);
+    const suppressModelParameters = this.shouldSuppressModelParameters(options);
+    const configuredMaxTokens = suppressModelParameters ? undefined : this.applyMaxTokensCap(options.maxTokens ?? 4096);
     const contextFit = this.fitMessagesToContext(messages, { ...options, maxTokens: configuredMaxTokens });
     messages = contextFit.messages;
     this.logContextTrim(contextFit, options.model);
-    const maxTokens = this.applyMaxTokensCap(contextFit.maxTokens ?? configuredMaxTokens);
+    const maxTokens =
+      configuredMaxTokens === undefined
+        ? undefined
+        : this.applyMaxTokensCap(contextFit.maxTokens ?? configuredMaxTokens);
 
     // Route to Responses API for models that require it
     if (this.useResponsesAPI(options.model, options)) {
@@ -758,57 +772,62 @@ export class OpenAIProvider extends BaseLLMProvider {
     const body: Record<string, unknown> = {
       model: options.model,
       messages: formatted,
-      stream: effectiveStream,
-      ...(this.shouldSendStopSequences(options.model) && options.stop?.length ? { stop: options.stop } : {}),
-      ...(options.tools?.length ? { tools: options.tools } : {}),
-      ...(effectiveStream ? { stream_options: { include_usage: true } } : {}),
     };
-
-    if (reasoning) {
-      // Reasoning models use max_completion_tokens instead of max_tokens
-      body.max_completion_tokens = maxTokens;
-    } else {
-      body.max_tokens = maxTokens;
+    if (effectiveStream || !suppressModelParameters) {
+      body.stream = effectiveStream;
     }
 
-    // o-series models never support temperature/topP; GPT-5.x only with effort=none
-    if (!this.isNoTemperatureModel(options.model, options.reasoningEffort)) {
-      body.temperature = options.temperature ?? 1;
-      const topP = OpenAIProvider.normalizeTopP(options.topP);
-      if (topP != null) body.top_p = topP;
-      if (
-        this.shouldSendTopK() &&
-        typeof options.topK === "number" &&
-        Number.isFinite(options.topK) &&
-        options.topK > 0
-      ) {
-        body.top_k = Math.round(options.topK);
+    if (!suppressModelParameters) {
+      if (this.shouldSendStopSequences(options.model) && options.stop?.length) body.stop = options.stop;
+      if (options.tools?.length) body.tools = options.tools;
+      if (effectiveStream) body.stream_options = { include_usage: true };
+
+      if (reasoning) {
+        // Reasoning models use max_completion_tokens instead of max_tokens
+        body.max_completion_tokens = maxTokens;
+      } else {
+        body.max_tokens = maxTokens;
       }
-      if (this.shouldSendPenaltyParams(options.model)) {
-        if (options.frequencyPenalty) body.frequency_penalty = options.frequencyPenalty;
-        if (options.presencePenalty) body.presence_penalty = options.presencePenalty;
+
+      // o-series models never support temperature/topP; GPT-5.x only with effort=none
+      if (!this.isNoTemperatureModel(options.model, options.reasoningEffort)) {
+        body.temperature = options.temperature ?? 1;
+        const topP = OpenAIProvider.normalizeTopP(options.topP);
+        if (topP != null) body.top_p = topP;
+        if (
+          this.shouldSendTopK() &&
+          typeof options.topK === "number" &&
+          Number.isFinite(options.topK) &&
+          options.topK > 0
+        ) {
+          body.top_k = Math.round(options.topK);
+        }
+        if (this.shouldSendPenaltyParams(options.model)) {
+          if (options.frequencyPenalty) body.frequency_penalty = options.frequencyPenalty;
+          if (options.presencePenalty) body.presence_penalty = options.presencePenalty;
+        }
       }
-    }
 
-    if (options.verbosity && this.supportsGpt5Verbosity(options.model)) {
-      body.verbosity = options.verbosity;
-    }
+      if (options.verbosity && this.supportsGpt5Verbosity(options.model)) {
+        body.verbosity = options.verbosity;
+      }
 
-    this.applyChatCompletionsReasoning(body, options);
+      this.applyChatCompletionsReasoning(body, options);
 
-    // OpenRouter provider routing preference
-    const openrouterProvider = this.resolveOpenrouterProvider(options.openrouterProvider);
-    if (this.shouldApplyOpenRouterProviderOverride(openrouterProvider)) {
-      body.provider = { order: [openrouterProvider] };
-    }
+      // OpenRouter provider routing preference
+      const openrouterProvider = this.resolveOpenrouterProvider(options.openrouterProvider);
+      if (this.shouldApplyOpenRouterProviderOverride(openrouterProvider)) {
+        body.provider = { order: [openrouterProvider] };
+      }
 
-    this.applyOpenRouterPromptCaching(body, options);
-    this.applyOpenRouterServiceTier(body, options);
+      this.applyOpenRouterPromptCaching(body, options);
+      this.applyOpenRouterServiceTier(body, options);
 
-    // Force response format (e.g. JSON mode)
-    const normalizedResponseFormat = this.normalizeChatCompletionsResponseFormat(options.responseFormat);
-    if (normalizedResponseFormat) {
-      body.response_format = normalizedResponseFormat;
+      // Force response format (e.g. JSON mode)
+      const normalizedResponseFormat = this.normalizeChatCompletionsResponseFormat(options.responseFormat);
+      if (normalizedResponseFormat) {
+        body.response_format = normalizedResponseFormat;
+      }
     }
 
     this.applyCustomParameters(body, options);
@@ -955,11 +974,15 @@ export class OpenAIProvider extends BaseLLMProvider {
 
   /** Non-streaming completion with tool-call support */
   async chatComplete(messages: ChatMessage[], options: ChatOptions): Promise<ChatCompletionResult> {
-    const configuredMaxTokens = this.applyMaxTokensCap(options.maxTokens ?? 4096);
+    const suppressModelParameters = this.shouldSuppressModelParameters(options);
+    const configuredMaxTokens = suppressModelParameters ? undefined : this.applyMaxTokensCap(options.maxTokens ?? 4096);
     const contextFit = this.fitMessagesToContext(messages, { ...options, maxTokens: configuredMaxTokens });
     messages = contextFit.messages;
     this.logContextTrim(contextFit, options.model);
-    const maxTokens = this.applyMaxTokensCap(contextFit.maxTokens ?? configuredMaxTokens);
+    const maxTokens =
+      configuredMaxTokens === undefined
+        ? undefined
+        : this.applyMaxTokensCap(contextFit.maxTokens ?? configuredMaxTokens);
 
     // Route to Responses API for models that require it
     if (this.useResponsesAPI(options.model, options)) {
@@ -984,56 +1007,61 @@ export class OpenAIProvider extends BaseLLMProvider {
     const body: Record<string, unknown> = {
       model: options.model,
       messages: formatted,
-      stream: useStream,
-      ...(this.shouldSendStopSequences(options.model) && options.stop?.length ? { stop: options.stop } : {}),
-      ...(options.tools?.length ? { tools: options.tools } : {}),
-      ...(useStream ? { stream_options: { include_usage: true } } : {}),
     };
-
-    if (reasoning) {
-      body.max_completion_tokens = maxTokens;
-    } else {
-      body.max_tokens = maxTokens;
+    if (useStream || !suppressModelParameters) {
+      body.stream = useStream;
     }
 
-    // o-series models never support temperature/topP; GPT-5.x only with effort=none
-    if (!this.isNoTemperatureModel(options.model, options.reasoningEffort)) {
-      body.temperature = options.temperature ?? 1;
-      const topP = OpenAIProvider.normalizeTopP(options.topP);
-      if (topP != null) body.top_p = topP;
-      if (
-        this.shouldSendTopK() &&
-        typeof options.topK === "number" &&
-        Number.isFinite(options.topK) &&
-        options.topK > 0
-      ) {
-        body.top_k = Math.round(options.topK);
+    if (!suppressModelParameters) {
+      if (this.shouldSendStopSequences(options.model) && options.stop?.length) body.stop = options.stop;
+      if (options.tools?.length) body.tools = options.tools;
+      if (useStream) body.stream_options = { include_usage: true };
+
+      if (reasoning) {
+        body.max_completion_tokens = maxTokens;
+      } else {
+        body.max_tokens = maxTokens;
       }
-      if (this.shouldSendPenaltyParams(options.model)) {
-        if (options.frequencyPenalty) body.frequency_penalty = options.frequencyPenalty;
-        if (options.presencePenalty) body.presence_penalty = options.presencePenalty;
+
+      // o-series models never support temperature/topP; GPT-5.x only with effort=none
+      if (!this.isNoTemperatureModel(options.model, options.reasoningEffort)) {
+        body.temperature = options.temperature ?? 1;
+        const topP = OpenAIProvider.normalizeTopP(options.topP);
+        if (topP != null) body.top_p = topP;
+        if (
+          this.shouldSendTopK() &&
+          typeof options.topK === "number" &&
+          Number.isFinite(options.topK) &&
+          options.topK > 0
+        ) {
+          body.top_k = Math.round(options.topK);
+        }
+        if (this.shouldSendPenaltyParams(options.model)) {
+          if (options.frequencyPenalty) body.frequency_penalty = options.frequencyPenalty;
+          if (options.presencePenalty) body.presence_penalty = options.presencePenalty;
+        }
       }
-    }
 
-    if (options.verbosity && this.supportsGpt5Verbosity(options.model)) {
-      body.verbosity = options.verbosity;
-    }
+      if (options.verbosity && this.supportsGpt5Verbosity(options.model)) {
+        body.verbosity = options.verbosity;
+      }
 
-    this.applyChatCompletionsReasoning(body, options);
+      this.applyChatCompletionsReasoning(body, options);
 
-    // OpenRouter provider routing preference
-    const openrouterProvider = this.resolveOpenrouterProvider(options.openrouterProvider);
-    if (this.shouldApplyOpenRouterProviderOverride(openrouterProvider)) {
-      body.provider = { order: [openrouterProvider] };
-    }
+      // OpenRouter provider routing preference
+      const openrouterProvider = this.resolveOpenrouterProvider(options.openrouterProvider);
+      if (this.shouldApplyOpenRouterProviderOverride(openrouterProvider)) {
+        body.provider = { order: [openrouterProvider] };
+      }
 
-    this.applyOpenRouterPromptCaching(body, options);
-    this.applyOpenRouterServiceTier(body, options);
+      this.applyOpenRouterPromptCaching(body, options);
+      this.applyOpenRouterServiceTier(body, options);
 
-    // Force response format (e.g. JSON mode)
-    const normalizedResponseFormat = this.normalizeChatCompletionsResponseFormat(options.responseFormat);
-    if (normalizedResponseFormat) {
-      body.response_format = normalizedResponseFormat;
+      // Force response format (e.g. JSON mode)
+      const normalizedResponseFormat = this.normalizeChatCompletionsResponseFormat(options.responseFormat);
+      if (normalizedResponseFormat) {
+        body.response_format = normalizedResponseFormat;
+      }
     }
 
     this.applyCustomParameters(body, options);
@@ -1363,6 +1391,7 @@ export class OpenAIProvider extends BaseLLMProvider {
   private buildResponsesBody(messages: ChatMessage[], options: ChatOptions): Record<string, unknown> {
     const { instructions, input } = this.formatResponsesInput(messages);
     const isOpenAIChatGPT = this.isOpenAIChatGPTProvider();
+    const suppressModelParameters = this.shouldSuppressModelParameters(options);
 
     // Replay encrypted reasoning items from the previous turn so the model
     // retains its reasoning context and avoids re-deriving (and re-narrating) the same conclusions.
@@ -1382,11 +1411,18 @@ export class OpenAIProvider extends BaseLLMProvider {
     const body: Record<string, unknown> = {
       model: options.model,
       input,
-      stream: isOpenAIChatGPT ? true : (options.stream ?? true),
       store: false, // don't persist responses on OpenAI side
     };
+    const shouldStreamResponses =
+      !this.isResponsesStreamingUnsupportedModel(options.model) && (isOpenAIChatGPT || (options.stream ?? true));
 
-    if (!isOpenAIChatGPT) {
+    if (shouldStreamResponses) {
+      body.stream = true;
+    } else if (!suppressModelParameters) {
+      body.stream = false;
+    }
+
+    if (!isOpenAIChatGPT && !suppressModelParameters) {
       // Request encrypted reasoning items so we can replay them on the next turn.
       body.include = ["reasoning.encrypted_content"];
     }
@@ -1395,12 +1431,21 @@ export class OpenAIProvider extends BaseLLMProvider {
       body.instructions = instructions || "You are a helpful assistant.";
     }
 
-    if (!isOpenAIChatGPT && options.maxTokens && !this.isXAIMultiAgentModel(options.model)) {
+    if (
+      !isOpenAIChatGPT &&
+      !suppressModelParameters &&
+      options.maxTokens &&
+      !this.isXAIMultiAgentModel(options.model)
+    ) {
       body.max_output_tokens = options.maxTokens;
     }
 
     // o-series models never support temperature/topP; GPT-5.x only with effort=none
-    if (!isOpenAIChatGPT && !this.isNoTemperatureModel(options.model, options.reasoningEffort)) {
+    if (
+      !isOpenAIChatGPT &&
+      !suppressModelParameters &&
+      !this.isNoTemperatureModel(options.model, options.reasoningEffort)
+    ) {
       if (options.temperature != null) body.temperature = options.temperature;
       const topP = OpenAIProvider.normalizeTopP(options.topP);
       if (topP != null) body.top_p = topP;
@@ -1410,25 +1455,34 @@ export class OpenAIProvider extends BaseLLMProvider {
       }
     }
 
-    if (!isOpenAIChatGPT) {
+    if (!isOpenAIChatGPT && !suppressModelParameters) {
       this.applyResponsesReasoning(body, options);
     }
 
     // GPT-5+ verbosity and Responses structured output / JSON mode.
-    if (!isOpenAIChatGPT) {
+    if (!isOpenAIChatGPT && !suppressModelParameters) {
       this.applyResponsesTextOptions(body, options);
     }
 
     const openrouterProvider = this.resolveOpenrouterProvider(options.openrouterProvider);
-    if (!isOpenAIChatGPT && this.shouldApplyOpenRouterProviderOverride(openrouterProvider)) {
+    if (
+      !isOpenAIChatGPT &&
+      !suppressModelParameters &&
+      this.shouldApplyOpenRouterProviderOverride(openrouterProvider)
+    ) {
       body.provider = { order: [openrouterProvider] };
     }
 
-    if (!isOpenAIChatGPT) {
+    if (!isOpenAIChatGPT && !suppressModelParameters) {
       this.applyOpenRouterServiceTier(body, options);
     }
 
-    if (!isOpenAIChatGPT && options.tools?.length && !this.isXAIMultiAgentModel(options.model)) {
+    if (
+      !isOpenAIChatGPT &&
+      !suppressModelParameters &&
+      options.tools?.length &&
+      !this.isXAIMultiAgentModel(options.model)
+    ) {
       body.tools = this.formatResponsesTools(options.tools);
     }
 
@@ -1449,7 +1503,7 @@ export class OpenAIProvider extends BaseLLMProvider {
   ): AsyncGenerator<string, LLMUsage | void, unknown> {
     const url = `${this.baseUrl}/responses`;
     const body = this.buildResponsesBody(messages, options);
-    const parseAsStream = this.isOpenAIChatGPTProvider() || (options.stream ?? true);
+    const parseAsStream = body.stream === true;
     logger.debug(
       "[OpenAI chatResponses] model=%s stream=%s reasoning=%j enableThinking=%s verbosity=%s max_output_tokens=%s tools=%s",
       body.model,
@@ -1643,7 +1697,9 @@ export class OpenAIProvider extends BaseLLMProvider {
   private async chatCompleteResponses(messages: ChatMessage[], options: ChatOptions): Promise<ChatCompletionResult> {
     const url = `${this.baseUrl}/responses`;
     const callerWantsStream = options.stream ?? !!options.onToken;
-    const useStream = this.isOpenAIChatGPTProvider() || callerWantsStream;
+    const useStream =
+      !this.isResponsesStreamingUnsupportedModel(options.model) &&
+      (this.isOpenAIChatGPTProvider() || callerWantsStream);
     const body = this.buildResponsesBody(messages, { ...options, stream: useStream });
     logger.debug(
       "[OpenAI chatCompleteResponses] reasoning=%s onThinking=%s",

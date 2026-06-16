@@ -67,7 +67,7 @@ export function QuickConnectionSwitcher({ className }: { className?: string }) {
   useEffect(() => {
     if (!open || !btnRef.current) return;
     const rect = btnRef.current.getBoundingClientRect();
-    const inputBox = btnRef.current.closest(".rounded-2xl") as HTMLElement | null;
+    const inputBox = btnRef.current.closest(".marinara-chat-input-shell") as HTMLElement | null;
     const anchorTop = inputBox ? inputBox.getBoundingClientRect().top : rect.top;
     requestAnimationFrame(() => {
       const menuEl = menuRef.current;
@@ -85,6 +85,7 @@ export function QuickConnectionSwitcher({ className }: { className?: string }) {
   return (
     <>
       <button
+        type="button"
         ref={btnRef}
         onClick={() => setOpen((v) => !v)}
         title="Quick Connection Switcher"
@@ -108,6 +109,7 @@ export function QuickConnectionSwitcher({ className }: { className?: string }) {
           <div className="flex items-center justify-between gap-2 border-b border-foreground/10 px-3 py-2">
             <span className="text-[0.6875rem] font-semibold">Connections</span>
             <button
+              type="button"
               onClick={handleToggleRandom}
               title={isRandom ? "Random pool active — click to disable" : "Use random connection from pool"}
               className={cn(
@@ -127,6 +129,7 @@ export function QuickConnectionSwitcher({ className }: { className?: string }) {
               if (isRandom) {
                 return (
                   <button
+                    type="button"
                     key={conn.id}
                     onClick={() => handleTogglePool(conn.id, inPool)}
                     className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs transition-colors hover:bg-foreground/10"
@@ -148,6 +151,7 @@ export function QuickConnectionSwitcher({ className }: { className?: string }) {
               }
               return (
                 <button
+                  type="button"
                   key={conn.id}
                   onClick={() => handleSwitch(conn.id)}
                   className={cn(

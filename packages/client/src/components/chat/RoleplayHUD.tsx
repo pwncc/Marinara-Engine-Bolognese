@@ -29,9 +29,13 @@ import { useChat } from "../../hooks/use-chats";
 import { discardPendingGameStatePatch, useGameStatePatcher } from "../../hooks/use-game-state-patcher";
 import { useUIStore } from "../../stores/ui.store";
 import {
+  getLocationPinColor,
   getTemperatureColor,
   getTemperatureGaugeDisplay,
   getTemperatureKeywordHint,
+  getWeatherIconColor,
+  getWorldDateIconColor,
+  getWorldTimeIconColor,
   parseTemperatureValue,
 } from "../../features/tracker-panel/lib/world-state-display";
 import { TrackerLockProvider } from "../../features/tracker-panel/components/TrackerLockContext";
@@ -1328,6 +1332,10 @@ function CombinedWorldWidget({
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const weatherEmoji = weather ? getWeatherEmoji(weather) : "🌤️";
+  const pinColor = getLocationPinColor(location);
+  const dateColor = getWorldDateIconColor(date);
+  const timeColor = getWorldTimeIconColor(time);
+  const weatherColor = getWeatherIconColor(weather);
   const temperatureDisplay = getTemperatureGaugeDisplay(temperature, trackerTemperatureUnit);
   const tempNumeric = temperature ? parseTemperatureValue(temperature) : null;
   const temp = tempNumeric ?? (temperature ? getTemperatureKeywordHint(temperature) : null);
@@ -1364,12 +1372,12 @@ function CombinedWorldWidget({
         title="World State"
       >
         {/* Location pin */}
-        <MapPin size="0.9375rem" className="shrink-0 drop-shadow-sm" />
+        <MapPin size="0.9375rem" className={cn("shrink-0 drop-shadow-sm", pinColor)} />
 
         {/* Mini calendar with day number */}
         {!sideLayout && (
           <>
-            <svg viewBox="0 0 20 20" fill="none" className="shrink-0 h-4 w-4">
+            <svg viewBox="0 0 20 20" fill="none" className={cn("shrink-0 h-4 w-4 drop-shadow-sm", dateColor)}>
               <rect x="2" y="4" width="16" height="14" rx="2" stroke="currentColor" strokeWidth="1.5" opacity="0.7" />
               <line x1="2" y1="8" x2="18" y2="8" stroke="currentColor" strokeWidth="1.2" opacity="0.5" />
               <line
@@ -1408,7 +1416,7 @@ function CombinedWorldWidget({
             </svg>
 
             {/* Mini clock with dynamic hands */}
-            <svg viewBox="0 0 20 20" fill="none" className="shrink-0 h-4 w-4">
+            <svg viewBox="0 0 20 20" fill="none" className={cn("shrink-0 h-4 w-4 drop-shadow-sm", timeColor)}>
               <circle cx="10" cy="10" r="8" stroke="currentColor" strokeWidth="1.5" opacity="0.7" />
               {hour >= 0 ? (
                 <>
@@ -1461,7 +1469,14 @@ function CombinedWorldWidget({
             </svg>
 
             {/* Weather emoji */}
-            <span className="text-sm leading-none shrink-0">{weatherEmoji}</span>
+            <span
+              className={cn(
+                "text-sm leading-none shrink-0 drop-shadow-sm [text-shadow:0_0_8px_currentColor]",
+                weatherColor,
+              )}
+            >
+              {weatherEmoji}
+            </span>
 
             {/* Mini thermometer with fill — vivid color & fill level changes dynamically */}
             <svg viewBox="0 0 10 20" fill="none" className="shrink-0 h-4 w-[0.625rem]">
@@ -1516,7 +1531,10 @@ function CombinedWorldWidget({
             onSaveWeather={onSaveWeather}
             onSaveTemperature={onSaveTemperature}
             weatherEmoji={weatherEmoji}
-            pinColor="text-[var(--marinara-chat-chrome-highlight-text)]"
+            pinColor={pinColor}
+            dateColor={dateColor}
+            timeColor={timeColor}
+            weatherColor={weatherColor}
             tempColor={tempColor}
             onClose={() => setOpen(false)}
             onRerunSingleTracker={onRerunSingleTracker}

@@ -170,7 +170,7 @@ export function QuickSwitcherMobile() {
   useEffect(() => {
     if (!open || !btnRef.current) return;
     const update = () => {
-      const inputBox = btnRef.current!.closest(".rounded-2xl") as HTMLElement | null;
+      const inputBox = btnRef.current!.closest(".marinara-chat-input-shell") as HTMLElement | null;
       const menuEl = menuRef.current;
       const menuHeight = menuEl?.offsetHeight || 400;
       if (inputBox) {

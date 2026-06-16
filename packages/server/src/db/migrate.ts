@@ -502,6 +502,11 @@ const CREATE_TABLES: string[] = [
     value TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS achievement_unlocks (
+    id TEXT PRIMARY KEY NOT NULL,
+    unlocked_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS installed_extensions (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,

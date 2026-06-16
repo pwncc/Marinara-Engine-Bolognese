@@ -5,6 +5,7 @@ import {
   APP_LANGUAGE_OPTIONS,
   TRACKER_DATA_PANEL_SECTIONS,
   TRACKER_PANEL_DEFAULT_BACKGROUND_COLOR,
+  DEFAULT_ROLEPLAY_BACKGROUND_URL,
   useUIStore,
   getDefaultAppAccentColor,
   getDefaultChatChromeTextColor,
@@ -61,6 +62,8 @@ import {
   Check,
   ChevronDown,
   Loader2,
+  Search,
+  Star,
   Palette,
   Puzzle,
   CloudRain,
@@ -1129,6 +1132,8 @@ function GeneralSettings() {
   const setEnterToSendGame = useUIStore((s) => s.setEnterToSendGame);
   const confirmBeforeDelete = useUIStore((s) => s.confirmBeforeDelete);
   const setConfirmBeforeDelete = useUIStore((s) => s.setConfirmBeforeDelete);
+  const achievementsEnabled = useUIStore((s) => s.achievementsEnabled);
+  const setAchievementsEnabled = useUIStore((s) => s.setAchievementsEnabled);
   const messagesPerPage = useUIStore((s) => s.messagesPerPage);
   const setMessagesPerPage = useUIStore((s) => s.setMessagesPerPage);
   const boldDialogue = useUIStore((s) => s.boldDialogue);
@@ -1189,6 +1194,12 @@ function GeneralSettings() {
             checked={confirmBeforeDelete}
             onChange={setConfirmBeforeDelete}
             help="Shows a confirmation dialog before permanently deleting chats, characters, or other items. Recommended to keep on."
+          />
+          <ToggleSetting
+            label="Achievements"
+            checked={achievementsEnabled}
+            onChange={setAchievementsEnabled}
+            help="Shows the Home achievements button and unlock notifications. Tracking stays silent in the current profile when this is off."
           />
           <ToggleSetting
             label="Music Player"
@@ -1723,6 +1734,8 @@ function AppearanceSettings() {
   const setVisualTheme = useUIStore((s) => s.setVisualTheme);
   const chatBackground = useUIStore((s) => s.chatBackground);
   const setChatBackgroundRaw = useUIStore((s) => s.setChatBackground);
+  const defaultRoleplayBackground = useUIStore((s) => s.defaultRoleplayBackground);
+  const setDefaultRoleplayBackground = useUIStore((s) => s.setDefaultRoleplayBackground);
   const chatBackgroundBlur = useUIStore((s) => s.chatBackgroundBlur);
   const setChatBackgroundBlur = useUIStore((s) => s.setChatBackgroundBlur);
   const activeChatId = useChatStore((s) => s.activeChatId);
@@ -2679,7 +2692,12 @@ function AppearanceSettings() {
                 </span>
               </div>
             </label>
-            <BackgroundPicker selected={chatBackground} onSelect={setChatBackground} />
+            <BackgroundPicker
+              selected={chatBackground}
+              onSelect={setChatBackground}
+              defaultRoleplayBackground={defaultRoleplayBackground}
+              onDefaultChange={setDefaultRoleplayBackground}
+            />
           </div>
         </div>
       </SettingsSection>
@@ -2708,12 +2726,23 @@ type BackgroundUploadResponse = {
   tags: string[];
 };
 
-function BackgroundPicker({ selected, onSelect }: { selected: string | null; onSelect: (url: string | null) => void }) {
+function BackgroundPicker({
+  selected,
+  onSelect,
+  defaultRoleplayBackground,
+  onDefaultChange,
+}: {
+  selected: string | null;
+  onSelect: (url: string | null) => void;
+  defaultRoleplayBackground: string;
+  onDefaultChange: (url: string) => void;
+}) {
   const [uploading, setUploading] = useState(false);
   const [editingTags, setEditingTags] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
   const [renamingFile, setRenamingFile] = useState<string | null>(null);
   const [renameInput, setRenameInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const refreshGameAssetManifest = useGameAssetStore((s) => s.fetchManifest);
   const qc = useQueryClient();
 
@@ -2755,10 +2784,31 @@ function BackgroundPicker({ selected, onSelect }: { selected: string | null; onS
       if (selected === oldUrl) {
         onSelect(data.url);
       }
+      if (defaultRoleplayBackground === oldUrl) {
+        onDefaultChange(data.url);
+      }
       setRenamingFile(null);
       qc.invalidateQueries({ queryKey: ["backgrounds"] });
     },
   });
+
+  const filteredBackgrounds = useMemo(() => {
+    const items = backgrounds ?? [];
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return items;
+    return items.filter((bg) => {
+      const haystack = [
+        bg.filename,
+        bg.originalName ?? "",
+        bg.tag ?? "",
+        bg.source === "game_asset" ? "game asset" : "library",
+        ...bg.tags,
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [backgrounds, searchQuery]);
 
   const handleUpload = async (files: File[]) => {
     if (files.length === 0) return;
@@ -2826,12 +2876,56 @@ function BackgroundPicker({ selected, onSelect }: { selected: string | null; onS
         className="rounded-lg py-3 hover:border-[var(--primary)]/40 hover:bg-[var(--secondary)]/50"
       />
 
+      <div className="flex flex-col gap-1.5 rounded-lg bg-[var(--secondary)]/40 p-2.5 ring-1 ring-[var(--border)]/70">
+        <div className="flex items-center gap-2">
+          <div className="relative min-w-0 flex-1">
+            <Search
+              size="0.75rem"
+              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]"
+            />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search backgrounds..."
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] py-1.5 pl-7 pr-2 text-xs text-[var(--foreground)] outline-none transition-colors placeholder:text-[var(--muted-foreground)]/60 focus:border-[var(--primary)]/50"
+            />
+          </div>
+          {searchQuery.trim() && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              className="shrink-0 rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+              title="Clear search"
+            >
+              <X size="0.75rem" />
+            </button>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-[0.625rem] text-[var(--muted-foreground)]">
+          <span>
+            {filteredBackgrounds.length} of {backgrounds?.length ?? 0} backgrounds
+          </span>
+          {defaultRoleplayBackground !== DEFAULT_ROLEPLAY_BACKGROUND_URL && (
+            <button
+              type="button"
+              onClick={() => onDefaultChange(DEFAULT_ROLEPLAY_BACKGROUND_URL)}
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+            >
+              <Star size="0.625rem" />
+              Reset Roleplay default
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Background grid */}
-      {backgrounds && backgrounds.length > 0 && (
+      {backgrounds && backgrounds.length > 0 && filteredBackgrounds.length > 0 && (
         <div className="flex flex-col gap-2">
-          {backgrounds.map((bg) => {
+          {filteredBackgrounds.map((bg) => {
             const itemKey = bg.id ?? bg.url;
             const isSelected = selected === bg.url;
+            const isDefaultRoleplay = defaultRoleplayBackground === bg.url;
             const isUserBackground = bg.source !== "game_asset";
             const isEditable = bg.editable !== false && isUserBackground;
             const canRename = bg.renameable !== false && isUserBackground;
@@ -2904,6 +2998,12 @@ function BackgroundPicker({ selected, onSelect }: { selected: string | null; onS
                           >
                             {sourceLabel}
                           </span>
+                          {isDefaultRoleplay && (
+                            <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-[var(--primary)]/12 px-1.5 py-0 text-[0.5625rem] text-[var(--primary)] ring-1 ring-[var(--primary)]/25">
+                              <Star size="0.5rem" fill="currentColor" />
+                              Default
+                            </span>
+                          )}
                           {canRename && (
                             <button
                               onClick={() => {
@@ -2919,11 +3019,38 @@ function BackgroundPicker({ selected, onSelect }: { selected: string | null; onS
                           )}
                         </>
                       )}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!isDefaultRoleplay) onDefaultChange(bg.url);
+                        }}
+                        className={cn(
+                          "shrink-0 rounded-md p-0.5 transition-colors",
+                          isDefaultRoleplay
+                            ? "text-[var(--primary)]"
+                            : "text-[var(--muted-foreground)]/70 hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+                        )}
+                        title={
+                          isDefaultRoleplay
+                            ? "Default for new Roleplay chats"
+                            : "Set as default for new Roleplay chats"
+                        }
+                        aria-label={
+                          isDefaultRoleplay
+                            ? `${title} is the default Roleplay background`
+                            : `Set ${title} as the default Roleplay background`
+                        }
+                        aria-pressed={isDefaultRoleplay}
+                      >
+                        <Star size="0.75rem" fill={isDefaultRoleplay ? "currentColor" : "none"} />
+                      </button>
                       {canDelete && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             if (selected === bg.url) onSelect(null);
+                            if (defaultRoleplayBackground === bg.url) onDefaultChange(DEFAULT_ROLEPLAY_BACKGROUND_URL);
                             deleteBg.mutate(bg.filename);
                           }}
                           className="ml-auto shrink-0 rounded-md p-0.5 text-[var(--muted-foreground)] opacity-0 transition-opacity hover:text-[var(--destructive)] group-hover:opacity-100"
@@ -3015,6 +3142,12 @@ function BackgroundPicker({ selected, onSelect }: { selected: string | null; onS
         <div className="flex flex-col items-center gap-1.5 py-4 text-center">
           <Image size="1.25rem" className="text-[var(--muted-foreground)]/40" />
           <p className="text-[0.625rem] text-[var(--muted-foreground)]">No backgrounds available yet</p>
+        </div>
+      )}
+      {backgrounds && backgrounds.length > 0 && filteredBackgrounds.length === 0 && (
+        <div className="flex flex-col items-center gap-1.5 py-4 text-center">
+          <Search size="1.25rem" className="text-[var(--muted-foreground)]/40" />
+          <p className="text-[0.625rem] text-[var(--muted-foreground)]">No backgrounds match that search</p>
         </div>
       )}
     </div>

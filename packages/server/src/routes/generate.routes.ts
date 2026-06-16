@@ -8,7 +8,6 @@ import {
   generateRequestSchema,
   BUILT_IN_AGENTS,
   getDefaultBuiltInAgentSettings,
-  findKnownModel,
   resolveMacros,
   resolveDeferredCharacterMacros,
   hasDeferredCharacterMacros,
@@ -35,7 +34,6 @@ import type {
   AgentCallDebugEvent,
   AgentResult,
   AgentPhase,
-  APIProvider,
   CharacterStat,
   GameState,
   HapticDeviceCommand,
@@ -80,7 +78,7 @@ import {
   type AssemblerInput,
 } from "../services/prompt/index.js";
 import { wrapContent } from "../services/prompt/format-engine.js";
-import { fitMessagesToContext, type ChatMessage, type LLMUsage } from "../services/llm/base-provider.js";
+import { type ChatMessage, type LLMUsage } from "../services/llm/base-provider.js";
 import { executeToolCalls } from "../services/tools/tool-executor.js";
 import { createAgentPipeline, type ResolvedAgent, type AgentInjection } from "../services/agents/agent-pipeline.js";
 import { DATA_DIR } from "../utils/data-dir.js";
@@ -320,13 +318,17 @@ import {
 } from "../services/generation/prompt-message-scope.js";
 import {
   applyProviderMaxTokensOverride,
-  minContextLimit,
   normalizeAgentMaxTokens,
   normalizeChatTopP,
-  normalizeMaxContext,
   readChatCompletionsReasoningMetadata,
   shouldReplayStoredChatCompletionsReasoning,
 } from "../services/generation/generation-parameters.js";
+import {
+  fitMessagesForModelAccess,
+  mergeModelContextLimit,
+  resolveModelAccessPolicy,
+  resolveStoredModelContextLimit,
+} from "../services/generation/model-access-policy.js";
 import { resolveAgentPipelineAgents } from "../services/generation/agent-resolution.js";
 import { applyImmersiveHtmlPromptInjection } from "../services/generation/immersive-html-injection.js";
 import { resolveGenerationTools } from "../services/generation/tool-resolution-runtime.js";
@@ -1087,11 +1089,13 @@ export async function generateRoutes(app: FastifyInstance) {
         let wrapFormat: "xml" | "markdown" | "none" = "xml";
         const runtimeAgentSectionTypes = new Set<RuntimeAgentSectionType>();
         const runtimeAgentSectionTokens = new Map<RuntimeAgentSectionType, RuntimeAgentSectionTokens>();
-        const connectionMaxContext = normalizeMaxContext(conn.maxContext);
-        const knownModelContext = normalizeMaxContext(
-          findKnownModel(conn.provider as APIProvider, conn.model)?.context,
-        );
-        let effectiveMaxContext = minContextLimit(connectionMaxContext, knownModelContext);
+        const modelAccessPolicy = resolveModelAccessPolicy({
+          provider: conn.provider,
+          model: conn.model,
+          maxContext: conn.maxContext,
+        });
+        const { suppressModelParameters, connectionMaxContext } = modelAccessPolicy;
+        let effectiveMaxContext = modelAccessPolicy.effectiveMaxContext;
 
         // Determine whether agents are enabled for this chat (needed by assembler + agent pipeline).
         // Mode policy filters which agents may run for conversation, roleplay, visual novel, and game chats.
@@ -1459,10 +1463,11 @@ export async function generateRoutes(app: FastifyInstance) {
           customThinkingTags = normalizeThinkingTagPairs(assembled.parameters.customThinkingTags);
           customParameters = mergeCustomParameters(customParameters, assembled.parameters.customParameters);
 
-          const presetMaxContext = assembled.parameters.useMaxContext
-            ? knownModelContext
-            : normalizeMaxContext(assembled.parameters.maxContext);
-          effectiveMaxContext = minContextLimit(effectiveMaxContext, presetMaxContext);
+          effectiveMaxContext = mergeModelContextLimit(
+            modelAccessPolicy,
+            effectiveMaxContext,
+            resolveStoredModelContextLimit(modelAccessPolicy, assembled.parameters),
+          );
 
           if (assembled.updatedEntryStateOverrides) chatMeta.entryStateOverrides = assembled.updatedEntryStateOverrides;
           if (assembled.updatedEntryTimingStates) chatMeta.entryTimingStates = assembled.updatedEntryTimingStates;
@@ -2739,8 +2744,11 @@ export async function generateRoutes(app: FastifyInstance) {
           }
           customParameters = mergeCustomParameters(customParameters, params.customParameters);
 
-          const paramsMaxContext = params.useMaxContext ? knownModelContext : normalizeMaxContext(params.maxContext);
-          effectiveMaxContext = minContextLimit(effectiveMaxContext, paramsMaxContext);
+          effectiveMaxContext = mergeModelContextLimit(
+            modelAccessPolicy,
+            effectiveMaxContext,
+            resolveStoredModelContextLimit(modelAccessPolicy, params),
+          );
         };
 
         // Scene chats use roleplay-friendly defaults before applying user overrides
@@ -3145,7 +3153,7 @@ export async function generateRoutes(app: FastifyInstance) {
             currentInputMessages: currentInputMessages(),
             chatId: input.chatId,
             embeddingSource: memoryRecallEmbeddingSource,
-            contextLimit: effectiveMaxContext ?? connectionMaxContext,
+            contextLimit: suppressModelParameters ? undefined : (effectiveMaxContext ?? connectionMaxContext),
             sendProgress,
           });
         }
@@ -5023,15 +5031,16 @@ export async function generateRoutes(app: FastifyInstance) {
           const rememberMainPromptPreviewForAgents = (messages: ChatMessage[]) => {
             agentContext.memory._mainPromptPreview = promptPreviewForAgents(messages);
           };
-          let effectiveMaxTokensForSend = maxTokens;
+          let effectiveMaxTokensForSend: number | undefined = suppressModelParameters ? undefined : maxTokens;
           const fitPromptForSend = (candidateMessages: ChatMessage[]): ChatMessage[] => {
-            const fit = fitMessagesToContext(
-              candidateMessages,
-              { maxContext: effectiveMaxContext, maxTokens, tools: toolDefs },
-              connectionMaxContext,
-            );
+            const fit = fitMessagesForModelAccess({
+              messages: candidateMessages,
+              policy: { ...modelAccessPolicy, effectiveMaxContext },
+              maxTokens,
+              tools: toolDefs,
+            });
             finalPromptSent = fit.messages;
-            effectiveMaxTokensForSend = fit.maxTokens ?? maxTokens;
+            effectiveMaxTokensForSend = fit.maxTokensForSend;
             return fit.messages;
           };
 
@@ -5199,6 +5208,7 @@ export async function generateRoutes(app: FastifyInstance) {
                     verbosity: verbosity ?? undefined,
                     serviceTier,
                     customParameters,
+                    suppressModelParameters,
                     onThinking,
                     onToken: input.streaming ? onToken : undefined,
                     openrouterProvider: conn.openrouterProvider ?? undefined,
@@ -5352,6 +5362,7 @@ export async function generateRoutes(app: FastifyInstance) {
                     verbosity: verbosity ?? undefined,
                     serviceTier,
                     customParameters,
+                    suppressModelParameters,
                     onThinking,
                     onToken: input.streaming ? onToken : undefined,
                     openrouterProvider: conn.openrouterProvider ?? undefined,
@@ -5407,6 +5418,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 verbosity: verbosity ?? undefined,
                 serviceTier,
                 customParameters,
+                suppressModelParameters,
                 openrouterProvider: conn.openrouterProvider ?? undefined,
                 onThinking,
                 onResponseParts: (parts) => {
@@ -5785,7 +5797,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   provider: conn.provider,
                   temperature: temperature ?? null,
                   maxTokens: effectiveMaxTokensForSend ?? null,
-                  maxContext: effectiveMaxContext ?? connectionMaxContext ?? null,
+                  maxContext: suppressModelParameters ? null : (effectiveMaxContext ?? connectionMaxContext ?? null),
                   showThoughts: showThoughts ?? null,
                   reasoningEffort: resolvedEffort ?? reasoningEffort ?? null,
                   verbosity: verbosity ?? null,
@@ -6727,8 +6739,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 // Build the new snapshot from agent output, falling back to previous snapshot.
                 let newDate = coerceGameStateTextValue(gs.date) ?? coerceGameStateTextValue(prevSnap?.date);
                 let newTime = coerceGameStateTextValue(gs.time) ?? coerceGameStateTextValue(prevSnap?.time);
-                let newLocation =
-                  coerceGameStateTextValue(gs.location) ?? coerceGameStateTextValue(prevSnap?.location);
+                let newLocation = coerceGameStateTextValue(gs.location) ?? coerceGameStateTextValue(prevSnap?.location);
                 let newWeather = coerceGameStateTextValue(gs.weather) ?? coerceGameStateTextValue(prevSnap?.weather);
                 let newTemperature =
                   coerceGameStateTextValue(gs.temperature) ?? coerceGameStateTextValue(prevSnap?.temperature);
@@ -7158,7 +7169,9 @@ export async function generateRoutes(app: FastifyInstance) {
                 }
                 if (personaPatch.changed) {
                   logger.debug("[game_state_patch] persona-stats: %j", personaPatch.patch);
-                  reply.raw.write(`data: ${JSON.stringify({ type: "game_state_patch", data: personaPatch.patch })}\n\n`);
+                  reply.raw.write(
+                    `data: ${JSON.stringify({ type: "game_state_patch", data: personaPatch.patch })}\n\n`,
+                  );
                 }
 
                 // Auto-populate journal: inventory changes
@@ -8022,7 +8035,11 @@ export async function generateRoutes(app: FastifyInstance) {
                               : `Generate a casual selfie of ${charName} based on the current conversation context.`,
                           },
                         ],
-                        { model: conn.model, temperature: 0.7, maxTokens: 8196, serviceTier },
+                        {
+                          model: conn.model,
+                          ...(suppressModelParameters ? {} : { temperature: 0.7, maxTokens: 8196, serviceTier }),
+                          suppressModelParameters,
+                        },
                       );
 
                       const imagePrompt = (promptResult.content ?? "").trim();

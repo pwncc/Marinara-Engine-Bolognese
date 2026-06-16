@@ -362,8 +362,9 @@ export function ChatSidebar() {
 
   const [localFolderOrder, setLocalFolderOrder] = useState<string[]>([]);
   useEffect(() => {
+    if (!folders) return;
     setLocalFolderOrder(modeFolders.map((f) => f.id));
-  }, [modeFolders]);
+  }, [folders, modeFolders]);
 
   // Detect if active chat belongs to a group (so its group row highlights)
   const activeChat = chats?.find((c) => c.id === activeChatId);
@@ -972,6 +973,7 @@ export function ChatSidebar() {
               onClick={() => setActiveTab(tab)}
               aria-pressed={isActive}
               data-chat-mode-tab={tab}
+              data-tour={`chat-mode-${tab}`}
               className={cn(
                 "relative flex min-h-[2.125rem] flex-1 items-center justify-center gap-1.5 overflow-visible rounded-lg px-2 py-2 text-xs leading-normal font-medium transition-all",
                 isActive

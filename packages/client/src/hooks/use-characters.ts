@@ -3,6 +3,7 @@
 // ──────────────────────────────────────────────
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api-client";
+import { achievementKeys, trackAchievementEvent } from "./use-achievements";
 import {
   parseTrackerCardColorConfig,
   serializeTrackerCardColorConfig,
@@ -69,7 +70,12 @@ export function useCreateCharacter() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (data: Record<string, unknown>) => api.post("/characters", data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: characterKeys.list() }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: characterKeys.list() });
+      void trackAchievementEvent("library_changed")
+        .then(() => qc.invalidateQueries({ queryKey: achievementKeys.all }))
+        .catch(() => undefined);
+    },
   });
 }
 
@@ -507,7 +513,12 @@ export function useCreatePersona() {
       savedStatusOptions?: string;
       avatarCrop?: string;
     }) => api.post("/characters/personas", data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: characterKeys.personas }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: characterKeys.personas });
+      void trackAchievementEvent("library_changed")
+        .then(() => qc.invalidateQueries({ queryKey: achievementKeys.all }))
+        .catch(() => undefined);
+    },
   });
 }
 

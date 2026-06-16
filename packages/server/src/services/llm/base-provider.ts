@@ -120,6 +120,8 @@ export interface ChatOptions {
   responseFormat?: { type: string; [key: string]: unknown };
   /** Raw provider request parameters merged into the outgoing request body. */
   customParameters?: Record<string, unknown>;
+  /** Do not add inferred generation/model parameters; only merge customParameters. */
+  suppressModelParameters?: boolean;
 }
 
 /** Token usage statistics returned by the model */
@@ -160,7 +162,7 @@ export interface ContextFitResult {
   trimmed: boolean;
 }
 
-type ContextFitOptions = Pick<ChatOptions, "maxContext" | "maxTokens" | "tools">;
+type ContextFitOptions = Pick<ChatOptions, "maxContext" | "maxTokens" | "tools" | "suppressModelParameters">;
 
 const CHARS_PER_TOKEN = 4;
 const MESSAGE_OVERHEAD_TOKENS = 6;
@@ -318,13 +320,13 @@ export function fitMessagesToContext(
   options: ContextFitOptions,
   defaultMaxContext?: number,
 ): ContextFitResult {
-  const requestedMaxTokens = normalizePositiveInteger(options.maxTokens);
-  const maxContext = minDefined(
-    normalizePositiveInteger(options.maxContext),
-    normalizePositiveInteger(defaultMaxContext),
-  );
+  const suppressModelParameters = options.suppressModelParameters === true;
+  const requestedMaxTokens = suppressModelParameters ? undefined : normalizePositiveInteger(options.maxTokens);
+  const maxContext = suppressModelParameters
+    ? undefined
+    : minDefined(normalizePositiveInteger(options.maxContext), normalizePositiveInteger(defaultMaxContext));
   const estimatedTokensBefore = estimateMessagesTokens(messages);
-  const toolTokens = estimateToolDefinitionTokens(options.tools);
+  const toolTokens = suppressModelParameters ? 0 : estimateToolDefinitionTokens(options.tools);
 
   if (!maxContext) {
     return {

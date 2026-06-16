@@ -21,7 +21,7 @@
 //   • SDK docs: https://docs.anthropic.com/en/docs/claude-code/sdk
 //
 import { randomUUID } from "node:crypto";
-import { isClaudeAdaptiveOnlyNoSamplingModel } from "@marinara-engine/shared";
+import { isClaudeAdaptiveOnlyNoSamplingModel, shouldSuppressUnknownModelParameters } from "@marinara-engine/shared";
 import { BaseLLMProvider, type ChatMessage, type ChatOptions, type LLMUsage } from "../base-provider.js";
 import { logger } from "../../../lib/logger.js";
 import { isClaudeSubscriptionResumeEnabled } from "../../../config/runtime-config.js";
@@ -313,8 +313,16 @@ export class ClaudeSubscriptionProvider extends BaseLLMProvider {
     super(baseUrl, apiKey, defaultMaxContext, defaultOpenrouterProvider, maxTokensOverride);
   }
 
+  private shouldSuppressModelParameters(options: ChatOptions): boolean {
+    return (
+      options.suppressModelParameters === true ||
+      shouldSuppressUnknownModelParameters("claude_subscription", options.model)
+    );
+  }
+
   async *chat(messages: ChatMessage[], options: ChatOptions): AsyncGenerator<string, LLMUsage | void, unknown> {
-    const configuredMaxTokens = options.maxTokens ?? 4096;
+    const suppressModelParameters = this.shouldSuppressModelParameters(options);
+    const configuredMaxTokens = suppressModelParameters ? undefined : (options.maxTokens ?? 4096);
     const contextFit = this.fitMessagesToContext(messages, { ...options, maxTokens: configuredMaxTokens });
     this.logContextTrim(contextFit, options.model);
 
@@ -388,12 +396,12 @@ export class ClaudeSubscriptionProvider extends BaseLLMProvider {
     };
     if (systemPrompt !== undefined) sdkOptions.systemPrompt = systemPrompt;
 
-    if (options.enableThinking) {
+    if (!suppressModelParameters && options.enableThinking) {
       sdkOptions.thinking = { type: "adaptive" };
       // EffortLevel covers low|medium|high|xhigh|max; reasoningEffort matches
       // that provider-facing set.
       sdkOptions.effort = (options.reasoningEffort ?? "high") as "low" | "medium" | "high" | "xhigh" | "max";
-    } else if (isAdaptiveOnly) {
+    } else if (!suppressModelParameters && isAdaptiveOnly) {
       // Adaptive-only Claude models always think; let the SDK pick a default effort.
       sdkOptions.thinking = { type: "adaptive" };
     }

@@ -11,7 +11,7 @@ interface ChatInputShellClassOptions {
 }
 
 const CHAT_INPUT_LAYOUT_CLASSES: Record<ChatInputLayout, string> = {
-  conversation: "items-center gap-0.5 px-1.5 py-1 sm:gap-2 sm:px-4 sm:py-2.5",
+  conversation: "items-center gap-0.5 px-2 py-1.5 sm:gap-2 sm:px-4 sm:py-2.5",
   game: "items-center gap-1.5 px-2 py-2 sm:px-4 sm:py-3",
   roleplay: "items-center gap-1 px-2 py-1.5 sm:gap-2 sm:px-4 sm:py-2.5",
 };

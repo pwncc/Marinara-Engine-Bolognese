@@ -13,6 +13,7 @@ import {
   type LLMToolDefinition,
   type LLMUsage,
 } from "../base-provider.js";
+import { shouldSuppressUnknownModelParameters } from "@marinara-engine/shared";
 import { decodePossiblyCompressedBody } from "../../../utils/security.js";
 
 /** A single Gemini response part (text, thought summary, or signature-only). */
@@ -185,7 +186,10 @@ function sanitizeGeminiSchema(value: unknown, depth = 0): unknown {
   return out;
 }
 
-function googleResponseFormatConfig(responseFormat?: { type: string; [key: string]: unknown }): Record<string, unknown> {
+function googleResponseFormatConfig(responseFormat?: {
+  type: string;
+  [key: string]: unknown;
+}): Record<string, unknown> {
   if (!responseFormat) return {};
   if (responseFormat.type === "json_object") return { responseMimeType: "application/json" };
   if (responseFormat.type !== "json_schema") return {};
@@ -233,7 +237,9 @@ function parseToolResultContent(content: string): Record<string, unknown> {
   }
 }
 
-function formatGoogleContents(messages: ChatMessage[]): Array<{ role: "user" | "model"; parts: Array<Record<string, unknown>> }> {
+function formatGoogleContents(
+  messages: ChatMessage[],
+): Array<{ role: "user" | "model"; parts: Array<Record<string, unknown>> }> {
   const contents: Array<{ role: "user" | "model"; parts: Array<Record<string, unknown>> }> = [];
   const toolNamesById = new Map<string, string>();
 
@@ -316,8 +322,15 @@ export class GoogleProvider extends BaseLLMProvider {
     super(baseUrl, apiKey, defaultMaxContext, defaultOpenrouterProvider, maxTokensOverride);
   }
 
+  private shouldSuppressModelParameters(options: ChatOptions): boolean {
+    return (
+      options.suppressModelParameters === true || shouldSuppressUnknownModelParameters(this.providerKind, options.model)
+    );
+  }
+
   async chatComplete(messages: ChatMessage[], options: ChatOptions): Promise<ChatCompletionResult> {
-    if (!options.tools?.length) return super.chatComplete(messages, options);
+    if (this.shouldSuppressModelParameters(options) || !options.tools?.length)
+      return super.chatComplete(messages, options);
 
     const configuredMaxTokens = options.maxTokens ?? 4096;
     const contextFit = this.fitMessagesToContext(messages, { ...options, maxTokens: configuredMaxTokens });
@@ -339,8 +352,9 @@ export class GoogleProvider extends BaseLLMProvider {
       } else {
         const budgetMap = { low: 1024, medium: 8192, high: 24576, xhigh: 24576, max: 24576 } as const;
         const requestedBudget = options.reasoningEffort ? budgetMap[options.reasoningEffort] : 8192;
+        const outputMaxTokens = maxTokens ?? 4096;
         thinkingConfig = {
-          thinkingBudget: capGeminiThinkingBudget(requestedBudget, maxTokens),
+          thinkingBudget: capGeminiThinkingBudget(requestedBudget, outputMaxTokens),
           includeThoughts: true,
         };
       }
@@ -389,7 +403,8 @@ export class GoogleProvider extends BaseLLMProvider {
       ...(options.signal ? { signal: options.signal } : {}),
     });
 
-    const readDecodedText = async () => decodePossiblyCompressedBody(Buffer.from(await response.arrayBuffer())).toString("utf8");
+    const readDecodedText = async () =>
+      decodePossiblyCompressedBody(Buffer.from(await response.arrayBuffer())).toString("utf8");
     if (!response.ok) {
       const errorText = await readDecodedText();
       const label = this.providerKind === "google_vertex" ? "Vertex AI Gemini API" : "Gemini API";
@@ -429,11 +444,12 @@ export class GoogleProvider extends BaseLLMProvider {
   }
 
   async *chat(messages: ChatMessage[], options: ChatOptions): AsyncGenerator<string, LLMUsage | void, unknown> {
-    const configuredMaxTokens = options.maxTokens ?? 4096;
+    const suppressModelParameters = this.shouldSuppressModelParameters(options);
+    const configuredMaxTokens = suppressModelParameters ? undefined : (options.maxTokens ?? 4096);
     const contextFit = this.fitMessagesToContext(messages, { ...options, maxTokens: configuredMaxTokens });
     messages = contextFit.messages;
     this.logContextTrim(contextFit, options.model || "gemini-2.0-flash");
-    const maxTokens = contextFit.maxTokens ?? configuredMaxTokens;
+    const maxTokens = configuredMaxTokens === undefined ? undefined : (contextFit.maxTokens ?? configuredMaxTokens);
 
     const model = options.model || "gemini-2.0-flash";
 
@@ -442,7 +458,8 @@ export class GoogleProvider extends BaseLLMProvider {
 
     // Only models that actually support thinking should get thinkingConfig:
     // Gemini 3.x, 2.5-flash/pro, and 2.0-flash-thinking.
-    const supportsThinking = isGemini3 || /gemini-2\.5|gemini-2\.0-flash-thinking/i.test(model);
+    const supportsThinking =
+      !suppressModelParameters && (isGemini3 || /gemini-2\.5|gemini-2\.0-flash-thinking/i.test(model));
 
     let thinkingConfig: Record<string, unknown> | undefined;
     if (supportsThinking && (options.enableThinking || options.reasoningEffort)) {
@@ -455,8 +472,9 @@ export class GoogleProvider extends BaseLLMProvider {
       } else {
         const budgetMap = { low: 1024, medium: 8192, high: 24576, xhigh: 24576, max: 24576 } as const;
         const requestedBudget = options.reasoningEffort ? budgetMap[options.reasoningEffort] : 8192;
+        const outputMaxTokens = maxTokens ?? 4096;
         thinkingConfig = {
-          thinkingBudget: capGeminiThinkingBudget(requestedBudget, maxTokens),
+          thinkingBudget: capGeminiThinkingBudget(requestedBudget, outputMaxTokens),
           includeThoughts: true,
         };
       }
@@ -513,9 +531,13 @@ export class GoogleProvider extends BaseLLMProvider {
 
     const body: Record<string, unknown> = {
       contents,
-      generationConfig: {
+    };
+
+    if (!suppressModelParameters) {
+      const outputMaxTokens = maxTokens ?? 4096;
+      body.generationConfig = {
         temperature: options.temperature ?? 1,
-        maxOutputTokens: maxTokens,
+        maxOutputTokens: outputMaxTokens,
         topP: options.topP ?? 1,
         ...(typeof options.topK === "number" && Number.isFinite(options.topK)
           ? { topK: Math.max(0, Math.trunc(options.topK)) }
@@ -524,8 +546,8 @@ export class GoogleProvider extends BaseLLMProvider {
         ...(options.presencePenalty ? { presencePenalty: options.presencePenalty } : {}),
         ...(thinkingConfig ? { thinkingConfig } : {}),
         ...googleResponseFormatConfig(options.responseFormat),
-      },
-    };
+      };
+    }
 
     if (systemMessages.length > 0) {
       body.systemInstruction = {

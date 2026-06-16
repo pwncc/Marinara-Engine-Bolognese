@@ -12,7 +12,7 @@ import {
   type LLMToolDefinition,
   type LLMUsage,
 } from "../base-provider.js";
-import { isClaudeAdaptiveOnlyNoSamplingModel } from "@marinara-engine/shared";
+import { isClaudeAdaptiveOnlyNoSamplingModel, shouldSuppressUnknownModelParameters } from "@marinara-engine/shared";
 
 const DEFAULT_CACHING_AT_DEPTH = 5;
 
@@ -182,7 +182,10 @@ function formatAnthropicPayloadMessages(messages: ChatMessage[]): AnthropicMessa
 
 function anthropicToolCallFromBlock(block: AnthropicContentBlock): LLMToolCall | null {
   if (block.type !== "tool_use" || typeof block.name !== "string") return null;
-  const id = typeof block.id === "string" && block.id.trim() ? block.id : `tool_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const id =
+    typeof block.id === "string" && block.id.trim()
+      ? block.id
+      : `tool_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const args = isRecord(block.input) ? block.input : {};
   return {
     id,
@@ -195,8 +198,13 @@ function anthropicToolCallFromBlock(block: AnthropicContentBlock): LLMToolCall |
  * Handles Anthropic Claude API (Messages API).
  */
 export class AnthropicProvider extends BaseLLMProvider {
+  private shouldSuppressModelParameters(options: ChatOptions): boolean {
+    return options.suppressModelParameters === true || shouldSuppressUnknownModelParameters("anthropic", options.model);
+  }
+
   async chatComplete(messages: ChatMessage[], options: ChatOptions): Promise<ChatCompletionResult> {
-    if (!options.tools?.length) return super.chatComplete(messages, options);
+    if (this.shouldSuppressModelParameters(options) || !options.tools?.length)
+      return super.chatComplete(messages, options);
 
     const configuredMaxTokens = options.maxTokens ?? 4096;
     const contextFit = this.fitMessagesToContext(messages, { ...options, maxTokens: configuredMaxTokens });
@@ -293,11 +301,12 @@ export class AnthropicProvider extends BaseLLMProvider {
   }
 
   async *chat(messages: ChatMessage[], options: ChatOptions): AsyncGenerator<string, LLMUsage | void, unknown> {
-    const configuredMaxTokens = options.maxTokens ?? 4096;
+    const suppressModelParameters = this.shouldSuppressModelParameters(options);
+    const configuredMaxTokens = suppressModelParameters ? undefined : (options.maxTokens ?? 4096);
     const contextFit = this.fitMessagesToContext(messages, { ...options, maxTokens: configuredMaxTokens });
     messages = contextFit.messages;
     this.logContextTrim(contextFit, options.model);
-    const maxTokens = contextFit.maxTokens ?? configuredMaxTokens;
+    const maxTokens = configuredMaxTokens === undefined ? undefined : (contextFit.maxTokens ?? configuredMaxTokens);
 
     const url = `${this.baseUrl}/messages`;
 
@@ -333,7 +342,6 @@ export class AnthropicProvider extends BaseLLMProvider {
 
     const body: Record<string, unknown> = {
       model: options.model,
-      max_tokens: maxTokens,
       ...(systemField !== undefined && { system: systemField }),
       messages: mergedMessages.map((m, i) => {
         // Build content parts (text + optional images)
@@ -357,38 +365,45 @@ export class AnthropicProvider extends BaseLLMProvider {
         }
         return { role: m.role, content: m.content };
       }),
-      stream: options.stream ?? true,
-      ...(options.temperature !== undefined && { temperature: options.temperature }),
-      ...(options.topK ? { top_k: options.topK } : {}),
     };
+    if (!suppressModelParameters) {
+      const outputMaxTokens = maxTokens ?? 4096;
+      body.max_tokens = outputMaxTokens;
+      body.stream = options.stream ?? true;
+      if (options.temperature !== undefined) body.temperature = options.temperature;
+      if (options.topK) body.top_k = options.topK;
+    } else if (options.stream) {
+      body.stream = true;
+    }
 
     // Claude adaptive-only models reject sampling parameters (400 error).
     // Strip temperature, top_k, top_p regardless of thinking mode.
     const modelLower = options.model.toLowerCase();
     const isAdaptiveOnly = isClaudeAdaptiveOnlyNoSamplingModel(options.model);
-    if (isAdaptiveOnly) {
+    if (isAdaptiveOnly && !suppressModelParameters) {
       stripAnthropicSamplingParameters(body);
     }
 
     // Enable extended thinking for reasoning models
-    if (options.enableThinking) {
+    if (!suppressModelParameters && options.enableThinking) {
+      const outputMaxTokens = maxTokens ?? 4096;
       if (isAdaptiveOnly) {
         // Adaptive-only Claude models use adaptive thinking (budget_tokens removed).
         // display defaults to "omitted" on 4.7+; summarized is what the UI
         // can safely capture and render in View Thoughts.
-        applyAdaptiveThinkingConfig(body, options, maxTokens);
+        applyAdaptiveThinkingConfig(body, options, outputMaxTokens);
       } else {
         // Opus 4.6 / Sonnet 4.6: prefer adaptive thinking (budget_tokens deprecated).
         const supportsAdaptive = /claude-(opus|sonnet)-4-[56]/.test(modelLower);
         if (supportsAdaptive) {
-          applyAdaptiveThinkingConfig(body, options, maxTokens);
+          applyAdaptiveThinkingConfig(body, options, outputMaxTokens);
           // Cannot use temperature with extended thinking
           delete body.temperature;
         } else {
-          const budgetTokens = Math.max(1024, Math.min(maxTokens, 16000));
+          const budgetTokens = Math.max(1024, Math.min(outputMaxTokens, 16000));
           body.thinking = { type: "enabled", budget_tokens: budgetTokens };
           // Anthropic requires max_tokens to be > budget_tokens
-          body.max_tokens = maxTokens + budgetTokens;
+          body.max_tokens = outputMaxTokens + budgetTokens;
           // Cannot use temperature with extended thinking
           delete body.temperature;
         }
@@ -396,7 +411,7 @@ export class AnthropicProvider extends BaseLLMProvider {
     }
 
     this.applyCustomParameters(body, options);
-    if (isAdaptiveOnly) {
+    if (isAdaptiveOnly && !suppressModelParameters) {
       stripAnthropicSamplingParameters(body);
       if (options.enableThinking) {
         applyAdaptiveThinkingConfig(body, options);

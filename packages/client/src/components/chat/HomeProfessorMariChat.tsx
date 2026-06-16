@@ -28,6 +28,7 @@ import {
   type Message,
 } from "@marinara-engine/shared";
 import { useConnections } from "../../hooks/use-connections";
+import { useTrackAchievement } from "../../hooks/use-achievements";
 import { chatKeys } from "../../hooks/use-chats";
 import { filterLanguageGenerationConnections } from "../../lib/connection-filters";
 import { api } from "../../lib/api-client";
@@ -887,6 +888,7 @@ function WorkspaceApprovalCard({
 export function HomeProfessorMariChat({ pageActive = true }: { pageActive?: boolean }) {
   const qc = useQueryClient();
   const { data: connectionsRaw, isLoading: connectionsLoading } = useConnections();
+  const trackAchievement = useTrackAchievement();
   const [chatId, setChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
@@ -900,7 +902,7 @@ export function HomeProfessorMariChat({ pageActive = true }: { pageActive?: bool
   const [sending, setSending] = useState(false);
   const [connectionMenuOpen, setConnectionMenuOpen] = useState(false);
   const [faqExpanded, setFaqExpanded] = useState(false);
-  const [faqOpenItemId, setFaqOpenItemId] = useState<string | null>("game-mode-model");
+  const [faqOpenItemId, setFaqOpenItemId] = useState<string | null>(null);
   const [mobileFocusMode, setMobileFocusMode] = useState(false);
   const hasLoadedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1229,6 +1231,7 @@ export function HomeProfessorMariChat({ pageActive = true }: { pageActive?: bool
       const chat = await ensureProfessorMariChat(effectiveConnectionId);
       setDraft("");
       setMessages((current) => [...current, createLocalUserMessage(chat.id, text)]);
+      trackAchievement.mutate("prof_mari_message_sent");
       const received = await sendWorkspaceMessage(chat, text);
       await loadMessages(chat.id);
       useChatStore.getState().clearStreamBuffer(chat.id);
@@ -1465,7 +1468,7 @@ export function HomeProfessorMariChat({ pageActive = true }: { pageActive?: bool
                   }}
                   rows={1}
                   placeholder="Ask Professor Mari..."
-                  className="max-h-24 min-h-8 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm leading-5 text-[var(--foreground)] outline-none placeholder:text-[var(--muted-foreground)]"
+                  className="mari-chat-input-textarea max-h-24 min-h-8 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm leading-normal text-foreground/90 outline-none placeholder:text-foreground/30 disabled:cursor-not-allowed disabled:opacity-40"
                   disabled={isBusy}
                 />
                 <button

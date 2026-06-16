@@ -329,6 +329,77 @@ export function getLocationPinColor(location: string | null | undefined) {
   return "text-emerald-400";
 }
 
+export function getWorldDateIconColor(date: string | null | undefined) {
+  const text = (date ?? "").trim();
+  if (!text) return "text-[var(--muted-foreground)]/70";
+
+  const display = getWorldDateDisplay(text);
+  const normalized = `${text} ${display.main} ${display.detail}`.toLowerCase();
+  const monthIndex =
+    display.month !== "DATE" ? WORLD_MONTH_LABELS.indexOf(display.month) : inferMonthIndexFromText(normalized);
+
+  if (/\b(winter|snow|frost|yuletide|christmas|yule|solstice)\b/.test(normalized)) return "text-sky-300";
+  if (/\b(spring|blossom|bloom|equinox)\b/.test(normalized)) return "text-emerald-300";
+  if (/\b(summer|midsummer|sunny|heatwave)\b/.test(normalized)) return "text-yellow-300";
+  if (/\b(autumn|fall|harvest|leaf|leaves)\b/.test(normalized)) return "text-orange-400";
+
+  if (monthIndex === 11 || monthIndex === 0 || monthIndex === 1) return "text-sky-300";
+  if (monthIndex >= 2 && monthIndex <= 4) return "text-emerald-300";
+  if (monthIndex >= 5 && monthIndex <= 7) return "text-yellow-300";
+  if (monthIndex >= 8 && monthIndex <= 10) return "text-orange-400";
+  return "text-zinc-200";
+}
+
+export function getWorldTimeIconColor(time: string | null | undefined) {
+  const text = (time ?? "").trim();
+  if (!text) return "text-[var(--muted-foreground)]/70";
+  const normalized = text.toLowerCase();
+
+  if (/\b(dawn|sunrise|morning|daybreak)\b/.test(normalized)) return "text-amber-300";
+  if (/\b(noon|midday|afternoon|daylight)\b/.test(normalized)) return "text-yellow-300";
+  if (/\b(dusk|sunset|twilight|evening|golden hour)\b/.test(normalized)) return "text-orange-400";
+  if (/\b(night|midnight|moon|moonlit|late)\b/.test(normalized)) return "text-indigo-300";
+
+  const display = getWorldTimeDisplay(text);
+  const hour = display.hour;
+  if (hour === null) return "text-amber-300";
+  if (hour >= 5 && hour < 10) return "text-amber-300";
+  if (hour >= 10 && hour < 17) return "text-yellow-300";
+  if (hour >= 17 && hour < 20) return "text-orange-400";
+  return "text-indigo-300";
+}
+
+export function getWeatherIconColor(weather: string | null | undefined) {
+  const text = (weather ?? "").toLowerCase();
+  if (!text) return "text-[var(--muted-foreground)]/70";
+  if (text.includes("thunder") || text.includes("lightning")) return "text-violet-300";
+  if (text.includes("blizzard") || text.includes("snow") || text.includes("sleet") || text.includes("frost"))
+    return "text-sky-300";
+  if (text.includes("heavy rain") || text.includes("downpour") || text.includes("storm")) return "text-blue-300";
+  if (text.includes("rain") || text.includes("drizzle") || text.includes("shower")) return "text-cyan-300";
+  if (text.includes("hail")) return "text-sky-200";
+  if (text.includes("fog") || text.includes("mist") || text.includes("haze")) return "text-zinc-300";
+  if (text.includes("sand") || text.includes("dust")) return "text-amber-300";
+  if (text.includes("ash") || text.includes("volcanic") || text.includes("smoke")) return "text-stone-300";
+  if (text.includes("ember") || text.includes("fire") || text.includes("inferno")) return "text-red-400";
+  if (text.includes("wind") || text.includes("breez") || text.includes("gust")) return "text-teal-300";
+  if (text.includes("cherry") || text.includes("blossom") || text.includes("petal")) return "text-pink-300";
+  if (text.includes("aurora") || text.includes("northern light")) return "text-fuchsia-300";
+  if (text.includes("cloud") || text.includes("overcast") || text.includes("grey") || text.includes("gray"))
+    return "text-zinc-300";
+  if (text.includes("clear") || text.includes("sunny") || text.includes("bright")) return "text-yellow-300";
+  if (text.includes("hot") || text.includes("swelter")) return "text-red-400";
+  if (text.includes("cold") || text.includes("freez")) return "text-sky-300";
+  return "text-sky-300";
+}
+
+function inferMonthIndexFromText(text: string) {
+  for (const [alias, index] of Object.entries(WORLD_MONTH_ALIASES)) {
+    if (new RegExp(`\\b${alias}\\.?\\b`, "i").test(text)) return index;
+  }
+  return -1;
+}
+
 export function getWorldAmbienceStyle(_state: GameState | null): CSSProperties {
   return {
     background: "var(--tracker-panel-section-background, color-mix(in srgb, var(--card) 6%, transparent))",

@@ -5,6 +5,7 @@ import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/rea
 import { api, ApiError } from "../lib/api-client";
 import type { Lorebook, LorebookEntry, LorebookFolder } from "@marinara-engine/shared";
 import { characterKeys } from "./use-characters";
+import { achievementKeys, trackAchievementEvent } from "./use-achievements";
 
 export const lorebookKeys = {
   all: ["lorebooks"] as const,
@@ -45,6 +46,9 @@ export function useCreateLorebook() {
     mutationFn: (data: Record<string, unknown>) => api.post<Lorebook>("/lorebooks", data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: lorebookKeys.all });
+      void trackAchievementEvent("library_changed")
+        .then(() => qc.invalidateQueries({ queryKey: achievementKeys.all }))
+        .catch(() => undefined);
     },
   });
 }

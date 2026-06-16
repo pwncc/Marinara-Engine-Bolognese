@@ -16,7 +16,7 @@ import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js
 import { createAgentsStorage } from "../services/storage/agents.storage.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { extractLeadingThinkingBlocks } from "../services/llm/inline-thinking.js";
-import { fitMessagesToContext, type ChatMessage, type ChatOptions } from "../services/llm/base-provider.js";
+import { type ChatMessage, type ChatOptions } from "../services/llm/base-provider.js";
 import { isDiceNotation, rollDice } from "../services/game/dice.service.js";
 import { parseGameJsonish } from "../services/game/jsonish.js";
 import { validateTransition } from "../services/game/state-machine.service.js";
@@ -28,10 +28,7 @@ import {
   type GmPromptContext,
 } from "../services/game/gm-prompts.js";
 import { buildPartySystemPrompt } from "../services/game/party-prompts.js";
-import {
-  buildPromptMacroContext,
-  resolveMacrosWithVariableSnapshot,
-} from "../services/prompt/index.js";
+import { buildPromptMacroContext, resolveMacrosWithVariableSnapshot } from "../services/prompt/index.js";
 import { listPartySprites, readPreferredFullBodySpriteBase64 } from "../services/game/sprite.service.js";
 import {
   buildSceneAnalyzerSystemPrompt,
@@ -101,6 +98,11 @@ import {
   serializeResolvedSkillCheckTag,
 } from "@marinara-engine/shared";
 import { mergeCustomParameters } from "./generate/generate-route-utils.js";
+import {
+  fitMessagesToModelAccessContext,
+  resolveModelAccessPolicy,
+  type ModelAccessPolicy,
+} from "../services/generation/model-access-policy.js";
 import { postToDiscordWebhook } from "../services/discord-webhook.js";
 import { isDebugAgentsEnabled } from "../config/runtime-config.js";
 import type {
@@ -1380,6 +1382,22 @@ function gameGenOptions(
   parameters: StoredGenerationParameters | null = null,
   provider?: APIProvider | string | null,
 ): ChatOptions {
+  const { suppressModelParameters } = resolveModelAccessPolicy({ provider, model });
+  if (suppressModelParameters) {
+    const customParameters = mergeCustomParameters(parameters?.customParameters, overrides.customParameters);
+    const stripped: ChatOptions = {
+      model,
+      suppressModelParameters: true,
+    };
+    if (overrides.stream !== undefined) stripped.stream = overrides.stream;
+    if (overrides.onToken) stripped.onToken = overrides.onToken;
+    if (overrides.onThinking) stripped.onThinking = overrides.onThinking;
+    if (overrides.onResponseParts) stripped.onResponseParts = overrides.onResponseParts;
+    if (overrides.signal) stripped.signal = overrides.signal;
+    if (Object.keys(customParameters).length > 0) stripped.customParameters = customParameters;
+    return stripped;
+  }
+
   const m = model.toLowerCase();
   const providerLower = (provider ?? "").toLowerCase();
   // Claude adaptive-only models and GPT-5.4/5.5 accept the strongest reasoning tier
@@ -1579,7 +1597,7 @@ function fitSessionConclusionMessages(args: {
   currentMorale: number;
   currentCards: Array<Record<string, unknown>>;
   nextSessionRequest?: string | null;
-  maxContext: number;
+  modelAccessPolicy: ModelAccessPolicy;
   maxTokens?: number;
 }): { messages: ChatMessage[]; transcriptTruncated: boolean } {
   let transcriptText = args.transcriptText;
@@ -1599,7 +1617,11 @@ function fitSessionConclusionMessages(args: {
     currentCards: args.currentCards,
     nextSessionRequest: args.nextSessionRequest,
   });
-  let fit = fitMessagesToContext(conclusionMessages, { maxContext: args.maxContext, maxTokens: args.maxTokens });
+  let fit = fitMessagesToModelAccessContext({
+    messages: conclusionMessages,
+    policy: args.modelAccessPolicy,
+    maxTokens: args.maxTokens,
+  });
   let guard = 0;
 
   while (fit.trimmed && guard < 8 && Array.from(transcriptText).length > SESSION_SUMMARY_MIN_TRANSCRIPT_CHARS) {
@@ -1631,7 +1653,11 @@ function fitSessionConclusionMessages(args: {
       currentCards: args.currentCards,
       nextSessionRequest: args.nextSessionRequest,
     });
-    fit = fitMessagesToContext(conclusionMessages, { maxContext: args.maxContext, maxTokens: args.maxTokens });
+    fit = fitMessagesToModelAccessContext({
+      messages: conclusionMessages,
+      policy: args.modelAccessPolicy,
+      maxTokens: args.maxTokens,
+    });
   }
 
   return {
@@ -2111,6 +2137,11 @@ async function runGameLorebookKeeperAfterConclusion(args: {
       generationParameters,
       conn.provider,
     );
+    const modelAccessPolicy = resolveModelAccessPolicy({
+      provider: conn.provider,
+      model: conn.model,
+      maxContext: conn.maxContext,
+    });
 
     const messages = await chats.listMessages(args.chatId);
     const partyNames = await resolveGameLorebookKeeperPartyNames(args.app, chat, meta, setupConfig);
@@ -2128,8 +2159,9 @@ async function runGameLorebookKeeperAfterConclusion(args: {
       existingEntries,
       transcriptText: formatGameLorebookKeeperTranscript(messages, meta),
     });
-    const fitted = fitMessagesToContext(keeperMessages, {
-      maxContext: conn.maxContext,
+    const fitted = fitMessagesToModelAccessContext({
+      messages: keeperMessages,
+      policy: modelAccessPolicy,
       maxTokens: options.maxTokens,
     });
 
@@ -3879,6 +3911,11 @@ export async function gameRoutes(app: FastifyInstance) {
       chat.connectionId,
     );
     const conclusionGenerationParameters = resolveStoredGameGenerationParameters(meta, defaultGenerationParameters);
+    const modelAccessPolicy = resolveModelAccessPolicy({
+      provider: conn.provider,
+      model: conn.model,
+      maxContext: conn.maxContext,
+    });
     const provider = createLLMProvider(
       conn.provider,
       baseUrl,
@@ -3912,7 +3949,7 @@ export async function gameRoutes(app: FastifyInstance) {
       currentMorale,
       currentCards,
       nextSessionRequest: trimmedNextSessionRequest || null,
-      maxContext: conn.maxContext,
+      modelAccessPolicy,
       maxTokens: conclusionOptions.maxTokens,
     });
     if (transcriptTruncated) {
@@ -4250,6 +4287,11 @@ export async function gameRoutes(app: FastifyInstance) {
       chat.connectionId,
     );
     const conclusionGenerationParameters = resolveStoredGameGenerationParameters(meta, defaultGenerationParameters);
+    const modelAccessPolicy = resolveModelAccessPolicy({
+      provider: conn.provider,
+      model: conn.model,
+      maxContext: conn.maxContext,
+    });
     const provider = createLLMProvider(
       conn.provider,
       baseUrl,
@@ -4282,7 +4324,7 @@ export async function gameRoutes(app: FastifyInstance) {
       currentMorale,
       currentCards,
       nextSessionRequest: existingNextSessionRequest,
-      maxContext: conn.maxContext,
+      modelAccessPolicy,
       maxTokens: conclusionOptions.maxTokens,
     });
     if (transcriptTruncated) {
@@ -4516,6 +4558,11 @@ export async function gameRoutes(app: FastifyInstance) {
       progressionGenerationParameters,
       conn.provider,
     );
+    const modelAccessPolicy = resolveModelAccessPolicy({
+      provider: conn.provider,
+      model: conn.model,
+      maxContext: conn.maxContext,
+    });
     const userLines = [
       `Session ${sessionNumber} journal recap:`,
       journalRecap,
@@ -4544,8 +4591,9 @@ export async function gameRoutes(app: FastifyInstance) {
       { role: "system", content: buildCampaignProgressionPrompt(setupConfig?.language ?? null) },
       { role: "user", content: userLines.join("\n") },
     ];
-    const fit = fitMessagesToContext(progressionMessages, {
-      maxContext: conn.maxContext,
+    const fit = fitMessagesToModelAccessContext({
+      messages: progressionMessages,
+      policy: modelAccessPolicy,
       maxTokens: progressionOptions.maxTokens,
     });
     if (fit.trimmed) {

@@ -41,6 +41,7 @@ export type UserStatus = "active" | "idle" | "dnd";
 export type RoleplayAvatarStyle = "none" | "circles" | "rectangles" | "panel";
 export type GameDialogueDisplayMode = "classic" | "stacked";
 export type SummaryPopoverSourceMode = "last" | "range";
+export const DEFAULT_ROLEPLAY_BACKGROUND_URL = "/api/backgrounds/file/Black.jpg";
 export interface FloatingWidgetPosition {
   x: number;
   y: number;
@@ -241,6 +242,15 @@ function normalizeTrackerPanelBackgroundColor(value: unknown) {
   return value.trim() || TRACKER_PANEL_DEFAULT_BACKGROUND_COLOR;
 }
 
+function normalizeDefaultRoleplayBackground(value: unknown) {
+  if (typeof value !== "string") return DEFAULT_ROLEPLAY_BACKGROUND_URL;
+  const trimmed = value.trim();
+  if (!trimmed) return DEFAULT_ROLEPLAY_BACKGROUND_URL;
+  if (trimmed.startsWith("/api/backgrounds/file/")) return trimmed;
+  if (trimmed.startsWith("/") || /^(https?:|data:|blob:)/i.test(trimmed)) return trimmed;
+  return `/api/backgrounds/file/${encodeURIComponent(trimmed)}`;
+}
+
 function normalizeLearnedGameSetupOption(value: unknown) {
   if (typeof value !== "string") return "";
   return value.replace(/\s+/g, " ").trim().slice(0, 160);
@@ -320,6 +330,8 @@ interface UIState {
   theme: "dark" | "light";
   appAccentColor: string;
   chatBackground: string | null;
+  /** Default background applied when a Roleplay chat has no saved background yet. */
+  defaultRoleplayBackground: string;
   /** Native blur applied to selected chat/game background images, in px. */
   chatBackgroundBlur: number;
   /** When set, the main area shows the full-page character editor instead of chat */
@@ -413,6 +425,8 @@ interface UIState {
   speechToTextEnabled: boolean;
   /** When true, allow the rare Chibi Professor Mari scroll toast. */
   chibiProfessorMariEnabled: boolean;
+  /** When true, achievements appear on Home and announce unlocks. Backend tracking stays silent either way. */
+  achievementsEnabled: boolean;
   /** When true, show the global Music Player surface. */
   musicPlayerEnabled: boolean;
   /** Which Music Player surface to show. */
@@ -583,6 +597,7 @@ interface UIState {
   setTheme: (theme: "dark" | "light") => void;
   setAppAccentColor: (color: string) => void;
   setChatBackground: (url: string | null) => void;
+  setDefaultRoleplayBackground: (url: string) => void;
   setChatBackgroundBlur: (v: number) => void;
   setCharacterLibrarySelectedId: (id: string | null) => void;
   openCharacterDetail: (id: string, options?: { preserveCharacterLibrary?: boolean }) => void;
@@ -653,6 +668,7 @@ interface UIState {
   setTrimIncompleteModelOutput: (v: boolean) => void;
   setSpeechToTextEnabled: (v: boolean) => void;
   setChibiProfessorMariEnabled: (v: boolean) => void;
+  setAchievementsEnabled: (v: boolean) => void;
   setMusicPlayerEnabled: (v: boolean) => void;
   setMusicPlayerSource: (v: MusicPlayerSource) => void;
   setSpotifyPlayerEnabled: (v: boolean) => void;
@@ -767,6 +783,7 @@ export function pickSyncedSettings(state: UIState) {
     theme: state.theme,
     appAccentColor: state.appAccentColor,
     chatBackground: state.chatBackground,
+    defaultRoleplayBackground: state.defaultRoleplayBackground,
     chatBackgroundBlur: state.chatBackgroundBlur,
     language: state.language,
     fontFamily: state.fontFamily,
@@ -806,6 +823,7 @@ export function pickSyncedSettings(state: UIState) {
     trimIncompleteModelOutput: state.trimIncompleteModelOutput,
     speechToTextEnabled: state.speechToTextEnabled,
     chibiProfessorMariEnabled: state.chibiProfessorMariEnabled,
+    achievementsEnabled: state.achievementsEnabled,
     musicPlayerEnabled: state.musicPlayerEnabled,
     musicPlayerSource: state.musicPlayerSource,
     spotifyPlayerEnabled: state.spotifyPlayerEnabled,
@@ -888,6 +906,7 @@ export const useUIStore = create<UIState>()(
       theme: "dark" as const,
       appAccentColor: "",
       chatBackground: null,
+      defaultRoleplayBackground: DEFAULT_ROLEPLAY_BACKGROUND_URL,
       chatBackgroundBlur: 0,
       characterDetailId: null,
       lorebookDetailId: null,
@@ -946,6 +965,7 @@ export const useUIStore = create<UIState>()(
       trimIncompleteModelOutput: false,
       speechToTextEnabled: false,
       chibiProfessorMariEnabled: true,
+      achievementsEnabled: true,
       musicPlayerEnabled: true,
       musicPlayerSource: "youtube" as MusicPlayerSource,
       spotifyPlayerEnabled: false,
@@ -1082,6 +1102,7 @@ export const useUIStore = create<UIState>()(
       setTheme: (theme) => set({ theme }),
       setAppAccentColor: (color) => set({ appAccentColor: normalizeAppAccentColor(color) }),
       setChatBackground: (url) => set({ chatBackground: url }),
+      setDefaultRoleplayBackground: (url) => set({ defaultRoleplayBackground: normalizeDefaultRoleplayBackground(url) }),
       setChatBackgroundBlur: (v) => set({ chatBackgroundBlur: Math.max(0, Math.min(24, Math.round(v))) }),
       setCharacterLibrarySelectedId: (id) => set({ characterLibrarySelectedId: id }),
       openCharacterDetail: (id, options) =>
@@ -1418,6 +1439,7 @@ export const useUIStore = create<UIState>()(
       setTrimIncompleteModelOutput: (v) => set({ trimIncompleteModelOutput: v }),
       setSpeechToTextEnabled: (v) => set({ speechToTextEnabled: v }),
       setChibiProfessorMariEnabled: (v) => set({ chibiProfessorMariEnabled: v }),
+      setAchievementsEnabled: (v) => set({ achievementsEnabled: v }),
       setMusicPlayerEnabled: (v) =>
         set((state) => ({
           musicPlayerEnabled: v,
@@ -1566,7 +1588,7 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: "marinara-engine-ui",
-      version: 49,
+      version: 51,
       // Debounce localStorage writes to avoid sync I/O on every state change
       storage: createJSONStorage(() => {
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -1949,6 +1971,12 @@ export const useUIStore = create<UIState>()(
         if (version <= 48 && !Array.isArray(persisted.recentUserActivities)) {
           persisted.recentUserActivities = [];
         }
+        if (version <= 49 && persisted.defaultRoleplayBackground === undefined) {
+          persisted.defaultRoleplayBackground = DEFAULT_ROLEPLAY_BACKGROUND_URL;
+        }
+        if (version <= 50 && persisted.achievementsEnabled === undefined) {
+          persisted.achievementsEnabled = true;
+        }
         if (Array.isArray(persisted.recentUserActivities)) {
           persisted.recentUserActivities = persisted.recentUserActivities
             .filter((activity: unknown): activity is string => typeof activity === "string")
@@ -1960,6 +1988,7 @@ export const useUIStore = create<UIState>()(
         }
         persisted.appAccentColor = normalizeAppAccentColor(persisted.appAccentColor);
         persisted.chatChromeTextColor = normalizeChatChromeTextColor(persisted.chatChromeTextColor);
+        persisted.defaultRoleplayBackground = normalizeDefaultRoleplayBackground(persisted.defaultRoleplayBackground);
         delete persisted.trackerPanelWidth;
         return persisted;
       },
@@ -1982,6 +2011,7 @@ export const useUIStore = create<UIState>()(
         theme: state.theme,
         appAccentColor: state.appAccentColor,
         chatBackground: state.chatBackground,
+        defaultRoleplayBackground: state.defaultRoleplayBackground,
         chatBackgroundBlur: state.chatBackgroundBlur,
         fontSize: state.fontSize,
         language: state.language,
@@ -2024,6 +2054,7 @@ export const useUIStore = create<UIState>()(
         trimIncompleteModelOutput: state.trimIncompleteModelOutput,
         speechToTextEnabled: state.speechToTextEnabled,
         chibiProfessorMariEnabled: state.chibiProfessorMariEnabled,
+        achievementsEnabled: state.achievementsEnabled,
         musicPlayerEnabled: state.musicPlayerEnabled,
         musicPlayerSource: state.musicPlayerSource,
         spotifyPlayerEnabled: state.spotifyPlayerEnabled,

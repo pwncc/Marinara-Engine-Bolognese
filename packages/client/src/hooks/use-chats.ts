@@ -11,6 +11,7 @@ import { useUIStore } from "../stores/ui.store";
 import { clearBrowserRuntimeCaches } from "../lib/browser-runtime";
 import { ApiError } from "../lib/api-client";
 import { lorebookKeys } from "./use-lorebooks";
+import { achievementKeys, trackAchievementEvent } from "./use-achievements";
 import type {
   Chat,
   ChatMemoryChunk,
@@ -150,6 +151,7 @@ export function useChats() {
   return useQuery({
     queryKey: chatKeys.list(),
     queryFn: () => api.get<Chat[]>("/chats"),
+    placeholderData: (previousData) => previousData,
     staleTime: 10_000,
     refetchOnMount: "always",
     refetchOnReconnect: true,
@@ -362,6 +364,9 @@ export function useCreateChat() {
         qc.setQueryData<Chat[]>(chatKeys.list(), (existing) => upsertCachedChat(existing, chat));
       }
       qc.invalidateQueries({ queryKey: chatKeys.list() });
+      void trackAchievementEvent("chat_created")
+        .then(() => qc.invalidateQueries({ queryKey: achievementKeys.all }))
+        .catch(() => undefined);
     },
   });
 }

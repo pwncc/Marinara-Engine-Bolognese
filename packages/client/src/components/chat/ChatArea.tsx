@@ -60,6 +60,7 @@ import { useEncounterStore } from "../../stores/encounter.store";
 import { useTranslationStore } from "../../stores/translation.store";
 import { ttsService } from "../../lib/tts-service";
 import { useTTSConfig } from "../../hooks/use-tts";
+import { useTrackAchievement } from "../../hooks/use-achievements";
 import { buildTTSVoiceRequests, normalizeTTSCharacterName, withTTSVoiceRequestCacheKeys } from "../../lib/tts-dialogue";
 import { CHAT_SCROLL_TO_BOTTOM_EVENT, type ChatScrollToBottomDetail } from "../../lib/chat-scroll-events";
 import { mirrorSpritePlacements, normalizeSpritePlacements } from "./sprite-placement";
@@ -74,6 +75,7 @@ import type {
 import { RecentChats } from "./RecentChats";
 import { HomeCreditsModal } from "./HomeCreditsModal";
 import { HomeProfessorMariChat } from "./HomeProfessorMariChat";
+import { HomeAchievements } from "./HomeAchievements";
 import { NewChatConnectionGate } from "./NewChatConnectionGate";
 import { ChatCommonOverlays } from "./ChatCommonOverlays";
 import { CreatorNotesCssInjector, type CardCssMode } from "./CreatorNotesCssInjector";
@@ -249,6 +251,7 @@ export function ChatArea() {
   const [agentInjectionReview, setAgentInjectionReview] = useState<AgentInjectionReviewRequest | null>(null);
   const [agentInjectionDrafts, setAgentInjectionDrafts] = useState<Record<string, string>>({});
   const [creditsOpen, setCreditsOpen] = useState(false);
+  const trackAchievement = useTrackAchievement();
 
   // Delete dialog & multi-select state
   const [deleteDialogMessageId, setDeleteDialogMessageId] = useState<string | null>(null);
@@ -606,7 +609,9 @@ export function ChatArea() {
   });
   useEffect(() => {
     if (!chat?.id) return;
-    const restoredUrl = chatBackgroundMetadataToUrl(chatMeta.background);
+    const savedUrl = chatBackgroundMetadataToUrl(chatMeta.background);
+    const restoredUrl =
+      savedUrl ?? (chat.mode === "roleplay" ? useUIStore.getState().defaultRoleplayBackground : null);
     restoredChatBackgroundRef.current = { chatId: chat.id, url: restoredUrl, isSyncing: true };
     useUIStore.getState().setChatBackground(restoredUrl);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1765,13 +1770,15 @@ export function ChatArea() {
             </div>
 
             <div className="text-center">
-              <h3 className="retro-glow-text text-base sm:text-xl font-bold tracking-tight">✧ Marinara Engine ✧</h3>
+              <h3 className="retro-glow-text text-base sm:text-xl font-bold tracking-tight">Marinara Engine</h3>
             </div>
 
             {/* Recent Chats */}
             <RecentChats />
 
             <HomeProfessorMariChat pageActive={isPageActive} />
+
+            <HomeAchievements />
 
             <div
               className={cn(
@@ -1822,6 +1829,7 @@ export function ChatArea() {
                   href="https://discord.com/invite/KdAkTg94ME"
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={() => trackAchievement.mutate("discord_clicked")}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/60 px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-all hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
                 >
                   <svg width="0.875rem" height="0.875rem" viewBox="0 0 24 24" fill="currentColor">
@@ -1833,6 +1841,7 @@ export function ChatArea() {
                   href="https://ko-fi.com/marinara_spaghetti"
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={() => trackAchievement.mutate("kofi_clicked")}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/60 px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-all hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
                 >
                   <svg width="0.875rem" height="0.875rem" viewBox="0 0 24 24" fill="currentColor">
@@ -1842,7 +1851,10 @@ export function ChatArea() {
                 </a>
                 <button
                   type="button"
-                  onClick={() => setCreditsOpen(true)}
+                  onClick={() => {
+                    setCreditsOpen(true);
+                    trackAchievement.mutate("credits_viewed");
+                  }}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/60 px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-all hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
                 >
                   <List size="0.875rem" />

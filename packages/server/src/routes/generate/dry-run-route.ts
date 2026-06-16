@@ -1,13 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import {
-  findKnownModel,
   LOCAL_SIDECAR_CONNECTION_ID,
   isClaudeAdaptiveOnlyNoSamplingModel,
   formatCustomTrackerFieldForPrompt,
   supportsXhighReasoningEffort,
   resolveMacros,
   stripMacroComments,
-  type APIProvider,
   type LorebookEntryTimingState,
 } from "@marinara-engine/shared";
 import { randomUUID } from "crypto";
@@ -32,7 +30,13 @@ import {
 } from "../../services/prompt/index.js";
 import { mergeAdjacentMessages } from "../../services/prompt/merger.js";
 import { wrapContent } from "../../services/prompt/format-engine.js";
-import { fitMessagesToContext, type BaseLLMProvider, type ChatMessage } from "../../services/llm/base-provider.js";
+import { type BaseLLMProvider, type ChatMessage } from "../../services/llm/base-provider.js";
+import {
+  fitMessagesForModelAccess,
+  mergeModelContextLimit,
+  resolveModelAccessPolicy,
+  resolveStoredModelContextLimit,
+} from "../../services/generation/model-access-policy.js";
 import { applyAllSegmentEdits } from "../../services/game/segment-edits.js";
 import { applyRegexScriptsToPromptMessages } from "../../services/regex/regex-application.js";
 import { sendSseEvent, startSseReply } from "./sse.js";
@@ -296,8 +300,7 @@ function wrapConversationHistoryAndLastMessageInPlace(
   const historyIndexes = messages
     .map((message, index) => (message.contextKind === "history" ? index : -1))
     .filter((index) => index >= 0);
-  const convoStart =
-    historyIndexes[0] ?? messages.findIndex((m) => m.role === "user" || m.role === "assistant");
+  const convoStart = historyIndexes[0] ?? messages.findIndex((m) => m.role === "user" || m.role === "assistant");
   if (convoStart < 0 || lastNonInstructionIdx < convoStart) return messages;
 
   const convoEnd = (() => {
@@ -477,20 +480,6 @@ function normalizeChatTopP(value: unknown): number | undefined {
   return Math.min(value, 1);
 }
 
-function normalizeMaxContext(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
-  return Math.floor(value);
-}
-
-function minContextLimit(...limits: Array<number | undefined>): number | undefined {
-  let resolved: number | undefined;
-  for (const limit of limits) {
-    if (limit === undefined) continue;
-    resolved = resolved === undefined ? limit : Math.min(resolved, limit);
-  }
-  return resolved;
-}
-
 export async function registerDryRunRoute(app: FastifyInstance) {
   const chats = createChatsStorage(app.db);
   const connections = createConnectionsStorage(app.db);
@@ -600,8 +589,12 @@ export async function registerDryRunRoute(app: FastifyInstance) {
     if (!baseUrl) return reply.status(400).send({ error: "No base URL configured for this connection" });
 
     const chatMeta = parseExtra(chat.metadata) as Record<string, unknown>;
-    const connectionMaxContext = normalizeMaxContext(conn.maxContext);
-    const knownModelContext = normalizeMaxContext(findKnownModel(conn.provider as APIProvider, conn.model)?.context);
+    const modelAccessPolicy = resolveModelAccessPolicy({
+      provider: conn.provider,
+      model: conn.model,
+      maxContext: conn.maxContext,
+    });
+    const { suppressModelParameters, connectionMaxContext } = modelAccessPolicy;
 
     // Minimal, safe parameter defaults (still allow chat-level overrides)
     let temperature: number | undefined = 1;
@@ -616,7 +609,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
     let serviceTier: "flex" | "priority" | null = null;
     let assistantPrefill = "";
     let customParameters: Record<string, unknown> = {};
-    let effectiveMaxContext = minContextLimit(connectionMaxContext, knownModelContext);
+    let effectiveMaxContext = modelAccessPolicy.effectiveMaxContext;
 
     const connectionParams = parseStoredGenerationParameters(conn.defaultParameters);
     const chatParams = parseStoredGenerationParameters(chatMeta.chatParameters);
@@ -635,8 +628,11 @@ export async function registerDryRunRoute(app: FastifyInstance) {
       if (typeof params.assistantPrefill === "string") assistantPrefill = params.assistantPrefill;
       customParameters = mergeCustomParameters(customParameters, params.customParameters);
 
-      const paramsMaxContext = params.useMaxContext ? knownModelContext : normalizeMaxContext(params.maxContext);
-      effectiveMaxContext = minContextLimit(effectiveMaxContext, paramsMaxContext);
+      effectiveMaxContext = mergeModelContextLimit(
+        modelAccessPolicy,
+        effectiveMaxContext,
+        resolveStoredModelContextLimit(modelAccessPolicy, params),
+      );
     };
 
     // Pull existing messages, apply the same conversation-start + context limit filtering
@@ -1291,10 +1287,11 @@ export async function registerDryRunRoute(app: FastifyInstance) {
       assistantPrefill = assembled.parameters.assistantPrefill ?? "";
       customParameters = mergeCustomParameters(customParameters, assembled.parameters.customParameters);
 
-      const presetMaxContext = assembled.parameters.useMaxContext
-        ? knownModelContext
-        : normalizeMaxContext(assembled.parameters.maxContext);
-      effectiveMaxContext = minContextLimit(effectiveMaxContext, presetMaxContext);
+      effectiveMaxContext = mergeModelContextLimit(
+        modelAccessPolicy,
+        effectiveMaxContext,
+        resolveStoredModelContextLimit(modelAccessPolicy, assembled.parameters),
+      );
     }
 
     applyParameterOverrides(connectionParams);
@@ -1542,13 +1539,13 @@ export async function registerDryRunRoute(app: FastifyInstance) {
       return mergeAdjacentMessages(converted as any) as ChatMessage[];
     };
 
-    const fit = fitMessagesToContext(
-      toProviderMessages(finalMessages as any),
-      { maxContext: effectiveMaxContext, maxTokens },
-      connectionMaxContext,
-    );
+    const fit = fitMessagesForModelAccess({
+      messages: toProviderMessages(finalMessages as any),
+      policy: { ...modelAccessPolicy, effectiveMaxContext },
+      maxTokens,
+    });
     const providerMessages = prepareProviderMessages(fit.messages);
-    const maxTokensForSend = fit.maxTokens ?? maxTokens;
+    const maxTokensForSend = fit.maxTokensForSend;
 
     // Prompt preview mode: return the exact prompt shape that would be sent.
     if (returnPrompt) {
@@ -1565,20 +1562,21 @@ export async function registerDryRunRoute(app: FastifyInstance) {
         parameters: {
           provider: conn.provider,
           model: conn.model,
-          temperature,
+          temperature: suppressModelParameters ? undefined : temperature,
           maxTokens: maxTokensForSend,
-          maxContext: effectiveMaxContext ?? connectionMaxContext,
-          topP,
-          topK: providerTopK,
-          frequencyPenalty: frequencyPenalty || undefined,
-          presencePenalty: presencePenalty || undefined,
-          enableThinking: enableThinking || undefined,
-          reasoningEffort: resolvedEffort || undefined,
-          verbosity: verbosity || undefined,
-          serviceTier: serviceTier || undefined,
+          maxContext: suppressModelParameters ? undefined : (effectiveMaxContext ?? connectionMaxContext),
+          topP: suppressModelParameters ? undefined : topP,
+          topK: suppressModelParameters ? undefined : providerTopK,
+          frequencyPenalty: suppressModelParameters ? undefined : frequencyPenalty || undefined,
+          presencePenalty: suppressModelParameters ? undefined : presencePenalty || undefined,
+          enableThinking: suppressModelParameters ? undefined : enableThinking || undefined,
+          reasoningEffort: suppressModelParameters ? undefined : resolvedEffort || undefined,
+          verbosity: suppressModelParameters ? undefined : verbosity || undefined,
+          serviceTier: suppressModelParameters ? undefined : serviceTier || undefined,
           showThoughts: showThoughts || undefined,
           assistantPrefill: assistantPrefill || undefined,
           customParameters: Object.keys(customParameters).length > 0 ? customParameters : undefined,
+          suppressModelParameters: suppressModelParameters || undefined,
         },
       });
     }
@@ -1625,7 +1623,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
           model: conn.model,
           temperature,
           maxTokens: maxTokensForSend,
-          maxContext: effectiveMaxContext ?? connectionMaxContext,
+          maxContext: suppressModelParameters ? undefined : (effectiveMaxContext ?? connectionMaxContext),
           topP,
           topK: providerTopK,
           frequencyPenalty: frequencyPenalty || undefined,
@@ -1635,6 +1633,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
           verbosity: verbosity ?? undefined,
           serviceTier,
           customParameters,
+          suppressModelParameters,
           onToken,
           signal: abortController.signal,
         });
@@ -1686,7 +1685,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
         model: conn.model,
         temperature,
         maxTokens: maxTokensForSend,
-        maxContext: effectiveMaxContext ?? connectionMaxContext,
+        maxContext: suppressModelParameters ? undefined : (effectiveMaxContext ?? connectionMaxContext),
         topP,
         topK: providerTopK,
         frequencyPenalty: frequencyPenalty || undefined,
@@ -1696,6 +1695,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
         verbosity: verbosity ?? undefined,
         serviceTier,
         customParameters,
+        suppressModelParameters,
         signal: abortController.signal,
       });
 

@@ -1,18 +1,7 @@
 // ──────────────────────────────────────────────
 // Layout: Top Bar (polished, with hover glow)
 // ──────────────────────────────────────────────
-import {
-  MessageSquareText,
-  Home,
-  Settings,
-  Link,
-  BookOpen,
-  Users,
-  Sparkles,
-  FileText,
-  User,
-  Bot,
-} from "lucide-react";
+import { MessageSquareText, Home, Settings, Link, BookOpen, Users, Sparkles, FileText, User, Bot } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useUIStore } from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
@@ -143,6 +132,7 @@ export function TopBar() {
         {/* Browser */}
         <button
           onClick={() => toggleRightPanel("bot-browser")}
+          data-tour="panel-bot-browser"
           className={cn(
             "relative rounded-lg p-2 transition-all duration-200 max-sm:p-1.5",
             isBotBrowserActive
@@ -159,6 +149,7 @@ export function TopBar() {
 
         <button
           onClick={() => toggleRightPanel("characters")}
+          data-tour="panel-characters"
           className={cn(
             "relative rounded-lg p-2 transition-all duration-200 max-sm:p-1.5",
             isCharactersPanelActive
@@ -179,6 +170,7 @@ export function TopBar() {
             <button
               key={panel}
               onClick={() => toggleRightPanel(panel)}
+              data-tour={`panel-${panel}`}
               className={cn(
                 "relative rounded-lg p-2 transition-all duration-200 max-sm:p-1.5",
                 isActive
@@ -206,6 +198,7 @@ export function TopBar() {
         {/* Settings */}
         <button
           onClick={() => toggleRightPanel("settings")}
+          data-tour="panel-settings"
           className={cn(
             "relative rounded-lg p-2 transition-all duration-200 max-sm:p-1.5",
             rightPanelOpen && rightPanel === "settings"

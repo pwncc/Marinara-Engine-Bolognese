@@ -1275,6 +1275,9 @@ interface CombinedWorldPanelProps {
   onSaveTemperature: (v: string) => void;
   weatherEmoji: string;
   pinColor: string;
+  dateColor: string;
+  timeColor: string;
+  weatherColor: string;
   tempColor: string;
   onClose: () => void;
   onRerunSingleTracker?: (agentType: string) => void;
@@ -1294,6 +1297,9 @@ export function CombinedWorldPanel({
   onSaveTemperature,
   weatherEmoji,
   pinColor,
+  dateColor,
+  timeColor,
+  weatherColor,
   tempColor,
   onClose,
   onRerunSingleTracker,
@@ -1339,7 +1345,7 @@ export function CombinedWorldPanel({
           onToggleLock={locationLock.onToggle}
         />
         <WorldFieldRow
-          icon={<CalendarDays size="0.8125rem" className="text-[var(--muted-foreground)]" />}
+          icon={<CalendarDays size="0.8125rem" className={dateColor} />}
           label="Date"
           value={date}
           onSave={onSaveDate}
@@ -1348,7 +1354,7 @@ export function CombinedWorldPanel({
           onToggleLock={dateLock.onToggle}
         />
         <WorldFieldRow
-          icon={<Clock size="0.8125rem" className="text-amber-400" />}
+          icon={<Clock size="0.8125rem" className={timeColor} />}
           label="Time"
           value={time}
           onSave={onSaveTime}
@@ -1357,7 +1363,13 @@ export function CombinedWorldPanel({
           onToggleLock={timeLock.onToggle}
         />
         <WorldFieldRow
-          icon={<span className="text-sm leading-none">{weatherEmoji}</span>}
+          icon={
+            <span
+              className={cn("text-sm leading-none drop-shadow-sm [text-shadow:0_0_8px_currentColor]", weatherColor)}
+            >
+              {weatherEmoji}
+            </span>
+          }
           label="Weather"
           value={weather}
           onSave={onSaveWeather}
