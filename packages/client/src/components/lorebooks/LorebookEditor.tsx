@@ -2001,23 +2001,25 @@ export function LorebookEditor() {
                   <div className="space-y-3">
                     {/* Folder block — nested tree (folders may contain sub-folders) */}
                     {folders.length > 0 && (
-                      <div className="space-y-1.5">
-                        {/* Un-nest target: drop a nested folder here to lift it back to top level. */}
-                        {draggingFolderIdx !== null && folders[draggingFolderIdx]?.parentFolderId != null && (
-                          <div
-                            onDragOver={handleFolderRootDragOver}
-                            onDragLeave={() => setFolderRootDropActive(false)}
-                            onDrop={commitFolderRootDrop}
-                            className={cn(
-                              "rounded-lg border border-dashed px-2 py-1.5 text-center text-[0.625rem] italic transition-colors",
-                              folderRootDropActive
-                                ? "border-amber-400 bg-amber-400/10 text-amber-200"
-                                : "border-[var(--border)] text-[var(--muted-foreground)]",
-                            )}
-                          >
-                            Drop here to move to the top level
-                          </div>
+                      // The folder list is itself the "move to top level" drop zone for a
+                      // nested folder (its padding + the gaps between roots). It must NOT
+                      // appear/disappear on drag start: inserting a strip here shifted the
+                      // layout the instant a nested drag began, which cancels the drag in
+                      // Chrome and made sub-folders impossible to pick up. So the target is
+                      // always present and only its highlight changes.
+                      <div
+                        className={cn(
+                          "space-y-1.5 rounded-lg py-1 transition-colors",
+                          folderRootDropActive && "bg-amber-400/5 ring-1 ring-amber-400/40",
                         )}
+                        onDragOver={(e) => {
+                          if (draggingFolderIdx !== null) handleFolderRootDragOver(e);
+                        }}
+                        onDragLeave={() => setFolderRootDropActive(false)}
+                        onDrop={(e) => {
+                          if (draggingFolderIdx !== null) commitFolderRootDrop(e);
+                        }}
+                      >
                         {folderForest.roots.map((folder) => renderFolder(folder))}
                       </div>
                     )}
