@@ -158,26 +158,29 @@ export function LorebookFolderRow({
     async (e: ReactMouseEvent) => {
       e.stopPropagation();
       const descendantCount = collectFolderSubtreeIds(folders, folder.id).length - 1;
-      if (descendantCount > 0) {
-        // Nested subfolders present — offer to delete the whole subtree, or (the
-        // default) just remove this folder and lift its contents up a level.
+      const hasSubfolders = descendantCount > 0;
+      // Any folder with content (subfolders and/or entries) offers a checkbox to
+      // delete that content too, instead of lifting it up to the top level.
+      if (hasSubfolders || entryCount > 0) {
         const { confirmed, checked } = await showConfirmWithCheckbox({
           title: "Delete Folder",
-          message: "Delete this folder? Its entries and subfolders move up to the top level.",
+          message: hasSubfolders
+            ? "Delete this folder? Its contents move up to the top level."
+            : `Delete this folder? Its ${entryCount} entr${entryCount === 1 ? "y" : "ies"} move up to the top level.`,
           confirmLabel: "Delete",
           tone: "destructive",
-          checkboxLabel: `Also delete the ${descendantCount} nested subfolder${descendantCount === 1 ? "" : "s"} and everything in them`,
+          checkboxLabel: hasSubfolders
+            ? `Also delete the ${descendantCount} nested subfolder${descendantCount === 1 ? "" : "s"} and everything inside`
+            : "Also delete everything in it",
         });
         if (!confirmed) return;
         deleteFolder.mutate({ lorebookId, folderId: folder.id, cascade: checked });
         return;
       }
+      // Empty folder — nothing to cascade.
       const confirmed = await showConfirmDialog({
         title: "Delete Folder",
-        message:
-          entryCount > 0
-            ? `Delete this folder? The ${entryCount} entr${entryCount === 1 ? "y" : "ies"} inside will be moved back to the root level.`
-            : "Delete this folder?",
+        message: "Delete this folder?",
         confirmLabel: "Delete",
         tone: "destructive",
       });
