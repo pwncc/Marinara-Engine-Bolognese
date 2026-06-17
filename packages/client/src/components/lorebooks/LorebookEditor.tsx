@@ -817,6 +817,25 @@ export function LorebookEditor() {
     [canReorderEntries, draggingEntryIdx, entriesByContainer],
   );
 
+  // Dragging a FOLDER over another folder's body nests it inside that folder, so
+  // the large body areas become valid drop targets (not just the thin headers).
+  const handleFolderBodyFolderDragOver = useCallback(
+    (folderId: string, e: ReactDragEvent<HTMLDivElement>) => {
+      if (!canReorderFolders || draggingFolderIdx === null) return;
+      const dragged = folders[draggingFolderIdx];
+      if (!dragged) return;
+      // Accept only a legal nest; otherwise let the event bubble so an ancestor
+      // body (or nothing) claims it, instead of showing a dead "no-drop" cursor.
+      if (dragged.parentFolderId === folderId || !canReparentFolder(folders, dragged.id, folderId).ok) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "move";
+      setFolderNestTargetId(folderId);
+      setFolderDropIdx(null);
+    },
+    [canReorderFolders, draggingFolderIdx, folders],
+  );
+
   const handleRootListDragOver = useCallback(
     (e: ReactDragEvent<HTMLDivElement>) => {
       if (!canReorderEntries || draggingEntryIdx === null) return;
@@ -1149,6 +1168,7 @@ export function LorebookEditor() {
     // Highlight this folder's body + indent rail while it's the live entry-drop
     // target, so the user can see which nesting level they're aiming at.
     const isEntryDropTarget = draggingEntryIdx !== null && dropTargetContainer === folder.id;
+    const isFolderNestTarget = draggingFolderIdx !== null && folderNestTargetId === folder.id;
     const showFolderDropBefore =
       folderDropIdx === fIdx &&
       draggingFolderIdx !== null &&
@@ -1197,12 +1217,16 @@ export function LorebookEditor() {
           <div
             className={cn(
               "ml-2 space-y-1.5 border-l pl-2 transition-colors sm:ml-3 sm:pl-2.5",
-              isEntryDropTarget ? "border-amber-400 bg-amber-400/5" : "border-[var(--border)]",
+              isEntryDropTarget || isFolderNestTarget ? "border-amber-400 bg-amber-400/5" : "border-[var(--border)]",
             )}
-            onDragOver={(e) => handleFolderBodyDragOver(folder.id, e)}
+            onDragOver={(e) => {
+              if (draggingEntryIdx !== null) handleFolderBodyDragOver(folder.id, e);
+              else handleFolderBodyFolderDragOver(folder.id, e);
+            }}
             onDrop={(e) => {
               e.stopPropagation();
-              commitEntryDrop(e);
+              if (draggingEntryIdx !== null) commitEntryDrop(e);
+              else commitFolderDrop(e);
             }}
           >
             {folderEntries.length === 0 && childFolders.length === 0 && (
