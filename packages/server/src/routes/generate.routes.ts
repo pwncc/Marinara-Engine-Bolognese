@@ -55,6 +55,8 @@ import { createGameStateStorage } from "../services/storage/game-state.storage.j
 import { createCustomToolsStorage } from "../services/storage/custom-tools.storage.js";
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
 import { createRegexScriptsStorage } from "../services/storage/regex-scripts.storage.js";
+import { createCustomEmojisStorage } from "../services/storage/custom-emojis.storage.js";
+import { createCharacterGalleryStorage } from "../services/storage/character-gallery.storage.js";
 import { applyRegexScriptsToPromptMessages } from "../services/regex/regex-application.js";
 import { createPromptOverridesStorage } from "../services/storage/prompt-overrides.storage.js";
 import { resolveConversationSelfieSystemPrompt } from "../services/conversation/selfie-prompt.js";
@@ -757,6 +759,44 @@ async function isConversationYoutubeCommandAvailable(storage: {
   return typeof settings.youtubeApiKey === "string" && settings.youtubeApiKey.trim().length > 0;
 }
 
+const CUSTOM_EMOJI_ADVERTISEMENT_GLOBAL_CAP = 25;
+const CUSTOM_EMOJI_ADVERTISEMENT_OWN_CAP = 25;
+
+/**
+ * Build the Conversation-mode system-prompt block that tells the responding
+ * character(s) which custom emojis they may use (`:name:`). A character gets the
+ * global pool plus its own gallery emojis, with its own listed first (weighted
+ * above global). Returns null when there are no custom emojis to advertise.
+ */
+function buildCustomEmojiAdvertisement(
+  responders: { charId: string; name: string }[],
+  globalNames: string[],
+  ownByChar: Map<string, string[]>,
+): string | null {
+  const global = globalNames.slice(0, CUSTOM_EMOJI_ADVERTISEMENT_GLOBAL_CAP);
+  const toTokens = (names: string[]) => names.map((name) => `:${name}:`).join(" ");
+  const lead =
+    "You can use custom emojis in your reply by writing their name between colons, e.g. :name: — they render as small inline images. Use them only where they fit naturally; do not overuse them.";
+
+  // Single responder (1:1 chats and individual-turn group mode): one merged list, own first.
+  if (responders.length === 1) {
+    const own = (ownByChar.get(responders[0]!.charId) ?? []).slice(0, CUSTOM_EMOJI_ADVERTISEMENT_OWN_CAP);
+    const merged = [...own, ...global.filter((name) => !own.includes(name))];
+    if (merged.length === 0) return null;
+    return `${lead}\nBeyond the full standard emoji set, you may use these custom emojis: ${toTokens(merged)}`;
+  }
+
+  // Multiple responders (merged group mode): shared global pool + each character's own.
+  const lines: string[] = [];
+  if (global.length > 0) lines.push(`Available to everyone: ${toTokens(global)}`);
+  for (const responder of responders) {
+    const own = (ownByChar.get(responder.charId) ?? []).slice(0, CUSTOM_EMOJI_ADVERTISEMENT_OWN_CAP);
+    if (own.length > 0) lines.push(`${responder.name} also has: ${toTokens(own)}`);
+  }
+  if (lines.length === 0) return null;
+  return `${lead}\nBeyond the full standard emoji set, these custom emojis are available (use by typing :name:):\n${lines.join("\n")}`;
+}
+
 export async function generateRoutes(app: FastifyInstance) {
   const isDebug = logger.isLevelEnabled("debug");
 
@@ -769,6 +809,8 @@ export async function generateRoutes(app: FastifyInstance) {
   const customToolsStore = createCustomToolsStorage(app.db);
   const lorebooksStore = createLorebooksStorage(app.db);
   const regexScriptsStore = createRegexScriptsStorage(app.db);
+  const customEmojisStore = createCustomEmojisStorage(app.db);
+  const characterGallery = createCharacterGalleryStorage(app.db);
 
   /**
    * In-memory cache for OpenAI Responses API encrypted reasoning items.
@@ -2333,6 +2375,25 @@ export async function generateRoutes(app: FastifyInstance) {
 
               conversationCommandsReminder = resolvePromptMacros(commandLines.join("\n"));
             }
+          }
+
+          // ── Custom emojis: advertise the available :name: emojis to the responding character(s) ──
+          if (chatMode === "conversation") {
+            const globalEmojiNames = (await customEmojisStore.list()).map((emoji) => emoji.name);
+            const ownEmojisByChar = new Map<string, string[]>();
+            for (const info of respondingConvoCharInfo) {
+              const images = await characterGallery.listByCharacterId(info.charId);
+              const names = images
+                .filter((img) => img.customKind === "emoji" && img.customName)
+                .map((img) => img.customName as string);
+              if (names.length > 0) ownEmojisByChar.set(info.charId, names);
+            }
+            const emojiAdvertisement = buildCustomEmojiAdvertisement(
+              respondingConvoCharInfo,
+              globalEmojiNames,
+              ownEmojisByChar,
+            );
+            if (emojiAdvertisement) conversationSystemPrompt += "\n\n" + emojiAdvertisement;
           }
 
           // ── Professor Mari: inject assistant knowledge & commands ──
