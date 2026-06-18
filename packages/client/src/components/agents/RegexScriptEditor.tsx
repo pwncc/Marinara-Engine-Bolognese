@@ -107,6 +107,7 @@ function parseCharacterData(value: unknown): Record<string, unknown> {
 // ═══════════════════════════════════════════════
 export function RegexScriptEditor() {
   const regexDetailId = useUIStore((s) => s.regexDetailId);
+  const regexDetailDefaultCharacterIds = useUIStore((s) => s.regexDetailDefaultCharacterIds);
   const closeRegexDetail = useUIStore((s) => s.closeRegexDetail);
   const openRegexDetail = useUIStore((s) => s.openRegexDetail);
 
@@ -206,8 +207,10 @@ export function RegexScriptEditor() {
       setLocalPlacement(["ai_output"]);
       setLocalFlags("gi");
       setLocalPromptOnly(false);
-      setLocalTargetCharacterIds([]);
-      setLocalCharacterScopeEnabled(false);
+      // Pre-scope when opened from a character's scoped-regex manager.
+      const defaultScope = regexDetailDefaultCharacterIds ?? [];
+      setLocalTargetCharacterIds(defaultScope);
+      setLocalCharacterScopeEnabled(defaultScope.length > 0);
       setLocalOrder(0);
       setLocalMinDepth(null);
       setLocalMaxDepth(null);
@@ -215,7 +218,7 @@ export function RegexScriptEditor() {
     setDirty(false);
     setSaveError(null);
     setTestInput("");
-  }, [regexDetailId, dbRow]);
+  }, [regexDetailId, dbRow, regexDetailDefaultCharacterIds]);
 
   // Regex validity check
   const regexError = useMemo(() => {

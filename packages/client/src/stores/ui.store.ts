@@ -362,6 +362,8 @@ interface UIState {
   personaDetailId: string | null;
   /** When set, the main area shows the full-page regex script editor */
   regexDetailId: string | null;
+  /** Pre-selected target characters for a NEW regex script opened via openRegexDetail("__new__") */
+  regexDetailDefaultCharacterIds: string[] | null;
   /** When true, the main area shows the browser */
   botBrowserOpen: boolean;
   /** When true, the main area shows the game assets browser */
@@ -639,7 +641,7 @@ interface UIState {
   closeToolDetail: () => void;
   openPersonaDetail: (id: string) => void;
   closePersonaDetail: () => void;
-  openRegexDetail: (id: string) => void;
+  openRegexDetail: (id: string, options?: { defaultCharacterIds?: string[] }) => void;
   closeRegexDetail: () => void;
   openCharacterLibrary: () => void;
   closeCharacterLibrary: () => void;
@@ -978,6 +980,7 @@ export const useUIStore = create<UIState>()(
       toolDetailId: null,
       personaDetailId: null,
       regexDetailId: null,
+      regexDetailDefaultCharacterIds: null,
       botBrowserOpen: false,
       gameAssetsBrowserOpen: false,
       characterLibraryOpen: false,
@@ -1326,9 +1329,10 @@ export const useUIStore = create<UIState>()(
           editorDirty: false,
           ...restoreMobileDetailReturnPanel(s.detailReturnRightPanel),
         })),
-      openRegexDetail: (id) =>
+      openRegexDetail: (id, options) =>
         set((s) => ({
           regexDetailId: id,
+          regexDetailDefaultCharacterIds: options?.defaultCharacterIds ?? null,
           personaDetailId: null,
           characterLibraryOpen: false,
           botBrowserOpen: false,

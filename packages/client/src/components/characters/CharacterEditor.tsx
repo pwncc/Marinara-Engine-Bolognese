@@ -42,6 +42,7 @@ import { AvatarGenerationModal } from "../ui/AvatarGenerationModal";
 import { AvatarCropWidget } from "../ui/AvatarCropWidget";
 import { ImageUploadDropzone } from "../ui/ImageUploadDropzone";
 import { CustomEmojiTagButton } from "../ui/CustomEmojiTagButton";
+import { CharacterRegexSection } from "./CharacterRegexSection";
 import {
   ArrowLeft,
   Save,
@@ -951,7 +952,12 @@ export function CharacterEditor() {
               <CharacterCardTab formData={formData} updateField={updateField} updateExtension={updateExtension} />
             )}
             {activeTab === "advanced" && (
-              <AdvancedTab formData={formData} updateField={updateField} updateExtension={updateExtension} />
+              <AdvancedTab
+                formData={formData}
+                updateField={updateField}
+                updateExtension={updateExtension}
+                characterId={characterId}
+              />
             )}
             {activeTab === "sprites" && characterId && (
               <SpritesTab
@@ -1693,10 +1699,12 @@ function AdvancedTab({
   formData,
   updateField,
   updateExtension,
+  characterId,
 }: {
   formData: CharacterData;
   updateField: <K extends keyof CharacterData>(key: K, value: CharacterData[K]) => void;
   updateExtension: (key: string, value: unknown) => void;
+  characterId: string | null;
 }) {
   const depthPrompt = formData.extensions.depth_prompt ?? { prompt: "", depth: 4, role: "system" as const };
 
@@ -1780,6 +1788,8 @@ function AdvancedTab({
           </label>
         </div>
       </div>
+
+      <CharacterRegexSection characterId={characterId} characterName={formData.name} />
     </div>
   );
 }
