@@ -13,6 +13,7 @@ import {
   useUploadCustomSticker,
   useRenameCustomSticker,
   useDeleteCustomSticker,
+  useImportCustomStickers,
 } from "../../hooks/use-custom-stickers";
 import {
   useConversationCustomStickers,
@@ -20,6 +21,8 @@ import {
 } from "../../hooks/use-conversation-custom-stickers";
 import { readImageDimensions, validateDimensionsForKind, slugifyCustomName } from "../../lib/custom-emoji";
 import { showPromptDialog, showConfirmDialog } from "../../lib/app-dialogs";
+import { downloadJsonFile } from "../../lib/download-json";
+import { api } from "../../lib/api-client";
 import { cn } from "../../lib/utils";
 
 interface StickerPickerProps {
@@ -43,7 +46,9 @@ export function StickerPicker({ open, onClose, onSelect, anchorRef, containerRef
   const upload = useUploadCustomSticker();
   const rename = useRenameCustomSticker();
   const remove = useDeleteCustomSticker();
+  const importStickers = useImportCustomStickers();
   const fileRef = useRef<HTMLInputElement>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
   const [query, setQuery] = useState("");
@@ -169,6 +174,32 @@ export function StickerPicker({ open, onClose, onSelect, anchorRef, containerRef
     [remove],
   );
 
+  const handleExport = useCallback(async () => {
+    setError(null);
+    try {
+      const bundle = await api.post<unknown>("/custom-stickers/export", {});
+      downloadJsonFile(bundle, "marinara-custom-stickers.json");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to export stickers.");
+    }
+  }, []);
+
+  const handleImportFile = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (!file) return;
+      setError(null);
+      try {
+        const bundle = JSON.parse(await file.text());
+        await importStickers.mutateAsync(bundle);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Couldn't import that file — is it a valid sticker set?");
+      }
+    },
+    [importStickers],
+  );
+
   if (!open) return null;
 
   const globalList = stickers ?? [];
@@ -202,28 +233,55 @@ export function StickerPicker({ open, onClose, onSelect, anchorRef, containerRef
   const content = (
     <>
       <div className="flex items-center justify-between gap-2 border-b border-foreground/10 px-3 py-2">
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          className="inline-flex items-center gap-1.5 rounded-md bg-foreground/5 px-2 py-1 text-xs text-foreground/70 ring-1 ring-foreground/10 transition-colors hover:bg-foreground/10 hover:text-foreground/90"
-        >
-          <ImagePlus size="0.875rem" /> Upload
-        </button>
-        <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFiles} />
-        {globalList.length > 0 && (
+        <div className="flex items-center gap-1.5">
           <button
             type="button"
-            onClick={() => setEditing((v) => !v)}
-            className={cn(
-              "rounded-md px-2 py-1 text-xs transition-colors",
-              editing
-                ? "bg-foreground/10 text-foreground/80 ring-1 ring-foreground/15"
-                : "text-foreground/45 hover:bg-foreground/10 hover:text-foreground/70",
-            )}
+            onClick={() => fileRef.current?.click()}
+            className="inline-flex items-center gap-1.5 rounded-md bg-foreground/5 px-2 py-1 text-xs text-foreground/70 ring-1 ring-foreground/10 transition-colors hover:bg-foreground/10 hover:text-foreground/90"
           >
-            {editing ? "Done" : "Edit"}
+            <ImagePlus size="0.875rem" /> Upload
           </button>
-        )}
+          {editing && (
+            <>
+              <button
+                type="button"
+                onClick={() => importFileRef.current?.click()}
+                className="rounded-md bg-foreground/5 px-2 py-1 text-xs text-foreground/70 ring-1 ring-foreground/10 transition-colors hover:bg-foreground/10 hover:text-foreground/90"
+              >
+                Import
+              </button>
+              {globalList.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void handleExport()}
+                  className="rounded-md bg-foreground/5 px-2 py-1 text-xs text-foreground/70 ring-1 ring-foreground/10 transition-colors hover:bg-foreground/10 hover:text-foreground/90"
+                >
+                  Export
+                </button>
+              )}
+            </>
+          )}
+        </div>
+        <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFiles} />
+        <input
+          ref={importFileRef}
+          type="file"
+          accept=".json,application/json"
+          className="hidden"
+          onChange={handleImportFile}
+        />
+        <button
+          type="button"
+          onClick={() => setEditing((v) => !v)}
+          className={cn(
+            "rounded-md px-2 py-1 text-xs transition-colors",
+            editing
+              ? "bg-foreground/10 text-foreground/80 ring-1 ring-foreground/15"
+              : "text-foreground/45 hover:bg-foreground/10 hover:text-foreground/70",
+          )}
+        >
+          {editing ? "Done" : "Edit"}
+        </button>
       </div>
 
       {(globalList.length > 0 || sourceGroups.length > 0) && (
