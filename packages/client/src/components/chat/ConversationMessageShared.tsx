@@ -2,13 +2,15 @@
 // Shared utilities, helpers, and types used across
 // the ConversationMessage* family of components.
 // ──────────────────────────────────────────────
-import { type CSSProperties, type ReactNode, type RefObject } from "react";
+import { Fragment, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { ChevronRight, EyeOff, FileText, X } from "lucide-react";
 import type { MessageExtra, QuoteFormat } from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
 import { applyInlineMarkdown, renderMarkdownBlocks } from "../../lib/markdown";
 import { renderInlineWithCustomEmojis } from "../../lib/custom-emoji-render";
+import { renderWithStickerBlocks } from "../../lib/sticker-render";
 import { useConversationCustomEmojis } from "../../hooks/use-conversation-custom-emojis";
+import { useConversationCustomStickers } from "../../hooks/use-conversation-custom-stickers";
 import { applyTextareaQuoteFormat } from "../../lib/textarea-quotes";
 import { ImagePromptPanel } from "./ImagePromptPanel";
 import { SwipeJumpControl } from "./SwipeJumpControl";
@@ -340,6 +342,7 @@ export function MessageContent({
   onImageOpen: (url: string) => void;
 }) {
   const { map: emojiMap } = useConversationCustomEmojis();
+  const { map: stickerMap } = useConversationCustomStickers();
 
   if (IMAGE_URL_RE.test(content.trim())) {
     const url = content.trim();
@@ -357,7 +360,10 @@ export function MessageContent({
     emojiMap.size > 0
       ? (text: string, kp: string) => renderInlineWithCustomEmojis(text, kp, emojiMap, baseInline)
       : baseInline;
-  return <>{renderMarkdownBlocks(compacted, renderInline)}</>;
+  const renderTextBlock = (text: string, kp: string) => (
+    <Fragment key={kp}>{renderMarkdownBlocks(text, renderInline)}</Fragment>
+  );
+  return <>{renderWithStickerBlocks(compacted, stickerMap, renderTextBlock)}</>;
 }
 
 /** Tiny action-bar button. */
