@@ -2587,6 +2587,26 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
 
     startSseReply(reply);
 
+    // Abort in-flight agent LLM calls when the client disconnects, and stop
+    // writing to a closed socket. Mirrors the main /generate handler so a dropped
+    // retry tab does not leak upstream provider requests to completion.
+    const abortController = new AbortController();
+    let clientDisconnected = false;
+    const originalSseWrite = reply.raw.write.bind(reply.raw);
+    reply.raw.write = ((chunk: any, encodingOrCallback?: any, callback?: any) => {
+      if (clientDisconnected || reply.raw.destroyed) return false;
+      try {
+        return originalSseWrite(chunk, encodingOrCallback, callback);
+      } catch {
+        return false;
+      }
+    }) as typeof reply.raw.write;
+    const onClientClose = () => {
+      clientDisconnected = true;
+      abortController.abort();
+    };
+    reply.raw.on("close", onClientClose);
+
     try {
       const chat = await chats.getById(chatId);
       if (!chat) {
@@ -2698,6 +2718,7 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
         wrapFormat: retryWrapFormat,
         historicalGameStateAnchor,
       });
+      agentContext.signal = abortController.signal;
       const hasPreGenerationRetries = resolvedAgents.some((entry) => entry.resolved.phase === "pre_generation");
       const preGenerationAgentContext =
         hasPreGenerationRetries && preGenerationRecentMessages
@@ -2719,6 +2740,7 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
               useLatestGameStateFallback: false,
             })
           : null;
+      if (preGenerationAgentContext) preGenerationAgentContext.signal = abortController.signal;
       if (debugMode) {
         const emitRetryAgentDebug = (event: AgentCallDebugEvent) => {
           sendSseEvent(reply, { type: "agent_debug", data: event });
@@ -2930,6 +2952,7 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
           : "Agent retry failed";
       sendSseEvent(reply, { type: "error", data: message });
     } finally {
+      reply.raw.off("close", onClientClose);
       reply.raw.end();
     }
   });
