@@ -9,6 +9,7 @@ import {
   X,
   Plus,
   ImagePlay,
+  Keyboard,
   AtSign,
   Users,
   Languages,
@@ -149,6 +150,8 @@ export function ConversationInput({
   const [isTranslatingDraft, setIsTranslatingDraft] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);
+  const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
+  const [mobilePickerTab, setMobilePickerTab] = useState<"emoji" | "gifs" | "stickers">("emoji");
   const [isDragging, setIsDragging] = useState(false);
   // @mention autocomplete
   const [_mentionQuery, setMentionQuery] = useState<string | null>(null);
@@ -1465,6 +1468,55 @@ export function ConversationInput({
         </div>
       )}
 
+      {/* Mobile multipurpose picker sheet — Emoji / GIFs / Stickers (desktop uses the popovers) */}
+      {mobilePickerOpen && (
+        <div className="absolute bottom-full left-0 right-0 z-20 mb-1 flex h-[22rem] max-h-[60vh] flex-col overflow-hidden rounded-xl border border-foreground/10 bg-[var(--card)] shadow-xl sm:hidden">
+          <div className="flex shrink-0 items-center gap-1 border-b border-foreground/10 px-2 py-1.5">
+            {(["emoji", "gifs", "stickers"] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                disabled={tab === "stickers"}
+                onClick={() => setMobilePickerTab(tab)}
+                className={cn(
+                  "flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                  tab === "stickers"
+                    ? "cursor-not-allowed text-foreground/25"
+                    : mobilePickerTab === tab
+                      ? "bg-foreground/10 text-foreground/80 ring-1 ring-foreground/15"
+                      : "text-foreground/45 hover:bg-foreground/10 hover:text-foreground/70",
+                )}
+              >
+                {tab === "gifs" ? "GIFs" : tab === "stickers" ? "Stickers" : "Emoji"}
+              </button>
+            ))}
+          </div>
+          <div className="min-h-0 flex-1">
+            {mobilePickerTab === "emoji" && (
+              <EmojiPicker
+                embedded
+                open
+                onClose={() => setMobilePickerOpen(false)}
+                onSelect={handleEmojiSelect}
+                customTab={{
+                  icon: "⭐",
+                  label: "Custom emojis",
+                  render: (query) => <CustomEmojiTab onInsert={handleEmojiSelect} query={query} />,
+                }}
+              />
+            )}
+            {mobilePickerTab === "gifs" && (
+              <GifPicker embedded open onClose={() => setMobilePickerOpen(false)} onSelect={handleGifSelect} />
+            )}
+            {mobilePickerTab === "stickers" && (
+              <div className="flex h-full items-center justify-center px-6 text-center text-xs text-foreground/45">
+                Custom stickers are coming soon.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Feedback toast */}
       {feedback && (
         <div className="absolute bottom-full left-3 right-3 z-50 mb-2">
@@ -1572,12 +1624,38 @@ export function ConversationInput({
           onInput={handleInput}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
+          onFocus={() => {
+            if (mobilePickerOpen) setMobilePickerOpen(false);
+          }}
           className="max-h-[12.5rem] min-h-9 min-w-0 flex-1 resize-none bg-transparent px-1 py-2 text-[1rem] leading-tight text-foreground outline-none placeholder:text-foreground/30 sm:min-h-0 sm:px-0 sm:py-0 sm:leading-normal"
         />
 
         {/* Right actions */}
         <div className="ml-0 flex shrink-0 flex-nowrap items-center justify-end gap-0 sm:ml-auto sm:gap-0.5">
-          <div className="relative">
+          {/* Mobile: one multipurpose button → Emoji/GIFs/Stickers sheet (desktop uses the separate buttons) */}
+          <button
+            type="button"
+            onClick={() => {
+              setEmojiOpen(false);
+              setGifOpen(false);
+              const next = !mobilePickerOpen;
+              setMobilePickerOpen(next);
+              if (next) textareaRef.current?.blur();
+              else textareaRef.current?.focus();
+            }}
+            className={cn(
+              "flex h-9 w-9 items-center justify-center rounded-xl transition-colors sm:hidden",
+              mobilePickerOpen
+                ? "bg-foreground/10 text-foreground/75 ring-1 ring-foreground/20"
+                : "text-foreground/40 hover:bg-foreground/10 hover:text-foreground/70",
+            )}
+            title={mobilePickerOpen ? "Show keyboard" : "Emoji, GIFs & stickers"}
+            aria-label={mobilePickerOpen ? "Show keyboard" : "Emoji, GIFs and stickers"}
+          >
+            {mobilePickerOpen ? <Keyboard size="1.25rem" /> : <Smile size="1.25rem" />}
+          </button>
+
+          <div className="relative hidden sm:block">
             <button
               ref={gifButtonRef}
               onClick={() => {

@@ -21,12 +21,14 @@ interface GifPickerProps {
   anchorRef?: React.RefObject<HTMLElement | null>;
   /** Container (e.g. input bar) whose top edge determines vertical placement */
   containerRef?: React.RefObject<HTMLElement | null>;
+  /** Render inline to fill a parent (no portal/positioning) — e.g. inside the mobile composer sheet. */
+  embedded?: boolean;
 }
 
 type GifErrorCode = "missing_giphy_api_key";
 type GifFetchError = Error & { code?: GifErrorCode };
 
-export function GifPicker({ open, onClose, onSelect, anchorRef, containerRef }: GifPickerProps) {
+export function GifPicker({ open, onClose, onSelect, anchorRef, containerRef, embedded }: GifPickerProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<GifResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -171,16 +173,8 @@ export function GifPicker({ open, onClose, onSelect, anchorRef, containerRef }: 
   const missingGiphyKey = errorCode === "missing_giphy_api_key";
   const setupCodeClass = "rounded bg-foreground/10 px-1 py-0.5 text-foreground/75";
 
-  return createPortal(
-    <div
-      ref={panelRef}
-      className="fixed z-[9999] flex h-[26rem] w-96 max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-xl border border-foreground/10 bg-[var(--card)] shadow-xl"
-      style={{
-        bottom: pos.bottom,
-        ...(pos.right != null ? { right: pos.right } : {}),
-        ...(pos.left != null ? { left: pos.left } : {}),
-      }}
-    >
+  const content = (
+    <>
       {/* Search */}
       <div className="border-b border-foreground/10 px-3 py-2">
         <div className="flex items-center gap-2 rounded-md bg-foreground/5 px-2.5 py-1.5 ring-1 ring-foreground/10 transition-shadow focus-within:ring-foreground/20">
@@ -191,7 +185,7 @@ export function GifPicker({ open, onClose, onSelect, anchorRef, containerRef }: 
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search for GIFs"
             className="flex-1 bg-transparent text-xs outline-none placeholder:text-foreground/35"
-            autoFocus
+            autoFocus={!embedded}
           />
         </div>
       </div>
@@ -273,6 +267,24 @@ export function GifPicker({ open, onClose, onSelect, anchorRef, containerRef }: 
       <div className="flex items-center justify-center border-t border-foreground/10 px-3 py-1.5">
         <span className="text-[0.5625rem] text-foreground/45">Powered by GIPHY</span>
       </div>
+    </>
+  );
+
+  if (embedded) {
+    return <div className="flex h-full min-h-0 flex-col overflow-hidden">{content}</div>;
+  }
+
+  return createPortal(
+    <div
+      ref={panelRef}
+      className="fixed z-[9999] flex h-[26rem] w-96 max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-xl border border-foreground/10 bg-[var(--card)] shadow-xl"
+      style={{
+        bottom: pos.bottom,
+        ...(pos.right != null ? { right: pos.right } : {}),
+        ...(pos.left != null ? { left: pos.left } : {}),
+      }}
+    >
+      {content}
     </div>,
     document.body,
   );

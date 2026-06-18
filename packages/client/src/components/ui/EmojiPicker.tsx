@@ -1128,9 +1128,11 @@ interface EmojiPickerProps {
   containerRef?: React.RefObject<HTMLElement | null>;
   /** Optional extra tab (e.g. custom emojis) shown after the standard categories. */
   customTab?: { icon: React.ReactNode; label?: string; render: (query: string) => React.ReactNode };
+  /** Render inline to fill a parent (no portal/positioning) — e.g. inside the mobile composer sheet. */
+  embedded?: boolean;
 }
 
-export function EmojiPicker({ open, onClose, onSelect, anchorRef, containerRef, customTab }: EmojiPickerProps) {
+export function EmojiPicker({ open, onClose, onSelect, anchorRef, containerRef, customTab, embedded }: EmojiPickerProps) {
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState<number | "custom">(0);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -1210,16 +1212,8 @@ export function EmojiPicker({ open, onClose, onSelect, anchorRef, containerRef, 
       })()
     : CATEGORIES;
 
-  return createPortal(
-    <div
-      ref={panelRef}
-      className="fixed z-[9999] flex h-[22rem] w-[21rem] max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-xl border border-foreground/10 bg-[var(--card)] shadow-xl"
-      style={{
-        bottom: pos.bottom,
-        ...(pos.right != null ? { right: pos.right } : {}),
-        ...(pos.left != null ? { left: pos.left } : {}),
-      }}
-    >
+  const content = (
+    <>
       {/* Search — filters the active standard category, or the custom tab's emojis */}
       <div className="border-b border-foreground/10 px-3 py-2">
         <input
@@ -1228,7 +1222,7 @@ export function EmojiPicker({ open, onClose, onSelect, anchorRef, containerRef, 
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search emojis..."
           className="w-full rounded-md bg-foreground/5 px-2.5 py-1.5 text-xs outline-none ring-1 ring-foreground/10 transition-shadow placeholder:text-foreground/35 focus:ring-foreground/20"
-          autoFocus
+          autoFocus={!embedded}
         />
       </div>
 
@@ -1291,6 +1285,24 @@ export function EmojiPicker({ open, onClose, onSelect, anchorRef, containerRef, 
               </div>
             ))}
       </div>
+    </>
+  );
+
+  if (embedded) {
+    return <div className="flex h-full min-h-0 flex-col overflow-hidden">{content}</div>;
+  }
+
+  return createPortal(
+    <div
+      ref={panelRef}
+      className="fixed z-[9999] flex h-[22rem] w-[21rem] max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-xl border border-foreground/10 bg-[var(--card)] shadow-xl"
+      style={{
+        bottom: pos.bottom,
+        ...(pos.right != null ? { right: pos.right } : {}),
+        ...(pos.left != null ? { left: pos.left } : {}),
+      }}
+    >
+      {content}
     </div>,
     document.body,
   );
