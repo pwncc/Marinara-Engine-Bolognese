@@ -18,6 +18,7 @@ import { Loader2, ChevronUp, Settings2, Image as ImageIcon, ArrowRightLeft } fro
 import { ConversationMessage } from "./ConversationMessage";
 import { ConversationInput } from "./ConversationInput";
 import { UnoBoard } from "./UnoBoard";
+import { UnoSetup } from "./UnoSetup";
 import { SceneBanner, EndSceneBar } from "./SceneBanner";
 import { ChatBranchSelector } from "./ChatBranchSelector";
 import { ActiveLorebookEntriesButton } from "./ActiveLorebookEntriesButton";
@@ -281,6 +282,8 @@ export function ConversationView({
   const streamingChatId = useChatStore((s) => s.streamingChatId);
   const isStreaming = useChatStore((s) => s.isStreaming) && streamingChatId === chatId;
   const unoGameActive = useUnoGameStore((s) => s.current?.chatId === chatId && s.current?.status !== "finished");
+  const unoSetupOpen = useUnoGameStore((s) => s.setupChatId === chatId);
+  const closeUnoSetup = useUnoGameStore((s) => s.closeSetup);
   const isStreamCommitted = useChatStore((s) => s.committedStreamChatIds.has(chatId));
   const hasLiveStream = isStreaming && !isStreamCommitted;
   const streamBuffer = useChatStore((s) => s.streamBuffer);
@@ -1256,6 +1259,8 @@ export function ConversationView({
 
       {/* ── Turn-game board (UNO, etc.) — self-hides when no game is active ── */}
       <UnoBoard chatId={chatId} />
+      {/* Setup modal mounted once here (stable position) so it never double-renders. */}
+      <UnoSetup chatId={chatId} open={unoSetupOpen} onClose={closeUnoSetup} />
 
       {/* ── Input area ── */}
       <ConversationInput

@@ -11,7 +11,6 @@ import type { UnoCard, UnoColor } from "@marinara-engine/shared";
 import { useChatStore } from "../../stores/chat.store";
 import { useUnoGameStore } from "../../stores/uno-game.store";
 import { useResignUno, useUnoMove, useUnoState } from "../../hooks/use-uno";
-import { UnoSetup } from "./UnoSetup";
 
 interface Props {
   chatId: string;
@@ -73,8 +72,6 @@ export function UnoBoard({ chatId }: Props) {
   const streaming = useChatStore((s) => s.isStreaming);
   const streamingChatId = useChatStore((s) => s.streamingChatId);
   const isStreaming = streaming && streamingChatId === chatId;
-  const setupChatId = useUnoGameStore((s) => s.setupChatId);
-  const closeSetup = useUnoGameStore((s) => s.closeSetup);
   const move = useUnoMove(chatId);
   const resign = useResignUno(chatId);
 
@@ -85,16 +82,15 @@ export function UnoBoard({ chatId }: Props) {
   const [pending, setPending] = useState<{ card: UnoCard; kind: "color" | "swap" } | null>(null);
   useEffect(() => setPending(null), [chatId]);
 
-  const setup = <UnoSetup chatId={chatId} open={setupChatId === chatId} onClose={closeSetup} />;
-
   const view = active ? current : null;
   const disabled = isStreaming || move.isPending || resign.isPending;
 
   const isMyTurn = !!view && view.currentSeatId === view.yourSeatId;
   const jumpInSet = useMemo(() => new Set(view?.jumpInCardIds ?? []), [view]);
 
-  // No active game: render only the (usually-hidden) setup modal, opened via /uno.
-  if (!view) return setup;
+  // No active game: render nothing. The setup modal is mounted once in
+  // ConversationView (a stable position), so it never double-renders here.
+  if (!view) return null;
 
   const submit = (m: Record<string, unknown>) => {
     if (disabled) return;
@@ -333,7 +329,6 @@ export function UnoBoard({ chatId }: Props) {
           </button>
         </div>
       )}
-      {setup}
     </div>
   );
 }
