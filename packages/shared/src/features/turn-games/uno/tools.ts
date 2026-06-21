@@ -19,16 +19,16 @@ export const playCardToolManifest = {
   name: "play_card",
   description:
     "Play one card from your hand onto the discard pile. Must match the active color OR the top card's value, or be a wild. " +
-    "If you play a Wild or Wild Draw Four you MUST set declared_color. Set say_uno=true on the play that leaves you with one card. " +
-    "If the 7-0 rule is on, playing a 7 requires swap_target (the exact name of the player to swap hands with).",
+    "If (and only if) value is 'wild' or 'wild4' you MUST set declared_color; never set it for any other card. Set say_uno=true on the play that leaves you with one card. " +
+    "If the 7-0 rule is on, playing a 7 that is NOT your last card requires swap_target (the exact name of the player to swap hands with); a winning 7 (your last card) needs no swap_target.",
   parameters: {
     type: "object",
     properties: {
       color: { type: "string", description: "The card's color (use 'wild' for Wild / Wild Draw Four).", enum: COLOR_ENUM },
       value: { type: "string", description: "The card's value/face.", enum: VALUE_ENUM },
-      declared_color: { type: "string", description: "Required when playing a wild: the color you choose.", enum: DECLARED_COLOR_ENUM },
+      declared_color: { type: "string", description: "Required if and only if value is 'wild' or 'wild4' — the color play continues in. Omit for every other card.", enum: DECLARED_COLOR_ENUM },
       say_uno: { type: "boolean", description: "Set true when this play leaves you holding exactly one card." },
-      swap_target: { type: "string", description: "When playing a 7 under the 7-0 rule: the exact name of the player to swap hands with." },
+      swap_target: { type: "string", description: "When playing a 7 under the 7-0 rule and it is not your winning last card: the exact name of the player to swap hands with." },
     },
     required: ["color", "value"],
   },
