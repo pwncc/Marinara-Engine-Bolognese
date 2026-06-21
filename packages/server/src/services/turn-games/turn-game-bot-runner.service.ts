@@ -138,7 +138,12 @@ export async function runTurnGameBotTurns(args: RunBotTurnsArgs): Promise<void> 
   const characters = createCharactersStorage(db);
   const engineStorage = createGameEngineStateStorage(db);
 
-  for (let turn = 0; turn < MAX_BOT_TURNS; turn++) {
+  // Track the prior board so a degenerate engine that stops advancing the seat
+  // can't silently burn the whole turn cap (and so we can tell a real "paused at
+  // the cap" exit from a normal "handed back to the human" exit below).
+  let lastSignature = "";
+  let turn = 0;
+  for (; turn < MAX_BOT_TURNS; turn++) {
     if (signal?.aborted) break;
 
     const active = await getActiveTurnGame(db, chatId);
@@ -146,6 +151,16 @@ export async function runTurnGameBotTurns(args: RunBotTurnsArgs): Promise<void> 
     const { engine, state } = active;
     const seatId = engine.currentSeat(state);
     if (!seatId || seatId === humanSeatId) break; // hand control back to the human
+
+    // Defensive stop: if the board is byte-identical to the previous iteration,
+    // the engine isn't advancing (a fallback move should always change state).
+    // Break rather than spin the rest of the cap on a stuck seat.
+    const signature = JSON.stringify(state);
+    if (signature === lastSignature) {
+      logger.warn("[turn-game] board not advancing for chat %s (seat %s still to act); stopping bot loop", chatId, seatId);
+      break;
+    }
+    lastSignature = signature;
 
     const seatName = state.seatNames?.[seatId] ?? seatId;
 
@@ -257,6 +272,21 @@ export async function runTurnGameBotTurns(args: RunBotTurnsArgs): Promise<void> 
 
     // Push the redacted human-perspective board so the client updates live.
     trySendSseEvent(reply, { type: "turn_game_state_patch", data: engine.publicView(nextState, humanSeatId) });
+  }
+
+  // Reaching the cap (rather than handing control back / finishing / aborting)
+  // means a bot is still on seat after MAX_BOT_TURNS consecutive bot moves —
+  // effectively unreachable in real UNO (a finite deck can't skip the human that
+  // many times in a row). Surface it instead of stalling silently. We deliberately
+  // do NOT auto-retrigger another bot generate here: that would reintroduce the
+  // unbounded cross-request loop the cap exists to bound. The human can resume the
+  // game with any move, which re-fires the bot loop through the normal path.
+  if (turn >= MAX_BOT_TURNS && !signal?.aborted) {
+    logger.warn(
+      "[turn-game] bot loop hit MAX_BOT_TURNS (%d) for chat %s with a bot still to act; pausing until the human plays",
+      MAX_BOT_TURNS,
+      chatId,
+    );
   }
 }
 

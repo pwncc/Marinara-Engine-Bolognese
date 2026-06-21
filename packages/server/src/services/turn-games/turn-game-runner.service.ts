@@ -205,6 +205,14 @@ export async function startTurnGame(db: DB, chatId: string, opts: TurnGameStartO
   const chat = await chats.getById(chatId);
   if (!chat) return { ok: false, error: "Chat not found." };
 
+  // Turn-games are a conversation-mode feature end to end: the `[uno]` command,
+  // the bot-turn generate gating, and the board UI all key off conversation mode.
+  // Starting one in another mode would create a game that can't be advanced and
+  // would leave stale game_engine_state rows behind, so reject it up front.
+  if (chat.mode !== "conversation") {
+    return { ok: false, error: "Turn-games can only be started in conversation mode." };
+  }
+
   const seats = await resolveSeats(db, chat, opts);
   if (seats.length < engine.minPlayers) {
     return { ok: false, error: `${engine.label} needs at least ${engine.minPlayers} players (got ${seats.length}).` };
