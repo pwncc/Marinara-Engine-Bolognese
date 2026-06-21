@@ -2028,6 +2028,12 @@ export async function backupRoutes(app: FastifyInstance) {
                       ? p.trackerCardColors
                       : JSON.stringify(p.trackerCardColors ?? { mode: "chat" }),
                   personaStats: p.personaStats,
+                  tags: typeof p.tags === "string" ? p.tags : JSON.stringify(p.tags ?? []),
+                  savedStatusOptions:
+                    typeof p.savedStatusOptions === "string"
+                      ? p.savedStatusOptions
+                      : JSON.stringify(p.savedStatusOptions ?? []),
+                  avatarCrop: typeof p.avatarCrop === "string" ? p.avatarCrop : JSON.stringify(p.avatarCrop ?? null),
                 },
                 normalizeTimestampOverrides({ createdAt: p.createdAt, updatedAt: p.updatedAt }),
               );

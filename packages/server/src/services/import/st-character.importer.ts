@@ -21,6 +21,7 @@ import { unlink, writeFile } from "fs/promises";
 import { join } from "path";
 import { randomUUID } from "crypto";
 import { DATA_DIR } from "../../utils/data-dir.js";
+import { isAllowedImageBuffer } from "../../utils/security.js";
 import AdmZip from "adm-zip";
 import { normalizeTimestampOverrides, type TimestampOverrides } from "./import-timestamps.js";
 
@@ -222,16 +223,19 @@ export async function importSTCharacter(raw: Record<string, unknown>, db: DB, op
   // Save avatar image if provided
   let avatarPath: string | undefined;
   if (avatarDataUrl && avatarDataUrl.startsWith("data:image/")) {
-    ensureAvatarDir();
-    const ext = avatarDataUrl.match(/^data:image\/([\w+]+);/)?.[1]?.replace("+xml", "") ?? "png";
-    const filename = `${randomUUID()}.${ext}`;
-    const filePath = join(AVATAR_DIR, filename);
-
     // Strip data URL header → raw base64
     const base64 = avatarDataUrl.split(",")[1];
     if (base64) {
-      await writeFile(filePath, Buffer.from(base64, "base64"));
-      avatarPath = `/api/avatars/file/${filename}`;
+      const declaredExt = avatarDataUrl.match(/^data:image\/([\w+]+);/)?.[1]?.replace("+xml", "");
+      const avatarBuffer = Buffer.from(base64, "base64");
+      const imageInfo = isAllowedImageBuffer(avatarBuffer, declaredExt ? `.${declaredExt}` : undefined);
+      if (imageInfo) {
+        ensureAvatarDir();
+        const filename = `${randomUUID()}.${imageInfo.ext}`;
+        const filePath = join(AVATAR_DIR, filename);
+        await writeFile(filePath, avatarBuffer);
+        avatarPath = `/api/avatars/file/${filename}`;
+      }
     }
   }
 
@@ -434,9 +438,12 @@ export async function importCharX(buf: Buffer, db: DB, options?: STCharacterImpo
       const entry = zip.getEntry(fallback);
       if (entry) {
         const ext = fallback.split(".").pop() ?? "png";
-        const mime = ext === "jpg" ? "jpeg" : ext;
-        avatarDataUrl = `data:image/${mime};base64,${entry.getData().toString("base64")}`;
-        break;
+        const data = entry.getData();
+        const imageInfo = isAllowedImageBuffer(data, `.${ext}`);
+        if (imageInfo) {
+          avatarDataUrl = `data:${imageInfo.mimeType};base64,${data.toString("base64")}`;
+          break;
+        }
       }
     }
   }
@@ -673,9 +680,11 @@ function resolveCharXAsset(zip: AdmZip, uri: string, ext?: string): string | nul
   const entry = zip.getEntry(zipPath);
   if (!entry) return null;
 
+  const data = entry.getData();
   const fileExt = ext ?? zipPath.split(".").pop() ?? "png";
-  const mime = fileExt === "jpg" ? "jpeg" : fileExt;
-  return `data:image/${mime};base64,${entry.getData().toString("base64")}`;
+  const imageInfo = isAllowedImageBuffer(data, `.${fileExt}`);
+  if (!imageInfo) return null;
+  return `data:${imageInfo.mimeType};base64,${data.toString("base64")}`;
 }
 
 function normalizeV2(raw: Record<string, unknown>): CharacterData {

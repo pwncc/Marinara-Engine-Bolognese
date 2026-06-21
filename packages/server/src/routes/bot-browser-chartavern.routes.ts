@@ -3,9 +3,11 @@
 // ──────────────────────────────────────────────
 import type { FastifyInstance } from "fastify";
 import { logger } from "../lib/logger.js";
+import { isAllowedImageBuffer, safeFetch } from "../utils/security.js";
 
 const CT_API_BASE = "https://character-tavern.com/api";
 const CT_CARDS_CDN = "https://cards.character-tavern.com";
+const AVATAR_PROXY_MAX_BYTES = 10 * 1024 * 1024;
 
 // In-memory session cookie store (persists until server restart)
 let ctSessionCookie: string = "";
@@ -23,6 +25,22 @@ async function proxyFetch(url: string, init?: RequestInit): Promise<unknown> {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function fetchAvatarImage(url: string, signal: AbortSignal) {
+  const res = await safeFetch(url, {
+    signal,
+    policy: { allowedProtocols: ["https:"] },
+    maxResponseBytes: AVATAR_PROXY_MAX_BYTES,
+  });
+  if (!res.ok) return null;
+  const buf = Buffer.from(await res.arrayBuffer());
+  const contentType = res.headers.get("content-type")?.toLowerCase() ?? "";
+  const imageInfo = isAllowedImageBuffer(buf);
+  if (!contentType.startsWith("image/") || !imageInfo) {
+    throw new Error("Unsupported avatar image content");
+  }
+  return { buf, mimeType: imageInfo.mimeType };
 }
 
 /** Build headers for CT API — includes session cookie if stored */
@@ -261,20 +279,18 @@ export async function botBrowserChartavernRoutes(app: FastifyInstance) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
     try {
-      const res = await fetch(`${CT_CARDS_CDN}/cdn-cgi/image/format=auto,width=320,quality=85/${encodeURI(path)}.png`, {
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const res2 = await fetch(`${CT_CARDS_CDN}/${encodeURI(path)}.png`, {
-          signal: controller.signal,
-        });
-        if (!res2.ok) return reply.status(404).send({ error: "Avatar not found" });
-        const buf = Buffer.from(await res2.arrayBuffer());
-        return reply.header("Content-Type", "image/png").header("Cache-Control", "public, max-age=86400").send(buf);
+      const primary = await fetchAvatarImage(
+        `${CT_CARDS_CDN}/cdn-cgi/image/format=auto,width=320,quality=85/${encodeURI(path)}.png`,
+        controller.signal,
+      );
+      const image = primary ?? (await fetchAvatarImage(`${CT_CARDS_CDN}/${encodeURI(path)}.png`, controller.signal));
+      if (!image) return reply.status(404).send({ error: "Avatar not found" });
+      return reply.header("Content-Type", image.mimeType).header("Cache-Control", "public, max-age=86400").send(image.buf);
+    } catch (err) {
+      if ((err as Error).message.includes("Unsupported avatar image content")) {
+        return reply.status(415).send({ error: "Unsupported avatar content type" });
       }
-      const buf = Buffer.from(await res.arrayBuffer());
-      const ct = res.headers.get("content-type") || "image/png";
-      return reply.header("Content-Type", ct).header("Cache-Control", "public, max-age=86400").send(buf);
+      throw err;
     } finally {
       clearTimeout(timeout);
     }

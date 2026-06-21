@@ -6,10 +6,12 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { logger } from "../lib/logger.js";
+import { isAllowedImageBuffer, safeFetch } from "../utils/security.js";
 
 const DATACAT_API_BASE = "https://datacat.run";
 const DATACAT_IMAGE_BASE = "https://ella.janitorai.com/bot-avatars/";
 const DEFAULT_MIN_TOTAL_TOKENS = 889;
+const AVATAR_PROXY_MAX_BYTES = 10 * 1024 * 1024;
 const DC_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
@@ -71,6 +73,22 @@ function dcHeaders(token: string): Record<string, string> {
     Referer: `${DATACAT_API_BASE}/`,
     "X-Session-Token": token,
   };
+}
+
+async function fetchAvatarImage(url: string, signal: AbortSignal) {
+  const res = await safeFetch(url, {
+    signal,
+    policy: { allowedProtocols: ["https:"] },
+    maxResponseBytes: AVATAR_PROXY_MAX_BYTES,
+  });
+  if (!res.ok) return null;
+  const buf = Buffer.from(await res.arrayBuffer());
+  const contentType = res.headers.get("content-type")?.toLowerCase() ?? "";
+  const imageInfo = isAllowedImageBuffer(buf);
+  if (!contentType.startsWith("image/") || !imageInfo) {
+    throw new Error("Unsupported avatar image content");
+  }
+  return { buf, mimeType: imageInfo.mimeType };
 }
 
 async function dcFetch(path: string): Promise<unknown> {
@@ -227,11 +245,14 @@ export async function botBrowserDatacatRoutes(app: FastifyInstance) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
     try {
-      const res = await fetch(url, { signal: controller.signal });
-      if (!res.ok) return reply.status(404).send({ error: "Avatar not found" });
-      const buf = Buffer.from(await res.arrayBuffer());
-      const ct = res.headers.get("content-type") || "image/jpeg";
-      return reply.header("Content-Type", ct).header("Cache-Control", "public, max-age=86400").send(buf);
+      const image = await fetchAvatarImage(url, controller.signal);
+      if (!image) return reply.status(404).send({ error: "Avatar not found" });
+      return reply.header("Content-Type", image.mimeType).header("Cache-Control", "public, max-age=86400").send(image.buf);
+    } catch (err) {
+      if ((err as Error).message.includes("Unsupported avatar image content")) {
+        return reply.status(415).send({ error: "Unsupported avatar content type" });
+      }
+      throw err;
     } finally {
       clearTimeout(timeout);
     }
