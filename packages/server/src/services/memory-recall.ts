@@ -216,8 +216,9 @@ export async function recallMemories(
 
   const matchingChatIds = chatIds.slice(0, 50);
 
-  // Load embedded chunks from matching chats (capped to prevent memory blowup)
-  const MAX_CHUNKS = 500;
+  // Load every embedded chunk in scope before scoring. Applying a recency cap
+  // here would exclude old-but-relevant memories before cosine similarity can
+  // evaluate them.
   const chunks = await db
     .select({
       id: memoryChunks.id,
@@ -228,9 +229,7 @@ export async function recallMemories(
       lastMessageAt: memoryChunks.lastMessageAt,
     })
     .from(memoryChunks)
-    .where(and(inArray(memoryChunks.chatId, matchingChatIds), isNotNull(memoryChunks.embedding)))
-    .orderBy(desc(memoryChunks.lastMessageAt))
-    .limit(MAX_CHUNKS);
+    .where(and(inArray(memoryChunks.chatId, matchingChatIds), isNotNull(memoryChunks.embedding)));
 
   if (chunks.length === 0) return [];
 
