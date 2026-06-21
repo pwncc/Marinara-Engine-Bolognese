@@ -60,6 +60,7 @@ import {
   findTrackerContextInsertIndex,
   isManualTrackerCharacterId,
   parseExtra,
+  resolveRoleplayChatSummary,
   isMessageHiddenFromAI,
   resolveActiveCharacterIds,
   resolveVisibleGameStateAnchor,
@@ -1695,10 +1696,7 @@ export async function chatsRoutes(app: FastifyInstance) {
             ? (chatMeta.activeAgentIds as string[])
             : [];
           const activePromptAgentIds = filterGameInternalAgentIds(chatMode, promptActiveAgentIds);
-          const activeChatSummary =
-            chatMode === "roleplay" || chatMode === "visual_novel"
-              ? ((chatMeta.summary as string) ?? "").trim() || null
-              : null;
+          const activeChatSummary = resolveRoleplayChatSummary(chatMode, chatMeta);
 
           const assembled = await assemblePrompt({
             db: app.db,

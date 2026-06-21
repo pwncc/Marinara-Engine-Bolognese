@@ -527,36 +527,46 @@ function findCurrentCharacterMatch(
   next: Partial<PresentCharacter>,
   currentCharacters: PresentCharacter[],
   fallbackIndex: number,
+  usedCurrent: Set<number>,
 ) {
   const id = typeof next.characterId === "string" ? next.characterId.trim() : "";
   if (id) {
-    const byId = currentCharacters.findIndex((character) => character.characterId === id);
+    const byId = currentCharacters.findIndex((character, index) => !usedCurrent.has(index) && character.characterId === id);
     if (byId >= 0) return { index: byId, matchedByIdentity: true };
   }
   const name = normalizeComparableText(next.name);
   if (name) {
-    const byName = currentCharacters.findIndex((character) => normalizeComparableText(character.name) === name);
+    const byName = currentCharacters.findIndex((character, index) => {
+      return !usedCurrent.has(index) && normalizeComparableText(character.name) === name;
+    });
     if (byName >= 0) return { index: byName, matchedByIdentity: true };
   }
   return {
-    index: fallbackIndex < currentCharacters.length ? fallbackIndex : -1,
+    index: fallbackIndex < currentCharacters.length && !usedCurrent.has(fallbackIndex) ? fallbackIndex : -1,
     matchedByIdentity: false,
   };
 }
 
-function findCurrentQuestMatch(next: Partial<QuestProgress>, currentQuests: QuestProgress[], fallbackIndex: number) {
+function findCurrentQuestMatch(
+  next: Partial<QuestProgress>,
+  currentQuests: QuestProgress[],
+  fallbackIndex: number,
+  usedCurrent: Set<number>,
+) {
   const id = typeof next.questEntryId === "string" ? next.questEntryId.trim() : "";
   if (id) {
-    const byId = currentQuests.findIndex((quest) => quest.questEntryId === id);
+    const byId = currentQuests.findIndex((quest, index) => !usedCurrent.has(index) && quest.questEntryId === id);
     if (byId >= 0) return { index: byId, matchedByIdentity: true };
   }
   const name = normalizeComparableText(next.name);
   if (name) {
-    const byName = currentQuests.findIndex((quest) => normalizeComparableText(quest.name) === name);
+    const byName = currentQuests.findIndex((quest, index) => {
+      return !usedCurrent.has(index) && normalizeComparableText(quest.name) === name;
+    });
     if (byName >= 0) return { index: byName, matchedByIdentity: true };
   }
   return {
-    index: fallbackIndex < currentQuests.length ? fallbackIndex : -1,
+    index: fallbackIndex < currentQuests.length && !usedCurrent.has(fallbackIndex) ? fallbackIndex : -1,
     matchedByIdentity: false,
   };
 }
@@ -598,6 +608,7 @@ function mergeNamedRowsWithLocks<T extends { name?: string }>(
     const currentRow = currentIndex >= 0 ? current[currentIndex] : null;
     if (!currentRow) return row;
     if (!match.matchedByIdentity && hasLockWithPrefix(locks, prefixFor(currentRow, currentIndex))) {
+      usedCurrent.add(currentIndex);
       return row;
     }
     usedCurrent.add(currentIndex);
@@ -721,11 +732,12 @@ function mergeQuestsWithLocks(
   const current = currentQuests ?? [];
   const usedCurrent = new Set<number>();
   const merged = nextQuests.map((quest, index) => {
-    const match = findCurrentQuestMatch(quest, current, index);
+    const match = findCurrentQuestMatch(quest, current, index, usedCurrent);
     const currentIndex = match.index;
     const currentQuest = currentIndex >= 0 ? current[currentIndex] : null;
     if (!currentQuest) return quest;
     if (!match.matchedByIdentity && hasLockWithPrefix(locks, `${questTrackerLockPrefix(currentQuest, currentIndex)}.`)) {
+      usedCurrent.add(currentIndex);
       return quest;
     }
     usedCurrent.add(currentIndex);
@@ -787,7 +799,7 @@ function mergeCharactersWithLocks(
   const current = currentCharacters ?? [];
   const usedCurrent = new Set<number>();
   const merged = nextCharacters.map((character, index) => {
-    const match = findCurrentCharacterMatch(character, current, index);
+    const match = findCurrentCharacterMatch(character, current, index, usedCurrent);
     const currentIndex = match.index;
     const currentCharacter = currentIndex >= 0 ? current[currentIndex] : null;
     if (!currentCharacter) return character;
@@ -795,6 +807,7 @@ function mergeCharactersWithLocks(
       !match.matchedByIdentity &&
       hasLockWithPrefix(locks, `${characterTrackerLockPrefix(currentCharacter, currentIndex)}.`)
     ) {
+      usedCurrent.add(currentIndex);
       return character;
     }
     usedCurrent.add(currentIndex);

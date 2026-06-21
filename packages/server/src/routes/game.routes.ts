@@ -2634,6 +2634,28 @@ function buildJsonRepairPayload(args: {
   };
 }
 
+type JsonRepairRouteResult = {
+  type: "json_repair";
+  error: string;
+  repair: JsonRepairPayload;
+  validationError?: string;
+};
+
+function isJsonRepairRouteResult(value: unknown): value is JsonRepairRouteResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "json_repair" &&
+    typeof (value as { error?: unknown }).error === "string" &&
+    typeof (value as { repair?: unknown }).repair === "object" &&
+    (value as { repair?: unknown }).repair !== null
+  );
+}
+
+function sendJsonRepairRouteResult(reply: FastifyReply, result: JsonRepairRouteResult): void {
+  sendJsonRepairError(reply, result.error, result.repair, result.validationError);
+}
+
 function validateGameSetupPayload(setupData: Record<string, unknown>): string | null {
   const missing: string[] = [];
   if (!setupData.storyArc) missing.push("storyArc");
@@ -3626,7 +3648,7 @@ export async function gameRoutes(app: FastifyInstance) {
   // ── POST /game/setup ──
   app.post("/setup", async (req, reply) => {
     logger.info("[game/setup] Received request");
-    const { chatId, connectionId, preferences, streaming, debugMode } = setupSchema.parse(req.body);
+    const { chatId, connectionId, preferences, debugMode } = setupSchema.parse(req.body);
     const requestDebug = debugMode === true;
     const debugLogsEnabled = requestDebug || logger.isLevelEnabled("debug");
     const debugLog = (message: string, ...args: any[]) => {
@@ -3842,20 +3864,7 @@ export async function gameRoutes(app: FastifyInstance) {
       conn.model,
       {
         maxTokens: setupMaxTokens,
-        stream: streaming,
-        ...(streaming
-          ? {
-              onToken: (() => {
-                const setupStartTime = Date.now();
-                let sawFirstToken = false;
-                return (chunk: string) => {
-                  if (!chunk || sawFirstToken) return;
-                  sawFirstToken = true;
-                  debugLog("[game/setup] First streamed token received after %d ms", Date.now() - setupStartTime);
-                };
-              })(),
-            }
-          : {}),
+        stream: false,
       },
       setupGenerationParameters,
       conn.provider,
@@ -4391,7 +4400,14 @@ export async function gameRoutes(app: FastifyInstance) {
   app.post("/session/conclude", async (req, reply) => {
     const { chatId, connectionId, streaming, nextSessionRequest } = concludeSessionSchema.parse(req.body);
     const existingConclusion = pendingSessionConclusions.get(chatId);
-    if (existingConclusion) return existingConclusion;
+    if (existingConclusion) {
+      const conclusionResult = await existingConclusion;
+      if (isJsonRepairRouteResult(conclusionResult)) {
+        sendJsonRepairRouteResult(reply, conclusionResult);
+        return;
+      }
+      return conclusionResult;
+    }
 
     const conclusionRequest = (async () => {
     const trimmedNextSessionRequest = nextSessionRequest.trim();
@@ -4526,18 +4542,17 @@ export async function gameRoutes(app: FastifyInstance) {
       }
     } catch (err) {
       logger.warn(err, "[session/conclude] Combined session conclusion parsing failed");
-      sendJsonRepairError(
-        reply,
-        "The generated session conclusion was not valid JSON.",
-        buildJsonRepairPayload({
+      return {
+        type: "json_repair",
+        error: "The generated session conclusion was not valid JSON.",
+        repair: buildJsonRepairPayload({
           kind: "session_conclusion",
           title: `Repair Session ${sessionNumber} Summary JSON`,
           rawJson: conclusionExtraction.content,
           applyEndpoint: "/game/session/conclude/apply-json",
           applyBody: { chatId, connectionId: conn.id, nextSessionRequest: trimmedNextSessionRequest },
         }),
-      );
-      return;
+      } satisfies JsonRepairRouteResult;
     }
 
     let conclusionWasStored = false;
@@ -4632,7 +4647,12 @@ export async function gameRoutes(app: FastifyInstance) {
 
     pendingSessionConclusions.set(chatId, conclusionRequest);
     try {
-      return await conclusionRequest;
+      const conclusionResult = await conclusionRequest;
+      if (isJsonRepairRouteResult(conclusionResult)) {
+        sendJsonRepairRouteResult(reply, conclusionResult);
+        return;
+      }
+      return conclusionResult;
     } finally {
       if (pendingSessionConclusions.get(chatId) === conclusionRequest) {
         pendingSessionConclusions.delete(chatId);
@@ -4644,7 +4664,14 @@ export async function gameRoutes(app: FastifyInstance) {
   app.post("/session/conclude/apply-json", async (req, reply) => {
     const { chatId, rawJson, connectionId, nextSessionRequest } = jsonRepairApplySchema.parse(req.body);
     const existingConclusion = pendingSessionConclusions.get(chatId);
-    if (existingConclusion) return existingConclusion;
+    if (existingConclusion) {
+      const conclusionResult = await existingConclusion;
+      if (isJsonRepairRouteResult(conclusionResult)) {
+        sendJsonRepairRouteResult(reply, conclusionResult);
+        return;
+      }
+      return conclusionResult;
+    }
 
     const conclusionRequest = (async () => {
     const trimmedNextSessionRequest = nextSessionRequest.trim();
@@ -4686,18 +4713,17 @@ export async function gameRoutes(app: FastifyInstance) {
       });
     } catch (err) {
       logger.warn(err, "[session/conclude/apply-json] Repaired session conclusion JSON still failed to parse");
-      sendJsonRepairError(
-        reply,
-        "The edited session conclusion JSON is still invalid.",
-        buildJsonRepairPayload({
+      return {
+        type: "json_repair",
+        error: "The edited session conclusion JSON is still invalid.",
+        repair: buildJsonRepairPayload({
           kind: "session_conclusion",
           title: `Repair Session ${sessionNumber} Summary JSON`,
           rawJson,
           applyEndpoint: "/game/session/conclude/apply-json",
           applyBody: { chatId, nextSessionRequest: trimmedNextSessionRequest },
         }),
-      );
-      return;
+      } satisfies JsonRepairRouteResult;
     }
 
     let conclusionWasStored = false;
@@ -4783,7 +4809,12 @@ export async function gameRoutes(app: FastifyInstance) {
 
     pendingSessionConclusions.set(chatId, conclusionRequest);
     try {
-      return await conclusionRequest;
+      const conclusionResult = await conclusionRequest;
+      if (isJsonRepairRouteResult(conclusionResult)) {
+        sendJsonRepairRouteResult(reply, conclusionResult);
+        return;
+      }
+      return conclusionResult;
     } finally {
       if (pendingSessionConclusions.get(chatId) === conclusionRequest) {
         pendingSessionConclusions.delete(chatId);

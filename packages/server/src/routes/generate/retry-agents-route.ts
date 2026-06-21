@@ -48,6 +48,7 @@ import { createChatsStorage } from "../../services/storage/chats.storage.js";
 import { createConnectionsStorage } from "../../services/storage/connections.storage.js";
 import { createPromptsStorage } from "../../services/storage/prompts.storage.js";
 import { findLastUserMessageIdBefore } from "../../services/generation/message-history.js";
+import { textRewriteDropsProtectedMarkup } from "../../services/generation/text-rewrite-safety.js";
 import { resolveConnectionImageDefaults } from "../../services/image/image-generation-defaults.js";
 import { loadImageGenerationUserSettings } from "../../services/image/image-generation-settings.js";
 import { compileImagePrompt } from "../../services/image/image-prompt-compiler.js";
@@ -66,6 +67,7 @@ import {
   preserveTrackerCharacterUiFields,
   resolveActiveCharacterIds,
   resolveBaseUrl,
+  resolveRoleplayChatSummary,
   resolveVisibleGameStateAnchor,
 } from "./generate-route-utils.js";
 import {
@@ -590,9 +592,10 @@ async function buildRetryAgentContext(args: {
     return resolveHistoryMessageMacros([{ content: value, characterId: null }])[0]?.content ?? value;
   };
 
+  const chatMode = ((chat as { mode?: ChatMode }).mode ?? "conversation") as ChatMode;
   const agentContext: AgentContext = {
     chatId,
-    chatMode: (chat as any).mode ?? "conversation",
+    chatMode,
     wrapFormat,
     recentMessages: agentSlice.map((message: any, index: number) => {
       const resolved = resolvedAgentSlice[index];
@@ -639,7 +642,7 @@ async function buildRetryAgentContext(args: {
         : null,
     activatedLorebookEntries: null,
     writableLorebookIds: null,
-    chatSummary: ((chatMeta.summary as string) ?? "").trim() || null,
+    chatSummary: resolveRoleplayChatSummary(chatMode, chatMeta),
     streaming,
     memory: {},
   };
@@ -2188,8 +2191,20 @@ async function applyRetryResultEffects(args: {
         const editNeededValue = rewriteData.editNeeded;
         const strictEditNeeded = result.agentType === "prose-guardian" || result.agentType === "continuity";
         const rewriteAllowed = editNeededValue === false ? false : strictEditNeeded ? editNeededValue === true : true;
+        const droppedProtectedMarkup =
+          strictEditNeeded && textRewriteDropsProtectedMarkup(currentResponseForRewrite, editedText);
+        if (droppedProtectedMarkup) {
+          logger.warn(
+            "[retry-agents] Skipping %s rewrite because it dropped protected markup from message %s",
+            result.agentType,
+            retryMessageId,
+          );
+        }
         const changedMessage =
-          rewriteAllowed && editedText.trim().length > 0 && editedText !== currentResponseForRewrite;
+          rewriteAllowed &&
+          !droppedProtectedMarkup &&
+          editedText.trim().length > 0 &&
+          editedText !== currentResponseForRewrite;
         if (retryMessageId && changedMessage) {
           const currentMessage = await chats.getMessage(retryMessageId);
           if ((currentMessage?.content ?? "") !== expectedStoredMessageContent) {

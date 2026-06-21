@@ -353,7 +353,7 @@ export async function assemblePrompt(input: AssemblerInput): Promise<AssemblerOu
 
     if (!resolved) continue;
 
-    if (section.injectionPosition === "depth" && section.injectionDepth >= 0) {
+    if (!resolved.isChatHistory && section.injectionPosition === "depth" && section.injectionDepth >= 0) {
       depthSections.push(resolved);
     } else {
       orderedSections.push(resolved);

@@ -58,6 +58,7 @@ import {
   resolveCharacterNameMap,
   resolveRegenerationGameStateAnchor,
   resolveProviderTopK,
+  resolveRoleplayChatSummary,
   normalizeServiceTier,
   resolveVisibleGameStateAnchor,
   resolveBaseUrl,
@@ -555,6 +556,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
     // Pull existing messages, apply the same conversation-start + context limit filtering
     const allChatMessages = await chats.listMessages(chatId);
     const chatMode = (chat.mode as string) ?? "roleplay";
+    const activeChatSummary = resolveRoleplayChatSummary(chatMode, chatMeta);
     const dryRunActiveAgentIds = Array.isArray(chatMeta.activeAgentIds) ? (chatMeta.activeAgentIds as string[]) : [];
     const dryRunChatEnableAgents = shouldEnableAgentsForGeneration({
       chatEnableAgents: chatMeta.enableAgents === true,
@@ -957,7 +959,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
 
       const chatSummaryBlock = (() => {
         if (!includeChatSummary) return "";
-        const summary = ((chatMeta.summary as string) ?? "").trim();
+        const summary = activeChatSummary ?? "";
         if (!summary) return "";
         return wrapFormat === "xml" ? `<chat_summary>\n${summary}\n</chat_summary>` : `Chat summary:\n${summary}`;
       })();
@@ -1174,7 +1176,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
           }
         })(),
         chatMessages: mappedMessages,
-        chatSummary: resolvedInjectChatSummary ? ((chatMeta.summary as string) ?? "").trim() || null : null,
+        chatSummary: resolvedInjectChatSummary ? activeChatSummary : null,
         enableAgents: false,
         activeAgentIds: [],
         activeLorebookIds: resolvedInjectLorebook
@@ -1258,7 +1260,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
 
     // Optional injection: chat summary (when not handled by preset assembler)
     if (!usePromptParts && !effectivePresetId && resolvedInjectChatSummary) {
-      const summary = ((chatMeta.summary as string) ?? "").trim();
+      const summary = activeChatSummary ?? "";
       if (summary) {
         const block =
           wrapFormat === "xml" ? `<chat_summary>\n${summary}\n</chat_summary>` : `Chat summary:\n${summary}`;

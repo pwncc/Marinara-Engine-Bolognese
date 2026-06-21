@@ -14,6 +14,9 @@ import {
 } from "react";
 import {
   type ChatSummaryEntry,
+  type MarkerConfig,
+  type PromptGroup,
+  type PromptSection,
   type SceneForkMode,
   type SpritePlacement,
   type SpriteSide,
@@ -38,7 +41,7 @@ import { useUIStore } from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
 import { useGameStateStore } from "../../stores/game-state.store";
 import { useActiveLorebookEntries, useLorebooks } from "../../hooks/use-lorebooks";
-import { usePresets } from "../../hooks/use-presets";
+import { usePresetFull, usePresets } from "../../hooks/use-presets";
 import { ChatMessage } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
 import { CyoaChoices } from "./CyoaChoices";
@@ -315,6 +318,59 @@ function readStringArray(value: unknown): string[] {
     : [];
 }
 
+function promptEnabled(value: unknown): boolean {
+  return value !== false && value !== "false";
+}
+
+function readMarkerConfig(value: unknown): MarkerConfig | null {
+  if (!value) return null;
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as MarkerConfig;
+    } catch {
+      return null;
+    }
+  }
+  return typeof value === "object" ? (value as MarkerConfig) : null;
+}
+
+function groupPathEnabled(groupId: string | null, groupsById: Map<string, PromptGroup>): boolean {
+  let currentId = groupId;
+  const seen = new Set<string>();
+  while (currentId) {
+    if (seen.has(currentId)) return true;
+    seen.add(currentId);
+    const group = groupsById.get(currentId);
+    if (!group) return true;
+    if (!promptEnabled(group.enabled)) return false;
+    currentId = group.parentGroupId;
+  }
+  return true;
+}
+
+function resolveChatSummaryInjectionHint(
+  presetFull: { sections: PromptSection[]; groups: PromptGroup[] } | null | undefined,
+): string | null {
+  if (!presetFull) return null;
+
+  const groupsById = new Map(presetFull.groups.map((group) => [group.id, group]));
+  const summarySections = presetFull.sections.filter((section) => {
+    const isMarker = (section.isMarker as unknown) === true || (section.isMarker as unknown) === "true";
+    return isMarker && readMarkerConfig(section.markerConfig)?.type === "chat_summary";
+  });
+
+  if (summarySections.length === 0) {
+    return "Active preset has no Chat Summary marker, so enabled summaries will not be inserted.";
+  }
+  if (!summarySections.some((section) => promptEnabled(section.enabled))) {
+    return "Chat Summary section is disabled in the active preset.";
+  }
+  if (!summarySections.some((section) => promptEnabled(section.enabled) && groupPathEnabled(section.groupId, groupsById))) {
+    return "Chat Summary section is inside a disabled preset group.";
+  }
+  return null;
+}
+
 function ActiveContextLinksButton({
   chat,
   chatMeta,
@@ -561,6 +617,7 @@ function SummaryButton({
   summaryRunInterval,
   automaticSummariesAvailable,
   totalMessageCount,
+  promptPresetId,
 }: {
   chatId: string | null;
   summary: string | null;
@@ -573,11 +630,14 @@ function SummaryButton({
   summaryRunInterval?: number;
   automaticSummariesAvailable: boolean;
   totalMessageCount: number;
+  promptPresetId?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [anchor, setAnchor] = useState<ComponentProps<typeof SummaryPopover>["anchor"]>(null);
   const compact = useUIStore((s) => s.centerCompact);
+  const { data: presetFull } = usePresetFull(promptPresetId ?? null);
+  const summaryInjectionHint = useMemo(() => resolveChatSummaryInjectionHint(presetFull), [presetFull]);
 
   useLayoutEffect(() => {
     if (!open || !buttonRef.current) return;
@@ -639,6 +699,7 @@ function SummaryButton({
             summaryRunInterval={summaryRunInterval}
             automaticSummariesAvailable={automaticSummariesAvailable}
             totalMessageCount={totalMessageCount}
+            summaryInjectionHint={summaryInjectionHint}
             anchor={anchor}
             onClose={() => setOpen(false)}
           />
@@ -1223,6 +1284,7 @@ export function ChatRoleplaySurface({
                       summaryRunInterval={summaryRunInterval}
                       automaticSummariesAvailable={chatMode === "roleplay"}
                       totalMessageCount={totalMessageCount}
+                      promptPresetId={typeof chat?.promptPresetId === "string" ? chat.promptPresetId : null}
                     />
                     <ActiveContextLinksButton
                       chat={chat}
@@ -1313,6 +1375,7 @@ export function ChatRoleplaySurface({
                           summaryRunInterval={summaryRunInterval}
                           automaticSummariesAvailable={chatMode === "roleplay"}
                           totalMessageCount={totalMessageCount}
+                          promptPresetId={typeof chat?.promptPresetId === "string" ? chat.promptPresetId : null}
                         />
                         <ActiveContextLinksButton
                           chat={chat}
@@ -1370,6 +1433,7 @@ export function ChatRoleplaySurface({
                         summaryRunInterval={summaryRunInterval}
                         automaticSummariesAvailable={chatMode === "roleplay"}
                         totalMessageCount={totalMessageCount}
+                        promptPresetId={typeof chat?.promptPresetId === "string" ? chat.promptPresetId : null}
                       />
                       <ActiveContextLinksButton
                         chat={chat}

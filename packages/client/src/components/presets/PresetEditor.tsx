@@ -1260,7 +1260,9 @@ function SectionsTab({
                             <div className="mari-chrome-text rounded-lg bg-[var(--marinara-chat-chrome-highlight-bg)] p-3 text-xs">
                               Marker type: <strong>{MARKER_LABELS[mc.type as MarkerType] ?? "Unknown"}</strong>
                               <p className="mt-1 text-[var(--muted-foreground)]">
-                                Content is auto-generated at assembly time from your characters, lorebooks, etc.
+                                {mc.type === "chat_summary"
+                                  ? "Renders the compiled Chat Summary for this chat, including enabled manual and automated summary entries."
+                                  : "Content is auto-generated at assembly time from your characters, lorebooks, etc."}
                               </p>
                               {["lorebook", "world_info_before", "world_info_after"].includes(mc.type) && (
                                 <p className="mt-1 text-amber-200">

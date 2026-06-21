@@ -78,6 +78,7 @@ import { injectAtDepth } from "../services/lorebook/prompt-injector.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { resolveConnectionImageDefaults } from "../services/image/image-generation-defaults.js";
 import { loadImageGenerationUserSettings } from "../services/image/image-generation-settings.js";
+import { textRewriteDropsProtectedMarkup } from "../services/generation/text-rewrite-safety.js";
 import { compileImagePrompt } from "../services/image/image-prompt-compiler.js";
 import { extractLeadingThinkingBlocks } from "../services/llm/inline-thinking.js";
 import { resolveSpotifyCredentials, spotifyHasScope } from "../services/spotify/spotify.service.js";
@@ -203,6 +204,7 @@ import {
   parseStoredGenerationParameters,
   parseGameStateRow,
   parseSnapshotPlayerStats,
+  isRoleplaySummaryMode,
   preserveTrackerCharacterUiFields,
   prefixGroupIndividualHistorySpeakers,
   resolveActiveCharacterIds,
@@ -211,6 +213,7 @@ import {
   resolvePromptCharacterIdsForTarget,
   resolveRegenerationGameStateFallbackMessageIds,
   resolveRegenerationGameStateAnchor,
+  resolveRoleplayChatSummary,
   resolveUserRegenerationPersistentAttachments,
   resolveVisibleGameStateAnchor,
   resolveProviderTopK,
@@ -592,15 +595,6 @@ function clampRoleplaySummaryContextSize(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return 50;
   return Math.max(MIN_SUMMARY_CONTEXT_SIZE, Math.min(MAX_SUMMARY_CONTEXT_SIZE, Math.trunc(parsed)));
-}
-
-function isRoleplaySummaryMode(chatMode: string): boolean {
-  return chatMode === "roleplay" || chatMode === "visual_novel";
-}
-
-function resolveRoleplayChatSummary(chatMode: string, chatMetadata: Record<string, unknown>): string | null {
-  if (!isRoleplaySummaryMode(chatMode)) return null;
-  return ((chatMetadata.summary as string) ?? "").trim() || null;
 }
 
 function isAutomaticRoleplaySummaryEnabled(chatMetadata: Record<string, unknown>): boolean {
@@ -8823,8 +8817,20 @@ export async function generateRoutes(app: FastifyInstance) {
                     editorResult.agentType === "prose-guardian" || editorResult.agentType === "continuity";
                   const rewriteAllowed =
                     editNeededValue === false ? false : strictEditNeeded ? editNeededValue === true : true;
+                  const droppedProtectedMarkup =
+                    strictEditNeeded && textRewriteDropsProtectedMarkup(currentResponseForRewrite, editedText);
+                  if (droppedProtectedMarkup) {
+                    logger.warn(
+                      "[text-rewrite] Skipping %s rewrite because it dropped protected markup from message %s",
+                      editorResult.agentType,
+                      messageId,
+                    );
+                  }
                   const changedMessage =
-                    rewriteAllowed && editedText.trim().length > 0 && editedText !== currentResponseForRewrite;
+                    rewriteAllowed &&
+                    !droppedProtectedMarkup &&
+                    editedText.trim().length > 0 &&
+                    editedText !== currentResponseForRewrite;
                   if (changedMessage) {
                     const originalText = strictEditNeeded ? originalResponseBeforeRewrite : null;
                     currentResponseForRewrite = editedText;

@@ -20,7 +20,20 @@ import {
   useUpdateChatMetadata,
   useUpdateSummaryEntry,
 } from "../../hooks/use-chats";
-import { Check, ChevronRight, Copy, Loader2, PenLine, Plus, Save, ScrollText, Sparkles, Trash2, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  ChevronRight,
+  Copy,
+  Loader2,
+  PenLine,
+  Plus,
+  Save,
+  ScrollText,
+  Sparkles,
+  Trash2,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { cn, generateClientId } from "../../lib/utils";
 import { useUIStore } from "../../stores/ui.store";
@@ -51,6 +64,7 @@ interface SummaryPopoverProps {
   summaryRunInterval?: number;
   automaticSummariesAvailable?: boolean;
   totalMessageCount: number;
+  summaryInjectionHint?: string | null;
   anchor?: SummaryPopoverAnchor | null;
   onClose: () => void;
 }
@@ -201,6 +215,7 @@ export function SummaryPopover({
   summaryRunInterval,
   automaticSummariesAvailable = true,
   totalMessageCount,
+  summaryInjectionHint = null,
   anchor = null,
   onClose,
 }: SummaryPopoverProps) {
@@ -356,6 +371,7 @@ export function SummaryPopover({
   const hasEntries = visibleEntries.length > 0;
   const allVisibleEntriesHidden = hasPersistedEntries && !hasEntries;
   const allEntriesDisabled = hasPersistedEntries && enabledEntryCount === 0;
+  const showSummaryInjectionHint = enabledEntryCount > 0 && !!summaryInjectionHint;
   const tokenWarning = enabledTokenEstimate > SUMMARY_TOKEN_WARNING_THRESHOLD;
   const entryMutationPending =
     updateSummaryEntry.isPending || deleteSummaryEntry.isPending || toggleSummaryEntry.isPending;
@@ -775,6 +791,13 @@ export function SummaryPopover({
                 />
               </div>
             </div>
+
+            {showSummaryInjectionHint && (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-400/25 bg-amber-400/10 px-2.5 py-2 text-[0.6875rem] leading-snug text-amber-100">
+                <AlertTriangle size="0.75rem" className="mt-0.5 shrink-0" />
+                <span>{summaryInjectionHint}</span>
+              </div>
+            )}
 
             <div className="grid gap-2 sm:grid-cols-2">
               {automaticSummariesAvailable && (

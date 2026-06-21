@@ -37,7 +37,7 @@ export function buildLlamaArgs(options: {
     args.push("--jinja");
   }
 
-  args.push("--embeddings", "--pooling", "mean");
+  args.push("--embeddings", "--pooling", "none");
 
   // Gemma 4 needs split mode disabled on CUDA multi-GPU launches,
   // but non-CUDA builds may reject the flag entirely.

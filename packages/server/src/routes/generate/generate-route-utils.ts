@@ -458,6 +458,15 @@ export function isMessageHiddenFromAI(message: { extra?: unknown }): boolean {
   return parseExtra(message.extra).hiddenFromAI === true;
 }
 
+export function isRoleplaySummaryMode(chatMode: string): boolean {
+  return chatMode === "roleplay" || chatMode === "visual_novel";
+}
+
+export function resolveRoleplayChatSummary(chatMode: string, chatMetadata: Record<string, unknown>): string | null {
+  if (!isRoleplaySummaryMode(chatMode)) return null;
+  return ((chatMetadata.summary as string) ?? "").trim() || null;
+}
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
