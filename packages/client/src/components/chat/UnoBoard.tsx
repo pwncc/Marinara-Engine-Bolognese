@@ -88,6 +88,21 @@ export function UnoBoard({ chatId }: Props) {
   const isMyTurn = !!view && view.currentSeatId === view.yourSeatId;
   const jumpInSet = useMemo(() => new Set(view?.jumpInCardIds ?? []), [view]);
 
+  // Seats arranged in ACTUAL turn order: the current player first, then each
+  // following seat in the live play direction. A Reverse flips `direction`, so
+  // the queue visibly re-orders; the human appears in their real slot rather
+  // than pinned aside. Falls back to the natural seating order once the game is
+  // finished (no current seat).
+  const turnOrderedSeats = useMemo(() => {
+    if (!view) return [];
+    const seats = view.seats;
+    const n = seats.length;
+    const curIdx = seats.findIndex((s) => s.seatId === view.currentSeatId);
+    if (n === 0 || curIdx < 0) return seats;
+    const dir = view.direction === -1 ? -1 : 1;
+    return Array.from({ length: n }, (_, k) => seats[(((curIdx + dir * k) % n) + n) % n]!);
+  }, [view]);
+
   // No active game: render nothing. The setup modal is mounted once in
   // ConversationView (a stable position), so it never double-renders here.
   if (!view) return null;
@@ -162,12 +177,13 @@ export function UnoBoard({ chatId }: Props) {
         </div>
       )}
 
-      {/* Seats (turn order, including you) + discard */}
+      {/* Seats in live turn order (current first, play-direction), including you + discard */}
       <div className="mb-2 flex items-center gap-3">
         <div className="flex flex-1 flex-wrap items-center gap-3">
-          {view.seats.map((seat) => {
+          {turnOrderedSeats.map((seat, idx) => {
             const isYou = seat.seatId === view.yourSeatId;
             const catchable = !isYou && view.catchableSeatIds.includes(seat.seatId);
+            const isNext = view.status !== "finished" && idx === 1 && turnOrderedSeats.length > 1;
             return (
               <div
                 key={seat.seatId}
@@ -184,6 +200,11 @@ export function UnoBoard({ chatId }: Props) {
                   <div className="flex items-center gap-1 text-xs font-medium text-[var(--foreground)]">
                     {seat.displayName}
                     {isYou && <span className="text-[0.6rem] font-semibold text-[var(--muted-foreground)]">(you)</span>}
+                    {isNext && (
+                      <span className="text-[0.6rem] font-semibold uppercase tracking-wide text-[var(--primary)]/70">
+                        next
+                      </span>
+                    )}
                     {seat.vulnerable && <span className="text-[0.6rem] font-bold text-amber-500">UNO?</span>}
                   </div>
                   <div className="text-[0.7rem] text-[var(--muted-foreground)]">
