@@ -8216,9 +8216,12 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!cp) throw new Error("Checkpoint not found");
     if (cp.chatId !== input.chatId) throw new Error("Checkpoint does not belong to this chat");
 
-    // Fetch the original snapshot
-    const snapshot = await stateStore.getByMessage(cp.messageId, 0);
-    if (!snapshot) throw new Error("Checkpoint snapshot no longer exists");
+    // Fetch the exact snapshot captured by the checkpoint. Do not fall back to
+    // message/swipe lookup: swipe indexes can shift while the snapshot row id
+    // remains stable, and a fallback could restore the wrong state.
+    const snapshot = await stateStore.getById(cp.snapshotId);
+    if (!snapshot) throw new Error("Checkpoint snapshot was deleted and can no longer be restored");
+    if (snapshot.chatId !== input.chatId) throw new Error("Checkpoint snapshot does not belong to this chat");
 
     // Create a system message to mark the restore point
     const restoreMsg = await chats.createMessage({

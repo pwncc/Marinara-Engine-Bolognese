@@ -79,6 +79,11 @@ export function createGameStateStorage(db: DB) {
       return rows[0] ?? null;
     },
 
+    async getById(id: string) {
+      const rows = await db.select().from(gameStateSnapshots).where(eq(gameStateSnapshots.id, id)).limit(1);
+      return rows[0] ?? null;
+    },
+
     /** Get the latest committed game state — the one the user "accepted" by sending their next message. */
     async getLatestCommitted(chatId: string) {
       const rows = await db
