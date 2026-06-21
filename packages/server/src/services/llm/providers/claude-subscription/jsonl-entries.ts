@@ -337,13 +337,14 @@ export function buildAssistantPrefillContinuationPrompt(prefill: string): string
   if (!normalized.trim()) {
     return "Continue the assistant's reply.";
   }
+  const safePrefill = normalized.replaceAll("</assistant_prefill>", "&lt;/assistant_prefill&gt;");
   return [
     "Continue the assistant's reply as if it already began with the prefill below.",
     "The prefill is already part of the assistant message, so do not repeat it.",
     "Start with the very next text that should follow it, preserving the same voice, format, and momentum.",
     "",
     "<assistant_prefill>",
-    normalized,
+    safePrefill,
     "</assistant_prefill>",
   ].join("\n");
 }
