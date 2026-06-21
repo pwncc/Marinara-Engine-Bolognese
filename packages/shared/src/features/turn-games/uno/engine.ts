@@ -665,14 +665,22 @@ function pickFallback(state: UnoState, seatId: string): UnoMove {
   const moves = enumerateLegalMoves(state, seatId);
   const hand = state.hands[seatId] ?? [];
 
-  // Out-of-turn fallback: pass/no-op is represented by declaring/catching only when forced.
+  // Out-of-turn: the only legal moves are optional interrupts — call_out,
+  // declare_uno, and jump_in (exactly what enumerateLegalMoves returns here).
+  // `draw` is NOT legal out of turn, so never fall back to it. pickFallbackMove
+  // must return a *legal* move, so prefer the passive interrupts (catch a
+  // careless opponent, then declare if vulnerable), then a jump-in, then any
+  // remaining legal move. If there is no legal interrupt the seat simply has
+  // nothing to do out of turn; production only requests a fallback for the seat
+  // whose turn it is, so the final sentinel is defensive and never reached.
   if (currentSeatId(state) !== seatId) {
-    // Prefer catching a careless opponent, else declare UNO if vulnerable, else there's nothing to do.
-    const catchMove = moves.find((m) => m.type === "call_out");
-    if (catchMove) return catchMove;
-    const declare = moves.find((m) => m.type === "declare_uno");
-    if (declare) return declare;
-    return catchMove ?? declare ?? { type: "draw" };
+    return (
+      moves.find((m) => m.type === "call_out") ??
+      moves.find((m) => m.type === "declare_uno") ??
+      moves.find((m) => m.type === "jump_in") ??
+      moves[0] ??
+      { type: "declare_uno" }
+    );
   }
 
   if (state.status === "awaiting_post_draw") {
