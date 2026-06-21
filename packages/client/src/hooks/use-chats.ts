@@ -478,6 +478,26 @@ export function useUpdateChat() {
   });
 }
 
+export function useTouchChat() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post<Chat>(`/chats/${id}/touch`, {}),
+    onMutate: async (id) => {
+      const updatedAt = new Date().toISOString();
+      qc.setQueryData<Chat[]>(chatKeys.list(), (existing) =>
+        existing
+          ?.map((chat) => (chat.id === id ? { ...chat, updatedAt } : chat))
+          .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
+      );
+      qc.setQueryData<Chat>(chatKeys.detail(id), (existing) => (existing ? { ...existing, updatedAt } : existing));
+    },
+    onSuccess: (chat, id) => {
+      if (chat) qc.setQueryData<Chat>(chatKeys.detail(id), chat);
+      qc.invalidateQueries({ queryKey: chatKeys.list() });
+    },
+  });
+}
+
 export function useUpdateChatMetadata() {
   const qc = useQueryClient();
   return useMutation({

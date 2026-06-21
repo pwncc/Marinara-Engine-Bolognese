@@ -316,6 +316,13 @@ export function createChatsStorage(db: DB) {
       return rows[0] ?? null;
     },
 
+    async touch(id: string, opts?: { tx?: Pick<DB, "select" | "update"> }) {
+      const conn = opts?.tx ?? db;
+      await conn.update(chats).set({ updatedAt: now() }).where(eq(chats.id, id));
+      const rows = await conn.select().from(chats).where(eq(chats.id, id));
+      return rows[0] ?? null;
+    },
+
     /**
      * Set the folder assignment for a chat, propagating to every branch that
      * shares its groupId. The sidebar collapses each group to a single visible

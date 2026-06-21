@@ -571,6 +571,14 @@ export async function chatsRoutes(app: FastifyInstance) {
     return storage.update(req.params.id, data);
   });
 
+  app.post<{ Params: { id: string } }>("/:id/touch", async (req, reply) => {
+    const chat = await storage.getById(req.params.id);
+    if (!chat || (hasProfessorMariCharacter(chat) && !isHomeProfessorMariChat(chat))) {
+      return reply.status(404).send({ error: "Chat not found" });
+    }
+    return storage.touch(req.params.id);
+  });
+
   // Update chat metadata (partial merge)
   app.patch<{ Params: { id: string } }>("/:id/metadata", async (req, reply) => {
     const chat = await storage.getById(req.params.id);
