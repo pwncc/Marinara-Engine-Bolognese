@@ -788,6 +788,30 @@ async function isConversationYoutubeCommandAvailable(storage: {
   return typeof settings.youtubeApiKey === "string" && settings.youtubeApiKey.trim().length > 0;
 }
 
+function resolveKnownMaxOutputTokens(provider: APIProvider | string | null | undefined, model: string): number | null {
+  const knownModel = provider ? findKnownModel(provider as APIProvider, model.trim()) : undefined;
+  return knownModel?.maxOutput && knownModel.maxOutput > 0 ? Math.floor(knownModel.maxOutput) : null;
+}
+
+function clampGenerationMaxOutputTokens(args: {
+  provider: APIProvider | string | null | undefined;
+  model: string;
+  maxTokens: number;
+  maxTokensOverride?: number | null;
+}): number {
+  let capped = Math.max(1, Math.floor(args.maxTokens));
+  const knownMaxOutput = resolveKnownMaxOutputTokens(args.provider, args.model);
+  if (knownMaxOutput !== null) capped = Math.min(capped, knownMaxOutput);
+  if (
+    typeof args.maxTokensOverride === "number" &&
+    Number.isFinite(args.maxTokensOverride) &&
+    args.maxTokensOverride > 0
+  ) {
+    capped = Math.min(capped, Math.floor(args.maxTokensOverride));
+  }
+  return capped;
+}
+
 /** Fisher-Yates shuffle (in place); used for random emoji selection. */
 function shuffleInPlace<T>(items: T[]): T[] {
   for (let i = items.length - 1; i > 0; i--) {
@@ -3500,6 +3524,15 @@ export async function generateRoutes(app: FastifyInstance) {
 
         applyParameterOverrides(connectionParams);
         applyParameterOverrides(chatParams);
+
+        if (chatMode === "game") {
+          maxTokens = clampGenerationMaxOutputTokens({
+            provider: conn.provider,
+            model: conn.model,
+            maxTokens: Math.max(maxTokens, 16_384),
+            maxTokensOverride: conn.maxTokensOverride,
+          });
+        }
 
         const modelLower = (conn.model ?? "").toLowerCase();
         const providerLower = (conn.provider ?? "").toLowerCase();

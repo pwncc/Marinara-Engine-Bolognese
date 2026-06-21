@@ -39,6 +39,61 @@ function extractObjectCandidate(raw: string): string {
   return end > start ? raw.slice(start, end + 1).trim() : raw.slice(start).trim();
 }
 
+function scanJsonishStructure(raw: string): {
+  started: boolean;
+  mismatched: boolean;
+  inString: boolean;
+  escaped: boolean;
+  closers: string[];
+} {
+  const objectStart = raw.indexOf("{");
+  const arrayStart = raw.indexOf("[");
+  const starts = [objectStart, arrayStart].filter((index) => index >= 0);
+  const start = starts.length > 0 ? Math.min(...starts) : -1;
+  if (start === -1) {
+    return { started: false, mismatched: false, inString: false, escaped: false, closers: [] };
+  }
+
+  let inString = false;
+  let escaped = false;
+  let mismatched = false;
+  const closers: string[] = [];
+
+  for (let i = start; i < raw.length; i++) {
+    const char = raw[i]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && inString) {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === "{") {
+      closers.push("}");
+      continue;
+    }
+    if (char === "[") {
+      closers.push("]");
+      continue;
+    }
+    if (char === "}" || char === "]") {
+      if (closers.at(-1) === char) {
+        closers.pop();
+      } else {
+        mismatched = true;
+      }
+    }
+  }
+
+  return { started: true, mismatched, inString, escaped, closers };
+}
+
 function sanitizeControlCharsInStrings(raw: string): string {
   let output = "";
   let inString = false;
@@ -125,10 +180,22 @@ function removeTrailingCommas(raw: string): string {
   return raw.replace(/,\s*([}\]])/g, "$1");
 }
 
+function closeUnbalancedJsonish(raw: string): string {
+  const scan = scanJsonishStructure(raw);
+  if (!scan.started || scan.mismatched || (!scan.inString && scan.closers.length === 0)) return raw;
+
+  let output = raw.trimEnd();
+  if (scan.escaped) output += "\\";
+  if (scan.inString) output += '"';
+  output = output.replace(/,\s*$/, "");
+  return `${output}${scan.closers.reverse().join("")}`;
+}
+
 function repairJsonish(raw: string): string {
-  return removeTrailingCommas(
-    insertMissingPropertyCommas(stripCommentsOutsideStrings(sanitizeControlCharsInStrings(raw))),
-  );
+  const sanitized = sanitizeControlCharsInStrings(raw);
+  const uncommented = stripCommentsOutsideStrings(sanitized);
+  const commaRepaired = insertMissingPropertyCommas(uncommented);
+  return closeUnbalancedJsonish(removeTrailingCommas(commaRepaired));
 }
 
 function unwrapJsonString(value: unknown): unknown {
@@ -167,4 +234,10 @@ export function parseGameJsonish(raw: string): unknown {
   } catch {
     return unwrapJsonString(JSON.parse(candidate));
   }
+}
+
+export function jsonishLooksTruncated(raw: string): boolean {
+  const candidate = extractObjectCandidate(stripFences(raw.trim()));
+  const scan = scanJsonishStructure(candidate);
+  return scan.started && !scan.mismatched && (scan.inString || scan.escaped || scan.closers.length > 0);
 }

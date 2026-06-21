@@ -18,7 +18,7 @@ import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { extractLeadingThinkingBlocks } from "../services/llm/inline-thinking.js";
 import { type ChatCompletionResult, type ChatMessage, type ChatOptions } from "../services/llm/base-provider.js";
 import { isDiceNotation, rollDice } from "../services/game/dice.service.js";
-import { parseGameJsonish } from "../services/game/jsonish.js";
+import { jsonishLooksTruncated, parseGameJsonish } from "../services/game/jsonish.js";
 import { validateTransition } from "../services/game/state-machine.service.js";
 import {
   buildSetupPrompt,
@@ -90,6 +90,7 @@ import {
 } from "../services/game/journal.service.js";
 import { dedupeSessionSummaryLists } from "../services/game/session-summary-normalization.js";
 import {
+  findKnownModel,
   generationParametersSchema,
   isClaudeAdaptiveOnlyNoSamplingModel,
   supportsXhighReasoningEffort,
@@ -1531,6 +1532,38 @@ function resolveGameModelAccessPolicy(args: {
   };
 }
 
+function resolveKnownMaxOutputTokens(provider: APIProvider | string | null | undefined, model: string): number | null {
+  const knownModel = provider ? findKnownModel(provider as APIProvider, model.trim()) : undefined;
+  return knownModel?.maxOutput && knownModel.maxOutput > 0 ? Math.floor(knownModel.maxOutput) : null;
+}
+
+function clampGameMaxOutputTokens(args: {
+  provider: APIProvider | string | null | undefined;
+  model: string;
+  maxTokens: number;
+  maxTokensOverride?: number | null;
+}): number {
+  let capped = Math.max(1, Math.floor(args.maxTokens));
+  const knownMaxOutput = resolveKnownMaxOutputTokens(args.provider, args.model);
+  if (knownMaxOutput !== null) capped = Math.min(capped, knownMaxOutput);
+  if (
+    typeof args.maxTokensOverride === "number" &&
+    Number.isFinite(args.maxTokensOverride) &&
+    args.maxTokensOverride > 0
+  ) {
+    capped = Math.min(capped, Math.floor(args.maxTokensOverride));
+  }
+  return capped;
+}
+
+function isLengthFinishReason(finishReason: unknown): boolean {
+  return typeof finishReason === "string" && finishReason.trim().toLowerCase() === "length";
+}
+
+function isLikelyTruncatedJsonResponse(raw: string, finishReason: unknown): boolean {
+  return isLengthFinishReason(finishReason) || jsonishLooksTruncated(raw);
+}
+
 function resolveGameReasoningEffort(
   model: string,
   reasoningEffort: GenerationParameters["reasoningEffort"] | ChatOptions["reasoningEffort"] | null | undefined,
@@ -1664,6 +1697,7 @@ function gameGenOptions(
 
 const SESSION_SUMMARY_CHARS_PER_TOKEN = 4;
 const SESSION_SUMMARY_MIN_TRANSCRIPT_CHARS = 256;
+const GAME_SETUP_MIN_OUTPUT_TOKENS = 16_384;
 const SESSION_CONCLUSION_MIN_OUTPUT_TOKENS = 8192;
 const CAMPAIGN_PROGRESSION_MIN_OUTPUT_TOKENS = SESSION_CONCLUSION_MIN_OUTPUT_TOKENS;
 const GAME_GENERATION_TIMEOUT_MS = 4 * 60 * 1000;
@@ -3677,10 +3711,16 @@ export async function gameRoutes(app: FastifyInstance) {
       debugLog("[game/setup] === END PROMPT ===");
     }
 
+    const setupMaxTokens = clampGameMaxOutputTokens({
+      provider: conn.provider,
+      model: conn.model,
+      maxTokens: Math.max(GAME_SETUP_MIN_OUTPUT_TOKENS, setupGenerationParameters?.maxTokens ?? 0),
+      maxTokensOverride: conn.maxTokensOverride,
+    });
     const setupOptions = gameGenOptions(
       conn.model,
       {
-        maxTokens: setupGenerationParameters?.maxTokens ?? 16384,
+        maxTokens: setupMaxTokens,
         stream: streaming,
         ...(streaming
           ? {
@@ -3709,44 +3749,71 @@ export async function gameRoutes(app: FastifyInstance) {
       );
     }
 
-    const result = await runGameChatComplete(provider, messages, setupOptions, "Game setup");
-    const setupExtraction = extractLeadingThinkingBlocks(
-      result.content ?? "",
-      setupGenerationParameters?.customThinkingTags,
-    );
-    const responseText = setupExtraction.content;
-
-    if (debugLogsEnabled) {
-      debugLog("[game/setup] Response length: %d chars", responseText.length);
-      debugLog("[game/setup] Full response:\n%s", responseText);
-      if (setupExtraction.thinking) {
-        debugLog(
-          "[game/setup] Thinking tokens (%d chars):\n%s",
-          setupExtraction.thinking.length,
-          setupExtraction.thinking,
-        );
-      }
-    }
-
     let setupData: Record<string, unknown> = {};
+    let responseText = "";
     let parseError: string | null = null;
-    try {
-      setupData = parseJSON(responseText) as Record<string, unknown>;
-      logger.info("[game/setup] Parsed JSON keys: %s", Object.keys(setupData));
-    } catch (e) {
-      logger.error(e, "[game/setup] JSON parse failed");
-      parseError = "Model did not return valid JSON. The setup response could not be parsed.";
-    }
+    let setupFinishReason: ChatCompletionResult["finishReason"] | null = null;
 
-    if (!parseError) {
-      parseError = validateGameSetupPayload(setupData);
-      if (parseError) {
-        logger.warn("[game/setup] Validation failed: %s", parseError);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const result = await runGameChatComplete(
+        provider,
+        messages,
+        setupOptions,
+        attempt === 1 ? "Game setup" : "Game setup retry",
+      );
+      setupFinishReason = result.finishReason;
+      const setupExtraction = extractLeadingThinkingBlocks(
+        result.content ?? "",
+        setupGenerationParameters?.customThinkingTags,
+      );
+      responseText = setupExtraction.content;
+
+      if (debugLogsEnabled) {
+        debugLog("[game/setup] Response length: %d chars", responseText.length);
+        debugLog("[game/setup] Full response:\n%s", responseText);
+        if (setupExtraction.thinking) {
+          debugLog(
+            "[game/setup] Thinking tokens (%d chars):\n%s",
+            setupExtraction.thinking.length,
+            setupExtraction.thinking,
+          );
+        }
+      }
+
+      parseError = null;
+      setupData = {};
+      try {
+        setupData = parseJSON(responseText) as Record<string, unknown>;
+        logger.info("[game/setup] Parsed JSON keys: %s", Object.keys(setupData));
+      } catch (e) {
+        logger.error(e, "[game/setup] JSON parse failed");
+        parseError = "Model did not return valid JSON. The setup response could not be parsed.";
+      }
+
+      if (!parseError) {
+        parseError = validateGameSetupPayload(setupData);
+        if (parseError) {
+          logger.warn("[game/setup] Validation failed: %s", parseError);
+        }
+      }
+
+      if (!parseError) break;
+      if (attempt === 1) {
+        logger.warn("[game/setup] Setup JSON failed parse/validation; retrying world setup once");
       }
     }
 
     if (parseError) {
       logger.error("[game/setup] Returning 422: %s", parseError);
+      if (isLikelyTruncatedJsonResponse(responseText, setupFinishReason)) {
+        reply.code(422).send({
+          error:
+            "World generation response was cut off before the setup JSON completed. Increase this connection's max output tokens or use a model with a larger output limit, then try again.",
+          rawResponse: responseText,
+          finishReason: setupFinishReason ?? null,
+        });
+        return;
+      }
       sendJsonRepairError(
         reply,
         parseError,
