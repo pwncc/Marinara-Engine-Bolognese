@@ -25,6 +25,23 @@ export class ApiError extends Error {
   }
 }
 
+export const PRIVILEGED_ACCESS_HINT =
+  "This action needs loopback access or an admin secret. Open the app via localhost, or set ADMIN_SECRET on the server and enter it under Settings → Advanced → Admin Access.";
+
+/**
+ * Build a user-facing message for a privileged-gated action (extension install,
+ * Professor Mari workspace mutation, etc.). The privileged gate replies 403 with a
+ * terse server message that doesn't tell the user how to recover, so surface the
+ * admin-secret hint for 403s; otherwise pass through the server/error message.
+ */
+export function getPrivilegedActionErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiError && error.status === 403) {
+    return error.message ? `${PRIVILEGED_ACCESS_HINT} (${error.message})` : PRIVILEGED_ACCESS_HINT;
+  }
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
 export type JsonRepairKind = "game_setup" | "session_conclusion" | "campaign_progression" | "lorebook_keeper";
 
 export type JsonRepairRequest = {
@@ -302,7 +319,7 @@ export const api = {
     path: string,
     body?: unknown,
     signal?: AbortSignal,
-  ): AsyncGenerator<{ type: string; data: unknown }> {
+  ): AsyncGenerator<{ type: string; data: unknown } & Record<string, unknown>> {
     const res = await fetch(`${BASE}${path}`, {
       method: "POST",
       headers: { ...getAdminSecretHeader(), [CSRF_HEADER]: CSRF_HEADER_VALUE, "Content-Type": "application/json" },
@@ -345,7 +362,7 @@ export const api = {
           if (data === "[DONE]") return;
           const parsed = parseSseJsonPayload(data);
           if (!parsed || typeof parsed.type !== "string") continue;
-          yield { type: parsed.type, data: parsed.data };
+          yield parsed as { type: string; data: unknown } & Record<string, unknown>;
           if (parsed.type === "error") return;
         }
       }
@@ -354,7 +371,7 @@ export const api = {
         if (data === "[DONE]") return;
         const parsed = parseSseJsonPayload(data);
         if (!parsed || typeof parsed.type !== "string") continue;
-        yield { type: parsed.type, data: parsed.data };
+        yield parsed as { type: string; data: unknown } & Record<string, unknown>;
         if (parsed.type === "error") return;
       }
     } finally {
