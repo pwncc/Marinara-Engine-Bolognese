@@ -26,6 +26,29 @@ export interface TTSSpeakRequest {
   cacheAliases?: string[];
 }
 
+function waitForBlobWithAbort(promise: Promise<Blob>, signal?: AbortSignal): Promise<Blob> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new DOMException("TTS request aborted", "AbortError"));
+
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(new DOMException("TTS request aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (blob) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(blob);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 class TTSService {
   private audio: HTMLAudioElement | null = null;
   private currentObjectUrl: string | null = null;
@@ -106,11 +129,12 @@ class TTSService {
 
   private async getAudioBlob(text: string, options: TTSSpeakOptions = {}): Promise<Blob> {
     if (!options.cacheKey) return this.generateAudio(text, options);
-    return getOrCreateCachedTTSAudioBlob(
+    const sharedPromise = getOrCreateCachedTTSAudioBlob(
       options.cacheKey,
-      () => this.generateAudio(text, options),
+      () => this.generateAudio(text, { ...options, signal: undefined }),
       options.cacheAliases,
     );
+    return waitForBlobWithAbort(sharedPromise, options.signal);
   }
 
   /** Speak the given text. `id` is an optional caller-supplied key (e.g. message id) so callers can track which item is active. */

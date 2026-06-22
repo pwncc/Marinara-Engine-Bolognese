@@ -6,6 +6,7 @@ import { existsSync } from "fs";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { extname, join } from "path";
 import {
+  IMAGE_DEFAULTS_STORAGE_KEY,
   MODEL_LISTS,
   createConnectionSchema,
   generationParametersSchema,
@@ -302,7 +303,11 @@ export async function connectionsRoutes(app: FastifyInstance) {
           })),
         });
       }
-      params = parsed.data;
+      params = { ...parsed.data };
+      const rawRecord = raw as Record<string, unknown>;
+      if (Object.prototype.hasOwnProperty.call(rawRecord, IMAGE_DEFAULTS_STORAGE_KEY)) {
+        params[IMAGE_DEFAULTS_STORAGE_KEY] = rawRecord[IMAGE_DEFAULTS_STORAGE_KEY];
+      }
     }
     await storage.updateDefaultParameters(req.params.id, params);
     return { success: true };

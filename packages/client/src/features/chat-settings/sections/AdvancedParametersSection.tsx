@@ -13,6 +13,21 @@ import { SettingsSwitch } from "../../../components/panels/settings/SettingContr
 import { useSaveConnectionDefaults } from "../../../hooks/use-connections";
 import { cn } from "../../../lib/utils";
 
+const EDITABLE_PARAMETER_KEYS: Array<keyof EditableGenerationParameters> = [
+  "temperature",
+  "maxTokens",
+  "topP",
+  "topK",
+  "frequencyPenalty",
+  "presencePenalty",
+  "reasoningEffort",
+  "verbosity",
+  "serviceTier",
+  "assistantPrefill",
+  "customThinkingTags",
+  "customParameters",
+];
+
 interface AdvancedParametersSectionProps {
   metadata: Record<string, unknown>;
   isConversation: boolean;
@@ -46,7 +61,17 @@ export function AdvancedParametersSection({
   const excludeReasoningEnabled = excludePastReasoning !== false;
 
   const setParameters = (next: EditableGenerationParameters) => {
-    onChatParametersChange({ ...params, ...next });
+    const editableKeys = new Set<string>(EDITABLE_PARAMETER_KEYS);
+    const sparse: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(params)) {
+      if (!editableKeys.has(key)) sparse[key] = value;
+    }
+    for (const key of EDITABLE_PARAMETER_KEYS) {
+      if (JSON.stringify(next[key]) !== JSON.stringify(defaults[key])) {
+        sparse[key] = next[key];
+      }
+    }
+    onChatParametersChange(sparse);
   };
   const toggleExpanded = () => setExpanded((open) => !open);
   const handleHeaderKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -147,7 +172,7 @@ export function AdvancedParametersSection({
             </button>
           )}
           <button
-            onClick={() => onChatParametersChange(defaults)}
+            onClick={() => onChatParametersChange({})}
             className="w-full rounded-lg bg-[var(--secondary)] px-3 py-1.5 text-[0.625rem] text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)]"
           >
             Reset to Defaults

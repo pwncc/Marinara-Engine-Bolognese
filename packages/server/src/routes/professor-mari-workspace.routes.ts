@@ -4,7 +4,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { requirePrivilegedAccess } from "../middleware/privileged-gate.js";
-import { startSseReply, trySendSseEvent } from "./generate/sse.js";
+import { startSseKeepalive, startSseReply, trySendSseEvent } from "./generate/sse.js";
 import { getProfessorMariWorkspaceService } from "../services/professor-mari/workspace-agent.service.js";
 import { getProfessorMariWorkspaceSkillsService } from "../services/professor-mari/workspace-skills.service.js";
 import { getMariDbService } from "../services/mari-db/mari-db.service.js";
@@ -96,6 +96,7 @@ export async function professorMariWorkspaceRoutes(app: FastifyInstance) {
     const service = getProfessorMariWorkspaceService(app);
     startSseReply(reply, { "X-Accel-Buffering": "no" });
     reply.raw.flushHeaders?.();
+    const stopSseKeepalive = startSseKeepalive(reply);
 
     let complete = false;
     let clientDisconnected = false;
@@ -123,6 +124,7 @@ export async function professorMariWorkspaceRoutes(app: FastifyInstance) {
       send({ type: "error", data: err instanceof Error ? err.message : String(err) });
     } finally {
       complete = true;
+      stopSseKeepalive();
       reply.raw.off("close", onClose);
       if (!clientDisconnected && !reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
     }

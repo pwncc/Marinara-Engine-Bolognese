@@ -389,6 +389,13 @@ function geminiUsage(usage?: GeminiUsageMetadata): LLMUsage | undefined {
   };
 }
 
+function normalizeGeminiFinishReason(reason: string | null | undefined): string {
+  const normalized = typeof reason === "string" ? reason.trim().toUpperCase() : "";
+  if (normalized === "MAX_TOKENS") return "length";
+  if (normalized === "STOP") return "stop";
+  return reason ?? "stop";
+}
+
 /**
  * Handles Google Gemini API (generateContent / streamGenerateContent).
  */
@@ -516,7 +523,7 @@ export class GoogleProvider extends BaseLLMProvider {
     return {
       content: content || null,
       toolCalls,
-      finishReason: toolCalls.length > 0 ? "tool_calls" : (candidate?.finishReason ?? "stop"),
+      finishReason: toolCalls.length > 0 ? "tool_calls" : normalizeGeminiFinishReason(candidate?.finishReason),
       usage: geminiUsage(json.usageMetadata),
     };
   }
@@ -715,19 +722,17 @@ export class GoogleProvider extends BaseLLMProvider {
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
 
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+        const lines = buffer.split(/\r?\n/);
+        buffer = done ? "" : (lines.pop() ?? "");
 
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
 
-          if (!trimmed.startsWith("data: ")) continue;
-          const data = trimmed.slice(6);
+          if (!trimmed.startsWith("data:")) continue;
+          const data = trimmed.slice(5).trimStart();
 
           let parsed: GeminiResponsePayload;
           try {
@@ -778,6 +783,7 @@ export class GoogleProvider extends BaseLLMProvider {
             }
           }
         }
+        if (done) break;
       }
     } finally {
       if (options.signal) options.signal.removeEventListener("abort", onAbort);
@@ -801,10 +807,10 @@ export class GoogleProvider extends BaseLLMProvider {
       options.onResponseParts(responseParts);
     }
 
-    if (streamUsage) return streamUsage;
+    if (streamUsage) return { ...streamUsage, finishReason: normalizeGeminiFinishReason(lastFinishReason) };
   }
 
-  override async embed(_texts: string[], _model: string): Promise<number[][]> {
+  override async embed(_texts: string[], _model: string, _signal?: AbortSignal): Promise<number[][]> {
     const label = this.providerKind === "google_vertex" ? "Vertex AI Gemini" : "Google Gemini";
     throw new Error(
       `${label} connections do not support embeddings through Marinara's OpenAI-compatible /embeddings path. Configure a dedicated OpenAI-compatible or local embedding connection.`,

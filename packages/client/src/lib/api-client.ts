@@ -39,6 +39,49 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function getSseDataPayload(line: string): string | null {
+  const normalized = line.endsWith("\r") ? line.slice(0, -1) : line;
+  if (!normalized.startsWith("data:")) return null;
+  const data = normalized.slice(5);
+  return (data.startsWith(" ") ? data.slice(1) : data).trimEnd();
+}
+
+function readSseDataPayloads(buffer: string, final = false): { payloads: string[]; rest: string } {
+  const lines = buffer.split(/\r?\n/);
+  const rest = final ? "" : (lines.pop() ?? "");
+  const payloads = lines.map(getSseDataPayload).filter((payload): payload is string => payload !== null);
+  return { payloads, rest };
+}
+
+function parseSseJsonPayload(data: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(data);
+    return isRecord(parsed) ? parsed : null;
+  } catch (error) {
+    console.warn("[api] Skipping malformed SSE frame", { error, data: data.slice(0, 200) });
+    return null;
+  }
+}
+
+async function releaseSseReader(reader: ReadableStreamDefaultReader<Uint8Array>, completed: boolean) {
+  if (!completed) {
+    try {
+      await reader.cancel();
+    } catch {
+      /* stream may already be closed or aborted */
+    }
+  }
+  try {
+    reader.releaseLock();
+  } catch {
+    /* lock may already be released */
+  }
+}
+
+function getSseErrorMessage(parsed: Record<string, unknown>): string {
+  return typeof parsed.data === "string" ? parsed.data : "Generation error";
+}
+
 export function getJsonRepairRequest(error: unknown): JsonRepairRequest | null {
   if (!(error instanceof ApiError) || !isRecord(error.payload)) return null;
   const repair = error.payload.jsonRepair;
@@ -189,12 +232,13 @@ export const api = {
   /**
    * Stream an SSE endpoint. Returns an async iterable of parsed events.
    */
-  stream: async function* (path: string, body?: unknown): AsyncGenerator<string> {
+  stream: async function* (path: string, body?: unknown, signal?: AbortSignal): AsyncGenerator<string> {
     const res = await fetch(`${BASE}${path}`, {
       method: "POST",
       headers: { ...getAdminSecretHeader(), [CSRF_HEADER]: CSRF_HEADER_VALUE, "Content-Type": "application/json" },
       body: body !== undefined ? JSON.stringify(body) : undefined,
       cache: "no-store",
+      signal,
     });
 
     if (!res.ok || !res.body) {
@@ -212,30 +256,41 @@ export const api = {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let completed = false;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          completed = true;
+          buffer += decoder.decode();
+          break;
+        }
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
+        buffer += decoder.decode(value, { stream: true });
+        const parsedBuffer = readSseDataPayloads(buffer);
+        buffer = parsedBuffer.rest;
 
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6);
+        for (const data of parsedBuffer.payloads) {
           if (data === "[DONE]") return;
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.type === "token" && parsed.data) yield parsed.data;
-            else if (parsed.type === "error") throw new ApiError(500, parsed.data ?? "Generation error", parsed);
-            else if (parsed.type === "done") return;
-          } catch (e) {
-            // If not JSON, yield as raw text
-            if (!(e instanceof ApiError)) yield data;
-          }
+          const parsed = parseSseJsonPayload(data);
+          if (!parsed) continue;
+          if (parsed.type === "token" && typeof parsed.data === "string") yield parsed.data;
+          else if (parsed.type === "error") throw new ApiError(500, getSseErrorMessage(parsed), parsed);
+          else if (parsed.type === "done") return;
         }
       }
+
+      for (const data of readSseDataPayloads(buffer, true).payloads) {
+        if (data === "[DONE]") return;
+        const parsed = parseSseJsonPayload(data);
+        if (!parsed) continue;
+        if (parsed.type === "token" && typeof parsed.data === "string") yield parsed.data;
+        else if (parsed.type === "error") throw new ApiError(500, getSseErrorMessage(parsed), parsed);
+        else if (parsed.type === "done") return;
+      }
+    } finally {
+      await releaseSseReader(reader, completed);
     }
   },
 
@@ -271,29 +326,39 @@ export const api = {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let completed = false;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          completed = true;
+          buffer += decoder.decode();
+          break;
+        }
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
+        buffer += decoder.decode(value, { stream: true });
+        const parsedBuffer = readSseDataPayloads(buffer);
+        buffer = parsedBuffer.rest;
 
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6);
+        for (const data of parsedBuffer.payloads) {
           if (data === "[DONE]") return;
-          try {
-            const parsed = JSON.parse(data);
-            yield parsed;
-            if (parsed.type === "error") return; // error is a terminal event — stop iteration
-          } catch {
-            // JSON parse failed — yield raw data as a token
-            yield { type: "token", data };
-          }
+          const parsed = parseSseJsonPayload(data);
+          if (!parsed || typeof parsed.type !== "string") continue;
+          yield { type: parsed.type, data: parsed.data };
+          if (parsed.type === "error") return;
         }
       }
+
+      for (const data of readSseDataPayloads(buffer, true).payloads) {
+        if (data === "[DONE]") return;
+        const parsed = parseSseJsonPayload(data);
+        if (!parsed || typeof parsed.type !== "string") continue;
+        yield { type: parsed.type, data: parsed.data };
+        if (parsed.type === "error") return;
+      }
+    } finally {
+      await releaseSseReader(reader, completed);
     }
   },
 

@@ -74,11 +74,16 @@ function stableTTSIndex(seed: string, length: number): number {
 }
 
 function hashTTSCacheKey(value: string): string {
-  let hash = 5381;
+  let h1 = 0xdeadbeef ^ value.length;
+  let h2 = 0x41c6ce57 ^ value.length;
   for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 33) ^ value.charCodeAt(index);
+    const ch = value.charCodeAt(index);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
   }
-  return (hash >>> 0).toString(36);
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `${value.length.toString(36)}-${(h2 >>> 0).toString(36)}${(h1 >>> 0).toString(36)}`;
 }
 
 function buildTTSConfigCacheSignature(config: TTSConfig): string {
@@ -235,6 +240,20 @@ export function resolveTTSNarratorVoice(
 
 export function cleanTTSInputText(value: string): string {
   return value
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/~~~[\s\S]*?~~~/g, " ")
+    .replace(/`[^`\n]*`/g, " ")
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/gm, "")
+    .replace(/~~([\s\S]*?)~~/g, "$1")
+    .replace(/\*\*([\s\S]*?)\*\*/g, "$1")
+    .replace(/__([\s\S]*?)__/g, "$1")
+    .replace(/\*([^*\n]+)\*/g, "$1")
+    .replace(/_([^_\n]+)_/g, "$1")
+    .replace(/[*~`]/g, "")
     .replace(/\{(shake|shout|whisper|glow|pulse|wave|flicker|drip|bounce|tremble|glitch|expand):([^}]+)\}/gi, "$2")
     .replace(/\[[a-z_]+:[^\]]*\]/gi, "")
     .replace(/<[^>]+>/g, "")
@@ -365,6 +384,18 @@ export function buildTTSVoiceRequests(
   });
 }
 
+function isLikelyTTSVNSpeaker(value: string): boolean {
+  const speaker = value.trim();
+  if (!speaker || speaker.length > 48) return false;
+  if (/^(?:ooc|note|notes?|meta|system|debug|info|warning|warn|time|timestamp|link|url|image|img)$/i.test(speaker)) {
+    return false;
+  }
+  if (/^\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]m)?$/i.test(speaker)) return false;
+  if (/^(?:https?:\/\/|www\.)/i.test(speaker)) return false;
+  if (/^\d+$/.test(speaker)) return false;
+  return /^[\p{L}\p{N}][\p{L}\p{N}' ._-]{0,47}$/u.test(speaker);
+}
+
 export function extractDialogueUtterances(
   text: string,
   config: Pick<TTSConfig, "dialogueScope" | "dialogueCharacterName">,
@@ -379,7 +410,9 @@ export function extractDialogueUtterances(
     const match = line.match(vnLineRe);
     if (!match) continue;
 
-    const speaker = match[1]?.trim() || fallbackSpeaker || undefined;
+    const rawSpeaker = match[1]?.trim() ?? "";
+    if (!isLikelyTTSVNSpeaker(rawSpeaker)) continue;
+    const speaker = rawSpeaker || fallbackSpeaker || undefined;
     const firstTag = match[2]?.trim();
     const secondTag = match[3]?.trim();
     const tone =
@@ -389,10 +422,6 @@ export function extractDialogueUtterances(
     if (spoken && ttsConfigMatchesSpeaker(config, speaker)) {
       utterances.push({ text: spoken, speaker, tone });
     }
-  }
-
-  if (utterances.length > 0) {
-    return dedupeUtterances(utterances);
   }
 
   const quoteRe = new RegExp(DIALOGUE_QUOTE_CAPTURE_GROUP_PATTERN_SOURCE, "g");

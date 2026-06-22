@@ -88,6 +88,12 @@ interface AnthropicMessageResponse {
   usage?: { input_tokens?: number; output_tokens?: number };
 }
 
+function normalizeAnthropicFinishReason(reason: string | null | undefined): string {
+  if (reason === "max_tokens") return "length";
+  if (reason === "tool_use") return "tool_calls";
+  return reason ?? "stop";
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -354,7 +360,7 @@ export class AnthropicProvider extends BaseLLMProvider {
     return {
       content: text || null,
       toolCalls,
-      finishReason: toolCalls.length > 0 ? "tool_calls" : (json.stop_reason ?? "stop"),
+      finishReason: toolCalls.length > 0 ? "tool_calls" : normalizeAnthropicFinishReason(json.stop_reason),
       usage:
         typeof json.usage?.input_tokens === "number" && typeof json.usage.output_tokens === "number"
           ? {
@@ -505,11 +511,15 @@ export class AnthropicProvider extends BaseLLMProvider {
         usage?: { input_tokens: number; output_tokens: number };
       };
       // Extract thinking content if present
-      const thinkingBlock = json.content.find((c) => c.type === "thinking");
-      if (thinkingBlock?.thinking && options.onThinking) {
-        options.onThinking(thinkingBlock.thinking);
+      for (const block of json.content) {
+        if (block.type === "thinking" && block.thinking && options.onThinking) {
+          options.onThinking(block.thinking);
+        }
       }
-      yield json.content.find((c) => c.type === "text")?.text ?? "";
+      yield json.content
+        .filter((block) => block.type === "text" && typeof block.text === "string")
+        .map((block) => block.text)
+        .join("");
       if (json.usage) {
         return {
           promptTokens: json.usage.input_tokens,
@@ -538,27 +548,27 @@ export class AnthropicProvider extends BaseLLMProvider {
     let currentBlockType = "text"; // track whether we're in a thinking or text block
     let inputTokens = 0;
     let outputTokens = 0;
+    let finishReason = "stop";
+    let emittedText = false;
 
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+        buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = done ? "" : (lines.pop() ?? "");
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (!trimmed.startsWith("data: ")) continue;
-          const data = trimmed.slice(6);
+          if (!trimmed.startsWith("data:")) continue;
+          const data = trimmed.slice(5).trimStart();
 
           let event: {
             type: string;
             error?: unknown;
             message?: { usage?: { input_tokens: number; output_tokens: number } };
             content_block?: { type: string };
-            delta?: { type: string; text?: string; thinking?: string };
+            delta?: { type: string; text?: string; thinking?: string; stop_reason?: string | null };
             usage?: { output_tokens: number };
           };
           try {
@@ -580,6 +590,9 @@ export class AnthropicProvider extends BaseLLMProvider {
           if (event.type === "message_delta" && event.usage) {
             outputTokens = event.usage.output_tokens;
           }
+          if (event.type === "message_delta" && typeof event.delta?.stop_reason === "string") {
+            finishReason = normalizeAnthropicFinishReason(event.delta.stop_reason);
+          }
           // Track block type (thinking vs text)
           if (event.type === "content_block_start" && event.content_block) {
             currentBlockType = event.content_block.type;
@@ -588,30 +601,44 @@ export class AnthropicProvider extends BaseLLMProvider {
             if (currentBlockType === "thinking" && event.delta?.thinking && options.onThinking) {
               options.onThinking(event.delta.thinking);
             } else if (event.delta?.text) {
+              emittedText = true;
               yield event.delta.text;
             }
           }
           if (event.type === "message_stop") {
+            if (!emittedText && !options.signal?.aborted) {
+              throw new Error(`Anthropic stream completed without text (finish reason: ${finishReason})`);
+            }
             if (inputTokens || outputTokens) {
               return {
                 promptTokens: inputTokens,
                 completionTokens: outputTokens,
                 totalTokens: inputTokens + outputTokens,
+                finishReason,
               };
             }
             return;
           }
         }
+        if (done) break;
       }
     } finally {
       if (options.signal) options.signal.removeEventListener("abort", onAbort);
     }
+    if (!emittedText && !options.signal?.aborted) {
+      throw new Error(`Anthropic stream completed without text (finish reason: ${finishReason})`);
+    }
     if (inputTokens || outputTokens) {
-      return { promptTokens: inputTokens, completionTokens: outputTokens, totalTokens: inputTokens + outputTokens };
+      return {
+        promptTokens: inputTokens,
+        completionTokens: outputTokens,
+        totalTokens: inputTokens + outputTokens,
+        finishReason,
+      };
     }
   }
 
-  override async embed(_texts: string[], _model: string): Promise<number[][]> {
+  override async embed(_texts: string[], _model: string, _signal?: AbortSignal): Promise<number[][]> {
     throw new Error(
       "Anthropic connections do not support embeddings through Marinara's OpenAI-compatible /embeddings path. Configure a dedicated OpenAI-compatible or local embedding connection.",
     );

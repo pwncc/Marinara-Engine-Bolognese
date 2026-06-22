@@ -64,6 +64,7 @@ import {
   findTrackerContextInsertIndex,
   isManualTrackerCharacterId,
   parseExtra,
+  resolveRoleplayChatSummary,
   isMessageHiddenFromAI,
   resolveActiveCharacterIds,
   resolveVisibleGameStateAnchor,
@@ -505,26 +506,6 @@ export async function chatsRoutes(app: FastifyInstance) {
       }),
     );
     if (!chat) return chat;
-
-    // Pre-populate chat parameters from connection defaults if available
-    if (input.connectionId && input.connectionId !== "random") {
-      const connStorage = createConnectionsStorage(app.db);
-      const conn = await connStorage.getById(input.connectionId);
-      if (conn?.defaultParameters) {
-        let connDefaults: unknown = null;
-        try {
-          connDefaults =
-            typeof conn.defaultParameters === "string" ? JSON.parse(conn.defaultParameters) : conn.defaultParameters;
-        } catch {
-          /* malformed JSON — skip defaults */
-        }
-        if (connDefaults && typeof connDefaults === "object") {
-          const existingMeta = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
-          await storage.updateMetadata(chat.id, { ...existingMeta, chatParameters: connDefaults });
-          return storage.getById(chat.id);
-        }
-      }
-    }
 
     return chat;
   });
@@ -1828,10 +1809,7 @@ export async function chatsRoutes(app: FastifyInstance) {
             ? (chatMeta.activeAgentIds as string[])
             : [];
           const activePromptAgentIds = filterGameInternalAgentIds(chatMode, promptActiveAgentIds);
-          const activeChatSummary =
-            chatMode === "roleplay" || chatMode === "visual_novel"
-              ? ((chatMeta.summary as string) ?? "").trim() || null
-              : null;
+          const activeChatSummary = resolveRoleplayChatSummary(chatMode, chatMeta);
 
           const assembled = await assemblePrompt({
             db: app.db,

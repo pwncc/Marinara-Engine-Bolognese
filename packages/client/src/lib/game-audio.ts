@@ -82,7 +82,9 @@ function setAmbientAudioSession(): void {
 class GameAudioManager {
   private musicElement: LoopingAudioLayer | null = null;
   private nextMusicElement: LoopingAudioLayer | null = null;
+  private fadingMusicElement: LoopingAudioLayer | null = null;
   private ambientElement: LoopingAudioLayer | null = null;
+  private nextAmbientElement: LoopingAudioLayer | null = null;
   private sfxPool: HTMLAudioElement[] = [];
   private sfxIndex = 0;
   private sfxAudioContext: AudioContext | null = null;
@@ -277,7 +279,7 @@ class GameAudioManager {
     if (existing) return existing.gain;
 
     const ctx = this.getSfxAudioContext();
-    if (!ctx) return null;
+    if (!ctx || ctx.state !== "running") return null;
 
     try {
       const source = ctx.createMediaElementSource(audio);
@@ -646,8 +648,10 @@ class GameAudioManager {
 
   /** Play background music with crossfade. */
   playMusic(tag: string, manifest?: Record<string, { path: string }> | null): void {
-    if (tag === this.currentMusicTag) return;
-    const previousMusicTag = this.currentMusicTag;
+    if (tag === this.currentMusicTag) {
+      if (this.pendingMusic?.tag === tag) this.pendingMusic = null;
+      return;
+    }
     this.currentMusicTag = tag;
 
     // Defer playback if the user hasn't interacted yet (avoids autoplay warnings)
@@ -662,6 +666,10 @@ class GameAudioManager {
     if (this.fadeInterval) {
       clearInterval(this.fadeInterval);
       this.fadeInterval = null;
+    }
+    if (this.fadingMusicElement) {
+      this.fadingMusicElement.stop();
+      this.fadingMusicElement = null;
     }
 
     const oldAudio = this.musicElement;
@@ -729,7 +737,7 @@ class GameAudioManager {
 
         // Autoplay blocked — queue for retry on user gesture
         this.pendingMusic = { tag, manifest };
-        this.currentMusicTag = previousMusicTag;
+        this.currentMusicTag = tag;
         if (oldAudio) {
           oldAudio.setMuted(this.isMuted);
           oldAudio.setVolume(this.musicVolume);
@@ -739,7 +747,7 @@ class GameAudioManager {
   }
 
   /** Stop music with fade out. */
-  stopMusic(): void {
+  stopMusic(immediate = false): void {
     this.currentMusicTag = null;
     this.pendingMusic = null;
 
@@ -747,6 +755,10 @@ class GameAudioManager {
     if (this.fadeInterval) {
       clearInterval(this.fadeInterval);
       this.fadeInterval = null;
+    }
+    if (this.fadingMusicElement) {
+      this.fadingMusicElement.stop();
+      this.fadingMusicElement = null;
     }
     if (this.nextMusicElement) {
       this.nextMusicElement.stop();
@@ -757,18 +769,26 @@ class GameAudioManager {
 
     const audio = this.musicElement;
     this.musicElement = null;
+    if (immediate) {
+      audio.stop();
+      return;
+    }
     const steps = CROSSFADE_MS / 50;
     const fadeStep = audio.getVolume() / steps;
     let step = 0;
+    this.fadingMusicElement = audio;
 
     const interval = setInterval(() => {
       step++;
       audio.setVolume(Math.max(0, audio.getVolume() - fadeStep));
       if (step >= steps) {
         clearInterval(interval);
+        if (this.fadeInterval === interval) this.fadeInterval = null;
+        if (this.fadingMusicElement === audio) this.fadingMusicElement = null;
         audio.stop();
       }
     }, 50);
+    this.fadeInterval = interval;
   }
 
   /** Play a one-shot sound effect. */
@@ -796,6 +816,10 @@ class GameAudioManager {
     const previousAmbientTag = this.currentAmbientTag;
     const previousAmbient = this.ambientElement;
     this.currentAmbientTag = tag;
+    if (this.nextAmbientElement) {
+      this.nextAmbientElement.stop();
+      this.nextAmbientElement = null;
+    }
 
     // Defer playback if the user hasn't interacted yet (avoids autoplay warnings)
     if (!this.userHasInteracted) {
@@ -805,9 +829,10 @@ class GameAudioManager {
 
     const url = this.resolveAssetUrl(tag, manifest);
     const nextAmbient = this.createLoopingAudioLayer(url, this.ambientVolume, this.isMuted);
+    this.nextAmbientElement = nextAmbient;
     nextAmbient.ready
       .then(() => {
-        if (this.currentAmbientTag !== tag) {
+        if (this.currentAmbientTag !== tag || this.nextAmbientElement !== nextAmbient) {
           nextAmbient.stop();
           return;
         }
@@ -816,15 +841,17 @@ class GameAudioManager {
           previousAmbient.stop();
         }
         this.ambientElement = nextAmbient;
+        this.nextAmbientElement = null;
         this.pendingAmbient = null;
       })
       .catch((err) => {
         nextAmbient.stop();
-        if (this.currentAmbientTag !== tag) {
+        if (this.currentAmbientTag !== tag || this.nextAmbientElement !== nextAmbient) {
           return;
         }
 
         console.warn("[audio] Ambient playback failed:", tag, err);
+        this.nextAmbientElement = null;
         this.pendingAmbient = { tag, manifest };
         this.currentAmbientTag = previousAmbientTag;
         this.ambientElement = previousAmbient ?? null;
@@ -840,6 +867,10 @@ class GameAudioManager {
   stopAmbient(): void {
     this.currentAmbientTag = null;
     this.pendingAmbient = null;
+    if (this.nextAmbientElement) {
+      this.nextAmbientElement.stop();
+      this.nextAmbientElement = null;
+    }
     if (this.ambientElement) {
       this.ambientElement.stop();
       this.ambientElement = null;
@@ -858,6 +889,9 @@ class GameAudioManager {
     if (this.ambientElement) {
       this.ambientElement.setMuted(muted);
     }
+    if (this.nextAmbientElement) {
+      this.nextAmbientElement.setMuted(muted);
+    }
     // Mute any currently-playing SFX
     for (const el of this.sfxPool) {
       this.setElementLayerVolume(el, muted ? 0 : this.sfxVolume);
@@ -871,9 +905,12 @@ class GameAudioManager {
     this.sfxVolume = Math.max(0, Math.min(1, sfx));
     this.ambientVolume = Math.max(0, Math.min(1, ambient));
     if (!this.isMuted) {
-      this.musicElement?.setVolume(this.musicVolume);
-      this.nextMusicElement?.setVolume(this.musicVolume);
+      if (!this.fadeInterval || !this.nextMusicElement) {
+        this.musicElement?.setVolume(this.musicVolume);
+        this.nextMusicElement?.setVolume(this.musicVolume);
+      }
       this.ambientElement?.setVolume(this.ambientVolume);
+      this.nextAmbientElement?.setVolume(this.ambientVolume);
     }
     for (const el of this.sfxPool) {
       this.setElementLayerVolume(el, this.sfxVolume);
@@ -894,7 +931,7 @@ class GameAudioManager {
 
   /** Stop everything and clean up. */
   dispose(): void {
-    this.stopMusic();
+    this.stopMusic(true);
     this.stopAmbient();
     for (const el of this.sfxPool) {
       releaseAudio(el);

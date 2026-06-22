@@ -18,6 +18,7 @@ const SERVER_AUTONOMOUS_INITIAL_DELAY_MS = 20_000;
 const SERVER_AUTONOMOUS_POLL_MS = 60_000;
 const RECENT_CLIENT_PRESENCE_MS = 75_000;
 const OFFLINE_MAX_FOLLOWUPS = 2;
+const MAX_SERVER_AUTONOMOUS_CONCURRENT_EVALUATIONS = 2;
 
 type RawChat = {
   id: string;
@@ -279,6 +280,7 @@ export function startServerAutonomousScheduler(app: FastifyInstance) {
       const allChats = (await chats.list()) as RawChat[];
       for (const chat of allChats) {
         if (stopped) return;
+        if (runningChats.size >= MAX_SERVER_AUTONOMOUS_CONCURRENT_EVALUATIONS) break;
         if (!shouldConsiderChat(chat)) continue;
         void evaluateChat(chat);
       }

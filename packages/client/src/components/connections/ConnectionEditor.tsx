@@ -109,6 +109,19 @@ const MAX_CACHING_AT_DEPTH = 100;
 const DEFAULT_MAX_PARALLEL_JOBS = 1;
 const MAX_PARALLEL_JOBS = 16;
 
+function normalizeEndpointUrlInput(raw: string, label: string): { value: string; error: string | null } {
+  const trimmed = raw.trim();
+  if (!trimmed) return { value: "", error: null };
+
+  const value = /^[a-z][a-z\d+.-]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  try {
+    new URL(value);
+  } catch {
+    return { value: trimmed, error: `${label} must be a valid URL, like http://localhost:11434/v1.` };
+  }
+  return { value, error: null };
+}
+
 function canProviderTreatAsLocalEndpoint(provider: APIProvider): boolean {
   return provider !== "image_generation" && provider !== "claude_subscription" && provider !== "openai_chatgpt";
 }
@@ -159,6 +172,7 @@ export function ConnectionEditor() {
   const [localProvider, setLocalProvider] = useState<APIProvider>("openai");
   const [localBaseUrl, setLocalBaseUrl] = useState("");
   const [localApiKey, setLocalApiKey] = useState("");
+  const [clearStoredApiKeyOnSave, setClearStoredApiKeyOnSave] = useState(false);
   const [localModel, setLocalModel] = useState("");
   const [localMaxContext, setLocalMaxContext] = useState(128000);
   const [localMaxParallelJobs, setLocalMaxParallelJobs] = useState(DEFAULT_MAX_PARALLEL_JOBS);
@@ -211,6 +225,14 @@ export function ConnectionEditor() {
   // Remote models fetched from provider API
   const [remoteModels, setRemoteModels] = useState<RemoteConnectionModel[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const baseUrlValidation = useMemo(
+    () => normalizeEndpointUrlInput(localBaseUrl, "Base URL"),
+    [localBaseUrl],
+  );
+  const embeddingBaseUrlValidation = useMemo(
+    () => normalizeEndpointUrlInput(localEmbeddingBaseUrl, "Embedding endpoint URL"),
+    [localEmbeddingBaseUrl],
+  );
 
   // Populate from server
   useEffect(() => {
@@ -220,6 +242,7 @@ export function ConnectionEditor() {
     setLocalProvider((c.provider as APIProvider) ?? "openai");
     setLocalBaseUrl((c.baseUrl as string) ?? "");
     setLocalApiKey(""); // never pre-fill (it's masked)
+    setClearStoredApiKeyOnSave(false);
     setLocalModel((c.model as string) ?? "");
     setLocalMaxContext(Number(c.maxContext) || 128000);
     setLocalMaxParallelJobs(normalizeMaxParallelJobs(c.maxParallelJobs));
@@ -404,12 +427,20 @@ export function ConnectionEditor() {
   const handleSave = useCallback(async () => {
     if (!connectionDetailId) return;
     setSaveError(null);
+    if (baseUrlValidation.error) {
+      setSaveError(baseUrlValidation.error);
+      throw new Error(baseUrlValidation.error);
+    }
+    if (embeddingBaseUrlValidation.error) {
+      setSaveError(embeddingBaseUrlValidation.error);
+      throw new Error(embeddingBaseUrlValidation.error);
+    }
     const canTreatAsLocalEndpoint = canProviderTreatAsLocalEndpoint(localProvider);
     const payload: Record<string, unknown> = {
       id: connectionDetailId,
       name: localName,
       provider: localProvider,
-      baseUrl: localBaseUrl,
+      baseUrl: baseUrlValidation.value,
       model: localModel,
       maxContext: localMaxContext,
       maxParallelJobs: localMaxParallelJobs,
@@ -417,7 +448,7 @@ export function ConnectionEditor() {
       cachingAtDepth: localCachingAtDepth,
       defaultForAgents: localDefaultForAgents,
       embeddingModel: localEmbeddingModel,
-      embeddingBaseUrl: localEmbeddingBaseUrl,
+      embeddingBaseUrl: embeddingBaseUrlValidation.value,
       embeddingConnectionId: localEmbeddingConnectionId || null,
       promptPresetId: localProvider !== "image_generation" ? localPromptPresetId || null : null,
       openrouterProvider: localOpenrouterProvider || null,
@@ -437,6 +468,8 @@ export function ConnectionEditor() {
     // Only send API key if user typed a new one
     if (localApiKey.trim()) {
       payload.apiKey = localApiKey;
+    } else if (clearStoredApiKeyOnSave) {
+      payload.apiKey = "";
     }
     try {
       await updateConnection.mutateAsync(payload as { id: string } & Record<string, unknown>);
@@ -458,18 +491,29 @@ export function ConnectionEditor() {
           ),
         });
       }
+      if (baseUrlValidation.value !== localBaseUrl.trim()) {
+        setLocalBaseUrl(baseUrlValidation.value);
+      }
+      if (embeddingBaseUrlValidation.value !== localEmbeddingBaseUrl.trim()) {
+        setLocalEmbeddingBaseUrl(embeddingBaseUrlValidation.value);
+      }
       setDirty(false);
+      setClearStoredApiKeyOnSave(false);
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Failed to save connection");
+      const message = err instanceof Error ? err.message : "Failed to save connection";
+      setSaveError(message);
+      throw err instanceof Error ? err : new Error(message);
     }
   }, [
     connectionDetailId,
     localName,
     localProvider,
     localBaseUrl,
+    baseUrlValidation,
     localApiKey,
+    clearStoredApiKeyOnSave,
     localModel,
     localMaxContext,
     localMaxParallelJobs,
@@ -478,6 +522,7 @@ export function ConnectionEditor() {
     localDefaultForAgents,
     localEmbeddingModel,
     localEmbeddingBaseUrl,
+    embeddingBaseUrlValidation,
     localEmbeddingConnectionId,
     localPromptPresetId,
     localOpenrouterProvider,
@@ -742,6 +787,15 @@ export function ConnectionEditor() {
 
   const markDirty = useCallback(() => setDirty(true), []);
 
+  const handleManualModelChange = useCallback(
+    (model: string) => {
+      setLocalModel(model);
+      setLocalMaxTokensOverride(null);
+      markDirty();
+    },
+    [markDirty],
+  );
+
   const handleJumpToJsonError = useCallback(() => {
     const ta = comfyWorkflowTextareaRef.current;
     if (!ta || !comfyWorkflowValidation || !comfyWorkflowValidation.parseError) return;
@@ -854,8 +908,12 @@ export function ConnectionEditor() {
             </button>
             <button
               onClick={async () => {
-                await handleSave();
-                closeConnectionDetail();
+                try {
+                  await handleSave();
+                  closeConnectionDetail();
+                } catch {
+                  // Keep the editor open so the user can fix the failed save.
+                }
               }}
               className="rounded-lg bg-amber-500/20 px-3 py-1 hover:bg-amber-500/30"
             >
@@ -907,6 +965,7 @@ export function ConnectionEditor() {
                 <button
                   key={key}
                   onClick={() => {
+                    if (key === localProvider) return;
                     const defaultModel = MODEL_LISTS[key]?.[0];
                     setLocalProvider(key);
                     // Auto-fill base URL
@@ -914,17 +973,14 @@ export function ConnectionEditor() {
                     // Clear model when switching providers, except xAI where
                     // we can seed the newest supported Grok model.
                     setLocalModel(key === "xai" ? (defaultModel?.id ?? "grok-4.3") : "");
+                    setLocalMaxContext(Number(defaultModel?.context) || 128000);
                     setLocalMaxTokensOverride(null);
                     setLocalDefaultParametersEnabled(false);
                     setLocalDefaultParameters(ROLEPLAY_PARAMETER_DEFAULTS);
-                    if (key === "xai" && defaultModel?.context) {
-                      setLocalMaxContext(defaultModel.context);
-                    }
-                    // Local subscription/session providers ignore the API key
-                    // field, so clear stale keys from other providers.
-                    if (key === "claude_subscription" || key === "openai_chatgpt") {
-                      setLocalApiKey("");
-                    }
+                    // Provider switches must not keep an encrypted key from
+                    // the previous provider under the new provider identity.
+                    setLocalApiKey("");
+                    setClearStoredApiKeyOnSave(true);
                     markDirty();
                   }}
                   className={cn(
@@ -1114,7 +1170,10 @@ export function ConnectionEditor() {
                 setLocalBaseUrl(e.target.value);
                 markDirty();
               }}
-              className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm font-mono ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-70"
+              className={cn(
+                "w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm font-mono ring-1 placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-70",
+                baseUrlValidation.error ? "ring-[var(--destructive)]" : "ring-[var(--border)]",
+              )}
               placeholder={
                 isClaudeSubscriptionProvider
                   ? "Not used — managed by the Claude Agent SDK"
@@ -1127,6 +1186,14 @@ export function ConnectionEditor() {
             {providerDef?.defaultBaseUrl && !localBaseUrl && !isLocalAuthProvider && (
               <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
                 Default: {providerDef.defaultBaseUrl}
+              </p>
+            )}
+            {baseUrlValidation.error && (
+              <p className="mt-1 text-[0.625rem] text-[var(--destructive)]">{baseUrlValidation.error}</p>
+            )}
+            {!baseUrlValidation.error && baseUrlValidation.value !== localBaseUrl.trim() && (
+              <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
+                Will save as {baseUrlValidation.value}
               </p>
             )}
             {localProvider === "claude_subscription" && (
@@ -1411,8 +1478,7 @@ export function ConnectionEditor() {
                 <input
                   value={localModel}
                   onChange={(e) => {
-                    setLocalModel(e.target.value);
-                    markDirty();
+                    handleManualModelChange(e.target.value);
                   }}
                   className="flex-1 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs ring-1 ring-[var(--border)] focus:outline-none focus:ring-[var(--ring)]"
                   placeholder="Or type model ID directly…"
@@ -1557,7 +1623,7 @@ export function ConnectionEditor() {
               <div className="flex items-center gap-3">
                 <DraftNumberInput
                   value={localMaxContext}
-                  min={0}
+                  min={1}
                   selectOnFocus
                   onCommit={(nextValue) => {
                     setLocalMaxContext(nextValue);
@@ -1880,9 +1946,23 @@ export function ConnectionEditor() {
                     setLocalEmbeddingBaseUrl(e.target.value);
                     markDirty();
                   }}
-                  className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm font-mono ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                  className={cn(
+                    "w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm font-mono ring-1 placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]",
+                    embeddingBaseUrlValidation.error ? "ring-[var(--destructive)]" : "ring-[var(--border)]",
+                  )}
                   placeholder="e.g. http://localhost:5002/v1"
                 />
+                {embeddingBaseUrlValidation.error && (
+                  <p className="mt-1 text-[0.625rem] text-[var(--destructive)]">
+                    {embeddingBaseUrlValidation.error}
+                  </p>
+                )}
+                {!embeddingBaseUrlValidation.error &&
+                  embeddingBaseUrlValidation.value !== localEmbeddingBaseUrl.trim() && (
+                    <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
+                      Will save as {embeddingBaseUrlValidation.value}
+                    </p>
+                  )}
                 <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
                   Optional. A separate base URL for your embedding backend. Useful when running two instances of
                   llama.cpp on different ports — one for chat, one for embeddings. Leave empty to use the

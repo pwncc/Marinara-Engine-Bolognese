@@ -14,8 +14,13 @@ export function encodeGameAssetPath(path: string): string {
 }
 
 export function gameAssetFileUrl(path: string | null | undefined): string | null {
-  if (!path?.trim()) return null;
-  return `${GAME_ASSET_FILE_URL_PREFIX}${encodeGameAssetPath(path)}`;
+  const cleanPath = path?.trim();
+  if (!cleanPath) return null;
+  if (cleanPath.startsWith("__user_bg__/")) {
+    const filename = cleanPath.replace("__user_bg__/", "");
+    return filename ? `/api/backgrounds/file/${encodeURIComponent(filename)}` : null;
+  }
+  return `${GAME_ASSET_FILE_URL_PREFIX}${encodeGameAssetPath(cleanPath)}`;
 }
 
 export async function resolveGameAssetFileUrl(path: string | null | undefined): Promise<string | null> {

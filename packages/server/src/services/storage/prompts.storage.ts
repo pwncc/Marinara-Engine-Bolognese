@@ -27,6 +27,19 @@ function resolveTimestamps(overrides?: TimestampOverrides | null) {
   };
 }
 
+function parseGenerationParameters(raw: unknown): Record<string, unknown> {
+  if (!raw) return {};
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+}
+
 export function createPromptsStorage(db: DB) {
   return {
     // ═══════════════════════════════════════════
@@ -80,7 +93,19 @@ export function createPromptsStorage(db: DB) {
       if (data.groupOrder !== undefined) updateFields.groupOrder = JSON.stringify(data.groupOrder);
       if (data.variableGroups !== undefined) updateFields.variableGroups = JSON.stringify(data.variableGroups);
       if (data.variableValues !== undefined) updateFields.variableValues = JSON.stringify(data.variableValues);
-      if (data.parameters !== undefined) updateFields.parameters = JSON.stringify(data.parameters);
+      if (data.parameters !== undefined) {
+        const existingRows = await db
+          .select({ parameters: promptPresets.parameters })
+          .from(promptPresets)
+          .where(eq(promptPresets.id, id))
+          .limit(1);
+        const existingParameters = parseGenerationParameters(existingRows[0]?.parameters);
+        updateFields.parameters = JSON.stringify({
+          ...DEFAULT_GENERATION_PARAMS,
+          ...existingParameters,
+          ...data.parameters,
+        });
+      }
       if (data.wrapFormat !== undefined) updateFields.wrapFormat = data.wrapFormat;
       if (data.author !== undefined) updateFields.author = data.author;
       if ((data as any).defaultChoices !== undefined)

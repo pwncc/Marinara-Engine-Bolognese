@@ -51,6 +51,15 @@ function saveDrafts(m: Map<string, string>) {
   }
 }
 
+function abortGenerationForChat(chatId: string, controller?: AbortController) {
+  controller?.abort();
+  fetch("/api/generate/abort", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId }),
+  }).catch(() => {});
+}
+
 interface ChatState {
   activeChatId: string | null;
   activeChat: Chat | null;
@@ -137,7 +146,7 @@ interface ChatState {
   setStreamCommitted: (chatId: string, committed: boolean) => void;
   setMariPhase: (chatId: string, phase: "thinking" | "updating" | "idle") => void;
   setAbortController: (chatId: string, controller: AbortController | null) => void;
-  stopGeneration: () => void;
+  stopGeneration: (chatId?: string) => void;
   appendStreamBuffer: (text: string, chatId?: string) => void;
   setStreamBuffer: (text: string, chatId?: string) => void;
   clearStreamBuffer: (chatId?: string) => void;
@@ -343,18 +352,17 @@ export const useChatStore = create<ChatState>()(
         else m.delete(chatId);
         return { abortControllers: m };
       }),
-    stopGeneration: () => {
-      const { streamingChatId, abortControllers } = useChatStore.getState();
-      if (streamingChatId) {
-        const ctrl = abortControllers.get(streamingChatId);
-        if (ctrl) ctrl.abort();
-        // Explicitly tell the server to abort — the SSE close event may not
-        // fire reliably, so this ensures the backend (e.g. KoboldCPP) stops.
-        fetch("/api/generate/abort", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chatId: streamingChatId }),
-        }).catch(() => {});
+    stopGeneration: (chatId) => {
+      const { activeChatId, streamingChatId, abortControllers } = useChatStore.getState();
+      const targetIds = chatId
+        ? [chatId]
+        : activeChatId && abortControllers.has(activeChatId)
+          ? [activeChatId]
+          : streamingChatId
+            ? [streamingChatId]
+            : [...abortControllers.keys()];
+      for (const targetChatId of new Set(targetIds)) {
+        abortGenerationForChat(targetChatId, abortControllers.get(targetChatId));
       }
     },
     appendStreamBuffer: (text, chatId) =>
@@ -637,6 +645,10 @@ export const useChatStore = create<ChatState>()(
       }),
 
     reset: () => {
+      const { abortControllers } = useChatStore.getState();
+      for (const [chatId, controller] of abortControllers) {
+        abortGenerationForChat(chatId, controller);
+      }
       set({
         activeChatId: null,
         activeChat: null,

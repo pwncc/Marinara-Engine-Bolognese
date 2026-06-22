@@ -164,17 +164,29 @@ export function useBackgroundAutonomousPolling() {
                   return;
                 }
 
+                const abortController = new AbortController();
+                useChatStore.getState().setAbortController(chat.id, abortController);
                 // Use streamEvents to drain the SSE — tokens aren't needed for background chats
-                for await (const _event of api.streamEvents("/generate", {
-                  chatId: chat.id,
-                  connectionId: null,
-                  forCharacterId: characterId,
-                  autonomous: true,
-                  autonomousIntentKey: result.autonomousIntentKey,
-                  skipPresenceDelay: true,
-                  streaming: useUIStore.getState().enableStreaming,
-                })) {
-                  if ((_event as { type: string }).type === "token") receivedTokens = true;
+                try {
+                  for await (const _event of api.streamEvents(
+                    "/generate",
+                    {
+                      chatId: chat.id,
+                      connectionId: null,
+                      forCharacterId: characterId,
+                      autonomous: true,
+                      autonomousIntentKey: result.autonomousIntentKey,
+                      skipPresenceDelay: true,
+                      streaming: useUIStore.getState().enableStreaming,
+                    },
+                    abortController.signal,
+                  )) {
+                    if ((_event as { type: string }).type === "token") receivedTokens = true;
+                  }
+                } finally {
+                  if (useChatStore.getState().abortControllers.get(chat.id) === abortController) {
+                    useChatStore.getState().setAbortController(chat.id, null);
+                  }
                 }
 
                 // Only notify if the generation actually produced a message

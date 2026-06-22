@@ -516,6 +516,7 @@ async function executeAgentWithTools(
   let totalTokens = 0;
   const debugAgentsEnabled = isDebugAgentsEnabled() && logger.isLevelEnabled("debug");
   const customParameters = agentCustomParameters(config);
+  const toolLoopSignal = agentCallSignal(context.signal);
 
   for (let round = 0; round < maxToolRounds; round++) {
     emitAgentDebug(context, {
@@ -533,7 +534,7 @@ async function executeAgentWithTools(
       customParameters,
       stream: streamResponses,
       tools: toolContext.tools,
-      signal: agentCallSignal(context.signal),
+      signal: toolLoopSignal,
     });
 
     totalTokens += result.usage?.totalTokens ?? 0;
@@ -613,7 +614,7 @@ async function executeAgentWithTools(
     maxTokens,
     customParameters,
     stream: streamResponses,
-    signal: agentCallSignal(context.signal),
+    signal: toolLoopSignal,
   });
   totalTokens += finalResult.usage?.totalTokens ?? 0;
   const responseText = finalResult.content?.trim() ?? "";
@@ -1215,8 +1216,10 @@ function buildStandardAgentMessages(config: AgentExecConfig, template: string, c
 
   // Build multi-turn message array for this agent (sliced to its own contextSize)
   const agentContextSize = normalizeAgentContextSize(config.settings.contextSize);
+  const resultType = resolveAgentResultType(config);
   return buildAgentMessages(systemParts.join("\n"), context, config.type, agentContextSize, [config.type], {
     includeMessageIds: normalizeCustomAgentCapabilities(config.settings).edit_messages === true,
+    preserveAssistantResponseMarkup: resultType === "text_rewrite",
   });
 }
 
@@ -1527,7 +1530,7 @@ function buildAgentMessages(
   agentType: string,
   contextSize = 5,
   contextAgentTypes: string[] = [agentType],
-  options: { includeMessageIds?: boolean } = {},
+  options: { includeMessageIds?: boolean; preserveAssistantResponseMarkup?: boolean } = {},
 ): ChatMessage[] {
   // ── 1. System message — already contains <role>, <lore>, <agents>, and extras ──
   const messages: ChatMessage[] = [{ role: "system", content: systemPrompt }];
@@ -1586,7 +1589,7 @@ function buildAgentMessages(
 
   if (context.mainResponse) {
     finalParts.push(`<assistant_response>`);
-    finalParts.push(stripHtmlTags(context.mainResponse));
+    finalParts.push(options.preserveAssistantResponseMarkup ? context.mainResponse : stripHtmlTags(context.mainResponse));
     finalParts.push(`</assistant_response>`);
   }
 

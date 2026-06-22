@@ -81,6 +81,7 @@ import { useSceneAnalysis } from "../../hooks/use-scene-analysis";
 import { useSidecarStore } from "../../stores/sidecar.store";
 import { parsePartyDialogue } from "../../lib/party-dialogue-parser";
 import { dispatchSpotifySceneTrackChange } from "../../lib/spotify-playback-events";
+import { ttsService } from "../../lib/tts-service";
 import { ActiveLorebookEntriesButton, ActiveLorebookEntriesModal } from "../chat/ActiveLorebookEntriesButton";
 import type {
   PartyDialogueLine,
@@ -1100,10 +1101,6 @@ function interactiveCommandKey(chatId: string, messageId: string): string {
 }
 
 function backgroundAssetUrl(entry: { path: string }): string {
-  if (entry.path.startsWith("__user_bg__/")) {
-    const filename = entry.path.replace("__user_bg__/", "");
-    return `/api/backgrounds/file/${encodeURIComponent(filename)}`;
-  }
   return gameAssetFileUrl(entry.path) ?? "";
 }
 
@@ -1823,6 +1820,12 @@ export function GameSurface({
 }: GameSurfaceProps) {
   // Sync game metadata → store
   useSyncGameState(activeChatId, chatMeta);
+
+  useEffect(() => {
+    return () => {
+      ttsService.stop();
+    };
+  }, [activeChatId]);
 
   const {
     gameState,
@@ -5760,13 +5763,13 @@ export function GameSurface({
         setInterruptModalOpen(false);
         return;
       }
-      useChatStore.getState().stopGeneration();
+      useChatStore.getState().stopGeneration(activeChatId ?? undefined);
       setPendingInterrupt({ ...interruptCandidate, mode });
       setInterruptModalOpen(false);
       setInterruptCandidate(null);
       setGameInputFocusToken((t) => t + 1);
     },
-    [interruptCandidate],
+    [activeChatId, interruptCandidate],
   );
 
   // If the assistant message changes (new GM turn arrived) or the player switches chats,

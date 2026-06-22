@@ -271,6 +271,13 @@ type GameSegmentVoiceEntry =
   | { status: "ready"; speaker?: string; tone?: string; voice?: string; chunks: string[]; urls: string[] }
   | { status: "error"; speaker?: string; tone?: string; voice?: string; chunks: string[] };
 
+const GAME_VOICE_CACHE_MAX_ENTRIES = 80;
+
+function revokeGameVoiceEntry(entry: GameSegmentVoiceEntry | undefined): void {
+  if (entry?.status !== "ready") return;
+  for (const url of entry.urls) URL.revokeObjectURL(url);
+}
+
 interface GameSegmentVoiceRequest {
   speaker?: string;
   tone?: string;
@@ -664,23 +671,44 @@ function waitForGameTTSRetry(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+function waitForGameTTSBlob(promise: Promise<Blob>, signal: AbortSignal): Promise<Blob> {
+  if (signal.aborted) return Promise.reject(new DOMException("TTS request aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(new DOMException("TTS request aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (blob) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(blob);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function generateGameVoiceJobBlob(job: GameVoiceAudioJob, controller: AbortController): Promise<Blob> {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= GAME_TTS_CHUNK_ATTEMPTS; attempt += 1) {
     if (controller.signal.aborted) throw new DOMException("TTS request aborted", "AbortError");
     try {
-      return await getOrCreateCachedTTSAudioBlob(
+      const sharedPromise = getOrCreateCachedTTSAudioBlob(
         job.cacheKey,
         () =>
           ttsService.generateAudio(job.chunk, {
             speaker: job.speaker,
             tone: job.tone,
             voice: job.voice,
-            signal: controller.signal,
           }),
         [job.textCacheKey],
       );
+      return await waitForGameTTSBlob(sharedPromise, controller.signal);
     } catch (err) {
       if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) throw err;
       lastError = err;
@@ -1755,6 +1783,32 @@ export function GameNarration({
   const normalizedGameVoiceVolume = Math.max(0, Math.min(1, gameVoiceVolume));
   const gameVoicePlaybackBlocked = voicePlaybackBlocked ?? autoPlayBlocked;
 
+  const cacheGameVoiceEntry = useCallback(
+    (key: string, entry: GameSegmentVoiceEntry) => {
+      const cache = gameVoiceCacheRef.current;
+      revokeGameVoiceEntry(cache.get(key));
+      cache.delete(key);
+      cache.set(key, entry);
+
+      const protectedKeys = new Set([gameVoicePlayingKey, gameVoicePausedKey].filter((value): value is string => !!value));
+      let guard = 0;
+      while (cache.size > GAME_VOICE_CACHE_MAX_ENTRIES && guard < cache.size) {
+        const oldestKey = cache.keys().next().value;
+        if (!oldestKey) break;
+        const oldestEntry = cache.get(oldestKey);
+        if (protectedKeys.has(oldestKey) && oldestEntry) {
+          cache.delete(oldestKey);
+          cache.set(oldestKey, oldestEntry);
+          guard += 1;
+          continue;
+        }
+        cache.delete(oldestKey);
+        revokeGameVoiceEntry(oldestEntry);
+      }
+    },
+    [gameVoicePausedKey, gameVoicePlayingKey],
+  );
+
   const queueLogScrollTopRestore = useCallback(() => {
     const scrollTop = logScrollContainerRef.current?.scrollTop;
     if (scrollTop != null) {
@@ -2762,7 +2816,7 @@ export function GameNarration({
 
       const controller = new AbortController();
       gameVoicePendingRef.current.set(key, controller);
-      gameVoiceCacheRef.current.set(key, {
+      cacheGameVoiceEntry(key, {
         status: "loading",
         chunks: audioJobs.map((job) => job.chunk),
         speaker: audioJobs[0]?.speaker,
@@ -2813,7 +2867,7 @@ export function GameNarration({
           if (controller.signal.aborted) return;
           const urls = blobs.map((blob) => URL.createObjectURL(blob));
           if (!failed && urls.length === audioJobs.length) {
-            gameVoiceCacheRef.current.set(key, {
+            cacheGameVoiceEntry(key, {
               status: "ready",
               chunks: audioJobs.map((job) => job.chunk),
               speaker: audioJobs[0]?.speaker,
@@ -2823,7 +2877,7 @@ export function GameNarration({
             });
           } else {
             for (const url of urls) URL.revokeObjectURL(url);
-            gameVoiceCacheRef.current.set(key, {
+            cacheGameVoiceEntry(key, {
               status: "error",
               chunks: audioJobs.map((job) => job.chunk),
               speaker: audioJobs[0]?.speaker,
@@ -2843,6 +2897,7 @@ export function GameNarration({
     gameVoiceGenerationTailRef.current = gameVoiceGenerationTailRef.current.catch(() => undefined).then(runPlans);
     void gameVoiceGenerationTailRef.current;
   }, [
+    cacheGameVoiceEntry,
     gameNpcs,
     gameVoiceConfigSignature,
     gameVoiceEnabled,

@@ -1,13 +1,16 @@
 // ──────────────────────────────────────────────
 // File Browser — Asset grid / list view (with multi-select checkboxes)
 // ──────────────────────────────────────────────
-import { Check, Folder, FolderOpen, Minus, MoreHorizontal } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, FileImage, Folder, FolderOpen, Minus, MoreHorizontal } from "lucide-react";
 import type { TreeNode } from "../../hooks/use-game-assets";
 import type { GameAssetSelectionStatus } from "../../lib/game-asset-selection";
 import { formatBytes, formatDate } from "../../lib/format";
 import { gameAssetFileUrl } from "../../lib/game-asset-urls";
 import { CATEGORY_ICONS } from "./constants";
 import { FileIcon, isImage } from "./utils";
+
+const ASSET_GRID_PAGE_SIZE = 240;
 
 /**
  * Props for the AssetGrid component.
@@ -61,6 +64,10 @@ function FolderSelectionMark({ status }: { status: GameAssetSelectionStatus }) {
   return null;
 }
 
+function BrokenImageFallback({ className }: { className?: string }) {
+  return <FileImage className={className ?? "h-8 w-8 text-[var(--foreground)]/80"} />;
+}
+
 /**
  * Render a grid or list of asset nodes with multi-select checkboxes.
  *
@@ -80,6 +87,15 @@ export function AssetGrid({
   getFolderSelectionStatus,
   onOpenFolderSelection,
 }: AssetGridProps) {
+  const [visibleCount, setVisibleCount] = useState(ASSET_GRID_PAGE_SIZE);
+  const [failedThumbnails, setFailedThumbnails] = useState<Set<string>>(() => new Set());
+  const nodesSignature = `${nodes.length}:${nodes[0]?.path ?? ""}:${nodes[nodes.length - 1]?.path ?? ""}`;
+
+  useEffect(() => {
+    setVisibleCount(ASSET_GRID_PAGE_SIZE);
+    setFailedThumbnails(new Set());
+  }, [nodesSignature]);
+
   if (nodes.length === 0) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 pt-8 text-[var(--muted-foreground)]">
@@ -91,98 +107,127 @@ export function AssetGrid({
   }
 
   const gridColsClass = listGridCols(listColumns);
+  const visibleNodes = nodes.slice(0, visibleCount);
+  const hasMoreNodes = visibleNodes.length < nodes.length;
+  const markThumbnailFailed = (path: string) => {
+    setFailedThumbnails((prev) => {
+      if (prev.has(path)) return prev;
+      const next = new Set(prev);
+      next.add(path);
+      return next;
+    });
+  };
+  const loadMore = () => setVisibleCount((count) => Math.min(nodes.length, count + ASSET_GRID_PAGE_SIZE));
+  const paginationFooter = hasMoreNodes ? (
+    <div className="flex items-center justify-center gap-3 px-3 py-3 text-xs text-[var(--muted-foreground)]">
+      <span>
+        Showing {visibleNodes.length} of {nodes.length}
+      </span>
+      <button type="button" onClick={loadMore} className="mari-chrome-control mari-chrome-control--small text-xs">
+        Load more
+      </button>
+    </div>
+  ) : null;
 
   if (viewMode === "grid") {
     return (
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(clamp(6.75rem,18vmin,10rem),1fr))] gap-[clamp(0.5rem,1.4vmin,0.875rem)] p-[clamp(0.5rem,1.6vmin,0.875rem)]">
-        {nodes.map((node) => {
-          const isSelected = selectedPaths.has(node.path);
-          const isFile = node.type === "file";
-          const folderSelectionStatus =
-            !isFile && assetSelectionMode ? (getFolderSelectionStatus?.(node) ?? "included") : null;
-          return (
-            <div
-              key={node.path}
-              onContextMenu={(e) => onContextMenu(e, node)}
-              onClick={() => {
-                if (node.type === "folder") onNavigateFolder(node.path);
-                else onSelectFile(node);
-              }}
-              className={
-                "group relative flex flex-col items-center gap-2 rounded-xl border bg-[var(--card)] p-[clamp(0.5rem,1.3vmin,0.875rem)] transition-all hover:border-[var(--foreground)]/25 hover:shadow-sm " +
-                (isSelected
-                  ? "border-[var(--foreground)]/30 ring-2 ring-[var(--foreground)]/20"
-                  : "border-[var(--border)]")
-              }
-            >
-              {/* Checkbox — files only, always visible */}
-              {isFile && (
-                <label
-                  onClick={(e) => e.stopPropagation()}
-                  className="absolute left-1.5 top-1.5 z-10 flex h-5 w-5 cursor-pointer items-center justify-center rounded border border-[var(--border)] bg-[var(--background)] shadow-sm transition-colors hover:border-[var(--foreground)]/30"
-                >
-                  <input
-                    type="checkbox"
-                    checked={isSelected}
-                    onChange={() => onToggleSelect(node)}
-                    className="h-3.5 w-3.5 accent-[var(--foreground)]"
-                  />
-                </label>
-              )}
-              {folderSelectionStatus && (
+      <>
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(clamp(6.75rem,18vmin,10rem),1fr))] gap-[clamp(0.5rem,1.4vmin,0.875rem)] p-[clamp(0.5rem,1.6vmin,0.875rem)]">
+          {visibleNodes.map((node) => {
+            const isSelected = selectedPaths.has(node.path);
+            const isFile = node.type === "file";
+            const thumbnailUrl =
+              isFile && isImage(node.ext) && !failedThumbnails.has(node.path) ? gameAssetFileUrl(node.path) : null;
+            const folderSelectionStatus =
+              !isFile && assetSelectionMode ? (getFolderSelectionStatus?.(node) ?? "included") : null;
+            return (
+              <div
+                key={node.path}
+                onContextMenu={(e) => onContextMenu(e, node)}
+                onClick={() => {
+                  if (node.type === "folder") onNavigateFolder(node.path);
+                  else onSelectFile(node);
+                }}
+                className={
+                  "group relative flex flex-col items-center gap-2 rounded-xl border bg-[var(--card)] p-[clamp(0.5rem,1.3vmin,0.875rem)] transition-all hover:border-[var(--foreground)]/25 hover:shadow-sm " +
+                  (isSelected
+                    ? "border-[var(--foreground)]/30 ring-2 ring-[var(--foreground)]/20"
+                    : "border-[var(--border)]")
+                }
+              >
+                {/* Checkbox — files only, always visible */}
+                {isFile && (
+                  <label
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute left-1.5 top-1.5 z-10 flex h-5 w-5 cursor-pointer items-center justify-center rounded border border-[var(--border)] bg-[var(--background)] shadow-sm transition-colors hover:border-[var(--foreground)]/30"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => onToggleSelect(node)}
+                      className="h-3.5 w-3.5 accent-[var(--foreground)]"
+                    />
+                  </label>
+                )}
+                {folderSelectionStatus && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenFolderSelection?.(node, e.currentTarget);
+                    }}
+                    className={
+                      "absolute left-1.5 top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full border shadow-sm transition-colors " +
+                      (folderSelectionStatus === "excluded"
+                        ? "border-[var(--border)] bg-[var(--background)] text-[var(--muted-foreground)] hover:border-[var(--foreground)]/30"
+                        : "border-[var(--foreground)]/25 bg-[var(--foreground)]/10 text-[var(--foreground)] hover:bg-[var(--foreground)]/15")
+                    }
+                    title="Select assets for this game"
+                    aria-label={`Select ${node.name} assets for this game`}
+                  >
+                    <FolderSelectionMark status={folderSelectionStatus} />
+                  </button>
+                )}
+
                 <button
-                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    onOpenFolderSelection?.(node, e.currentTarget);
+                    onOpenActionMenu(node, e.currentTarget);
                   }}
-                  className={
-                    "absolute left-1.5 top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full border shadow-sm transition-colors " +
-                    (folderSelectionStatus === "excluded"
-                      ? "border-[var(--border)] bg-[var(--background)] text-[var(--muted-foreground)] hover:border-[var(--foreground)]/30"
-                      : "border-[var(--foreground)]/25 bg-[var(--foreground)]/10 text-[var(--foreground)] hover:bg-[var(--foreground)]/15")
-                  }
-                  title="Select assets for this game"
-                  aria-label={`Select ${node.name} assets for this game`}
+                  className="absolute right-1.5 top-1.5 rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
                 >
-                  <FolderSelectionMark status={folderSelectionStatus} />
+                  <MoreHorizontal size="0.875rem" />
                 </button>
-              )}
 
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenActionMenu(node, e.currentTarget);
-                }}
-                className="absolute right-1.5 top-1.5 rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-              >
-                <MoreHorizontal size="0.875rem" />
-              </button>
-
-              <div className="flex aspect-square w-[clamp(3.5rem,13vmin,6.75rem)] max-w-full shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--accent)]">
-                {node.type === "folder" ? (
-                  (() => {
-                    const CategoryIcon = CATEGORY_ICONS[node.name] || Folder;
-                    return (
-                      <CategoryIcon className="h-[52%] min-h-8 w-[52%] min-w-8 max-h-16 max-w-16 text-[var(--foreground)]/80" />
-                    );
-                  })()
-                ) : isImage(node.ext) ? (
-                  <img
-                    src={gameAssetFileUrl(node.path) ?? ""}
-                    alt={node.name}
-                    className="h-full w-full object-cover"
-                    loading="lazy"
-                  />
-                ) : (
-                  <FileIcon ext={node.ext} className="h-8 w-8 text-[var(--foreground)]/80" />
-                )}
+                <div className="flex aspect-square w-[clamp(3.5rem,13vmin,6.75rem)] max-w-full shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--accent)]">
+                  {node.type === "folder" ? (
+                    (() => {
+                      const CategoryIcon = CATEGORY_ICONS[node.name] || Folder;
+                      return (
+                        <CategoryIcon className="h-[52%] min-h-8 w-[52%] min-w-8 max-h-16 max-w-16 text-[var(--foreground)]/80" />
+                      );
+                    })()
+                  ) : thumbnailUrl ? (
+                    <img
+                      src={thumbnailUrl}
+                      alt={node.name}
+                      className="h-full w-full object-cover"
+                      loading="lazy"
+                      onError={() => markThumbnailFailed(node.path)}
+                    />
+                  ) : isImage(node.ext) ? (
+                    <BrokenImageFallback />
+                  ) : (
+                    <FileIcon ext={node.ext} className="h-8 w-8 text-[var(--foreground)]/80" />
+                  )}
+                </div>
+                <span className="w-full truncate text-center text-xs text-[var(--foreground)]">{node.name}</span>
               </div>
-              <span className="w-full truncate text-center text-xs text-[var(--foreground)]">{node.name}</span>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+        {paginationFooter}
+      </>
     );
   }
 
@@ -198,9 +243,11 @@ export function AssetGrid({
         {listColumns.modified && <span className="text-right">Modified</span>}
         <span></span>
       </div>
-      {nodes.map((node) => {
+      {visibleNodes.map((node) => {
         const isSelected = selectedPaths.has(node.path);
         const isFile = node.type === "file";
+        const thumbnailUrl =
+          isFile && isImage(node.ext) && !failedThumbnails.has(node.path) ? gameAssetFileUrl(node.path) : null;
         const folderSelectionStatus =
           !isFile && assetSelectionMode ? (getFolderSelectionStatus?.(node) ?? "included") : null;
         return (
@@ -252,14 +299,19 @@ export function AssetGrid({
                 const CategoryIcon = CATEGORY_ICONS[node.name] || Folder;
                 return <CategoryIcon size="1rem" className="shrink-0 text-[var(--foreground)]/80" />;
               })()
-            ) : isImage(node.ext) ? (
+            ) : thumbnailUrl ? (
               <div className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded bg-[var(--accent)]">
                 <img
-                  src={gameAssetFileUrl(node.path) ?? ""}
+                  src={thumbnailUrl}
                   alt=""
                   className="h-full w-full object-cover"
                   loading="lazy"
+                  onError={() => markThumbnailFailed(node.path)}
                 />
+              </div>
+            ) : isImage(node.ext) ? (
+              <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-[var(--accent)]">
+                <BrokenImageFallback className="h-4 w-4 text-[var(--foreground)]/70" />
               </div>
             ) : (
               <FileIcon ext={node.ext} className="shrink-0 text-[var(--muted-foreground)]" size="1rem" />
@@ -283,6 +335,7 @@ export function AssetGrid({
           </div>
         );
       })}
+      {paginationFooter}
     </div>
   );
 }

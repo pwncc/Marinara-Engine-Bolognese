@@ -15,6 +15,8 @@ import {
   renameSync,
   copyFileSync,
   readFileSync,
+  rmSync,
+  unlinkSync,
 } from "fs";
 import { join, extname, basename, dirname } from "path";
 import { execFile } from "child_process";
@@ -49,7 +51,7 @@ function loadMeta(): Record<string, FolderMeta> {
  * @param meta - Map of folder paths to metadata
  */
 function saveMeta(meta: Record<string, FolderMeta>) {
-  writeFileSync(META_PATH, JSON.stringify(meta, null, 2), "utf-8");
+  atomicWriteText(META_PATH, JSON.stringify(meta, null, 2));
 }
 
 // sharp can fail to load on Android/Termux because it has no native Android
@@ -130,6 +132,33 @@ const MUSIC_INTENSITY_SET = new Set<string>(MUSIC_INTENSITIES);
  */
 function isSafePath(segment: string): boolean {
   return !segment.includes("..") && !segment.includes("\\") && !/^\//.test(segment);
+}
+
+function cleanupFile(filePath: string): void {
+  try {
+    if (existsSync(filePath)) unlinkSync(filePath);
+  } catch {
+    /* best-effort cleanup */
+  }
+}
+
+function tempWritePath(filePath: string): string {
+  return join(dirname(filePath), `.${basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`);
+}
+
+function atomicWriteBuffer(filePath: string, buffer: Buffer): void {
+  const tmpPath = tempWritePath(filePath);
+  try {
+    writeFileSync(tmpPath, buffer);
+    renameSync(tmpPath, filePath);
+  } catch (err) {
+    cleanupFile(tmpPath);
+    throw err;
+  }
+}
+
+function atomicWriteText(filePath: string, value: string): void {
+  atomicWriteBuffer(filePath, Buffer.from(value, "utf-8"));
 }
 
 const uploadSchema = z.object({
@@ -290,7 +319,26 @@ async function normalizeGeneratedBackgroundBuffer(buffer: Buffer, ext: string) {
 async function normalizeGeneratedBackgroundFile(category: string, subcategory: string, filePath: string, ext: string) {
   if (!shouldNormalizeGeneratedBackground(category, subcategory, ext)) return;
   const normalized = await normalizeGeneratedBackgroundBuffer(readFileSync(filePath), ext);
-  writeFileSync(filePath, normalized);
+  atomicWriteBuffer(filePath, normalized);
+}
+
+function containsNativeMarker(dir: string): boolean {
+  if (existsSync(join(dir, ".native"))) return true;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (containsNativeMarker(join(dir, entry.name))) return true;
+  }
+  return false;
+}
+
+function isInsideNativeFolder(filePath: string): boolean {
+  let current = statSync(filePath).isDirectory() ? filePath : dirname(filePath);
+  while (current !== dirname(current)) {
+    if (existsSync(join(current, ".native"))) return true;
+    if (current === GAME_ASSETS_DIR) return false;
+    current = dirname(current);
+  }
+  return false;
 }
 
 // ════════════════════════════════════════════════
@@ -427,7 +475,7 @@ export async function gameAssetsRoutes(app: FastifyInstance) {
   app.post("/upload", async (req, reply) => {
     const contentType = req.headers["content-type"] ?? "";
     if (contentType.includes("multipart/form-data")) {
-      const file = await req.file();
+      const file = await req.file({ limits: { fileSize: MAX_UPLOAD_BYTES + 1 } });
       if (!file) {
         return reply.status(400).send({ error: "No file uploaded" });
       }
@@ -445,32 +493,52 @@ export async function gameAssetsRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: error instanceof Error ? error.message : "Invalid upload" });
       }
 
-      await pipeline(file.file, createWriteStream(target.targetPath));
+      const tempPath = tempWritePath(target.targetPath);
+      try {
+        await pipeline(file.file, createWriteStream(tempPath));
+      } catch (error) {
+        cleanupFile(tempPath);
+        const truncated = (file.file as typeof file.file & { truncated?: boolean }).truncated === true;
+        return reply.status(truncated ? 400 : 500).send({
+          error: truncated
+            ? `File too large: ${file.filename} exceeds the 50MB upload limit.`
+            : "Failed to upload file",
+          ...(truncated ? {} : { detail: String(error) }),
+        });
+      }
 
-      const writtenSize = statSync(target.targetPath).size;
+      const writtenSize = statSync(tempPath).size;
       const ext = extname(file.filename).toLowerCase();
       const isTextFile = TEXT_EXTS.has(ext);
       const maxBytes = isTextFile ? MAX_TEXT_BYTES : MAX_UPLOAD_BYTES;
       const maxLabel = isTextFile ? "10MB" : "50MB";
 
-      if (writtenSize > maxBytes) {
-        const { unlinkSync } = await import("fs");
-        unlinkSync(target.targetPath);
+      if (writtenSize > maxBytes || (file.file as typeof file.file & { truncated?: boolean }).truncated === true) {
+        cleanupFile(tempPath);
         return reply.status(400).send({
           error: `File too large: ${file.filename} is ${(writtenSize / 1024 / 1024).toFixed(1)} MB. Max size: ${maxLabel}.`,
         });
       }
 
-      await normalizeGeneratedBackgroundFile(category, subcategory, target.targetPath, extname(target.safeName).toLowerCase());
-      const processedSize = statSync(target.targetPath).size;
-      if (processedSize > maxBytes) {
-        const { unlinkSync } = await import("fs");
-        unlinkSync(target.targetPath);
-        return reply.status(400).send({
-          error: `File too large after processing: ${file.filename} is ${(processedSize / 1024 / 1024).toFixed(1)} MB. Max size: ${maxLabel}.`,
-        });
-      }
+      try {
+        await normalizeGeneratedBackgroundFile(category, subcategory, tempPath, extname(target.safeName).toLowerCase());
+        const processedSize = statSync(tempPath).size;
+        if (processedSize > maxBytes) {
+          cleanupFile(tempPath);
+          return reply.status(400).send({
+            error: `File too large after processing: ${file.filename} is ${(processedSize / 1024 / 1024).toFixed(1)} MB. Max size: ${maxLabel}.`,
+          });
+        }
 
+        if (existsSync(target.targetPath)) {
+          cleanupFile(tempPath);
+          return reply.status(409).send({ error: "A file with that name already exists" });
+        }
+        renameSync(tempPath, target.targetPath);
+      } catch (error) {
+        cleanupFile(tempPath);
+        return reply.status(500).send({ error: "Failed to process uploaded file", detail: String(error) });
+      }
       return finishAssetUpload(category, subcategory, target.safeName);
     }
 
@@ -512,7 +580,7 @@ export async function gameAssetsRoutes(app: FastifyInstance) {
       });
     }
 
-    writeFileSync(target.targetPath, buffer);
+    atomicWriteBuffer(target.targetPath, buffer);
 
     return finishAssetUpload(category, subcategory, target.safeName);
   });
@@ -529,7 +597,6 @@ export async function gameAssetsRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Asset not found" });
     }
 
-    const { unlinkSync } = await import("fs");
     unlinkSync(filePath);
 
     // Rebuild manifest after deletion
@@ -637,9 +704,6 @@ export async function gameAssetsRoutes(app: FastifyInstance) {
 
     const target = join(GAME_ASSETS_DIR, wildcard);
 
-    if (existsSync(join(target, ".native"))) {
-      return reply.status(403).send({ error: "Cannot delete native folders" });
-    }
     try {
       assertInsideDir(GAME_ASSETS_DIR, target);
     } catch {
@@ -655,6 +719,10 @@ export async function gameAssetsRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "Not a directory" });
     }
 
+    if (containsNativeMarker(target)) {
+      return reply.status(403).send({ error: "Cannot delete folders containing native assets" });
+    }
+
     const entries = readdirSync(target);
     const visibleEntries = entries.filter((e) => !e.startsWith("."));
     const recursive = (req.query as { recursive?: string }).recursive === "true";
@@ -665,7 +733,6 @@ export async function gameAssetsRoutes(app: FastifyInstance) {
 
     try {
       if (recursive && visibleEntries.length > 0) {
-        const { rmSync } = await import("fs");
         rmSync(target, { recursive: true, force: true });
       } else {
         rmdirSync(target);
@@ -741,6 +808,14 @@ export async function gameAssetsRoutes(app: FastifyInstance) {
 
     if (!existsSync(oldFull)) {
       return reply.status(404).send({ error: "File not found" });
+    }
+
+    const oldStat = statSync(oldFull);
+    if (!oldStat.isFile()) {
+      return reply.status(400).send({ error: "Not a file" });
+    }
+    if (isInsideNativeFolder(oldFull)) {
+      return reply.status(403).send({ error: "Cannot move native assets" });
     }
 
     const destDir = join(GAME_ASSETS_DIR, targetFolder);
@@ -917,7 +992,6 @@ export async function gameAssetsRoutes(app: FastifyInstance) {
 
     const succeeded: string[] = [];
     const failed: { path: string; error: string }[] = [];
-    const { unlinkSync } = await import("fs");
 
     for (const filePath of paths) {
       if (!isSafePath(filePath)) {

@@ -448,7 +448,6 @@ export function scoreAmbient(input: AmbientScoreInput): string | null {
   } else {
     keywords.push(...(STATE_AMBIENT[state] ?? []));
   }
-  keywords.push(...(STATE_AMBIENT[state] ?? []));
   if (weather) keywords.push(...(WEATHER_AMBIENT[weather.toLowerCase()] ?? []));
   if (timeOfDay) keywords.push(...(TIME_AMBIENT[timeOfDay.toLowerCase()] ?? []));
 

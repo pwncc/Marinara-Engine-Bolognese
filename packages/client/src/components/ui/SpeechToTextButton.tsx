@@ -69,6 +69,7 @@ export function SpeechToTextButton({ disabled, onTranscript, className, iconSize
   const [supported, setSupported] = useState(false);
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const disabledRef = useRef(Boolean(disabled));
 
   useEffect(() => {
     setSupported(Boolean(getSpeechRecognitionCtor()));
@@ -78,16 +79,25 @@ export function SpeechToTextButton({ disabled, onTranscript, className, iconSize
     };
   }, []);
 
+  useEffect(() => {
+    disabledRef.current = Boolean(disabled);
+    if (disabled && recognitionRef.current) {
+      recognitionRef.current.abort();
+      recognitionRef.current = null;
+      setListening(false);
+    }
+  }, [disabled]);
+
   const stopListening = useCallback(() => {
     recognitionRef.current?.stop();
   }, []);
 
   const startListening = useCallback(() => {
-    if (disabled) return;
-    if (listening) {
+    if (listening || recognitionRef.current) {
       stopListening();
       return;
     }
+    if (disabledRef.current) return;
 
     const Recognition = getSpeechRecognitionCtor();
     if (!Recognition) {
@@ -119,7 +129,7 @@ export function SpeechToTextButton({ disabled, onTranscript, className, iconSize
     recognition.onend = () => {
       recognitionRef.current = null;
       setListening(false);
-      if (finalTranscript.trim()) {
+      if (!disabledRef.current && finalTranscript.trim()) {
         onTranscript(finalTranscript.trim());
       }
     };
@@ -133,7 +143,7 @@ export function SpeechToTextButton({ disabled, onTranscript, className, iconSize
       setListening(false);
       toast.error("Could not start speech recognition.");
     }
-  }, [disabled, listening, onTranscript, stopListening]);
+  }, [listening, onTranscript, stopListening]);
 
   return (
     <button

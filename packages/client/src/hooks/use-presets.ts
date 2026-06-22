@@ -2,6 +2,7 @@
 // React Query: Preset, Group, Section & Choice hooks
 // ──────────────────────────────────────────────
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { api } from "../lib/api-client";
 import type {
   PromptPreset,
@@ -26,6 +27,10 @@ export const presetKeys = {
   preview: (presetId: string) => [...presetKeys.all, "preview", presetId] as const,
   default: () => [...presetKeys.all, "default"] as const,
 };
+
+function mutationErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
 
 // ═══════════════════════════════════════════════
 //  Presets
@@ -92,6 +97,9 @@ export function useUpdatePreset() {
       qc.invalidateQueries({ queryKey: presetKeys.list() });
       qc.invalidateQueries({ queryKey: presetKeys.detail(variables.id) });
       qc.invalidateQueries({ queryKey: presetKeys.full(variables.id) });
+    },
+    onError: (error) => {
+      toast.error(mutationErrorMessage(error, "Failed to update preset."));
     },
   });
 }
@@ -283,6 +291,9 @@ export function useCreateVariable() {
       qc.invalidateQueries({ queryKey: presetKeys.choiceBlocks(variables.presetId) });
       qc.invalidateQueries({ queryKey: presetKeys.full(variables.presetId) });
     },
+    onError: (error) => {
+      toast.error(mutationErrorMessage(error, "Failed to create preset variable."));
+    },
   });
 }
 
@@ -298,6 +309,9 @@ export function useUpdateVariable() {
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: presetKeys.choiceBlocks(variables.presetId) });
       qc.invalidateQueries({ queryKey: presetKeys.full(variables.presetId) });
+    },
+    onError: (error) => {
+      toast.error(mutationErrorMessage(error, "Failed to update preset variable."));
     },
   });
 }

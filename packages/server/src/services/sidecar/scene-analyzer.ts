@@ -176,6 +176,55 @@ function compactPromptLabel(value: string | null | undefined): string {
     .slice(0, 180);
 }
 
+function sceneAnalyzerSegmentBeats(narration: string): string[] {
+  const lines = narration.split(/\r?\n/);
+  const beats: string[] = [];
+  let fallbackLines: string[] = [];
+  const readablePlaceholderRe = /^\s*\[(?:Note|Book):/i;
+  const narrationRegex = /^\s*Narration\s*:\s*(.+)$/i;
+  const legacyDialogueRegex = /^\s*Dialogue\s*\[([^\]]+)\]\s*(?:\[([^\]]+)\])?\s*:\s*(.+)$/i;
+  const compactDialogueRegex = /^\s*\[([^\]]+)\]\s*(?:\[([^\]]+)\])?\s*:\s*(.+)$/;
+  const partyLineRegex =
+    /^\s*\[([^\]]+)\]\s*\[(main|side|extra|action|thought|whisper(?::([^\]]+))?)\]\s*(?:\[([^\]]+)\])?\s*:\s*(.+)$/i;
+
+  const flushFallback = () => {
+    const text = fallbackLines.join("\n").trim();
+    if (text) beats.push(text);
+    fallbackLines = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      flushFallback();
+      continue;
+    }
+
+    const structuredMatch =
+      line.match(narrationRegex) ??
+      line.match(legacyDialogueRegex) ??
+      line.match(partyLineRegex) ??
+      line.match(compactDialogueRegex);
+    if (structuredMatch) {
+      flushFallback();
+      beats.push(line);
+      continue;
+    }
+
+    if (readablePlaceholderRe.test(line)) {
+      flushFallback();
+      beats.push(line);
+      continue;
+    }
+
+    fallbackLines.push(line);
+  }
+
+  flushFallback();
+  const fallback = narration.trim();
+  return beats.length > 0 ? beats : fallback ? [fallback] : [];
+}
+
 /** Build the user prompt with all choices inline in a JSON template. */
 export function buildSceneAnalyzerUserPrompt(
   narration: string,
@@ -201,10 +250,10 @@ export function buildSceneAnalyzerUserPrompt(
     parts.push(`<player_action>`, playerAction, `</player_action>`);
   }
 
-  const lines = narration.split(/\r?\n/).filter((l) => l.trim());
+  const beats = sceneAnalyzerSegmentBeats(narration);
   parts.push(`<narration>`);
-  for (let i = 0; i < lines.length; i++) {
-    parts.push(`[${i}] ${lines[i]}`);
+  for (let i = 0; i < beats.length; i++) {
+    parts.push(`[${i}] ${beats[i]}`);
   }
   parts.push(`</narration>`);
 
@@ -258,7 +307,7 @@ export function buildSceneAnalyzerUserPrompt(
           `2. AUDIO DIRECTION — Choose compact musicGenre/musicIntensity/locationKind hints. Do NOT choose music or ambient file tags; Marinara maps these hints to assets deterministically. Do NOT output spotifyTrack.`,
         ]),
     `3. REPUTATION — If an NPC relationship shifted, note it. Otherwise empty array.`,
-    `4. PER-BEAT EFFECTS — Scan each narration beat [0]-[${lines.length - 1}]. For each beat you can optionally add:`,
+    `4. PER-BEAT EFFECTS — Scan each narration beat [0]-[${Math.max(0, beats.length - 1)}]. For each beat you can optionally add:`,
     `   - "sfx": sound effects (door slam, explosion, footsteps, impact)`,
     `   - "directions": rare cinematic effects at the exact beat they should happen, usually paired with a meaningful sound or reveal`,
     `   - "background": a DIFFERENT background tag if the characters move to a new location at that beat. The background stays the same until the NEXT segment that changes it, so only set "background" on the beat where characters actually arrive at a new location. Do NOT repeat the current background.`,
@@ -344,7 +393,7 @@ export function buildSceneAnalyzerUserPrompt(
 
   // Build ONE segment example showing the range
   const segmentFields: string[] = [];
-  segmentFields.push(`      "segment": <0-${lines.length - 1}>`);
+  segmentFields.push(`      "segment": <0-${Math.max(0, beats.length - 1)}>`);
   if (sfxLine) segmentFields.push(sfxLine);
   segmentFields.push(
     `      "directions": [{"effect":"<flash|screen_shake|pulse|slow_zoom|impact_zoom|tilt|desaturate|chromatic_aberration|film_grain|rain_streaks|spotlight|focus|vignette|letterbox|color_grade>","duration":<0.4-3>,"intensity":<0-1>}]  // optional, rare`,
@@ -379,7 +428,7 @@ export function buildSceneAnalyzerUserPrompt(
       : []),
     ...(canGenerateIllustrations
       ? [
-          `,  "illustration": null OR {"segment":<0-${lines.length - 1}>,"title":"<short concrete visual title>","prompt":"<important CG image prompt from player POV>","characters":["<visible named character>"],"reason":"<why this is CG-worthy>","slug":"<short-safe-slug>"}`,
+          `,  "illustration": null OR {"segment":<0-${Math.max(0, beats.length - 1)}>,"title":"<short concrete visual title>","prompt":"<important CG image prompt from player POV>","characters":["<visible named character>"],"reason":"<why this is CG-worthy>","slug":"<short-safe-slug>"}`,
         ]
       : []),
     `}`,

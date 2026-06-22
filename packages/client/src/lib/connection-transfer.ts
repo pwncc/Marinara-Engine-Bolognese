@@ -64,6 +64,7 @@ export type ConnectionImportPayload = {
 
 export const CONNECTION_EXPORT_WARNING =
   "This will export your connection data, WITHOUT your provided API Key. Remember to never share those with others!";
+const MAX_PARALLEL_JOBS = 16;
 
 export function createConnectionExportEnvelope(connections: ConnectionTransferRow[]) {
   return {
@@ -103,22 +104,22 @@ export function normalizeImportedConnectionEntry(value: unknown): ConnectionImpo
       baseUrl: asString(value.baseUrl),
       model: asString(value.model),
       maxContext: asPositiveInteger(value.maxContext, 128000),
-      isDefault: asBoolean(value.isDefault),
-      useForRandom: asBoolean(value.useForRandom),
-      defaultForAgents: asBoolean(value.defaultForAgents),
+      isDefault: false,
+      useForRandom: false,
+      defaultForAgents: false,
       enableCaching: asBoolean(value.enableCaching),
       cachingAtDepth: asNonNegativeInteger(value.cachingAtDepth, 5),
       embeddingModel: asString(value.embeddingModel),
       embeddingBaseUrl: asString(value.embeddingBaseUrl),
-      embeddingConnectionId: asNullableString(value.embeddingConnectionId),
+      embeddingConnectionId: null,
       openrouterProvider: asNullableString(value.openrouterProvider),
       imageGenerationSource: asNullableString(value.imageGenerationSource),
       comfyuiWorkflow: asNullableString(value.comfyuiWorkflow),
       imageService,
       imageEndpointId: asNullableString(value.imageEndpointId),
-      promptPresetId: asNullableString(value.promptPresetId),
+      promptPresetId: null,
       maxTokensOverride: asNullablePositiveInteger(value.maxTokensOverride),
-      maxParallelJobs: asPositiveInteger(value.maxParallelJobs, 1),
+      maxParallelJobs: asBoundedPositiveInteger(value.maxParallelJobs, 1, MAX_PARALLEL_JOBS),
       treatAsLocalEndpoint: asBoolean(value.treatAsLocalEndpoint),
       claudeFastMode: asBoolean(value.claudeFastMode),
     },
@@ -168,18 +169,17 @@ function parseDefaultParameters(value: unknown): Record<string, unknown> | null 
     }
   }
 
-  const scrubbed = scrubSecrets(value);
+  const scrubbed = scrubTopLevelSecrets(value);
   return isRecord(scrubbed) ? scrubbed : null;
 }
 
-function scrubSecrets(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(scrubSecrets);
+function scrubTopLevelSecrets(value: unknown): unknown {
   if (!isRecord(value)) return value;
 
   const next: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     if (isSecretFieldName(key)) continue;
-    next[key] = scrubSecrets(entry);
+    next[key] = entry;
   }
   return next;
 }
@@ -227,6 +227,10 @@ function asPositiveInteger(value: unknown, fallback: number) {
   const numberValue = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   if (!Number.isFinite(numberValue)) return fallback;
   return Math.max(1, Math.round(numberValue));
+}
+
+function asBoundedPositiveInteger(value: unknown, fallback: number, max: number) {
+  return Math.min(max, asPositiveInteger(value, fallback));
 }
 
 function asNonNegativeInteger(value: unknown, fallback: number) {

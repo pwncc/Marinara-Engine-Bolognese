@@ -433,22 +433,25 @@ function capStreamingResponse(response: Response, maxBytes: number, dispatcher?:
     return response;
   }
   let total = 0;
+  let innerReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  const closeDispatcher = () => dispatcher?.close().catch(() => undefined);
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const reader = response.body!.getReader();
+      innerReader = reader;
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) {
             controller.close();
-            await dispatcher?.close().catch(() => undefined);
+            await closeDispatcher();
             return;
           }
 
           total += value.byteLength;
           if (total > maxBytes) {
             await reader.cancel().catch(() => undefined);
-            await dispatcher?.close().catch(() => undefined);
+            await closeDispatcher();
             controller.error(new Error(`Outbound response exceeded ${maxBytes} bytes`));
             return;
           }
@@ -456,9 +459,15 @@ function capStreamingResponse(response: Response, maxBytes: number, dispatcher?:
           controller.enqueue(value);
         }
       } catch (err) {
-        await dispatcher?.close().catch(() => undefined);
+        await closeDispatcher();
         controller.error(err);
+      } finally {
+        if (innerReader === reader) innerReader = null;
       }
+    },
+    async cancel(reason) {
+      await innerReader?.cancel(reason).catch(() => undefined);
+      await closeDispatcher();
     },
   });
   return new Response(stream, {
@@ -530,6 +539,26 @@ export function requestHeadersWithIdentityEncoding(headersInit: RequestInit["hea
   return headers;
 }
 
+const CROSS_ORIGIN_REDIRECT_STRIPPED_HEADERS = [
+  "authorization",
+  "proxy-authorization",
+  "cookie",
+  "xi-api-key",
+  "x-api-key",
+  "api-key",
+  "content-type",
+  "content-length",
+];
+
+function stripCrossOriginRedirectHeaders(headersInit: RequestInit["headers"] | undefined): Headers | undefined {
+  if (!headersInit) return undefined;
+  const headers = new Headers(headersInit);
+  for (const name of CROSS_ORIGIN_REDIRECT_STRIPPED_HEADERS) {
+    headers.delete(name);
+  }
+  return headers;
+}
+
 export async function safeFetch(url: string | URL, options: SafeFetchOptions = {}): Promise<Response> {
   const {
     policy,
@@ -548,12 +577,14 @@ export async function safeFetch(url: string | URL, options: SafeFetchOptions = {
 
   let current = await validateOutboundUrlForFetch(url, policy, dispatcher ? undefined : agentOptions);
   const redirects = policy?.maxRedirects ?? MAX_REDIRECTS;
+  let currentHeaders = headers;
+  let currentInit = { ...init };
 
   for (let i = 0; i <= redirects; i += 1) {
     const internalDispatcher = dispatcher ? undefined : current.dispatcher;
-    const requestHeaders = decodeCompressedResponse ? requestHeadersWithIdentityEncoding(headers) : headers;
+    const requestHeaders = decodeCompressedResponse ? requestHeadersWithIdentityEncoding(currentHeaders) : currentHeaders;
     const response = await fetch(current.url, {
-      ...init,
+      ...currentInit,
       ...(requestHeaders ? { headers: requestHeaders } : {}),
       redirect: "manual",
       dispatcher: dispatcher ?? internalDispatcher,
@@ -561,11 +592,14 @@ export async function safeFetch(url: string | URL, options: SafeFetchOptions = {
     if (response.status >= 300 && response.status < 400 && response.headers.has("location")) {
       if (i === redirects) throw new Error("Outbound request exceeded redirect limit");
       await internalDispatcher?.close().catch(() => undefined);
-      current = await validateOutboundUrlForFetch(
-        new URL(response.headers.get("location")!, current.url),
-        policy,
-        agentOptions,
-      );
+      const previousUrl = current.url;
+      const nextUrl = new URL(response.headers.get("location")!, previousUrl);
+      if (nextUrl.origin !== previousUrl.origin) {
+        currentHeaders = stripCrossOriginRedirectHeaders(currentHeaders);
+        currentInit = { ...currentInit };
+        delete (currentInit as { body?: unknown }).body;
+      }
+      current = await validateOutboundUrlForFetch(nextUrl, policy, agentOptions);
       continue;
     }
 

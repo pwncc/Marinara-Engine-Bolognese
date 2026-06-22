@@ -17,6 +17,7 @@ export async function injectMemoryRecallContext({
   embeddingSource,
   contextLimit,
   sendProgress,
+  signal,
 }: {
   db: DB;
   messages: PromptMessage[];
@@ -25,6 +26,7 @@ export async function injectMemoryRecallContext({
   embeddingSource: MemoryRecallEmbeddingSource | null;
   contextLimit: number | undefined;
   sendProgress(phase: string): void;
+  signal?: AbortSignal;
 }): Promise<void> {
   sendProgress("memory_recall");
   const startedAt = Date.now();
@@ -32,7 +34,7 @@ export async function injectMemoryRecallContext({
     const lastUserMsg = [...currentInputMessages].reverse().find((message) => message.role === "user");
     if (!lastUserMsg?.content?.trim()) return;
 
-    const recalled = await recallMemories(db, lastUserMsg.content, [chatId], { embeddingSource });
+    const recalled = await recallMemories(db, lastUserMsg.content, [chatId], { embeddingSource, signal });
     if (recalled.length === 0) return;
 
     const packedRecall = packRecalledMemories(recalled, contextLimit);

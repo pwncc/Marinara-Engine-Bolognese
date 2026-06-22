@@ -434,8 +434,8 @@ class SidecarProcessService {
     return ["-m", "mlx_lm.server", "--model", modelRepo, "--host", "127.0.0.1", "--port", String(port)];
   }
 
-  private async waitForMlxCompletionProbe(baseUrl: string): Promise<void> {
-    const model = resolveSidecarRequestModel("mlx", sidecarModelService.getConfiguredModelRef());
+  private async waitForCompletionProbe(baseUrl: string, backend: SidecarBackend): Promise<void> {
+    const model = resolveSidecarRequestModel(backend, sidecarModelService.getConfiguredModelRef());
     const response = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: {
@@ -775,9 +775,7 @@ class SidecarProcessService {
           signal: AbortSignal.timeout(3_000),
         });
         if (response.ok) {
-          if (backend === "mlx") {
-            await this.waitForMlxCompletionProbe(baseUrl);
-          }
+          await this.waitForCompletionProbe(baseUrl, backend);
           return;
         }
         lastError = new Error(`HTTP ${response.status}`);

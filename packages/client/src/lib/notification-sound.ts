@@ -4,10 +4,15 @@
 
 let audioCtx: AudioContext | null = null;
 
-function getAudioContext(): AudioContext {
+function getAudioContext(): AudioContext | null {
+  if (typeof window === "undefined") return null;
   if (!audioCtx) {
-    audioCtx = new AudioContext();
+    const AudioContextCtor =
+      window.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) return null;
+    audioCtx = new AudioContextCtor();
   }
+  if (audioCtx.state === "suspended") void audioCtx.resume().catch(() => {});
   return audioCtx;
 }
 
@@ -19,6 +24,7 @@ function getAudioContext(): AudioContext {
 export function playNotificationPing(): void {
   try {
     const ctx = getAudioContext();
+    if (!ctx) return;
     const now = ctx.currentTime;
 
     // Main tone — a bright sine at ~880 Hz (A5)

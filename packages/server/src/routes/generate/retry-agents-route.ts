@@ -49,6 +49,7 @@ import { createChatsStorage } from "../../services/storage/chats.storage.js";
 import { createConnectionsStorage } from "../../services/storage/connections.storage.js";
 import { createPromptsStorage } from "../../services/storage/prompts.storage.js";
 import { findLastUserMessageIdBefore } from "../../services/generation/message-history.js";
+import { textRewriteDropsProtectedMarkup } from "../../services/generation/text-rewrite-safety.js";
 import { resolveConnectionImageDefaults } from "../../services/image/image-generation-defaults.js";
 import { loadImageGenerationUserSettings } from "../../services/image/image-generation-settings.js";
 import { compileImagePrompt } from "../../services/image/image-prompt-compiler.js";
@@ -67,6 +68,7 @@ import {
   preserveTrackerCharacterUiFields,
   resolveActiveCharacterIds,
   resolveBaseUrl,
+  resolveRoleplayChatSummary,
   resolveVisibleGameStateAnchor,
 } from "./generate-route-utils.js";
 import {
@@ -83,7 +85,7 @@ import {
   isAgentWriteApprovalEnvelope,
 } from "./agent-write-approval.js";
 import { filterGameInternalAgentIds } from "../../services/lorebook/game-lorebook-scope.js";
-import { sendSseEvent, startSseReply } from "./sse.js";
+import { sendSseEvent, startSseKeepalive, startSseReply } from "./sse.js";
 import { buildGenerationPromptPresetCandidates } from "./prompt-preset-selection.js";
 import {
   buildAgentConnectionUnavailableWarning,
@@ -119,6 +121,26 @@ type PersonaContext = {
   personaStats: any;
   rpgStats: any;
 };
+
+function resolveIllustratorImageSize(
+  size: { width: number; height: number },
+  aspectRatio: unknown,
+): { width: number; height: number } {
+  const width = Math.max(1, Math.round(size.width));
+  const height = Math.max(1, Math.round(size.height));
+  const aspect = typeof aspectRatio === "string" ? aspectRatio.trim().toLowerCase() : "";
+  if (aspect === "portrait") {
+    return width <= height ? { width, height } : { width: height, height: width };
+  }
+  if (aspect === "landscape") {
+    return width >= height ? { width, height } : { width: height, height: width };
+  }
+  if (aspect === "square") {
+    const side = Math.min(width, height);
+    return { width: side, height: side };
+  }
+  return { width, height };
+}
 
 function cardPromptText(value: unknown): string {
   return typeof value === "string" ? stripMacroComments(value).trim() : "";
@@ -593,9 +615,10 @@ async function buildRetryAgentContext(args: {
     return resolveHistoryMessageMacros([{ content: value, characterId: null }])[0]?.content ?? value;
   };
 
+  const chatMode = ((chat as { mode?: ChatMode }).mode ?? "conversation") as ChatMode;
   const agentContext: AgentContext = {
     chatId,
-    chatMode: (chat as any).mode ?? "conversation",
+    chatMode,
     wrapFormat,
     recentMessages: agentSlice.map((message: any, index: number) => {
       const resolved = resolvedAgentSlice[index];
@@ -642,7 +665,7 @@ async function buildRetryAgentContext(args: {
         : null,
     activatedLorebookEntries: null,
     writableLorebookIds: null,
-    chatSummary: ((chatMeta.summary as string) ?? "").trim() || null,
+    chatSummary: resolveRoleplayChatSummary(chatMode, chatMeta),
     streaming,
     memory: {},
   };
@@ -2191,8 +2214,20 @@ async function applyRetryResultEffects(args: {
         const editNeededValue = rewriteData.editNeeded;
         const strictEditNeeded = result.agentType === "prose-guardian" || result.agentType === "continuity";
         const rewriteAllowed = editNeededValue === false ? false : strictEditNeeded ? editNeededValue === true : true;
+        const droppedProtectedMarkup =
+          strictEditNeeded && textRewriteDropsProtectedMarkup(currentResponseForRewrite, editedText);
+        if (droppedProtectedMarkup) {
+          logger.warn(
+            "[retry-agents] Skipping %s rewrite because it dropped protected markup from message %s",
+            result.agentType,
+            retryMessageId,
+          );
+        }
         const changedMessage =
-          rewriteAllowed && editedText.trim().length > 0 && editedText !== currentResponseForRewrite;
+          rewriteAllowed &&
+          !droppedProtectedMarkup &&
+          editedText.trim().length > 0 &&
+          editedText !== currentResponseForRewrite;
         if (retryMessageId && changedMessage) {
           const currentMessage = await chats.getMessage(retryMessageId);
           if ((currentMessage?.content ?? "") !== expectedStoredMessageContent) {
@@ -2611,8 +2646,9 @@ async function applyRetryResultEffects(args: {
               (typeof setupConfig.imageStyleProfileId === "string" ? setupConfig.imageStyleProfileId : "") ||
               (typeof chatMeta.imageStyleProfileId === "string" ? chatMeta.imageStyleProfileId : "") ||
               null;
-            const imgWidth = imageSettings.illustration.width;
-            const imgHeight = imageSettings.illustration.height;
+            const illustrationSize = resolveIllustratorImageSize(imageSettings.illustration, illData.aspectRatio);
+            const imgWidth = illustrationSize.width;
+            const imgHeight = illustrationSize.height;
 
             const gameArtStylePrompt =
               typeof agentContext.memory._gameImageStylePrompt === "string"
@@ -2880,7 +2916,7 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
       return reply.status(400).send({ error: "chatId and agentTypes are required" });
     }
 
-    startSseReply(reply);
+    startSseReply(reply, { "X-Accel-Buffering": "no" });
 
     // Abort in-flight agent LLM calls when the client disconnects, and stop
     // writing to a closed socket. Mirrors the main /generate handler so a dropped
@@ -2896,6 +2932,7 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
         return false;
       }
     }) as typeof reply.raw.write;
+    const stopSseKeepalive = startSseKeepalive(reply);
     const onClientClose = () => {
       clientDisconnected = true;
       abortController.abort();
@@ -3257,6 +3294,7 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
           : "Agent retry failed";
       sendSseEvent(reply, { type: "error", data: message });
     } finally {
+      stopSseKeepalive();
       reply.raw.off("close", onClientClose);
       reply.raw.end();
     }

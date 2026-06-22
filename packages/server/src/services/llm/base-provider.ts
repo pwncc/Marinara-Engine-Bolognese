@@ -7,15 +7,16 @@ import { requestHeadersWithIdentityEncoding, safeFetch, type SafeFetchOptions } 
 
 /**
  * Shared undici Agent with a 5-minute headers timeout (time to first byte)
- * and no body timeout — prevents indefinite hangs while still allowing
- * long-running streaming responses to complete.
+ * and a finite inter-chunk body timeout to prevent half-open streams from
+ * hanging indefinitely while still allowing long-running healthy streams.
  */
 const LLM_HEADERS_TIMEOUT = 5 * 60 * 1000; // 5 minutes
-const llmAgentOptions = { bodyTimeout: 0, headersTimeout: LLM_HEADERS_TIMEOUT };
+const LLM_BODY_TIMEOUT = 120 * 1000; // 2 minutes between body chunks
+const llmAgentOptions = { bodyTimeout: LLM_BODY_TIMEOUT, headersTimeout: LLM_HEADERS_TIMEOUT };
 
 /**
  * Drop-in replacement for `fetch()` that uses a custom undici dispatcher
- * with no body/headers timeout. Use this for all outgoing LLM requests.
+ * with provider-oriented timeout settings. Use this for all outgoing LLM requests.
  */
 export function llmFetch(
   url: string | URL,
@@ -150,6 +151,8 @@ export interface LLMUsage {
   acceptedPredictionTokens?: number;
   /** Predicted output tokens rejected by the model but still counted in output usage. */
   rejectedPredictionTokens?: number;
+  /** Provider-reported stream finish reason when usage is returned from a streaming generator. */
+  finishReason?: "stop" | "tool_calls" | "length" | string;
 }
 
 /** Result from a non-streaming chat call that may include tool calls */
@@ -614,16 +617,31 @@ export abstract class BaseLLMProvider {
     let content = "";
     const useStream = options.stream ?? !!options.onToken;
     const gen = this.chat(messages, { ...options, stream: useStream });
-    let result = await gen.next();
+    const returnPartialOnStreamFailure = (error: unknown): ChatCompletionResult => {
+      if (!content) throw error;
+      logger.warn(error, "LLM stream failed after partial content; returning partial completion");
+      return { content, toolCalls: [], finishReason: options.signal?.aborted ? "abort" : "error", usage: undefined };
+    };
+
+    let result: IteratorResult<string, LLMUsage | void>;
+    try {
+      result = await gen.next();
+    } catch (error) {
+      return returnPartialOnStreamFailure(error);
+    }
     while (!result.done) {
       content += result.value;
       if (options.onToken) {
         await options.onToken(result.value);
       }
-      result = await gen.next();
+      try {
+        result = await gen.next();
+      } catch (error) {
+        return returnPartialOnStreamFailure(error);
+      }
     }
     const usage = result.value || undefined;
-    return { content, toolCalls: [], finishReason: "stop", usage };
+    return { content, toolCalls: [], finishReason: usage?.finishReason ?? "stop", usage };
   }
 
   /**
@@ -631,8 +649,9 @@ export abstract class BaseLLMProvider {
    * Default implementation calls the OpenAI-compatible /embeddings endpoint.
    * Override in provider subclasses that use a different API shape.
    */
-  async embed(texts: string[], model: string): Promise<number[][]> {
+  async embed(texts: string[], model: string, signal?: AbortSignal): Promise<number[][]> {
     const timeoutMs = getEmbeddingRequestTimeoutMs();
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Authorization: `Bearer ${this.apiKey}`,
@@ -645,8 +664,8 @@ export abstract class BaseLLMProvider {
       method: "POST",
       headers,
       body: JSON.stringify({ input: texts, model }),
-      signal: AbortSignal.timeout(timeoutMs),
-      agentOptions: { bodyTimeout: 0, headersTimeout: timeoutMs },
+      signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
+      agentOptions: { bodyTimeout: timeoutMs, headersTimeout: timeoutMs },
       bufferResponse: true,
     });
     if (!res.ok) {
@@ -710,8 +729,13 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function isUnsafeRequestBodyKey(key: string): boolean {
+  return key === "__proto__" || key === "constructor" || key === "prototype";
+}
+
 function deepMergeRequestBody(target: Record<string, unknown>, source: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(source)) {
+    if (isUnsafeRequestBodyKey(key)) continue;
     if (value === undefined) continue;
     const current = target[key];
     if (isPlainRecord(current) && isPlainRecord(value)) {

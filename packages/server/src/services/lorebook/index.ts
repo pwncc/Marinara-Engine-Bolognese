@@ -702,6 +702,7 @@ export function resolveBudgetAndRecursivelyActivateLorebookEntriesWithDiagnostic
 ): { selected: ActivatedEntry[]; budgetSkippedEntries: LorebookBudgetSkippedEntry[] } {
   let state = createLorebookBudgetSelectionState();
   const processedIds = new Set<string>();
+  const selectedGroups = new Set<string>();
   const probabilityDecisions = options.probabilityDecisions ?? new Map<string, boolean>();
   const scanOptions = { ...options, probabilityDecisions };
   let frontier = scanForActivatedEntries(messages, entries, scanOptions);
@@ -709,7 +710,10 @@ export function resolveBudgetAndRecursivelyActivateLorebookEntriesWithDiagnostic
 
   for (let depth = 0; frontier.length > 0; depth++) {
     const candidates = frontier.filter(
-      (candidate) => !processedIds.has(candidate.entry.id) && !state.selectedIds.has(candidate.entry.id),
+      (candidate) =>
+        !processedIds.has(candidate.entry.id) &&
+        !state.selectedIds.has(candidate.entry.id) &&
+        !(candidate.entry.group && selectedGroups.has(candidate.entry.group)),
     );
     for (const candidate of candidates) {
       processedIds.add(candidate.entry.id);
@@ -725,6 +729,9 @@ export function resolveBudgetAndRecursivelyActivateLorebookEntriesWithDiagnostic
     );
     state = selectedBatch.state;
     budgetSkippedEntries.push(...selectedBatch.budgetSkippedEntries);
+    for (const selected of selectedBatch.selectedFromCandidates) {
+      if (selected.entry.group) selectedGroups.add(selected.entry.group);
+    }
 
     const recursiveContentParts = selectedBatch.selectedFromCandidates
       .filter((selected) => !selected.entry.preventRecursion)
@@ -737,7 +744,11 @@ export function resolveBudgetAndRecursivelyActivateLorebookEntriesWithDiagnostic
     if (!recursiveContent) break;
 
     const remaining = entries.filter(
-      (entry) => !processedIds.has(entry.id) && !state.selectedIds.has(entry.id) && !entry.excludeRecursion,
+      (entry) =>
+        !processedIds.has(entry.id) &&
+        !state.selectedIds.has(entry.id) &&
+        !entry.excludeRecursion &&
+        !(entry.group && selectedGroups.has(entry.group)),
     );
     if (remaining.length === 0) break;
 

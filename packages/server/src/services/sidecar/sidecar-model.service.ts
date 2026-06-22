@@ -449,9 +449,17 @@ class SidecarModelService {
   }
 
   private emitProgress(progress: SidecarDownloadProgress, inline?: ProgressCallback): void {
-    inline?.(progress);
+    try {
+      inline?.(progress);
+    } catch (error) {
+      logger.warn(error, "[sidecar] Inline progress listener failed");
+    }
     for (const listener of this.progressListeners) {
-      listener(progress);
+      try {
+        listener(progress);
+      } catch (error) {
+        logger.warn(error, "[sidecar] Progress listener failed");
+      }
     }
   }
 

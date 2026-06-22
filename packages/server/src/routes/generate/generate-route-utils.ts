@@ -200,7 +200,7 @@ export function resolveProviderTopK(provider: unknown, topK: number): number | u
   const normalized = Number.isFinite(topK) ? Math.max(0, Math.trunc(topK)) : 0;
   const providerId = typeof provider === "string" ? provider.toLowerCase() : "";
   if (providerId === "google" || providerId === "google_vertex") {
-    return normalized;
+    return normalized > 0 ? normalized : undefined;
   }
   return normalized > 0 ? normalized : undefined;
 }
@@ -213,9 +213,13 @@ export function mergeCustomParameters(
   base: Record<string, unknown> | null | undefined,
   next: Record<string, unknown> | null | undefined,
 ): Record<string, unknown> {
-  const merged: Record<string, unknown> = { ...(base ?? {}) };
+  const merged: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(base ?? {})) {
+    if (!isUnsafeCustomParameterKey(key)) merged[key] = value;
+  }
   if (!next) return merged;
   for (const [key, value] of Object.entries(next)) {
+    if (isUnsafeCustomParameterKey(key)) continue;
     if (value === undefined) continue;
     const current = merged[key];
     if (isPlainRecord(current) && isPlainRecord(value)) {
@@ -225,6 +229,10 @@ export function mergeCustomParameters(
     }
   }
   return merged;
+}
+
+function isUnsafeCustomParameterKey(key: string): boolean {
+  return key === "__proto__" || key === "constructor" || key === "prototype";
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -456,6 +464,15 @@ export function parseExtra(extra: unknown): Record<string, unknown> {
 
 export function isMessageHiddenFromAI(message: { extra?: unknown }): boolean {
   return parseExtra(message.extra).hiddenFromAI === true;
+}
+
+export function isRoleplaySummaryMode(chatMode: string): boolean {
+  return chatMode === "roleplay" || chatMode === "visual_novel";
+}
+
+export function resolveRoleplayChatSummary(chatMode: string, chatMetadata: Record<string, unknown>): string | null {
+  if (!isRoleplaySummaryMode(chatMode)) return null;
+  return ((chatMetadata.summary as string) ?? "").trim() || null;
 }
 
 function escapeRegex(value: string): string {
@@ -963,7 +980,7 @@ export function parseStoredGenerationParameters(raw: unknown): StoredGenerationP
     out.customThinkingTags = normalizeThinkingTagPairs(source.customThinkingTags);
   }
   if (isPlainRecord(source.customParameters)) {
-    out.customParameters = source.customParameters;
+    out.customParameters = mergeCustomParameters({}, source.customParameters);
   }
   for (const key of [
     "squashSystemMessages",

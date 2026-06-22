@@ -61,12 +61,13 @@ export interface RecalledMemory {
 
 export interface MemoryRecallEmbeddingSource {
   label: string;
-  embed(texts: string[]): Promise<number[][] | null>;
+  embed(texts: string[], signal?: AbortSignal): Promise<number[][] | null>;
 }
 
 export interface MemoryRecallEmbeddingOptions {
   embeddingSource?: MemoryRecallEmbeddingSource | null;
-  localEmbedder?: (texts: string[]) => Promise<number[][] | null>;
+  localEmbedder?: (texts: string[], signal?: AbortSignal) => Promise<number[][] | null>;
+  signal?: AbortSignal;
 }
 
 export async function embedMemoryRecallTexts(
@@ -74,7 +75,7 @@ export async function embedMemoryRecallTexts(
   options: MemoryRecallEmbeddingOptions = {},
 ): Promise<number[][]> {
   if (options.embeddingSource) {
-    const configuredEmbeddings = await options.embeddingSource.embed(texts);
+    const configuredEmbeddings = await options.embeddingSource.embed(texts, options.signal);
     if (configuredEmbeddings) {
       logger.debug("[memory-recall] Used configured embedding source %s", options.embeddingSource.label);
       return configuredEmbeddings;
@@ -83,7 +84,7 @@ export async function embedMemoryRecallTexts(
   }
 
   const localEmbedder = options.localEmbedder ?? localEmbed;
-  const localEmbeddings = await localEmbedder(texts);
+  const localEmbeddings = await localEmbedder(texts, options.signal);
   if (localEmbeddings) return localEmbeddings;
 
   logger.warn("[memory-recall] Local embeddings are unavailable and no embedding connection is configured");

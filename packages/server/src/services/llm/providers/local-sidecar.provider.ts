@@ -92,7 +92,7 @@ export class LocalSidecarProvider extends BaseLLMProvider {
     });
   }
 
-  async embed(texts: string[], _model: string): Promise<number[][]> {
+  async embed(texts: string[], _model: string, signal?: AbortSignal): Promise<number[][]> {
     if (sidecarModelService.getResolvedBackend() === "mlx") {
       throw new Error("Local sidecar embeddings are not supported on the MLX backend.");
     }
@@ -106,21 +106,27 @@ export class LocalSidecarProvider extends BaseLLMProvider {
     const requestModel = this.getRequestModel();
 
     try {
-      return await this.requestOpenAIEmbeddings(baseUrl, texts, requestModel);
+      return await this.requestOpenAIEmbeddings(baseUrl, texts, requestModel, signal);
     } catch (error) {
       if (!isNotFoundError(error)) throw error;
-      return this.requestLegacyEmbeddings(baseUrl, texts);
+      return this.requestLegacyEmbeddings(baseUrl, texts, signal);
     }
   }
 
-  private async requestOpenAIEmbeddings(baseUrl: string, texts: string[], model: string): Promise<number[][]> {
+  private async requestOpenAIEmbeddings(
+    baseUrl: string,
+    texts: string[],
+    model: string,
+    signal?: AbortSignal,
+  ): Promise<number[][]> {
     const timeoutMs = getEmbeddingRequestTimeoutMs();
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const response = await llmFetch(`${baseUrl}/v1/embeddings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ input: texts, model }),
-      signal: AbortSignal.timeout(timeoutMs),
-      agentOptions: { bodyTimeout: 0, headersTimeout: timeoutMs },
+      signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
+      agentOptions: { bodyTimeout: timeoutMs, headersTimeout: timeoutMs },
       bufferResponse: true,
     });
     if (!response.ok) {
@@ -130,16 +136,17 @@ export class LocalSidecarProvider extends BaseLLMProvider {
     return parseEmbeddingResponse(await response.json());
   }
 
-  private async requestLegacyEmbeddings(baseUrl: string, texts: string[]): Promise<number[][]> {
+  private async requestLegacyEmbeddings(baseUrl: string, texts: string[], signal?: AbortSignal): Promise<number[][]> {
     const timeoutMs = getEmbeddingRequestTimeoutMs();
     const embeddings: number[][] = [];
     for (const text of texts) {
+      const timeoutSignal = AbortSignal.timeout(timeoutMs);
       const response = await llmFetch(`${baseUrl}/embedding`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: text }),
-        signal: AbortSignal.timeout(timeoutMs),
-        agentOptions: { bodyTimeout: 0, headersTimeout: timeoutMs },
+        signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
+        agentOptions: { bodyTimeout: timeoutMs, headersTimeout: timeoutMs },
         bufferResponse: true,
       });
       if (!response.ok) {

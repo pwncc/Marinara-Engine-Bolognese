@@ -108,7 +108,37 @@ function formatStreamOutput(content: string, reasoning: string): string {
 
 function isContextOverflowError(error: unknown): boolean {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  return /context|ctx|prompt.*too|slot|exceed|overflow|too many tokens/.test(message);
+  return [
+    /context\s+(window|length|size|limit|overflow)/,
+    /ctx\s*(size|limit|overflow)/,
+    /prompt.*(too long|too large|exceed|overflow|context)/,
+    /(exceed|exceeds|exceeded|overflow).*(context|ctx|token|prompt)/,
+    /too many tokens/,
+    /maximum context/,
+    /n_ctx/,
+  ].some((pattern) => pattern.test(message));
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  return error instanceof Error && /aborted|abort/i.test(`${error.name} ${error.message}`);
+}
+
+function isStreamStallError(error: unknown): boolean {
+  return error instanceof Error && /stalled waiting for tokens/i.test(error.message);
+}
+
+function isProviderStreamError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("llama-server stream error:");
+}
+
+function markStreamedBeforeError(error: unknown): void {
+  if (error && typeof error === "object") {
+    (error as { sidecarStreamedTokens?: boolean }).sidecarStreamedTokens = true;
+  }
+}
+
+function streamedBeforeError(error: unknown): boolean {
+  return !!(error && typeof error === "object" && (error as { sidecarStreamedTokens?: boolean }).sidecarStreamedTokens);
 }
 
 function getRequestModel(): string {
@@ -254,13 +284,17 @@ async function streamChatCompletion(options: {
     let buffer = "";
     let content = "";
     let reasoning = "";
+    let emittedText = false;
     const readChunk = async () => {
       let timeout: ReturnType<typeof setTimeout> | null = null;
       try {
         return await Promise.race([
           reader.read(),
           new Promise<never>((_, reject) => {
-            timeout = setTimeout(() => reject(new Error("llama-server stream stalled waiting for tokens")), STREAM_IDLE_TIMEOUT_MS);
+            timeout = setTimeout(
+              () => reject(new Error("llama-server stream stalled waiting for tokens")),
+              STREAM_IDLE_TIMEOUT_MS,
+            );
           }),
         ]);
       } finally {
@@ -268,12 +302,26 @@ async function streamChatCompletion(options: {
       }
     };
 
-    const appendText = (nextContent: string, nextReasoning: string) => {
+    const truncateAccumulatedText = (): string => {
+      const truncated = formatStreamOutput(content, reasoning).slice(0, MAX_ACCUMULATED_TEXT_CHARS);
+      content = truncated;
+      reasoning = "";
+      return truncated;
+    };
+
+    const appendText = (nextContent: string, nextReasoning: string): string | null => {
       content += nextContent;
       reasoning += nextReasoning;
+      if (nextContent || nextReasoning) emittedText = true;
       if (content.length + reasoning.length > MAX_ACCUMULATED_TEXT_CHARS) {
-        throw new Error("llama-server response exceeded local inference size limit");
+        return truncateAccumulatedText();
       }
+      return null;
+    };
+
+    const readSseData = (line: string): string | null => {
+      if (!line.startsWith("data:")) return null;
+      return line.slice(5).trimStart();
     };
 
     const handlePayload = (data: string): string | null => {
@@ -288,43 +336,44 @@ async function streamChatCompletion(options: {
       const choice = parsed.choices?.[0];
       if (!choice) return null;
       const extracted = extractChoiceContent(choice);
-      appendText(extracted.content, extracted.reasoning);
-      return null;
+      return appendText(extracted.content, extracted.reasoning);
     };
 
-    const flushTrailingPayload = () => {
-      if (!buffer.trim().startsWith("data: ")) return;
-      const trailing = buffer.trim().slice(6);
-      if (trailing === "[DONE]") return;
+    const flushTrailingPayload = (): string | null => {
+      const trailing = readSseData(buffer.trim());
+      if (trailing == null) return null;
+      if (trailing === "[DONE]") return null;
       try {
-        handlePayload(trailing);
-      } catch {
+        return handlePayload(trailing);
+      } catch (err) {
+        if (isProviderStreamError(err)) throw err;
         // Ignore malformed trailing chunk after the stream has ended.
+        return null;
       }
     };
 
     try {
       while (true) {
         const { done, value } = await readChunk();
-        if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+        buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = done ? "" : (lines.pop() ?? "");
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (!trimmed.startsWith("data: ")) continue;
-          const output = handlePayload(trimmed.slice(6));
+          const data = readSseData(trimmed);
+          if (data == null) continue;
+          const output = handlePayload(data);
           if (output !== null) return output;
         }
+        if (done) break;
       }
     } catch (err) {
+      if (emittedText) markStreamedBeforeError(err);
+      if (isProviderStreamError(err)) throw err;
       const partial = formatStreamOutput(content, reasoning);
-      const partialIsUsable =
-        partial &&
-        (options.signal?.aborted ||
-          (err instanceof Error && /aborted|abort|stalled waiting for tokens/i.test(`${err.name} ${err.message}`)));
+      const partialIsUsable = partial && !structuredOutput && (isAbortLikeError(err) || isStreamStallError(err));
       if (partialIsUsable) return partial;
       throw err;
     } finally {
@@ -335,14 +384,15 @@ async function streamChatCompletion(options: {
       }
     }
 
-    flushTrailingPayload();
+    const trailingOutput = flushTrailingPayload();
+    if (trailingOutput !== null) return trailingOutput;
     return formatStreamOutput(content, reasoning);
   };
 
   try {
     return await send(maxTokens);
   } catch (err) {
-    if (maxTokens > 512 && isContextOverflowError(err)) {
+    if (maxTokens > 512 && !streamedBeforeError(err) && isContextOverflowError(err)) {
       return await send(Math.max(512, Math.floor(maxTokens / 2)));
     }
     throw err;

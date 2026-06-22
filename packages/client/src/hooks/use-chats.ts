@@ -503,14 +503,40 @@ export function useUpdateChatMetadata() {
   return useMutation({
     mutationFn: ({ id, ...metadata }: { id: string; [key: string]: unknown }) =>
       api.patch<Chat>(`/chats/${id}/metadata`, metadata),
+    onMutate: async ({ id, ...metadata }) => {
+      await qc.cancelQueries({ queryKey: chatKeys.detail(id) });
+      const previous = qc.getQueryData<Chat>(chatKeys.detail(id));
+      const updatedAt = new Date().toISOString();
+      qc.setQueryData<Chat>(chatKeys.detail(id), (existing) =>
+        existing
+          ? {
+              ...existing,
+              metadata: { ...existing.metadata, ...metadata },
+              updatedAt,
+            }
+          : existing,
+      );
+      return { previous };
+    },
+    onError: (_error, variables, context) => {
+      if (context?.previous) {
+        qc.setQueryData<Chat>(chatKeys.detail(variables.id), context.previous);
+      }
+    },
     onSuccess: (data, vars) => {
       // Metadata PATCH returns a full chat row, but concurrent updates to
       // non-metadata fields (for example promptPresetId) may still be in
-      // flight. Merge only the metadata fields so a stale full-row response
-      // cannot clobber fresher chat detail state.
+      // flight. Merge only metadata, and keep newer optimistic metadata on top
+      // so an older PATCH response cannot clobber a later in-flight edit.
       if (data) {
         qc.setQueryData<Chat>(chatKeys.detail(vars.id), (existing) =>
-          existing ? { ...existing, metadata: data.metadata, updatedAt: data.updatedAt } : data,
+          existing
+            ? {
+                ...existing,
+                metadata: { ...data.metadata, ...existing.metadata },
+                updatedAt: data.updatedAt,
+              }
+            : data,
         );
       } else {
         qc.invalidateQueries({ queryKey: chatKeys.detail(vars.id) });

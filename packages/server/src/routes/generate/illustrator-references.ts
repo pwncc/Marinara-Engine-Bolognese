@@ -14,6 +14,7 @@ type CharacterReferenceSource = {
   avatarPath: string | null;
   appearance: string | null;
   aliases: string[];
+  promptAliases: string[];
   sourceOrder: number;
 };
 
@@ -69,7 +70,7 @@ function normalizeReferenceName(value: string): string {
     .trim();
 }
 
-function buildNameAliases(name: string): string[] {
+function buildNameAliases(name: string, opts: { includeStandaloneTokens?: boolean } = {}): string[] {
   const normalized = normalizeReferenceName(name);
   if (!normalized) return [];
 
@@ -83,8 +84,10 @@ function buildNameAliases(name: string): string[] {
     if (withoutLeadingTitle) aliases.add(withoutLeadingTitle);
   }
 
-  for (const token of tokens) {
-    if (token.length >= 4 && !NAME_STOPWORDS.has(token)) aliases.add(token);
+  if (opts.includeStandaloneTokens !== false) {
+    for (const token of tokens) {
+      if (token.length >= 4 && !NAME_STOPWORDS.has(token)) aliases.add(token);
+    }
   }
 
   return [...aliases].sort((a, b) => b.length - a.length);
@@ -120,6 +123,7 @@ function characterRowToSource(row: CharacterRowLike, sourceOrder: number): Chara
     avatarPath: typeof row.avatarPath === "string" ? row.avatarPath : null,
     appearance: readAppearance(data),
     aliases: buildNameAliases(rawName),
+    promptAliases: buildNameAliases(rawName, { includeStandaloneTokens: false }),
     sourceOrder,
   };
 }
@@ -153,6 +157,7 @@ export async function resolveIllustratorCharacterReferences(args: {
       avatarPath: character.avatarPath ?? fromDb?.avatarPath ?? null,
       appearance: character.appearance ?? fromDb?.appearance ?? null,
       aliases: buildNameAliases(character.name),
+      promptAliases: buildNameAliases(character.name, { includeStandaloneTokens: false }),
       sourceOrder: index,
     });
   });
@@ -176,17 +181,20 @@ export async function resolveIllustratorCharacterReferences(args: {
 
   for (const source of sources) {
     if (selected.has(source.id)) continue;
-    if (source.aliases.some((alias) => textContainsAlias(normalizedPromptText, alias))) selected.set(source.id, source);
+    if (source.promptAliases.some((alias) => textContainsAlias(normalizedPromptText, alias))) {
+      selected.set(source.id, source);
+    }
   }
 
   const personaName = args.persona?.name?.trim() ?? "";
   const personaAliases = personaName ? buildNameAliases(personaName) : [];
+  const personaPromptAliases = personaName ? buildNameAliases(personaName, { includeStandaloneTokens: false }) : [];
   const personaRequested =
     personaAliases.length > 0 &&
     (requestedNames.some((requestedName) =>
       personaAliases.some((alias) => alias === requestedName || textContainsAlias(requestedName, alias)),
     ) ||
-      personaAliases.some((alias) => textContainsAlias(normalizedPromptText, alias)));
+      personaPromptAliases.some((alias) => textContainsAlias(normalizedPromptText, alias)));
 
   if (selected.size === 0 && args.fallbackToChatCharacters === true) {
     for (const character of args.chatCharacters) {

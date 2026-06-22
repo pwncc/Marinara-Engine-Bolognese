@@ -7,7 +7,7 @@
 // `enableSpriteGeneration` is active.
 // ──────────────────────────────────────────────
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { createHash } from "crypto";
 import { logger } from "../../lib/logger.js";
 import { basename, join } from "path";
@@ -27,6 +27,7 @@ export const DEFAULT_GAME_BACKGROUND_SIZE: ImageGenerationSize = { width: 1280, 
 export const DEFAULT_GAME_PORTRAIT_SIZE: ImageGenerationSize = { width: 1024, height: 1024 };
 export const GENERATED_GAME_BACKGROUND_EXTS = ["png", "jpg", "jpeg", "webp", "avif", "gif"] as const;
 const GAME_BACKGROUND_EXT_SET = new Set<string>(GENERATED_GAME_BACKGROUND_EXTS);
+const GENERATED_BACKGROUND_MAX_INPUT_PIXELS = 32_000_000;
 const GAME_PORTRAIT_NEGATIVE_PROMPT =
   "text, letters, captions, subtitles, UI, watermark, logo, signature, speech bubble, split screen, panel, collage, contact sheet, grid, four portraits, multiple portraits, duplicated face, extra head, extra person, bad anatomy, low quality";
 const GAME_BACKGROUND_NEGATIVE_PROMPT =
@@ -64,6 +65,25 @@ type GameBackgroundImage = {
 };
 
 type ChatBackgroundMeta = Record<string, { originalName?: string; tags: string[] }>;
+
+function atomicWriteBuffer(filePath: string, buffer: Buffer): void {
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    writeFileSync(tmpPath, buffer);
+    renameSync(tmpPath, filePath);
+  } catch (err) {
+    try {
+      if (existsSync(tmpPath)) unlinkSync(tmpPath);
+    } catch {
+      /* best-effort cleanup */
+    }
+    throw err;
+  }
+}
+
+function atomicWriteText(filePath: string, value: string): void {
+  atomicWriteBuffer(filePath, Buffer.from(value, "utf-8"));
+}
 
 /** Return the extension implied by known image file signatures. */
 function detectImageExt(buffer: Buffer): string | null {
@@ -111,7 +131,10 @@ async function gameBackgroundImage(result: ImageGenResult, size: ImageGeneration
   const sharp = await getSharp();
   if (!sharp) return { buffer: input, ext: normalizeGeneratedImageExt(result, input) };
   try {
-    const buffer = await sharp(input)
+    const buffer = await sharp(input, {
+      limitInputPixels: GENERATED_BACKGROUND_MAX_INPUT_PIXELS,
+      failOn: "warning",
+    })
       .resize(size.width, size.height, { fit: "cover", position: "centre" })
       .png()
       .toBuffer();
@@ -131,9 +154,28 @@ function generatedBackgroundPath(targetDir: string, slug: string, ext: string): 
 function existingGeneratedBackgroundPath(targetDir: string, slug: string): string | null {
   for (const ext of GENERATED_GAME_BACKGROUND_EXTS) {
     const candidate = generatedBackgroundPath(targetDir, slug, ext);
-    if (existsSync(candidate)) return candidate;
+    if (isUsableGeneratedImagePath(candidate)) return candidate;
   }
   return null;
+}
+
+function existingGeneratedPortraitPath(targetDir: string, slug: string): string | null {
+  for (const ext of GENERATED_GAME_BACKGROUND_EXTS) {
+    const candidate = join(targetDir, `${slug}.${ext}`);
+    if (isUsableGeneratedImagePath(candidate)) return candidate;
+  }
+  return null;
+}
+
+function isUsableGeneratedImagePath(filePath: string): boolean {
+  try {
+    if (!existsSync(filePath)) return false;
+    const stat = statSync(filePath);
+    if (!stat.isFile() || stat.size <= 0) return false;
+    return detectImageExt(readFileSync(filePath)) !== null;
+  } catch {
+    return false;
+  }
 }
 
 function readChatBackgroundMeta(): ChatBackgroundMeta {
@@ -148,7 +190,7 @@ function readChatBackgroundMeta(): ChatBackgroundMeta {
 
 function writeChatBackgroundMeta(meta: ChatBackgroundMeta): void {
   if (!existsSync(CHAT_BACKGROUND_DIR)) mkdirSync(CHAT_BACKGROUND_DIR, { recursive: true });
-  writeFileSync(CHAT_BACKGROUND_META_PATH, JSON.stringify(meta, null, 2), "utf-8");
+  atomicWriteText(CHAT_BACKGROUND_META_PATH, JSON.stringify(meta, null, 2));
 }
 
 function chatBackgroundTags(req: ChatBackgroundGenRequest, slug: string): string[] {
@@ -221,6 +263,17 @@ export function safeGeneratedAssetSlug(name: string, opts: { maxBytes?: number; 
   const prefixBudget = Math.max(1, maxBytes - Buffer.byteLength(tail, "utf8") - 1);
   const prefix = truncateSlugByBytes(slug, prefixBudget) || "asset";
   return `${prefix}-${tail}`;
+}
+
+function npcPortraitSlug(req: NpcPortraitRequest): string {
+  const identityHash = createHash("sha256")
+    .update([req.npcName, req.appearance, req.gender ?? "", req.pronouns ?? ""].join("\n"))
+    .digest("hex")
+    .slice(0, 8);
+  return safeGeneratedAssetSlug(req.npcName, {
+    maxBytes: 160,
+    suffix: identityHash,
+  });
 }
 
 function hasExplicitNonHumanCue(value: string): boolean {
@@ -443,15 +496,15 @@ function compileGameImagePrompt(
  * Returns the avatar URL path on success, or null on failure.
  */
 export async function generateNpcPortrait(req: NpcPortraitRequest): Promise<string | null> {
-  const slug = safeName(req.npcName);
+  const slug = npcPortraitSlug(req);
   if (!slug) return null;
 
   const avatarDir = join(NPC_AVATAR_DIR, req.chatId);
-  const avatarPath = join(avatarDir, `${slug}.png`);
 
   // Skip if already exists unless the caller explicitly asked for a fresh portrait.
-  if (!req.force && existsSync(avatarPath)) {
-    return `/api/avatars/npc/${req.chatId}/${slug}.png`;
+  const existingPortraitPath = !req.force ? existingGeneratedPortraitPath(avatarDir, slug) : null;
+  if (existingPortraitPath) {
+    return `/api/avatars/npc/${req.chatId}/${basename(existingPortraitPath)}`;
   }
 
   const compiled = await buildNpcPortraitProviderPrompt(req);
@@ -487,13 +540,16 @@ export async function generateNpcPortrait(req: NpcPortraitRequest): Promise<stri
     );
 
     if (!existsSync(avatarDir)) mkdirSync(avatarDir, { recursive: true });
-    writeFileSync(avatarPath, Buffer.from(result.base64, "base64"));
+    const avatarBuffer = Buffer.from(result.base64, "base64");
+    const ext = normalizeGeneratedImageExt(result, avatarBuffer);
+    const avatarPath = join(avatarDir, `${slug}.${ext}`);
+    atomicWriteBuffer(avatarPath, avatarBuffer);
 
-    const url = `/api/avatars/npc/${req.chatId}/${slug}.png`;
+    const url = `/api/avatars/npc/${req.chatId}/${slug}.${ext}`;
     req.debugLog?.(
       "[debug/game/image-generation] NPC portrait result name=%s bytes=%d url=%s",
       req.npcName,
-      Buffer.byteLength(result.base64, "base64"),
+      avatarBuffer.byteLength,
       url,
     );
     logger.info('[game-asset-gen] Generated NPC portrait for "%s" -> %s', req.npcName, url);
@@ -800,7 +856,7 @@ export async function generateBackground(req: BackgroundGenRequest): Promise<str
     if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
     const image = await gameBackgroundImage(result, size);
     const targetPath = generatedBackgroundPath(targetDir, slug, image.ext);
-    writeFileSync(targetPath, image.buffer);
+    atomicWriteBuffer(targetPath, image.buffer);
 
     // Rebuild manifest so the new tag is available immediately
     buildAssetManifest();
@@ -868,7 +924,7 @@ export async function generateChatBackground(req: ChatBackgroundGenRequest): Pro
 
     const image = await gameBackgroundImage(result, size);
     const filename = `${slug}.${image.ext}`;
-    writeFileSync(join(CHAT_BACKGROUND_DIR, filename), image.buffer);
+    atomicWriteBuffer(join(CHAT_BACKGROUND_DIR, filename), image.buffer);
 
     const meta = readChatBackgroundMeta();
     meta[filename] = {
@@ -936,7 +992,7 @@ export async function generateSceneIllustration(req: SceneIllustrationGenRequest
     if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
     const image = await gameBackgroundImage(result, size);
     const targetPath = generatedBackgroundPath(targetDir, slug, image.ext);
-    writeFileSync(targetPath, image.buffer);
+    atomicWriteBuffer(targetPath, image.buffer);
     buildAssetManifest();
 
     logger.info('[game-asset-gen] Generated scene illustration "%s" -> tag: %s', slug, tag);

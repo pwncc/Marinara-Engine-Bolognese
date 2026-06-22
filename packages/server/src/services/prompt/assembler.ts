@@ -18,7 +18,7 @@ import type {
   MacroContext,
   ResolveMacroOptions,
 } from "@marinara-engine/shared";
-import { resolveMacros } from "@marinara-engine/shared";
+import { DEFAULT_GENERATION_PARAMS, resolveMacros } from "@marinara-engine/shared";
 import { wrapContent, wrapGroup } from "./format-engine.js";
 import { expandMarker, type MarkerContext } from "./marker-expander.js";
 import { mergeAdjacentMessages, squashLeadingSystemMessages } from "./merger.js";
@@ -208,13 +208,25 @@ export interface AssemblerOutput {
   runtimeAgentTypesUsed?: string[];
 }
 
+function parsePresetParameters(raw: string): GenerationParameters {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { ...DEFAULT_GENERATION_PARAMS, ...(parsed as Partial<GenerationParameters>) };
+    }
+  } catch {
+    // Malformed legacy rows should not leave generation parameters undefined.
+  }
+  return { ...DEFAULT_GENERATION_PARAMS };
+}
+
 // ═══════════════════════════════════════════════
 //  Main Assembler
 // ═══════════════════════════════════════════════
 
 export async function assemblePrompt(input: AssemblerInput): Promise<AssemblerOutput> {
   const wrapFormat = (input.preset.wrapFormat || "xml") as WrapFormat;
-  const parameters = JSON.parse(input.preset.parameters) as GenerationParameters;
+  const parameters = parsePresetParameters(input.preset.parameters);
   const sectionOrder = JSON.parse(input.preset.sectionOrder) as string[];
   const groupOrder = JSON.parse(input.preset.groupOrder) as string[];
   const variableValues = JSON.parse(input.preset.variableValues) as Record<string, string>;
@@ -359,7 +371,7 @@ export async function assemblePrompt(input: AssemblerInput): Promise<AssemblerOu
 
     if (!resolved) continue;
 
-    if (section.injectionPosition === "depth" && section.injectionDepth >= 0) {
+    if (!resolved.isChatHistory && section.injectionPosition === "depth" && section.injectionDepth >= 0) {
       depthSections.push(resolved);
     } else {
       orderedSections.push(resolved);

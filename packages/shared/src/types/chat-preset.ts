@@ -52,6 +52,7 @@ export const CHAT_PRESET_EXCLUDED_METADATA_KEYS: readonly string[] = [
   "tags",
   "appliedChatPresetId",
   "agentVariables",
+  "presetChoices",
   "spriteCharacterIds",
   "spritePlacements",
   "entryStateOverrides",

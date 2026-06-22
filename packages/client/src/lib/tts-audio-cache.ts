@@ -3,9 +3,13 @@
 // ──────────────────────────────────────────────
 
 const DB_NAME = "marinara-tts-audio-cache";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = "voiceLines";
+const META_STORE_NAME = "voiceLineMeta";
 const MAX_MEMORY_ENTRIES = 150;
+const MAX_PERSISTENT_ENTRIES = 750;
+const MAX_PERSISTENT_BYTES = 100 * 1024 * 1024;
+const PERSISTENT_PRUNE_THROTTLE_MS = 30_000;
 
 type CachedVoiceLine = {
   key: string;
@@ -15,9 +19,12 @@ type CachedVoiceLine = {
   size: number;
 };
 
+type CachedVoiceLineMeta = Omit<CachedVoiceLine, "blob">;
+
 const memoryCache = new Map<string, Blob>();
 const inFlight = new Map<string, Promise<Blob>>();
 let dbPromise: Promise<IDBDatabase | null> | null = null;
+let lastPersistentPruneAt = 0;
 
 function rememberInMemory(key: string, blob: Blob) {
   memoryCache.delete(key);
@@ -60,14 +67,85 @@ function openDb(): Promise<IDBDatabase | null> {
       if (store && !store.indexNames.contains("lastUsedAt")) {
         store.createIndex("lastUsedAt", "lastUsedAt", { unique: false });
       }
+      const metaStore = db.objectStoreNames.contains(META_STORE_NAME)
+        ? request.transaction?.objectStore(META_STORE_NAME)
+        : db.createObjectStore(META_STORE_NAME, { keyPath: "key" });
+      if (metaStore && !metaStore.indexNames.contains("lastUsedAt")) {
+        metaStore.createIndex("lastUsedAt", "lastUsedAt", { unique: false });
+      }
     };
 
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => resolve(null);
-    request.onblocked = () => resolve(null);
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
+    request.onerror = () => {
+      dbPromise = null;
+      resolve(null);
+    };
+    request.onblocked = () => {
+      dbPromise = null;
+      resolve(null);
+    };
   });
 
   return dbPromise;
+}
+
+function hasMetadataStore(db: IDBDatabase): boolean {
+  return db.objectStoreNames.contains(META_STORE_NAME);
+}
+
+async function touchPersistentBlobMeta(db: IDBDatabase, record: CachedVoiceLine): Promise<void> {
+  if (!hasMetadataStore(db)) return;
+
+  const now = Date.now();
+  const tx = db.transaction(META_STORE_NAME, "readwrite");
+  tx.objectStore(META_STORE_NAME).put({
+    key: record.key,
+    createdAt: record.createdAt || now,
+    lastUsedAt: now,
+    size: record.size || record.blob.size,
+  } satisfies CachedVoiceLineMeta);
+  await transactionDone(tx);
+}
+
+async function prunePersistentCache(db: IDBDatabase): Promise<void> {
+  if (!hasMetadataStore(db)) return;
+
+  const now = Date.now();
+  if (now - lastPersistentPruneAt < PERSISTENT_PRUNE_THROTTLE_MS) return;
+  lastPersistentPruneAt = now;
+
+  const readTx = db.transaction(META_STORE_NAME, "readonly");
+  const metas = await requestToPromise<CachedVoiceLineMeta[]>(readTx.objectStore(META_STORE_NAME).getAll());
+  await transactionDone(readTx);
+
+  const totalBytes = metas.reduce((sum, meta) => sum + Math.max(0, meta.size || 0), 0);
+  const excessEntries = Math.max(0, metas.length - MAX_PERSISTENT_ENTRIES);
+  const excessBytes = Math.max(0, totalBytes - MAX_PERSISTENT_BYTES);
+  if (excessEntries === 0 && excessBytes === 0) return;
+
+  const byOldest = [...metas].sort((a, b) => (a.lastUsedAt || a.createdAt) - (b.lastUsedAt || b.createdAt));
+  const keysToDelete = new Set<string>();
+  let bytesFreed = 0;
+  for (const meta of byOldest) {
+    if (keysToDelete.size >= excessEntries && bytesFreed >= excessBytes) break;
+    keysToDelete.add(meta.key);
+    bytesFreed += Math.max(0, meta.size || 0);
+  }
+  if (keysToDelete.size === 0) return;
+
+  const deleteTx = db.transaction([STORE_NAME, META_STORE_NAME], "readwrite");
+  const blobStore = deleteTx.objectStore(STORE_NAME);
+  const metaStore = deleteTx.objectStore(META_STORE_NAME);
+  for (const key of keysToDelete) {
+    blobStore.delete(key);
+    metaStore.delete(key);
+    memoryCache.delete(key);
+  }
+  await transactionDone(deleteTx);
 }
 
 async function getPersistentBlob(key: string): Promise<Blob | null> {
@@ -81,15 +159,7 @@ async function getPersistentBlob(key: string): Promise<Blob | null> {
     if (!record?.blob) return null;
 
     void transactionDone(tx).catch(() => {});
-    void (async () => {
-      try {
-        const writeTx = db.transaction(STORE_NAME, "readwrite");
-        writeTx.objectStore(STORE_NAME).put({ ...record, lastUsedAt: Date.now() });
-        await transactionDone(writeTx);
-      } catch {
-        // Best-effort recency update only.
-      }
-    })();
+    void touchPersistentBlobMeta(db, record).catch(() => {});
 
     return record.blob;
   } catch {
@@ -103,15 +173,25 @@ async function putPersistentBlob(key: string, blob: Blob): Promise<void> {
 
   try {
     const now = Date.now();
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).put({
+    const record = {
       key,
       blob,
       createdAt: now,
       lastUsedAt: now,
       size: blob.size,
-    } satisfies CachedVoiceLine);
+    } satisfies CachedVoiceLine;
+    const tx = db.transaction(hasMetadataStore(db) ? [STORE_NAME, META_STORE_NAME] : STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).put(record);
+    if (hasMetadataStore(db)) {
+      tx.objectStore(META_STORE_NAME).put({
+        key,
+        createdAt: now,
+        lastUsedAt: now,
+        size: blob.size,
+      } satisfies CachedVoiceLineMeta);
+    }
     await transactionDone(tx);
+    void prunePersistentCache(db).catch(() => {});
   } catch {
     // Memory cache still protects this runtime even if IndexedDB is unavailable.
   }
@@ -141,7 +221,6 @@ export async function getOrCreateCachedTTSAudioBlob(
     if (cached) {
       if (cacheKey !== key) {
         rememberInMemory(key, cached);
-        await putPersistentBlob(key, cached);
       }
       return cached;
     }
@@ -152,7 +231,6 @@ export async function getOrCreateCachedTTSAudioBlob(
     if (pending) {
       const blob = await pending;
       rememberInMemory(key, blob);
-      await putPersistentBlob(key, blob);
       return blob;
     }
   }
@@ -163,7 +241,6 @@ export async function getOrCreateCachedTTSAudioBlob(
       if (secondLook) {
         if (cacheKey !== key) {
           rememberInMemory(key, secondLook);
-          await putPersistentBlob(key, secondLook);
         }
         return secondLook;
       }

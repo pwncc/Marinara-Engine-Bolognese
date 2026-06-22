@@ -4,7 +4,9 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api-client";
 import { useUIStore } from "../stores/ui.store";
-import type { APIProvider, ConnectionTestResult } from "@marinara-engine/shared";
+import { useChatStore } from "../stores/chat.store";
+import { chatKeys } from "./use-chats";
+import type { APIProvider, Chat, ConnectionTestResult } from "@marinara-engine/shared";
 
 export const connectionKeys = {
   all: ["connections"] as const,
@@ -99,7 +101,20 @@ export function useDeleteConnection() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.delete(`/connections/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: connectionKeys.list() }),
+    onSuccess: async (_data, id) => {
+      qc.invalidateQueries({ queryKey: connectionKeys.list() });
+      const activeChatId = useChatStore.getState().activeChatId;
+      if (!activeChatId) return;
+      const activeChat = qc.getQueryData<Chat>(chatKeys.detail(activeChatId));
+      if (activeChat?.connectionId !== id) return;
+      try {
+        const updated = await api.patch<Chat>(`/chats/${activeChatId}`, { connectionId: null });
+        qc.setQueryData<Chat>(chatKeys.detail(activeChatId), updated);
+        qc.invalidateQueries({ queryKey: chatKeys.list() });
+      } catch {
+        qc.invalidateQueries({ queryKey: chatKeys.detail(activeChatId) });
+      }
+    },
   });
 }
 

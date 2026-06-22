@@ -65,7 +65,7 @@ export const DEFAULT_IMAGE_STYLE_PROFILES: ImageStyleProfile[] = [
     negativeTags:
       "worst quality, low quality, lowres, bad anatomy, bad hands, extra digits, fewer digits, text, watermark, logo, signature",
     subjectTags: {
-      portrait: "1girl, solo, portrait, upper body, looking at viewer",
+      portrait: "solo, portrait, upper body, looking at viewer",
       avatar: "solo, portrait, upper body, centered composition",
       selfie: "solo, selfie, close-up, looking at viewer",
       background: "scenery, environment, landscape, no humans",

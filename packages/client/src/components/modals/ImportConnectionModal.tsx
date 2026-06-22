@@ -6,6 +6,7 @@ import { CheckCircle, Download, FileJson, Loader2, XCircle } from "lucide-react"
 import { Modal } from "../ui/Modal";
 import { useCreateConnection, useSaveConnectionDefaults } from "../../hooks/use-connections";
 import { getConnectionImportEntries, normalizeImportedConnectionEntry } from "../../lib/connection-transfer";
+import { api } from "../../lib/api-client";
 
 interface Props {
   open: boolean;
@@ -40,26 +41,41 @@ export function ImportConnectionModal({ open, onClose }: Props) {
         if (entries.length === 0) throw new Error("No connection data found");
 
         let imported = 0;
+        let failed = 0;
         for (const entry of entries) {
-          const normalized = normalizeImportedConnectionEntry(entry);
-          if (!normalized) continue;
+          let createdConnectionId: string | null = null;
+          try {
+            const normalized = normalizeImportedConnectionEntry(entry);
+            if (!normalized) {
+              failed += 1;
+              continue;
+            }
 
-          const result = await createConnection.mutateAsync(normalized.connection);
-          const connectionId = (result as { id?: string } | null)?.id;
-          if (connectionId && normalized.hasDefaultParameters) {
-            await saveConnectionDefaults.mutateAsync({
-              id: connectionId,
-              params: normalized.defaultParameters,
-            });
+            const result = await createConnection.mutateAsync(normalized.connection);
+            const connectionId = (result as { id?: string } | null)?.id;
+            createdConnectionId = connectionId ?? null;
+            if (connectionId && normalized.hasDefaultParameters) {
+              await saveConnectionDefaults.mutateAsync({
+                id: connectionId,
+                params: normalized.defaultParameters,
+              });
+            }
+            imported += 1;
+          } catch {
+            if (createdConnectionId) {
+              await api.delete(`/connections/${createdConnectionId}`).catch(() => undefined);
+            }
+            failed += 1;
           }
-          imported += 1;
         }
 
         if (imported === 0) throw new Error("No supported connection entries found");
         nextResults.push({
           filename: file.name,
           success: true,
-          message: `Imported ${imported} connection${imported === 1 ? "" : "s"} without API keys`,
+          message: `Imported ${imported} connection${imported === 1 ? "" : "s"} without API keys${
+            failed > 0 ? ` (${failed} skipped)` : ""
+          }`,
         });
       } catch (error) {
         nextResults.push({

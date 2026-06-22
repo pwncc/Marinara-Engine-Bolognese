@@ -551,6 +551,7 @@ function ParamInput({
         ? `Enter a value of ${min.toLocaleString()} or higher.`
         : `Enter a value from ${min.toLocaleString()} to ${max.toLocaleString()}.`,
     );
+    setDraft(String(value));
   };
 
   return (

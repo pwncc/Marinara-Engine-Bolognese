@@ -227,8 +227,12 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
     reply.raw.once("close", cancelActiveWork);
 
     const sendEvent = (data: unknown) => {
-      if (reply.raw.destroyed) return;
-      reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+      if (reply.raw.destroyed || reply.raw.writableEnded) return;
+      try {
+        reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+      } catch {
+        // Client disconnected between the guard and the write.
+      }
     };
 
     let lastProgressPhase: SidecarDownloadProgress["phase"] | undefined;
@@ -259,8 +263,12 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
     } finally {
       sidecarModelService.removeProgressListener(listener);
       completed = true;
-      if (!reply.raw.destroyed) {
-        reply.raw.end();
+      if (!reply.raw.destroyed && !reply.raw.writableEnded) {
+        try {
+          reply.raw.end();
+        } catch {
+          // Client disconnected between the guard and the end call.
+        }
       }
     }
   }

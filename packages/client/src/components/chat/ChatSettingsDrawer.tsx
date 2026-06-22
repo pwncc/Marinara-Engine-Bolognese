@@ -426,6 +426,8 @@ const CHAT_SETTINGS_ORDER = {
   gamePrompt: 0,
 } as const;
 
+const CHAT_PRESET_UNAPPLIED_SELECT_VALUE = "__chat_preset_unapplied__";
+
 type AvailableAgent = {
   id: string;
   name: string;
@@ -2174,13 +2176,16 @@ export function ChatSettingsDrawer({
   const setActiveChatPreset = useSetActiveChatPreset();
   const presetList = useMemo(() => (chatPresets ?? []) as ChatPreset[], [chatPresets]);
   const appliedPresetId = (metadata.appliedChatPresetId as string | undefined) ?? null;
-  const selectedChatPreset = useMemo(() => {
-    if (appliedPresetId) {
-      const match = presetList.find((p) => p.id === appliedPresetId);
-      if (match) return match;
-    }
-    return presetList.find((p) => p.isDefault) ?? null;
+  const appliedChatPreset = useMemo(() => {
+    if (!appliedPresetId) return null;
+    return presetList.find((p) => p.id === appliedPresetId) ?? null;
   }, [presetList, appliedPresetId]);
+  const selectedChatPreset = useMemo(() => {
+    if (appliedChatPreset) return appliedChatPreset;
+    return presetList.find((p) => p.isDefault) ?? null;
+  }, [presetList, appliedChatPreset]);
+  const chatPresetSelectValue =
+    appliedChatPreset?.id ?? (presetList.length > 0 ? CHAT_PRESET_UNAPPLIED_SELECT_VALUE : "");
   const [renamingPreset, setRenamingPreset] = useState(false);
   const [renamePresetVal, setRenamePresetVal] = useState("");
   const presetFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -2460,7 +2465,7 @@ export function ChatSettingsDrawer({
   }, [chat.connectionId, chat.promptPresetId, metadata]);
 
   const handleSelectPreset = (id: string) => {
-    if (!id || id === selectedChatPreset?.id) return;
+    if (!id || id === CHAT_PRESET_UNAPPLIED_SELECT_VALUE || id === appliedChatPreset?.id) return;
     applyChatPreset.mutate({ presetId: id, chatId: chat.id });
   };
 
@@ -2809,12 +2814,17 @@ export function ChatSettingsDrawer({
                   />
                 ) : (
                   <select
-                    value={selectedChatPreset?.id ?? ""}
+                    value={chatPresetSelectValue}
                     onChange={(e) => handleSelectPreset(e.target.value)}
                     title="Apply a chat-settings preset to this chat"
                     className="flex-1 min-w-0 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
                   >
                     {presetList.length === 0 && <option value="">Loading…</option>}
+                    {!appliedChatPreset && presetList.length > 0 && (
+                      <option value={CHAT_PRESET_UNAPPLIED_SELECT_VALUE}>
+                        {appliedPresetId ? "Missing preset - choose a preset" : "Custom settings - choose a preset"}
+                      </option>
+                    )}
                     {presetList.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.isDefault ? "Default" : p.name}

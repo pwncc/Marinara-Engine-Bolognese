@@ -99,6 +99,17 @@ type VoiceOption = {
   labels?: Record<string, string | number | boolean | null> | null;
 };
 
+function addSavedVoiceOption(options: VoiceOption[], voiceId: string): VoiceOption[] {
+  const id = voiceId.trim();
+  if (!id || options.some((option) => option.id === id)) return options;
+  return [...options, { id, name: id, category: "saved" }];
+}
+
+function formatVoiceOptionLabel(option: VoiceOption): string {
+  if (option.category === "saved") return `${option.id} (saved; not in current voice list)`;
+  return option.name === option.id ? option.id : `${option.name} (${option.id})`;
+}
+
 const ELEVENLABS_DEFAULT_MALE_VOICE_NAMES = new Set([
   "adam",
   "antoni",
@@ -269,7 +280,7 @@ function NpcDefaultVoicePool({
                 onChange={(e) => onToggle(option.id, e.target.checked)}
                 className="h-3 w-3 shrink-0 rounded border-[var(--border)] accent-[var(--primary)]"
               />
-              <span className="truncate">{option.name === option.id ? option.id : option.name}</span>
+              <span className="truncate">{formatVoiceOptionLabel(option)}</span>
             </label>
           ))}
         </div>
@@ -316,6 +327,7 @@ export function TTSConfigCard() {
   const [expanded, setExpanded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [ttsState, setTTSState] = useState(ttsService.getState());
   const [previewError, setPreviewError] = useState<string | null>(null);
 
@@ -375,6 +387,7 @@ export function TTSConfigCard() {
   useEffect(
     () => () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
     },
     [],
   );
@@ -414,7 +427,11 @@ export function TTSConfigCard() {
     setSaveStatus("saving");
     await updateConfig.mutateAsync(payload);
     setSaveStatus("saved");
-    setTimeout(() => setSaveStatus((s) => (s === "saved" ? "idle" : s)), 2000);
+    if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
+    statusTimerRef.current = setTimeout(() => {
+      setSaveStatus((s) => (s === "saved" ? "idle" : s));
+      statusTimerRef.current = null;
+    }, 2000);
   };
 
   const mark = (overrides?: Partial<TTSConfig>) => {
@@ -503,7 +520,20 @@ export function TTSConfigCard() {
   };
 
   const voices = voicesData?.voices ?? [];
-  const voiceOptions = voicesData?.voiceOptions ?? voices.map((v) => ({ id: v, name: v }));
+  const fetchedVoiceOptions = voicesData?.voiceOptions ?? voices.map((v) => ({ id: v, name: v }));
+  const voiceOptions = useMemo(() => {
+    let nextOptions = fetchedVoiceOptions;
+    for (const savedVoice of [
+      voice,
+      narratorVoice,
+      ...voiceAssignments.map((assignment) => assignment.voice),
+      ...npcDefaultMaleVoices,
+      ...npcDefaultFemaleVoices,
+    ]) {
+      nextOptions = addSavedVoiceOption(nextOptions, savedVoice);
+    }
+    return nextOptions;
+  }, [fetchedVoiceOptions, narratorVoice, npcDefaultFemaleVoices, npcDefaultMaleVoices, voice, voiceAssignments]);
   const voicesFromProvider = voicesData?.fromProvider ?? false;
   const elevenLabsMatchedMaleVoiceOptions = useMemo(
     () =>
@@ -517,10 +547,20 @@ export function TTSConfigCard() {
       ),
     [voiceOptions],
   );
-  const elevenLabsNpcMaleVoiceOptions =
-    elevenLabsMatchedMaleVoiceOptions.length > 0 ? elevenLabsMatchedMaleVoiceOptions : voiceOptions;
-  const elevenLabsNpcFemaleVoiceOptions =
-    elevenLabsMatchedFemaleVoiceOptions.length > 0 ? elevenLabsMatchedFemaleVoiceOptions : voiceOptions;
+  const elevenLabsNpcMaleVoiceOptions = useMemo(() => {
+    let options = elevenLabsMatchedMaleVoiceOptions.length > 0 ? elevenLabsMatchedMaleVoiceOptions : voiceOptions;
+    for (const savedVoice of npcDefaultMaleVoices) {
+      options = addSavedVoiceOption(options, savedVoice);
+    }
+    return options;
+  }, [elevenLabsMatchedMaleVoiceOptions, npcDefaultMaleVoices, voiceOptions]);
+  const elevenLabsNpcFemaleVoiceOptions = useMemo(() => {
+    let options = elevenLabsMatchedFemaleVoiceOptions.length > 0 ? elevenLabsMatchedFemaleVoiceOptions : voiceOptions;
+    for (const savedVoice of npcDefaultFemaleVoices) {
+      options = addSavedVoiceOption(options, savedVoice);
+    }
+    return options;
+  }, [elevenLabsMatchedFemaleVoiceOptions, npcDefaultFemaleVoices, voiceOptions]);
   const maleNpcVoiceFallbackNote =
     voiceOptions.length > 0 && elevenLabsMatchedMaleVoiceOptions.length === 0
       ? "No male-labeled defaults were detected, so choose male voices manually here."
@@ -568,6 +608,17 @@ export function TTSConfigCard() {
   const selectedLanguage =
     ELEVENLABS_TTS_LANGUAGE_OPTIONS.find((option) => option.code === elevenLabsLanguageCode) ??
     ELEVENLABS_TTS_LANGUAGE_OPTIONS[0];
+  const speedMin = source === "elevenlabs" ? 0.7 : 0.25;
+  const speedMax = source === "elevenlabs" ? 1.2 : 4.0;
+  const speedHelp =
+    source === "elevenlabs"
+      ? "Playback speed. ElevenLabs supports 0.7×–1.2×; wider saved values are clamped when spoken."
+      : "Playback speed. 1.0 is normal; range is 0.25×–4.0×.";
+  const speedSliderValue = Math.min(speedMax, Math.max(speedMin, speed));
+  const speedLabel =
+    source === "elevenlabs" && speedSliderValue !== speed
+      ? `Speed — ${speedSliderValue.toFixed(2)}× (clamped from ${speed.toFixed(2)}×)`
+      : `Speed — ${speed.toFixed(2)}×`;
   const previewDisabled = !enabled || ttsState === "loading" || (source === "elevenlabs" && !previewVoice);
   const previewTitle =
     source === "elevenlabs" && !previewVoice
@@ -893,7 +944,7 @@ export function TTSConfigCard() {
                     {!fetchingVoices && voicesError && <option value="">Could not load voices</option>}
                     {voiceOptions.map((option) => (
                       <option key={option.id} value={option.id}>
-                        {option.name === option.id ? option.id : `${option.name} (${option.id})`}
+                        {formatVoiceOptionLabel(option)}
                       </option>
                     ))}
                   </select>
@@ -968,7 +1019,7 @@ export function TTSConfigCard() {
                       {source === "elevenlabs" && <option value="">Select voice</option>}
                       {voiceOptions.map((option) => (
                         <option key={option.id} value={option.id}>
-                          {option.name === option.id ? option.id : `${option.name} (${option.id})`}
+                          {formatVoiceOptionLabel(option)}
                         </option>
                       ))}
                     </select>
@@ -1046,7 +1097,7 @@ export function TTSConfigCard() {
                       {!fetchingVoices && voicesError && <option value="">Could not load voices</option>}
                       {voiceOptions.map((option) => (
                         <option key={option.id} value={option.id}>
-                          {option.name === option.id ? option.id : `${option.name} (${option.id})`}
+                          {formatVoiceOptionLabel(option)}
                         </option>
                       ))}
                     </select>
@@ -1132,13 +1183,13 @@ export function TTSConfigCard() {
           )}
 
           {/* Speed */}
-          <FieldRow label={`Speed — ${speed.toFixed(2)}×`} help="Playback speed. 1.0 is normal; range is 0.25×–4.0×.">
+          <FieldRow label={speedLabel} help={speedHelp}>
             <input
               type="range"
-              min={0.25}
-              max={4.0}
+              min={speedMin}
+              max={speedMax}
               step={0.05}
-              value={speed}
+              value={speedSliderValue}
               onChange={(e) => {
                 setSpeed(parseFloat(e.target.value));
                 mark({ speed: parseFloat(e.target.value) });
@@ -1146,9 +1197,9 @@ export function TTSConfigCard() {
               className="w-full accent-[var(--primary)]"
             />
             <div className="flex justify-between text-[0.6rem] text-[var(--muted-foreground)]">
-              <span>0.25×</span>
+              <span>{speedMin.toFixed(2)}×</span>
               <span>1.0×</span>
-              <span>4.0×</span>
+              <span>{speedMax.toFixed(2)}×</span>
             </div>
           </FieldRow>
 

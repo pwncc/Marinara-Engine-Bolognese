@@ -659,7 +659,7 @@ export class ClaudeSubscriptionProvider extends BaseLLMProvider {
    * Embeddings are not exposed by the Claude Agent SDK. Surface a clear error
    * so callers can route embedding work to a separate connection.
    */
-  override async embed(_texts: string[], _model: string): Promise<number[][]> {
+  override async embed(_texts: string[], _model: string, _signal?: AbortSignal): Promise<number[][]> {
     throw new Error(
       "The Claude (Subscription) provider does not support embeddings. Configure a separate embedding connection (OpenAI, Google, or local).",
     );

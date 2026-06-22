@@ -1720,6 +1720,7 @@ const CAMPAIGN_PROGRESSION_MIN_OUTPUT_TOKENS = SESSION_CONCLUSION_MIN_OUTPUT_TOK
 const GAME_GENERATION_TIMEOUT_MS = 4 * 60 * 1000;
 const GAME_ASSET_GENERATION_TIMEOUT_MS = 220 * 1000;
 const GAME_ASSET_PORTRAIT_CONCURRENCY = 2;
+const gameAssetGenerationLocks = new Map<string, Promise<void>>();
 
 class GameGenerationTimeoutError extends Error {
   constructor(label: string, timeoutMs: number) {
@@ -1829,6 +1830,57 @@ function createResponseAbortSignal(reply: FastifyReply, timeoutMs: number, label
   reply.raw.once("finish", onFinish);
   reply.raw.once("close", onClose);
   return controller.signal;
+}
+
+function abortReasonAsError(signal: AbortSignal, fallback: string): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error(fallback);
+}
+
+function waitForPreviousGameAssetGeneration(chatId: string, previous: Promise<void>, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(abortReasonAsError(signal, "Game asset generation cancelled"));
+
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(abortReasonAsError(signal, "Game asset generation cancelled"));
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+    previous
+      .catch(() => undefined)
+      .then(() => {
+        cleanup();
+        resolve();
+      });
+
+    logger.info("[game/generate-assets] waiting for in-flight asset generation for chat %s", chatId);
+  });
+}
+
+async function acquireGameAssetGenerationLock(chatId: string, signal: AbortSignal): Promise<() => void> {
+  const previous = gameAssetGenerationLocks.get(chatId);
+  if (previous) {
+    await waitForPreviousGameAssetGeneration(chatId, previous, signal);
+  }
+
+  let releasePromise: () => void = () => undefined;
+  const current = new Promise<void>((resolve) => {
+    releasePromise = resolve;
+  });
+  gameAssetGenerationLocks.set(chatId, current);
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    releasePromise();
+    if (gameAssetGenerationLocks.get(chatId) === current) {
+      gameAssetGenerationLocks.delete(chatId);
+    }
+  };
 }
 const GAME_LOREBOOK_KEEPER_MIN_OUTPUT_TOKENS = 16_384;
 const GAME_LOREBOOK_KEEPER_MAX_ENTRIES = 32;
@@ -2428,6 +2480,7 @@ async function runGameLorebookKeeperAfterConclusion(args: {
   sessionSummary: SessionSummary;
   replaceExistingSessionEntries?: boolean;
   streaming?: boolean;
+  signal?: AbortSignal;
 }): Promise<GameLorebookKeeperRunResult> {
   const chats = createChatsStorage(args.app.db);
   const chat = await chats.getById(args.chatId);
@@ -2484,6 +2537,7 @@ async function runGameLorebookKeeperAfterConclusion(args: {
         maxTokens: Math.max(GAME_LOREBOOK_KEEPER_MIN_OUTPUT_TOKENS, generationParameters?.maxTokens ?? 0),
         temperature: 0.35,
         stream: streaming,
+        signal: args.signal,
         ...(streaming ? { onToken: () => {} } : {}),
       },
       generationParameters,
@@ -2634,6 +2688,28 @@ function buildJsonRepairPayload(args: {
     applyEndpoint: args.applyEndpoint,
     applyBody: args.applyBody,
   };
+}
+
+type JsonRepairRouteResult = {
+  type: "json_repair";
+  error: string;
+  repair: JsonRepairPayload;
+  validationError?: string;
+};
+
+function isJsonRepairRouteResult(value: unknown): value is JsonRepairRouteResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "json_repair" &&
+    typeof (value as { error?: unknown }).error === "string" &&
+    typeof (value as { repair?: unknown }).repair === "object" &&
+    (value as { repair?: unknown }).repair !== null
+  );
+}
+
+function sendJsonRepairRouteResult(reply: FastifyReply, result: JsonRepairRouteResult): void {
+  sendJsonRepairError(reply, result.error, result.repair, result.validationError);
 }
 
 function validateGameSetupPayload(setupData: Record<string, unknown>): string | null {
@@ -3850,24 +3926,13 @@ export async function gameRoutes(app: FastifyInstance) {
       maxTokens: Math.max(GAME_SETUP_MIN_OUTPUT_TOKENS, setupGenerationParameters?.maxTokens ?? 0),
       maxTokensOverride: conn.maxTokensOverride,
     });
+    const setupAbortSignal = createResponseAbortSignal(reply, GAME_GENERATION_TIMEOUT_MS, "Game setup");
     const setupOptions = gameGenOptions(
       conn.model,
       {
         maxTokens: setupMaxTokens,
-        stream: streaming,
-        ...(streaming
-          ? {
-              onToken: (() => {
-                const setupStartTime = Date.now();
-                let sawFirstToken = false;
-                return (chunk: string) => {
-                  if (!chunk || sawFirstToken) return;
-                  sawFirstToken = true;
-                  debugLog("[game/setup] First streamed token received after %d ms", Date.now() - setupStartTime);
-                };
-              })(),
-            }
-          : {}),
+        stream: false,
+        signal: setupAbortSignal,
       },
       setupGenerationParameters,
       conn.provider,
@@ -4127,7 +4192,7 @@ export async function gameRoutes(app: FastifyInstance) {
   };
 
   // ── POST /game/session/start ──
-  app.post("/session/start", async (req) => {
+  app.post("/session/start", async (req, reply) => {
     const { gameId, connectionId } = startSessionSchema.parse(req.body);
     const existingStart = pendingSessionStarts.get(gameId);
     if (existingStart) {
@@ -4303,6 +4368,7 @@ export async function gameRoutes(app: FastifyInstance) {
               conn.model,
               {
                 temperature: 0.7,
+                signal: createResponseAbortSignal(reply, GAME_GENERATION_TIMEOUT_MS, "Game session recap"),
               },
               null,
               conn.provider,
@@ -4403,7 +4469,14 @@ export async function gameRoutes(app: FastifyInstance) {
   app.post("/session/conclude", async (req, reply) => {
     const { chatId, connectionId, streaming, nextSessionRequest } = concludeSessionSchema.parse(req.body);
     const existingConclusion = pendingSessionConclusions.get(chatId);
-    if (existingConclusion) return existingConclusion;
+    if (existingConclusion) {
+      const conclusionResult = await existingConclusion;
+      if (isJsonRepairRouteResult(conclusionResult)) {
+        sendJsonRepairRouteResult(reply, conclusionResult);
+        return;
+      }
+      return conclusionResult;
+    }
 
     const conclusionRequest = (async () => {
     const trimmedNextSessionRequest = nextSessionRequest.trim();
@@ -4466,12 +4539,14 @@ export async function gameRoutes(app: FastifyInstance) {
       conn.maxTokensOverride,
     );
 
+    const conclusionAbortSignal = createResponseAbortSignal(reply, GAME_GENERATION_TIMEOUT_MS, "Game session conclusion");
     const conclusionOptions = gameGenOptions(
       conn.model,
       {
         maxTokens: Math.max(SESSION_CONCLUSION_MIN_OUTPUT_TOKENS, conclusionGenerationParameters?.maxTokens ?? 0),
         temperature: 0.45,
         stream: streaming,
+        signal: conclusionAbortSignal,
         ...(streaming ? { onToken: () => {} } : {}),
       },
       conclusionGenerationParameters,
@@ -4538,18 +4613,17 @@ export async function gameRoutes(app: FastifyInstance) {
       }
     } catch (err) {
       logger.warn(err, "[session/conclude] Combined session conclusion parsing failed");
-      sendJsonRepairError(
-        reply,
-        "The generated session conclusion was not valid JSON.",
-        buildJsonRepairPayload({
+      return {
+        type: "json_repair",
+        error: "The generated session conclusion was not valid JSON.",
+        repair: buildJsonRepairPayload({
           kind: "session_conclusion",
           title: `Repair Session ${sessionNumber} Summary JSON`,
           rawJson: conclusionExtraction.content,
           applyEndpoint: "/game/session/conclude/apply-json",
           applyBody: { chatId, connectionId: conn.id, nextSessionRequest: trimmedNextSessionRequest },
         }),
-      );
-      return;
+      } satisfies JsonRepairRouteResult;
     }
 
     let conclusionWasStored = false;
@@ -4644,7 +4718,12 @@ export async function gameRoutes(app: FastifyInstance) {
 
     pendingSessionConclusions.set(chatId, conclusionRequest);
     try {
-      return await conclusionRequest;
+      const conclusionResult = await conclusionRequest;
+      if (isJsonRepairRouteResult(conclusionResult)) {
+        sendJsonRepairRouteResult(reply, conclusionResult);
+        return;
+      }
+      return conclusionResult;
     } finally {
       if (pendingSessionConclusions.get(chatId) === conclusionRequest) {
         pendingSessionConclusions.delete(chatId);
@@ -4656,7 +4735,14 @@ export async function gameRoutes(app: FastifyInstance) {
   app.post("/session/conclude/apply-json", async (req, reply) => {
     const { chatId, rawJson, connectionId, nextSessionRequest } = jsonRepairApplySchema.parse(req.body);
     const existingConclusion = pendingSessionConclusions.get(chatId);
-    if (existingConclusion) return existingConclusion;
+    if (existingConclusion) {
+      const conclusionResult = await existingConclusion;
+      if (isJsonRepairRouteResult(conclusionResult)) {
+        sendJsonRepairRouteResult(reply, conclusionResult);
+        return;
+      }
+      return conclusionResult;
+    }
 
     const conclusionRequest = (async () => {
     const trimmedNextSessionRequest = nextSessionRequest.trim();
@@ -4698,18 +4784,17 @@ export async function gameRoutes(app: FastifyInstance) {
       });
     } catch (err) {
       logger.warn(err, "[session/conclude/apply-json] Repaired session conclusion JSON still failed to parse");
-      sendJsonRepairError(
-        reply,
-        "The edited session conclusion JSON is still invalid.",
-        buildJsonRepairPayload({
+      return {
+        type: "json_repair",
+        error: "The edited session conclusion JSON is still invalid.",
+        repair: buildJsonRepairPayload({
           kind: "session_conclusion",
           title: `Repair Session ${sessionNumber} Summary JSON`,
           rawJson,
           applyEndpoint: "/game/session/conclude/apply-json",
           applyBody: { chatId, nextSessionRequest: trimmedNextSessionRequest },
         }),
-      );
-      return;
+      } satisfies JsonRepairRouteResult;
     }
 
     let conclusionWasStored = false;
@@ -4795,7 +4880,12 @@ export async function gameRoutes(app: FastifyInstance) {
 
     pendingSessionConclusions.set(chatId, conclusionRequest);
     try {
-      return await conclusionRequest;
+      const conclusionResult = await conclusionRequest;
+      if (isJsonRepairRouteResult(conclusionResult)) {
+        sendJsonRepairRouteResult(reply, conclusionResult);
+        return;
+      }
+      return conclusionResult;
     } finally {
       if (pendingSessionConclusions.get(chatId) === conclusionRequest) {
         pendingSessionConclusions.delete(chatId);
@@ -4834,6 +4924,7 @@ export async function gameRoutes(app: FastifyInstance) {
       sessionSummary: summary,
       replaceExistingSessionEntries: true,
       streaming,
+      signal: createResponseAbortSignal(reply, GAME_GENERATION_TIMEOUT_MS, "Game lorebook keeper regeneration"),
     });
 
     if (result.status === "failed") {
@@ -4989,12 +5080,18 @@ export async function gameRoutes(app: FastifyInstance) {
       conn.openrouterProvider,
       conn.maxTokensOverride,
     );
+    const conclusionAbortSignal = createResponseAbortSignal(
+      reply,
+      GAME_GENERATION_TIMEOUT_MS,
+      "Game session conclusion regeneration",
+    );
     const conclusionOptions = gameGenOptions(
       conn.model,
       {
         maxTokens: Math.max(SESSION_CONCLUSION_MIN_OUTPUT_TOKENS, conclusionGenerationParameters?.maxTokens ?? 0),
         temperature: 0.45,
         stream: streaming,
+        signal: conclusionAbortSignal,
         ...(streaming ? { onToken: () => {} } : {}),
       },
       conclusionGenerationParameters,
@@ -5241,12 +5338,18 @@ export async function gameRoutes(app: FastifyInstance) {
       conn.openrouterProvider,
       conn.maxTokensOverride,
     );
+    const progressionAbortSignal = createResponseAbortSignal(
+      reply,
+      GAME_GENERATION_TIMEOUT_MS,
+      "Game campaign progression update",
+    );
     const progressionOptions = gameGenOptions(
       conn.model,
       {
         maxTokens: Math.max(CAMPAIGN_PROGRESSION_MIN_OUTPUT_TOKENS, progressionGenerationParameters?.maxTokens ?? 0),
         temperature: 0.35,
         stream: streaming,
+        signal: progressionAbortSignal,
         ...(streaming ? { onToken: () => {} } : {}),
       },
       progressionGenerationParameters,
@@ -5454,7 +5557,7 @@ export async function gameRoutes(app: FastifyInstance) {
 
   // ── POST /game/party/recruit ──
   // Adds a library character or tracked NPC to the active game party.
-  app.post("/party/recruit", async (req) => {
+  app.post("/party/recruit", async (req, reply) => {
     const input = recruitPartyMemberSchema.parse(req.body);
     const chats = createChatsStorage(app.db);
     const chars = createCharactersStorage(app.db);
@@ -5617,13 +5720,19 @@ export async function gameRoutes(app: FastifyInstance) {
           language: setupConfig.language ?? null,
         });
 
+        const recruitAbortSignal = createResponseAbortSignal(reply, GAME_GENERATION_TIMEOUT_MS, "Game party recruit card");
         const result = await runGameChatComplete(
           provider,
           [
             { role: "system", content: prompt },
             { role: "user", content: `Create the recruited companion card for ${recruitName} now.` },
           ],
-          gameGenOptions(conn.model, { temperature: 0.6, maxTokens: 1200 }, generationParameters, conn.provider),
+          gameGenOptions(
+            conn.model,
+            { temperature: 0.6, maxTokens: 1200, signal: recruitAbortSignal },
+            generationParameters,
+            conn.provider,
+          ),
           "Game party recruit card",
         );
         const recruitExtraction = extractLeadingThinkingBlocks(
@@ -5956,7 +6065,7 @@ export async function gameRoutes(app: FastifyInstance) {
   });
 
   // ── POST /game/map/generate ──
-  app.post("/map/generate", async (req) => {
+  app.post("/map/generate", async (req, reply) => {
     const { chatId, locationType, context, connectionId } = mapGenerateSchema.parse(req.body);
     const chats = createChatsStorage(app.db);
     const connections = createConnectionsStorage(app.db);
@@ -5979,6 +6088,7 @@ export async function gameRoutes(app: FastifyInstance) {
       { role: "user", content: "Generate the map." },
     ];
 
+    const mapAbortSignal = createResponseAbortSignal(reply, GAME_GENERATION_TIMEOUT_MS, "Game map generation");
     const result = await runGameChatComplete(
       provider,
       messages,
@@ -5986,6 +6096,7 @@ export async function gameRoutes(app: FastifyInstance) {
         conn.model,
         {
           temperature: 0.6,
+          signal: mapAbortSignal,
         },
         null,
         conn.provider,
@@ -6555,7 +6666,7 @@ export async function gameRoutes(app: FastifyInstance) {
     debugMode: z.boolean().optional().default(false),
   });
 
-  app.post("/party-turn", async (req) => {
+  app.post("/party-turn", async (req, reply) => {
     const input = partyTurnSchema.parse(req.body);
     const chats = createChatsStorage(app.db);
     const connections = createConnectionsStorage(app.db);
@@ -6735,6 +6846,7 @@ export async function gameRoutes(app: FastifyInstance) {
       conn.openrouterProvider,
       conn.maxTokensOverride,
     );
+    const partyTurnAbortSignal = createResponseAbortSignal(reply, GAME_GENERATION_TIMEOUT_MS, "Game party turn");
     const result = await runGameChatComplete(
       provider,
       messages,
@@ -6742,6 +6854,7 @@ export async function gameRoutes(app: FastifyInstance) {
         conn.model ?? "",
         {
           maxTokens: 8192,
+          signal: partyTurnAbortSignal,
         },
         gameGenerationParameters,
         conn.provider,
@@ -6955,7 +7068,7 @@ export async function gameRoutes(app: FastifyInstance) {
     debugMode: z.boolean().optional().default(false),
   });
 
-  app.post("/scene-wrap", async (req) => {
+  app.post("/scene-wrap", async (req, reply) => {
     const input = sceneWrapSchema.parse(req.body);
     const requestDebug = input.debugMode === true;
     const debugOverrideEnabled = requestDebug || isDebugAgentsEnabled();
@@ -7054,11 +7167,13 @@ export async function gameRoutes(app: FastifyInstance) {
     // request should stay on the buffered completion path regardless of the
     // UI's live-streaming toggle. Some GPT-5.5/OpenAI-compatible stacks return
     // empty content when `chatComplete()` is asked to stream this JSON route.
+    const sceneWrapAbortSignal = createResponseAbortSignal(reply, GAME_GENERATION_TIMEOUT_MS, "Game scene wrap");
     const sceneWrapOptions = gameGenOptions(
       conn.model ?? "",
       {
         stream: false,
         responseFormat: { type: "json_object" },
+        signal: sceneWrapAbortSignal,
       },
       gameGenerationParameters,
       conn.provider,
@@ -7826,6 +7941,8 @@ export async function gameRoutes(app: FastifyInstance) {
       GAME_ASSET_GENERATION_TIMEOUT_MS,
       "Game asset generation",
     );
+    const releaseAssetGeneration = await acquireGameAssetGenerationLock(input.chatId, assetAbortSignal);
+    try {
     const requestDebug = input.debugMode === true;
     const debugOverrideEnabled = requestDebug || isDebugAgentsEnabled();
     const debugLogsEnabled = debugOverrideEnabled || logger.isLevelEnabled("debug");
@@ -8228,6 +8345,9 @@ export async function gameRoutes(app: FastifyInstance) {
     }
 
     return { generatedBackground, fallbackBackground, generatedIllustration, generatedNpcAvatars };
+    } finally {
+      releaseAssetGeneration();
+    }
   });
 
   // ── POST /game/checkpoint ──

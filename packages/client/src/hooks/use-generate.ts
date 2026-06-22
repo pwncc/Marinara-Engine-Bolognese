@@ -929,10 +929,6 @@ export function useGenerate() {
       }
       activeGenerateLocks.add(params.chatId);
 
-      // Abort any in-progress generation for the SAME chat before starting a new one.
-      const prev = useChatStore.getState().abortControllers.get(params.chatId);
-      if (prev) prev.abort();
-
       // Create an AbortController so the stop button can cancel this generation.
       const abortController = new AbortController();
       try {
@@ -2108,7 +2104,13 @@ export function useGenerate() {
               if (spriteChangeReceived) {
                 qc.invalidateQueries({ queryKey: chatKeys.messages(params.chatId) });
               }
-              if (isActiveChat()) setProcessing(false);
+              if (isActiveChat()) {
+                if (useChatStore.getState().streamingChatId === params.chatId) {
+                  setStreaming(false);
+                  clearStreamBuffer(params.chatId);
+                }
+                setProcessing(false);
+              }
               clearMariPhaseForThisChat();
               break;
             }
@@ -2292,7 +2294,31 @@ export function useGenerate() {
         // + user send). The latest generation replaces the AbortController,
         // so the superseded one knows it no longer owns the state.
         const stillOwner = useChatStore.getState().abortControllers.get(params.chatId) === abortController;
-        const persistedForRefresh = [...persistedMessages.values()];
+        const partialContent = normalizeLineBreakSpacing(fullBuffer + pendingText).trim();
+        const unpersistedPartialMessage: Message | null =
+          receivedContent && persistedMessages.size === 0 && partialContent && !params.regenerateMessageId
+            ? {
+                id: `__partial_${params.chatId}_${Date.now()}`,
+                chatId: params.chatId,
+                role: params.impersonate ? "user" : "assistant",
+                characterId: params.impersonate
+                  ? null
+                  : (params.forCharacterId ?? useChatStore.getState().streamingCharacterId ?? null),
+                content: partialContent,
+                activeSwipeIndex: 0,
+                extra: {
+                  displayText: null,
+                  isGenerated: !params.impersonate,
+                  tokenCount: null,
+                  generationInfo: null,
+                },
+                createdAt: new Date().toISOString(),
+              }
+            : null;
+        const persistedForRefresh = [
+          ...persistedMessages.values(),
+          ...(unpersistedPartialMessage ? [unpersistedPartialMessage] : []),
+        ];
         const primeMessagesFromSaved = () => {
           if (persistedForRefresh.length > 0) {
             upsertPersistedMessages(qc, params.chatId, persistedForRefresh);
@@ -2448,6 +2474,11 @@ export function useGenerate() {
     async (chatId: string, agentTypes: string[], options?: RetryAgentsOptions): Promise<boolean> => {
       const isActiveChat = () => useChatStore.getState().activeChatId === chatId;
       const abortController = new AbortController();
+      if (useChatStore.getState().abortControllers.has(chatId)) {
+        console.warn("[RetryAgents] Skipped — generation already in progress for this chat");
+        return false;
+      }
+      useChatStore.getState().setAbortController(chatId, abortController);
       const isTrackerRetry = agentTypes.some(
         (agentType) => BUILT_IN_TRACKER_AGENT_TYPE_SET.has(agentType) || !BUILT_IN_AGENT_TYPE_SET.has(agentType),
       );
@@ -2739,6 +2770,9 @@ export function useGenerate() {
         showError(msg);
       } finally {
         setProcessing(false);
+        if (useChatStore.getState().abortControllers.get(chatId) === abortController) {
+          useChatStore.getState().setAbortController(chatId, null);
+        }
         if (isTrackerRetry) useGameStateStore.getState().clearRefreshingChat(chatId);
         if (hasError && isActiveChat()) {
           void refreshMessagesAuthoritatively(qc, chatId);

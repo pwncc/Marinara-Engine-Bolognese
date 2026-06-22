@@ -997,11 +997,10 @@ export class OpenAIProvider extends BaseLLMProvider {
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+        buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = done ? "" : (lines.pop() ?? "");
 
         for (const line of lines) {
           const trimmed = line.trim();
@@ -1052,6 +1051,7 @@ export class OpenAIProvider extends BaseLLMProvider {
             yield delta.refusal;
           }
         }
+        if (done) break;
       }
     } finally {
       if (options.signal) options.signal.removeEventListener("abort", onAbort);
@@ -1230,6 +1230,15 @@ export class OpenAIProvider extends BaseLLMProvider {
     const reader = response.body?.getReader();
     if (!reader) throw new Error("No response body");
 
+    const onAbort = () => reader.cancel().catch(() => {});
+    if (options.signal) {
+      if (options.signal.aborted) {
+        await reader.cancel().catch(() => {});
+        return { content: null, toolCalls: [], finishReason: "abort", usage: undefined };
+      }
+      options.signal.addEventListener("abort", onAbort, { once: true });
+    }
+
     const decoder = new TextDecoder();
     let buffer = "";
     let content = "";
@@ -1243,118 +1252,122 @@ export class OpenAIProvider extends BaseLLMProvider {
       { id: string; type: "function"; function: { name: string; arguments: string } }
     >();
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
+        buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = done ? "" : (lines.pop() ?? "");
 
-      for (const line of lines) {
-        const trimmed = line.trim();
-        const data = OpenAIProvider.extractSseData(trimmed);
-        if (data == null) continue;
-        if (data === "[DONE]") break;
+        for (const line of lines) {
+          const trimmed = line.trim();
+          const data = OpenAIProvider.extractSseData(trimmed);
+          if (data == null) continue;
+          if (data === "[DONE]") break;
 
-        let parsed: Record<string, unknown>;
-        try {
-          parsed = JSON.parse(data) as Record<string, unknown>;
-        } catch {
-          // Skip malformed JSON lines
-          continue;
-        }
-
-        if (parsed.usage) {
-          streamUsage = OpenAIProvider.extractChatCompletionsUsage(parsed.usage as ChatCompletionsUsagePayload);
-        }
-
-        if (!Array.isArray(parsed.choices)) {
-          const providerMessage = OpenAIProvider.extractProviderErrorMessage(parsed);
-          if (providerMessage) {
-            throw new Error(
-              `OpenAI chatComplete() stream response missing choices: ${sanitizeApiError(providerMessage)}`,
-            );
+          let parsed: Record<string, unknown>;
+          try {
+            parsed = JSON.parse(data) as Record<string, unknown>;
+          } catch {
+            // Skip malformed JSON lines
+            continue;
           }
-          continue;
-        }
 
-        const choice = (
-          parsed.choices as Array<{
-            delta: Record<string, unknown> & {
-              content?: string | unknown[];
-              tool_calls?: unknown;
-            };
-            finish_reason?: string;
-          }>
-        )[0];
-        if (!choice) continue;
-
-        if (choice.finish_reason) {
-          finishReason = choice.finish_reason;
-        }
-
-        const delta = choice.delta;
-        OpenAIProvider.appendReasoningMetadata(reasoningMetadata, delta);
-
-        // Stream reasoning/thinking
-        const reasoning = OpenAIProvider.extractReasoning(delta);
-        if (reasoning && options.onThinking) {
-          options.onThinking(reasoning);
-        }
-
-        // Handle OpenRouter content block arrays (Anthropic-style)
-        const blocks = OpenAIProvider.extractContentBlocks(delta?.content);
-        if (blocks) {
-          if (!reasoning && blocks.thinking && options.onThinking) options.onThinking(blocks.thinking);
-          if (blocks.text) {
-            content += blocks.text;
-            await options.onToken?.(blocks.text);
+          if (parsed.usage) {
+            streamUsage = OpenAIProvider.extractChatCompletionsUsage(parsed.usage as ChatCompletionsUsagePayload);
           }
-        } else if (delta?.content) {
-          content += delta.content as string;
-          await options.onToken?.(delta.content as string);
-        } else if (typeof delta?.refusal === "string" && delta.refusal) {
-          content += delta.refusal;
-          await options.onToken?.(delta.refusal);
-        }
 
-        // Accumulate tool call deltas. Some OpenAI-compatible backends (including llama.cpp)
-        // may stream tool calls as { name, arguments } instead of { function: { ... } }.
-        if (Array.isArray(delta?.tool_calls)) {
-          for (const [fallbackIndex, rawToolCall] of delta.tool_calls.entries()) {
-            const tc = OpenAIProvider.asRecord(rawToolCall);
-            if (!tc) continue;
-            const fn = OpenAIProvider.asRecord(tc.function) ?? tc;
-            const index = typeof tc.index === "number" ? tc.index : fallbackIndex;
-            const nameDelta = typeof fn.name === "string" ? fn.name : typeof tc.name === "string" ? tc.name : "";
-            const argumentDelta =
-              typeof fn.arguments === "string"
-                ? fn.arguments
-                : typeof tc.arguments === "string"
-                  ? tc.arguments
-                  : fn.arguments !== undefined || tc.arguments !== undefined
-                    ? OpenAIProvider.stringifyToolArguments(fn.arguments ?? tc.arguments)
-                    : "";
-            const existing = toolCallsMap.get(index);
-            if (!existing) {
-              toolCallsMap.set(index, {
-                id: typeof tc.id === "string" ? tc.id : typeof tc.call_id === "string" ? tc.call_id : "",
-                type: "function",
-                function: {
-                  name: nameDelta,
-                  arguments: argumentDelta,
-                },
-              });
-            } else {
-              if (typeof tc.id === "string" && tc.id) existing.id = tc.id;
-              else if (typeof tc.call_id === "string" && tc.call_id) existing.id = tc.call_id;
-              if (nameDelta) existing.function.name += nameDelta;
-              if (argumentDelta) existing.function.arguments += argumentDelta;
+          if (!Array.isArray(parsed.choices)) {
+            const providerMessage = OpenAIProvider.extractProviderErrorMessage(parsed);
+            if (providerMessage) {
+              throw new Error(
+                `OpenAI chatComplete() stream response missing choices: ${sanitizeApiError(providerMessage)}`,
+              );
+            }
+            continue;
+          }
+
+          const choice = (
+            parsed.choices as Array<{
+              delta: Record<string, unknown> & {
+                content?: string | unknown[];
+                tool_calls?: unknown;
+              };
+              finish_reason?: string;
+            }>
+          )[0];
+          if (!choice) continue;
+
+          if (choice.finish_reason) {
+            finishReason = choice.finish_reason;
+          }
+
+          const delta = choice.delta;
+          OpenAIProvider.appendReasoningMetadata(reasoningMetadata, delta);
+
+          // Stream reasoning/thinking
+          const reasoning = OpenAIProvider.extractReasoning(delta);
+          if (reasoning && options.onThinking) {
+            options.onThinking(reasoning);
+          }
+
+          // Handle OpenRouter content block arrays (Anthropic-style)
+          const blocks = OpenAIProvider.extractContentBlocks(delta?.content);
+          if (blocks) {
+            if (!reasoning && blocks.thinking && options.onThinking) options.onThinking(blocks.thinking);
+            if (blocks.text) {
+              content += blocks.text;
+              await options.onToken?.(blocks.text);
+            }
+          } else if (delta?.content) {
+            content += delta.content as string;
+            await options.onToken?.(delta.content as string);
+          } else if (typeof delta?.refusal === "string" && delta.refusal) {
+            content += delta.refusal;
+            await options.onToken?.(delta.refusal);
+          }
+
+          // Accumulate tool call deltas. Some OpenAI-compatible backends (including llama.cpp)
+          // may stream tool calls as { name, arguments } instead of { function: { ... } }.
+          if (Array.isArray(delta?.tool_calls)) {
+            for (const [fallbackIndex, rawToolCall] of delta.tool_calls.entries()) {
+              const tc = OpenAIProvider.asRecord(rawToolCall);
+              if (!tc) continue;
+              const fn = OpenAIProvider.asRecord(tc.function) ?? tc;
+              const index = typeof tc.index === "number" ? tc.index : fallbackIndex;
+              const nameDelta = typeof fn.name === "string" ? fn.name : typeof tc.name === "string" ? tc.name : "";
+              const argumentDelta =
+                typeof fn.arguments === "string"
+                  ? fn.arguments
+                  : typeof tc.arguments === "string"
+                    ? tc.arguments
+                    : fn.arguments !== undefined || tc.arguments !== undefined
+                      ? OpenAIProvider.stringifyToolArguments(fn.arguments ?? tc.arguments)
+                      : "";
+              const existing = toolCallsMap.get(index);
+              if (!existing) {
+                toolCallsMap.set(index, {
+                  id: typeof tc.id === "string" ? tc.id : typeof tc.call_id === "string" ? tc.call_id : "",
+                  type: "function",
+                  function: {
+                    name: nameDelta,
+                    arguments: argumentDelta,
+                  },
+                });
+              } else {
+                if (typeof tc.id === "string" && tc.id) existing.id = tc.id;
+                else if (typeof tc.call_id === "string" && tc.call_id) existing.id = tc.call_id;
+                if (nameDelta) existing.function.name += nameDelta;
+                if (argumentDelta) existing.function.arguments += argumentDelta;
+              }
             }
           }
         }
+        if (done) break;
       }
+    } finally {
+      options.signal?.removeEventListener("abort", onAbort);
     }
 
     // Collect tool calls in order
@@ -1569,10 +1582,6 @@ export class OpenAIProvider extends BaseLLMProvider {
       if (options.temperature != null) body.temperature = options.temperature;
       const topP = OpenAIProvider.normalizeTopP(options.topP);
       if (topP != null) body.top_p = topP;
-      if (this.shouldSendPenaltyParams(options.model)) {
-        if (options.frequencyPenalty) body.frequency_penalty = options.frequencyPenalty;
-        if (options.presencePenalty) body.presence_penalty = options.presencePenalty;
-      }
     }
 
     if (!isOpenAIChatGPT && !suppressModelParameters) {
@@ -1708,38 +1717,52 @@ export class OpenAIProvider extends BaseLLMProvider {
     const reader = response.body?.getReader();
     if (!reader) throw new Error("No response body");
 
+    const onAbortResponses = () => reader.cancel().catch(() => {});
+    if (options.signal) {
+      if (options.signal.aborted) {
+        await reader.cancel().catch(() => {});
+        return;
+      }
+      options.signal.addEventListener("abort", onAbortResponses, { once: true });
+    }
+
     const decoder = new TextDecoder();
     let buffer = "";
     let streamUsage: LLMUsage | undefined;
     let yieldedAny = false;
+    let currentEvent = "";
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
+        buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = done ? "" : (lines.pop() ?? "");
 
-      let currentEvent = "";
-      for (const line of lines) {
-        const trimmed = line.trim();
+        for (const line of lines) {
+          const trimmed = line.trim();
 
-        // SSE event type line
-        const eventName = OpenAIProvider.extractSseEvent(trimmed);
-        if (eventName != null) {
-          currentEvent = eventName;
-          continue;
-        }
+          // SSE event type line
+          const eventName = OpenAIProvider.extractSseEvent(trimmed);
+          if (eventName != null) {
+            currentEvent = eventName;
+            continue;
+          }
 
-        const data = OpenAIProvider.extractSseData(trimmed);
-        if (data == null) {
-          if (trimmed === "") currentEvent = ""; // reset on blank line
-          continue;
-        }
+          const data = OpenAIProvider.extractSseData(trimmed);
+          if (data == null) {
+            if (trimmed === "") currentEvent = ""; // reset on blank line
+            continue;
+          }
 
-        try {
-          const parsed = JSON.parse(data) as Record<string, unknown>;
+          let parsed: Record<string, unknown>;
+          try {
+            parsed = JSON.parse(data) as Record<string, unknown>;
+          } catch {
+            currentEvent = "";
+            continue;
+          }
           // Use SSE event: field if present, otherwise fall back to the JSON type field.
           // Some proxies strip SSE event names and only forward data lines.
           const eventType = currentEvent || (parsed.type as string) || "";
@@ -1791,7 +1814,7 @@ export class OpenAIProvider extends BaseLLMProvider {
               const error = resp?.error as Record<string, unknown> | undefined;
               const msg = (error?.message as string) ?? "unknown error";
               logger.error(new Error(msg), "[OpenAI Responses] Stream ended with response.failed");
-              break;
+              throw new Error(`OpenAI Responses stream failed: ${msg}`);
             }
             case "response.incomplete": {
               const resp = parsed.response as Record<string, unknown> | undefined;
@@ -1801,11 +1824,12 @@ export class OpenAIProvider extends BaseLLMProvider {
             }
             // Ignore other event types (response.created, response.in_progress, etc.)
           }
-        } catch {
-          // Skip malformed JSON
+          currentEvent = "";
         }
-        currentEvent = "";
+        if (done) break;
       }
+    } finally {
+      options.signal?.removeEventListener("abort", onAbortResponses);
     }
 
     if (streamUsage) return streamUsage;
@@ -1913,16 +1937,16 @@ export class OpenAIProvider extends BaseLLMProvider {
     const functionCalls: LLMToolCall[] = [];
     // Track in-progress function call argument deltas keyed by call_id
     const fnCallArgs = new Map<string, { id: string; name: string; arguments: string }>();
+    let currentEvent = "";
 
+    try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
 
-      sseBuffer += decoder.decode(value, { stream: true });
-      const lines = sseBuffer.split("\n");
-      sseBuffer = lines.pop() ?? "";
+      sseBuffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      const lines = sseBuffer.split(/\r?\n/);
+      sseBuffer = done ? "" : (lines.pop() ?? "");
 
-      let currentEvent = "";
       for (const line of lines) {
         const trimmed = line.trim();
 
@@ -1938,134 +1962,139 @@ export class OpenAIProvider extends BaseLLMProvider {
           continue;
         }
 
+        let parsed: Record<string, unknown>;
         try {
-          const parsed = JSON.parse(data) as Record<string, unknown>;
-          // Use SSE event: field if present, otherwise fall back to the JSON type field.
-          // Some proxies strip SSE event names and only forward data lines.
-          const eventType = currentEvent || (parsed.type as string) || "";
-
-          switch (eventType) {
-            case "response.text.delta":
-            case "response.output_text.delta": {
-              const delta = parsed.delta as string | undefined;
-              if (delta) {
-                content += delta;
-                await options.onToken?.(delta);
-              }
-              break;
-            }
-
-            case "response.refusal.delta": {
-              const delta = parsed.delta as string | undefined;
-              if (delta) {
-                content += delta;
-                await options.onToken?.(delta);
-              }
-              break;
-            }
-
-            case "response.reasoning_summary_text.delta": {
-              const delta = parsed.delta as string | undefined;
-              if (delta && options.onThinking) options.onThinking(delta);
-              break;
-            }
-
-            case "response.output_item.added": {
-              // A new output item appeared — could be a function_call
-              const item = parsed.item as Record<string, unknown> | undefined;
-              if (item?.type === "function_call") {
-                const callId = (item.call_id ?? item.id) as string;
-                fnCallArgs.set(callId, {
-                  id: callId,
-                  name: (item.name as string) ?? "",
-                  arguments: (item.arguments as string) ?? "",
-                });
-              }
-              break;
-            }
-
-            case "response.function_call_arguments.delta": {
-              const callId = parsed.call_id as string | undefined;
-              const delta = parsed.delta as string | undefined;
-              if (callId && delta) {
-                const entry = fnCallArgs.get(callId);
-                if (entry) entry.arguments += delta;
-              }
-              break;
-            }
-
-            case "response.function_call_arguments.done": {
-              const callId = parsed.call_id as string | undefined;
-              if (callId) {
-                const entry = fnCallArgs.get(callId);
-                if (entry) {
-                  // Overwrite with the final arguments if provided
-                  const args = parsed.arguments as string | undefined;
-                  if (args) entry.arguments = args;
-                }
-              }
-              break;
-            }
-
-            case "response.output_item.done": {
-              // Finalize function_call items
-              const item = parsed.item as Record<string, unknown> | undefined;
-              if (item?.type === "function_call") {
-                const callId = ((item.call_id ?? item.id) as string) ?? "";
-                const entry = fnCallArgs.get(callId);
-                functionCalls.push({
-                  id: callId,
-                  type: "function",
-                  function: {
-                    name: entry?.name ?? (item.name as string) ?? "",
-                    arguments: entry?.arguments ?? (item.arguments as string) ?? "",
-                  },
-                });
-              }
-              break;
-            }
-
-            case "response.completed": {
-              const resp = parsed.response as Record<string, unknown> | undefined;
-              if (resp) {
-                streamUsage = this.extractResponsesUsage(resp);
-                this.emitEncryptedReasoning(resp, options);
-                const status = resp.status as string | undefined;
-                if (status === "incomplete") finishReason = "length";
-                // Fallback: extract text/refusal from the completed response
-                // if nothing was streamed (e.g. model returned only in payload)
-                if (!content) {
-                  const fallback = this.extractResponsesText(resp);
-                  if (fallback) {
-                    content = fallback;
-                    await options.onToken?.(fallback);
-                  }
-                }
-              }
-              break;
-            }
-            case "response.failed": {
-              const resp = parsed.response as Record<string, unknown> | undefined;
-              const error = resp?.error as Record<string, unknown> | undefined;
-              const msg = (error?.message as string) ?? "unknown error";
-              logger.error(new Error(msg), "[OpenAI Responses] chatCompleteResponses stream failed");
-              break;
-            }
-            case "response.incomplete": {
-              const resp = parsed.response as Record<string, unknown> | undefined;
-              const reason = (resp?.incomplete_details as Record<string, unknown>)?.reason ?? "unknown";
-              logger.warn("[OpenAI Responses] chatCompleteResponses stream incomplete (reason=%s)", reason);
-              finishReason = "length";
-              break;
-            }
-          }
+          parsed = JSON.parse(data) as Record<string, unknown>;
         } catch {
-          // Skip malformed JSON
+          currentEvent = "";
+          continue;
+        }
+        // Use SSE event: field if present, otherwise fall back to the JSON type field.
+        // Some proxies strip SSE event names and only forward data lines.
+        const eventType = currentEvent || (parsed.type as string) || "";
+
+        switch (eventType) {
+          case "response.text.delta":
+          case "response.output_text.delta": {
+            const delta = parsed.delta as string | undefined;
+            if (delta) {
+              content += delta;
+              await options.onToken?.(delta);
+            }
+            break;
+          }
+
+          case "response.refusal.delta": {
+            const delta = parsed.delta as string | undefined;
+            if (delta) {
+              content += delta;
+              await options.onToken?.(delta);
+            }
+            break;
+          }
+
+          case "response.reasoning_summary_text.delta": {
+            const delta = parsed.delta as string | undefined;
+            if (delta && options.onThinking) options.onThinking(delta);
+            break;
+          }
+
+          case "response.output_item.added": {
+            // A new output item appeared — could be a function_call
+            const item = parsed.item as Record<string, unknown> | undefined;
+            if (item?.type === "function_call") {
+              const callId = (item.call_id ?? item.id) as string;
+              fnCallArgs.set(callId, {
+                id: callId,
+                name: (item.name as string) ?? "",
+                arguments: (item.arguments as string) ?? "",
+              });
+            }
+            break;
+          }
+
+          case "response.function_call_arguments.delta": {
+            const callId = parsed.call_id as string | undefined;
+            const delta = parsed.delta as string | undefined;
+            if (callId && delta) {
+              const entry = fnCallArgs.get(callId);
+              if (entry) entry.arguments += delta;
+            }
+            break;
+          }
+
+          case "response.function_call_arguments.done": {
+            const callId = parsed.call_id as string | undefined;
+            if (callId) {
+              const entry = fnCallArgs.get(callId);
+              if (entry) {
+                // Overwrite with the final arguments if provided
+                const args = parsed.arguments as string | undefined;
+                if (args) entry.arguments = args;
+              }
+            }
+            break;
+          }
+
+          case "response.output_item.done": {
+            // Finalize function_call items
+            const item = parsed.item as Record<string, unknown> | undefined;
+            if (item?.type === "function_call") {
+              const callId = ((item.call_id ?? item.id) as string) ?? "";
+              const entry = fnCallArgs.get(callId);
+              functionCalls.push({
+                id: callId,
+                type: "function",
+                function: {
+                  name: entry?.name ?? (item.name as string) ?? "",
+                  arguments: entry?.arguments ?? (item.arguments as string) ?? "",
+                },
+              });
+            }
+            break;
+          }
+
+          case "response.completed": {
+            const resp = parsed.response as Record<string, unknown> | undefined;
+            if (resp) {
+              streamUsage = this.extractResponsesUsage(resp);
+              this.emitEncryptedReasoning(resp, options);
+              const status = resp.status as string | undefined;
+              if (status === "incomplete") finishReason = "length";
+              // Fallback: extract text/refusal from the completed response
+              // if nothing was streamed (e.g. model returned only in payload)
+              if (!content) {
+                const fallback = this.extractResponsesText(resp);
+                if (fallback) {
+                  content = fallback;
+                  await options.onToken?.(fallback);
+                }
+              }
+            }
+            break;
+          }
+          case "response.failed": {
+            const resp = parsed.response as Record<string, unknown> | undefined;
+            const error = resp?.error as Record<string, unknown> | undefined;
+            const msg = (error?.message as string) ?? "unknown error";
+            logger.error(new Error(msg), "[OpenAI Responses] chatCompleteResponses stream failed");
+            throw new Error(`OpenAI Responses stream failed: ${msg}`);
+          }
+          case "response.incomplete": {
+            const resp = parsed.response as Record<string, unknown> | undefined;
+            const reason = (resp?.incomplete_details as Record<string, unknown>)?.reason ?? "unknown";
+            logger.warn("[OpenAI Responses] chatCompleteResponses stream incomplete (reason=%s)", reason);
+            finishReason = "length";
+            break;
+          }
         }
         currentEvent = "";
       }
+      if (done) break;
     }
-    if (options.signal) options.signal.removeEventListener("abort", onAbortCCR);
+    } finally {
+      options.signal?.removeEventListener("abort", onAbortCCR);
+    }
     // Check if we got tool calls
     if (functionCalls.length > 0) {
       finishReason = "tool_calls";

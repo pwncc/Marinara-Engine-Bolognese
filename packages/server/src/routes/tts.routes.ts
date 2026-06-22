@@ -226,6 +226,18 @@ function normalizeNanoGptTtsModelId(model: string) {
   return NANOGPT_TTS_MODEL_ALIASES[trimmed.toLowerCase()] ?? trimmed;
 }
 
+function clampElevenLabsSpeed(speed: number) {
+  return Math.min(1.2, Math.max(0.7, Number.isFinite(speed) ? speed : 1));
+}
+
+function elevenLabsModelSupportsSpeed(model: string) {
+  return model.trim().toLowerCase() !== "eleven_v3";
+}
+
+function isNanoGptElevenLabsModel(model: string) {
+  return /^elevenlabs[-_]/i.test(model.trim());
+}
+
 function readString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
@@ -596,14 +608,22 @@ export async function ttsRoutes(app: FastifyInstance) {
         ? normalizeElevenLabsTtsModelId(configuredModel)
         : configuredModel;
     const normalizedModel = model.toLowerCase();
-    if (cfg.source === "elevenlabs" && !useNanoGptSpeech && ELEVENLABS_NON_TTS_MODELS.has(normalizedModel)) {
+    if (cfg.source === "elevenlabs" && ELEVENLABS_NON_TTS_MODELS.has(normalizedModel)) {
       return reply.status(400).send({
         error: `ElevenLabs model "${model}" cannot generate text-to-speech`,
         detail: `That model is for Text to Voice / voice design. Use "eleven_v3" for Eleven v3 speech, or "eleven_multilingual_v2", "eleven_flash_v2_5", or "eleven_turbo_v2_5" for regular TTS.`,
       });
     }
 
-    const audioFormat = cfg.audioFormat ?? "mp3";
+    const audioFormat = cfg.source === "elevenlabs" ? "mp3" : (cfg.audioFormat ?? "mp3");
+    const nanoGptElevenLabsModel = useNanoGptSpeech && isNanoGptElevenLabsModel(model);
+    const includeSpeed =
+      useNanoGptSpeech
+        ? !nanoGptElevenLabsModel
+        : cfg.source === "elevenlabs"
+          ? elevenLabsModelSupportsSpeed(model)
+          : true;
+    const elevenLabsSpeed = clampElevenLabsSpeed(cfg.speed);
     const url = useNanoGptSpeech
       ? `${nanoGptV1BaseUrl(base)}/audio/speech`
       : usePocketTtsSpeech
@@ -615,8 +635,10 @@ export async function ttsRoutes(app: FastifyInstance) {
     const elevenLabsLanguageCode = cfg.elevenLabsLanguageCode?.trim();
     const includeSpeakerInstructions = cfg.source !== "elevenlabs";
     const speechInstructions = useNanoGptSpeech
-      ? buildSpeechInstructions({ speaker, tone, includeSpeaker: includeSpeakerInstructions })
-      : cfg.source === "openai" && openAiModelSupportsSpeechInstructions(cfg.model)
+      ? !nanoGptElevenLabsModel && openAiModelSupportsSpeechInstructions(model)
+        ? buildSpeechInstructions({ speaker, tone, includeSpeaker: includeSpeakerInstructions })
+        : undefined
+      : cfg.source === "openai" && openAiModelSupportsSpeechInstructions(model)
         ? buildSpeechInstructions({ speaker, tone })
         : undefined;
 
@@ -645,7 +667,7 @@ export async function ttsRoutes(app: FastifyInstance) {
                 model,
                 input: providerText,
                 voice: requestVoice || "alloy",
-                speed: cfg.speed,
+                ...(includeSpeed ? { speed: cfg.speed } : {}),
                 response_format: audioFormat,
                 ...(speechInstructions ? { instructions: speechInstructions } : {}),
               })
@@ -656,14 +678,14 @@ export async function ttsRoutes(app: FastifyInstance) {
                   ...(elevenLabsLanguageCode ? { language_code: elevenLabsLanguageCode } : {}),
                   voice_settings: {
                     stability: cfg.elevenLabsStability,
-                    speed: cfg.speed,
+                    ...(includeSpeed ? { speed: elevenLabsSpeed } : {}),
                   },
                 })
               : JSON.stringify({
                   model,
                   input: providerText,
                   voice: requestVoice,
-                  speed: cfg.speed,
+                  ...(includeSpeed ? { speed: cfg.speed } : {}),
                   response_format: audioFormat,
                   ...(speechInstructions ? { instructions: speechInstructions } : {}),
                 }),

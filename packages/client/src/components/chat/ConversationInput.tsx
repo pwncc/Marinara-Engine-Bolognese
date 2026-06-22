@@ -2061,7 +2061,11 @@ export function ConversationInput({
           )}
 
           <button
-            onClick={isActuallyGenerating ? () => useChatStore.getState().stopGeneration() : handleSend}
+            onClick={
+              isActuallyGenerating
+                ? () => useChatStore.getState().stopGeneration(activeChatId ?? undefined)
+                : handleSend
+            }
             disabled={!isActuallyGenerating && (isReadingAttachments || !activeChatId || !canSubmit)}
             aria-label={sendButtonTitle}
             className={cn(

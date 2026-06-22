@@ -11,6 +11,20 @@ export function startSseReply(reply: FastifyReply, extraHeaders: Record<string, 
   });
 }
 
+export function startSseKeepalive(reply: FastifyReply, intervalMs = 15_000): () => void {
+  const timer = setInterval(() => {
+    try {
+      if (!reply.raw.destroyed && !reply.raw.writableEnded) {
+        reply.raw.write(": keepalive\n\n");
+      }
+    } catch {
+      // Ignore writes after the client disconnects.
+    }
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
 export function sendSseEvent(reply: FastifyReply, payload: SsePayload) {
   reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
 }

@@ -78,9 +78,9 @@ export async function resolveMemoryRecallEmbeddingSource(
     const label = "Local Model sidecar";
     return {
       label,
-      async embed(texts: string[]) {
+      async embed(texts: string[], signal?: AbortSignal) {
         try {
-          return await provider.embed(texts, LOCAL_SIDECAR_MODEL);
+          return await provider.embed(texts, LOCAL_SIDECAR_MODEL, signal);
         } catch (err) {
           logger.warn(err, "[memory-recall] Configured embedding source %s failed", label);
           return null;
@@ -122,9 +122,9 @@ export async function resolveMemoryRecallEmbeddingSource(
 
   return {
     label,
-    async embed(texts: string[]) {
+    async embed(texts: string[], signal?: AbortSignal) {
       try {
-        return await provider.embed(texts, embeddingModel);
+        return await provider.embed(texts, embeddingModel, signal);
       } catch (err) {
         logger.warn(err, "[memory-recall] Configured embedding source %s failed", label);
         return null;

@@ -41,6 +41,13 @@ export interface AgentRunRow {
   createdAt: string;
 }
 
+function upsertAgentConfig(rows: AgentConfigRow[] | undefined, agent: AgentConfigRow) {
+  if (!rows) return [agent];
+  const existingIndex = rows.findIndex((row) => row.id === agent.id);
+  if (existingIndex === -1) return [agent, ...rows];
+  return rows.map((row) => (row.id === agent.id ? agent : row));
+}
+
 export function useAgentConfigs(enabled = true) {
   return useQuery({
     queryKey: agentKeys.all,
@@ -104,8 +111,12 @@ export function useUpdateAgentByType() {
 export function useCreateAgent() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: Record<string, unknown>) => api.post("/agents", data),
-    onSuccess: () => {
+    mutationFn: (data: Record<string, unknown>) => api.post<AgentConfigRow>("/agents", data),
+    onSuccess: (agent) => {
+      if (agent?.id) {
+        qc.setQueryData(agentKeys.detail(agent.id), agent);
+        qc.setQueryData<AgentConfigRow[] | undefined>(agentKeys.all, (rows) => upsertAgentConfig(rows, agent));
+      }
       qc.invalidateQueries({ queryKey: agentKeys.all });
     },
   });

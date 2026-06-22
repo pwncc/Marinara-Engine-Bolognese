@@ -219,7 +219,7 @@ export function createConnectionsStorage(db: DB) {
         imagePath: source.imagePath,
         maxContext: source.maxContext,
         isDefault: "false",
-        useForRandom: source.useForRandom,
+        useForRandom: "false",
         defaultForAgents: "false",
         enableCaching: source.enableCaching,
         cachingAtDepth: source.cachingAtDepth,

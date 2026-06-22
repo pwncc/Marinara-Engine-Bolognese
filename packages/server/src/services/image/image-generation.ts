@@ -5,7 +5,7 @@
 // based on a user's configured image_generation connection.
 
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { inflateRawSync } from "zlib";
 import { DATA_DIR } from "../../utils/data-dir.js";
@@ -25,7 +25,7 @@ import {
 import { isImageLocalUrlsEnabled } from "../../config/runtime-config.js";
 import { generateRunPodComfyUI } from "./runpod-comfyui.service.js";
 import { logger } from "../../lib/logger.js";
-import { normalizeLoopbackUrl, safeFetch, validateOutboundUrl } from "../../utils/security.js";
+import { assertInsideDir, normalizeLoopbackUrl, safeFetch, validateOutboundUrl } from "../../utils/security.js";
 
 // sharp is an optional native module (no prebuilds on some platforms like Termux).
 // Lazy-load so the server boots even when sharp is missing; the only callers that
@@ -156,57 +156,56 @@ export async function generateImage(
   serviceHint: string,
   request: ImageGenRequest,
 ): Promise<ImageGenResult> {
-  return withImageGenerationDeadline(
-    (async () => {
-      const resolvedSource = resolveImageBackend(source, baseUrl, serviceHint, request.model);
-      const normalizedBaseUrl = normalizeImageUrl(baseUrl);
-      const scopedRequest = {
-        ...request,
-        allowLocalUrls:
-          request.allowLocalUrls ?? (await shouldAllowLocalUrlsForImageConnection(normalizedBaseUrl, resolvedSource)),
-      };
+  return withImageGenerationDeadline(request, async (signal) => {
+    const resolvedSource = resolveImageBackend(source, baseUrl, serviceHint, request.model);
+    const normalizedBaseUrl = normalizeImageUrl(baseUrl);
+    const scopedRequest = {
+      ...request,
+      signal,
+      allowLocalUrls:
+        request.allowLocalUrls ?? (await shouldAllowLocalUrlsForImageConnection(normalizedBaseUrl, resolvedSource)),
+    };
 
-      switch (resolvedSource) {
-        case "openai":
-          return generateOpenAI(normalizedBaseUrl, apiKey, scopedRequest);
-        case "nanogpt":
-          return generateNanoGPT(normalizedBaseUrl, apiKey, scopedRequest);
-        case "openrouter":
-          return generateOpenRouter(normalizedBaseUrl, apiKey, scopedRequest);
-        case "pollinations":
-          return generatePollinations(scopedRequest);
-        case "stability":
-          return generateStability(normalizedBaseUrl, apiKey, scopedRequest);
-        case "togetherai":
-          return generateTogetherAI(normalizedBaseUrl, apiKey, scopedRequest);
-        case "novelai":
-          return generateNovelAI(normalizedBaseUrl, apiKey, scopedRequest);
-        case "horde":
-          return generateHorde(normalizedBaseUrl, apiKey, scopedRequest);
-        case "xai":
-          return generateXAI(normalizedBaseUrl, apiKey, scopedRequest);
-        case "comfyui":
-          return generateComfyUI(normalizedBaseUrl, scopedRequest);
-        case "runpod_comfyui": {
-          const endpointId = scopedRequest.imageEndpointId || "";
-          if (!endpointId) {
-            throw new Error(
-              "RunPod ComfyUI requires an endpoint ID. " +
-                "Enter your RunPod endpoint ID in the Endpoint ID field (e.g. 'abc123def456').",
-            );
-          }
-          return generateRunPodComfyUI(normalizedBaseUrl, endpointId, apiKey, scopedRequest);
+    switch (resolvedSource) {
+      case "openai":
+        return generateOpenAI(normalizedBaseUrl, apiKey, scopedRequest);
+      case "nanogpt":
+        return generateNanoGPT(normalizedBaseUrl, apiKey, scopedRequest);
+      case "openrouter":
+        return generateOpenRouter(normalizedBaseUrl, apiKey, scopedRequest);
+      case "pollinations":
+        return generatePollinations(scopedRequest);
+      case "stability":
+        return generateStability(normalizedBaseUrl, apiKey, scopedRequest);
+      case "togetherai":
+        return generateTogetherAI(normalizedBaseUrl, apiKey, scopedRequest);
+      case "novelai":
+        return generateNovelAI(normalizedBaseUrl, apiKey, scopedRequest);
+      case "horde":
+        return generateHorde(normalizedBaseUrl, apiKey, scopedRequest);
+      case "xai":
+        return generateXAI(normalizedBaseUrl, apiKey, scopedRequest);
+      case "comfyui":
+        return generateComfyUI(normalizedBaseUrl, scopedRequest);
+      case "runpod_comfyui": {
+        const endpointId = scopedRequest.imageEndpointId || "";
+        if (!endpointId) {
+          throw new Error(
+            "RunPod ComfyUI requires an endpoint ID. " +
+              "Enter your RunPod endpoint ID in the Endpoint ID field (e.g. 'abc123def456').",
+          );
         }
-        case "automatic1111":
-          return generateAutomatic1111(normalizedBaseUrl, scopedRequest, serviceHint);
-        case "gemini_image":
-          return generateViaChatCompletions(normalizedBaseUrl, apiKey, scopedRequest);
-        default:
-          // Fallback: try OpenAI-compatible endpoint
-          return generateOpenAI(normalizedBaseUrl, apiKey, scopedRequest);
+        return generateRunPodComfyUI(normalizedBaseUrl, endpointId, apiKey, scopedRequest);
       }
-    })(),
-  );
+      case "automatic1111":
+        return generateAutomatic1111(normalizedBaseUrl, scopedRequest, serviceHint);
+      case "gemini_image":
+        return generateViaChatCompletions(normalizedBaseUrl, apiKey, scopedRequest);
+      default:
+        // Fallback: try OpenAI-compatible endpoint
+        return generateOpenAI(normalizedBaseUrl, apiKey, scopedRequest);
+    }
+  });
 }
 
 /**
@@ -214,11 +213,22 @@ export async function generateImage(
  * Returns the relative file path (chatId/filename).
  */
 export function saveImageToDisk(chatId: string, base64: string, ext: string): string {
-  const dir = join(GALLERY_DIR, chatId);
+  const dir = assertInsideDir(GALLERY_DIR, join(GALLERY_DIR, chatId));
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const filename = `${newId()}.${ext}`;
-  const filePath = join(dir, filename);
-  writeFileSync(filePath, Buffer.from(base64, "base64"));
+  const filePath = assertInsideDir(GALLERY_DIR, join(dir, filename));
+  const tempPath = assertInsideDir(GALLERY_DIR, `${filePath}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    writeFileSync(tempPath, Buffer.from(base64, "base64"));
+    renameSync(tempPath, filePath);
+  } catch (error) {
+    try {
+      if (existsSync(tempPath)) unlinkSync(tempPath);
+    } catch {
+      /* best-effort cleanup */
+    }
+    throw error;
+  }
   return `${chatId}/${filename}`;
 }
 
@@ -236,21 +246,70 @@ class ImageGenerationDeadlineError extends Error {
   }
 }
 
-function withImageGenerationDeadline<T>(promise: Promise<T>): Promise<T> {
+function withImageGenerationDeadline<T>(
+  request: Pick<ImageGenRequest, "signal">,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const abortFromRequest = () => controller.abort(request.signal?.reason);
+  if (request.signal?.aborted) {
+    controller.abort(request.signal.reason);
+  } else {
+    request.signal?.addEventListener("abort", abortFromRequest, { once: true });
+  }
+
   let timeout: ReturnType<typeof setTimeout> | null = null;
   const deadline = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new ImageGenerationDeadlineError(IMAGE_GEN_TIMEOUT)), IMAGE_GEN_TIMEOUT);
+    timeout = setTimeout(() => {
+      const error = new ImageGenerationDeadlineError(IMAGE_GEN_TIMEOUT);
+      controller.abort(error);
+      reject(error);
+    }, IMAGE_GEN_TIMEOUT);
     timeout.unref?.();
   });
 
-  return Promise.race([promise, deadline]).finally(() => {
+  return Promise.race([run(controller.signal), deadline]).finally(() => {
+    request.signal?.removeEventListener("abort", abortFromRequest);
     if (timeout) clearTimeout(timeout);
   });
 }
 
 function imageRequestSignal(request: Pick<ImageGenRequest, "signal">): AbortSignal {
-  const timeoutSignal = AbortSignal.timeout(IMAGE_GEN_TIMEOUT);
-  return request.signal ? AbortSignal.any([request.signal, timeoutSignal]) : timeoutSignal;
+  return request.signal ?? AbortSignal.timeout(IMAGE_GEN_TIMEOUT);
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  throw new Error("Image generation aborted");
+}
+
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    try {
+      throwIfAborted(signal);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const onAbort = () => {
+      if (timeout) clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("Image generation aborted"));
+    };
+    const cleanup = () => {
+      if (timeout) clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    timeout = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    timeout.unref?.();
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function normalizeImageUrl(url: string | URL): string {
@@ -386,10 +445,10 @@ function imageDataUrlFromReference(reference: string): string {
   const trimmed = reference.trim();
   if (trimmed.startsWith("data:")) return trimmed;
   const base64 = trimmed.replace(/\s+/g, "");
-  return `data:${detectImageMimeType(base64)};base64,${base64}`;
+  return `data:${detectImageMimeType(base64) ?? "image/png"};base64,${base64}`;
 }
 
-function detectImageMimeType(base64: string): string {
+function detectImageMimeType(base64: string): string | null {
   const bytes = Buffer.from(base64.slice(0, 64), "base64");
   if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
@@ -406,14 +465,28 @@ function detectImageMimeType(base64: string): string {
     return "image/webp";
   }
   if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return "image/gif";
-  return "image/png";
+  if (bytes[0] === 0x42 && bytes[1] === 0x4d) return "image/bmp";
+  if (bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) {
+    const brand = bytes.subarray(8, 12).toString("ascii").toLowerCase();
+    if (brand.startsWith("avif") || brand.startsWith("avis")) return "image/avif";
+  }
+  return null;
 }
 
 function imageExtensionFromMimeType(mimeType: string): string {
   if (mimeType.includes("jpeg") || mimeType.includes("jpg")) return "jpg";
   if (mimeType.includes("webp")) return "webp";
   if (mimeType.includes("gif")) return "gif";
+  if (mimeType.includes("avif")) return "avif";
+  if (mimeType.includes("bmp")) return "bmp";
   return "png";
+}
+
+function normalizeImageMimeType(mimeType: string | null | undefined): string | null {
+  const normalized = mimeType?.split(";")[0]?.trim().toLowerCase().replace("image/jpg", "image/jpeg") ?? "";
+  return /^(?:image\/png|image\/jpeg|image\/webp|image\/gif|image\/avif|image\/bmp)$/.test(normalized)
+    ? normalized
+    : null;
 }
 
 function imageResultMetadata(
@@ -437,13 +510,19 @@ function imageResultMetadata(
   if (normalizedContentType.includes("gif") || /\.gif(?:$|[?#])/i.test(normalizedFilename)) {
     return { mimeType: "image/gif", ext: "gif" };
   }
+  if (normalizedContentType.includes("avif") || /\.avif(?:$|[?#])/i.test(normalizedFilename)) {
+    return { mimeType: "image/avif", ext: "avif" };
+  }
+  if (normalizedContentType.includes("bmp") || /\.bmp(?:$|[?#])/i.test(normalizedFilename)) {
+    return { mimeType: "image/bmp", ext: "bmp" };
+  }
 
-  const detectedMimeType = detectImageMimeType(base64);
+  const detectedMimeType = detectImageMimeType(base64) ?? normalizeImageMimeType(contentType) ?? "image/png";
   return { mimeType: detectedMimeType, ext: imageExtensionFromMimeType(detectedMimeType) };
 }
 
 function decodeImageDataUrl(imageUrl: string): ImageGenResult {
-  const match = imageUrl.trim().match(/^data:(image\/(?:png|jpe?g|webp|gif));base64,([\s\S]+)$/i);
+  const match = imageUrl.trim().match(/^data:(image\/(?:png|jpe?g|webp|gif|avif|bmp));base64,([\s\S]+)$/i);
   if (!match) {
     throw new Error("Generated image data URL was not a supported image format");
   }
@@ -544,7 +623,7 @@ function normalizeBase64ImagePayload(value: string, label = "Reference image"): 
 }
 
 function decodeReferenceImage(reference: string): { base64: string; mimeType: string; ext: string } {
-  const dataUrlMatch = reference.trim().match(/^data:(image\/(?:png|jpe?g|webp|gif));base64,([\s\S]+)$/i);
+  const dataUrlMatch = reference.trim().match(/^data:(image\/(?:png|jpe?g|webp|gif|avif|bmp));base64,([\s\S]+)$/i);
   if (dataUrlMatch) {
     const mimeType = dataUrlMatch[1]!.toLowerCase().replace("image/jpg", "image/jpeg");
     const base64 = normalizeBase64ImagePayload(dataUrlMatch[2]!);
@@ -607,13 +686,17 @@ async function downloadImageUrl(
   const base64 = Buffer.from(arrayBuffer).toString("base64");
 
   const contentType = imgResp.headers.get("content-type") ?? "";
-  let mimeType = detectImageMimeType(base64);
+  let mimeType = detectImageMimeType(base64) ?? normalizeImageMimeType(contentType) ?? "image/png";
   if (contentType.includes("jpeg") || contentType.includes("jpg") || normalizedImageUrl.match(/\.jpe?g/i)) {
     mimeType = "image/jpeg";
   } else if (contentType.includes("webp") || normalizedImageUrl.match(/\.webp/i)) {
     mimeType = "image/webp";
   } else if (contentType.includes("gif") || normalizedImageUrl.match(/\.gif/i)) {
     mimeType = "image/gif";
+  } else if (contentType.includes("avif") || normalizedImageUrl.match(/\.avif/i)) {
+    mimeType = "image/avif";
+  } else if (contentType.includes("bmp") || normalizedImageUrl.match(/\.bmp/i)) {
+    mimeType = "image/bmp";
   }
 
   return { base64, mimeType, ext: imageExtensionFromMimeType(mimeType) };
@@ -959,7 +1042,7 @@ async function generateHorde(baseUrl: string, apiKey: string, request: ImageGenR
   if (image.startsWith("data:")) return decodeImageDataUrl(image);
   if (/^https?:\/\//i.test(image)) return downloadImageUrl(image, request.allowLocalUrls, request.signal);
 
-  const mimeType = detectImageMimeType(image);
+  const mimeType = detectImageMimeType(image) ?? "image/png";
   return { base64: image, mimeType, ext: imageExtensionFromMimeType(mimeType) };
 }
 
@@ -1052,8 +1135,9 @@ async function generateStability(baseUrl: string, apiKey: string, request: Image
   formData.append("prompt", request.prompt);
   if (request.negativePrompt) formData.append("negative_prompt", request.negativePrompt);
   if (endpoint.model) formData.append("model", endpoint.model);
+  const hasReference = Boolean(request.referenceImage || request.referenceImages?.length);
   const aspectRatio = stabilityAspectRatio(request.width, request.height);
-  if (aspectRatio) formData.append("aspect_ratio", aspectRatio);
+  if (aspectRatio && !hasReference) formData.append("aspect_ratio", aspectRatio);
   if (request.referenceImage) {
     formData.append(
       "image",
@@ -1591,17 +1675,26 @@ async function generateOpenRouter(baseUrl: string, apiKey: string, request: Imag
   const contentType = resp.headers.get("content-type") ?? "";
   const buffer = Buffer.from(await resp.arrayBuffer());
   const isImageContentType = contentType.startsWith("image/");
+  const isAvifLike =
+    buffer.length >= 12 &&
+    buffer[4] === 0x66 &&
+    buffer[5] === 0x74 &&
+    buffer[6] === 0x79 &&
+    buffer[7] === 0x70 &&
+    ["avif", "avis"].some((brand) => buffer.subarray(8, 12).toString("ascii").toLowerCase().startsWith(brand));
   const looksLikeImageBytes =
     buffer.length >= 4 &&
     ((buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) || // PNG
       (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) || // JPEG
       (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) || // GIF
+      (buffer[0] === 0x42 && buffer[1] === 0x4d) || // BMP
+      isAvifLike ||
       (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46)); // RIFF/WEBP
 
   if (isImageContentType || looksLikeImageBytes) {
     const base64 = buffer.toString("base64");
     let mimeType = detectImageMimeType(base64);
-    if (!mimeType && contentType.startsWith("image/")) mimeType = contentType.split(";")[0]!.trim();
+    if (!mimeType) mimeType = normalizeImageMimeType(contentType);
     if (!mimeType) mimeType = "image/png";
     return { base64, mimeType, ext: imageExtensionFromMimeType(mimeType) };
   }
@@ -1757,6 +1850,62 @@ interface ComfyUiOutputFile {
 interface ComfyUiNodeOutput {
   images?: ComfyUiOutputFile[];
   gifs?: ComfyUiOutputFile[];
+}
+
+interface ComfyUiHistoryEntry {
+  outputs?: Record<string, ComfyUiNodeOutput>;
+  status?: Record<string, unknown>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function collectComfyUiErrorFragments(value: unknown, fragments: string[] = []): string[] {
+  if (typeof value === "string") {
+    const clean = value.trim();
+    if (clean) fragments.push(clean);
+    return fragments;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    fragments.push(String(value));
+    return fragments;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) collectComfyUiErrorFragments(entry, fragments);
+    return fragments;
+  }
+  if (!isRecord(value)) return fragments;
+
+  for (const key of ["exception_message", "message", "error", "details", "traceback"]) {
+    collectComfyUiErrorFragments(value[key], fragments);
+  }
+  collectComfyUiErrorFragments(value.node_errors, fragments);
+  return fragments;
+}
+
+function formatComfyUiError(value: unknown): string {
+  const fragments = collectComfyUiErrorFragments(value);
+  if (fragments.length > 0) return sanitizeErrorText(fragments.join("; "));
+  try {
+    const json = JSON.stringify(value);
+    return typeof json === "string" ? sanitizeErrorText(json) : "";
+  } catch {
+    return "";
+  }
+}
+
+function getComfyUiStatusError(status: unknown): string | null {
+  if (!isRecord(status)) return null;
+  const statusStr = typeof status.status_str === "string" ? status.status_str.toLowerCase() : "";
+  if (statusStr !== "error") return null;
+  return formatComfyUiError(status.messages ?? status);
+}
+
+function isComfyUiStatusComplete(status: unknown): boolean {
+  if (!isRecord(status)) return false;
+  const statusStr = typeof status.status_str === "string" ? status.status_str.toLowerCase() : "";
+  return status.completed === true || statusStr === "success";
 }
 
 function randomSeed(): number {
@@ -1937,21 +2086,35 @@ async function generateComfyUI(baseUrl: string, request: ImageGenRequest): Promi
     throw new Error(`ComfyUI queue failed (${queueResp.status}): ${sanitizeErrorText(errText)}`);
   }
 
-  const { prompt_id } = (await queueResp.json()) as { prompt_id: string };
+  const queueJson = (await queueResp.json().catch(() => null)) as Record<string, unknown> | null;
+  const promptId = typeof queueJson?.prompt_id === "string" ? queueJson.prompt_id.trim() : "";
+  if (!promptId) {
+    const details = formatComfyUiError(queueJson);
+    throw new Error(`ComfyUI queue did not return a prompt_id${details ? `: ${details}` : ""}`);
+  }
 
   // Poll for completion. Default is 5 minutes to match shared image request timeout.
-  for (let i = 0; i < COMFYUI_GEN_TIMEOUT_SECONDS; i++) {
-    await new Promise((r) => setTimeout(r, 1000));
+  const pollTimeoutMs = Math.max(1000, Math.min(COMFYUI_GEN_TIMEOUT_SECONDS * 1000, IMAGE_GEN_TIMEOUT - 1000));
+  const pollStartedAt = Date.now();
+  while (Date.now() - pollStartedAt < pollTimeoutMs) {
+    await sleepWithAbort(1000, request.signal);
 
-    const historyResp = await localImageBackendFetch(`${base}/history/${prompt_id}`, {
+    const historyResp = await localImageBackendFetch(`${base}/history/${promptId}`, {
       signal: imageRequestSignal(request),
     });
     if (!historyResp.ok) continue;
 
-    const history = (await historyResp.json()) as Record<string, { outputs?: Record<string, ComfyUiNodeOutput> }>;
+    const history = (await historyResp.json()) as Record<string, ComfyUiHistoryEntry>;
 
-    const entry = history[prompt_id];
-    if (!entry?.outputs) continue;
+    const entry = history[promptId];
+    const statusError = getComfyUiStatusError(entry?.status);
+    if (statusError) throw new Error(`ComfyUI workflow failed: ${statusError}`);
+    if (!entry?.outputs) {
+      if (isComfyUiStatusComplete(entry?.status)) {
+        throw new Error("ComfyUI workflow completed without image outputs.");
+      }
+      continue;
+    }
 
     // Video Helper Suite's Video Combine reports animated WebP files as "gifs".
     for (const outputKey of COMFYUI_OUTPUT_FILE_KEYS) {
@@ -1979,9 +2142,13 @@ async function generateComfyUI(baseUrl: string, request: ImageGenRequest): Promi
         }
       }
     }
+
+    if (isComfyUiStatusComplete(entry.status)) {
+      throw new Error("ComfyUI workflow completed without image outputs.");
+    }
   }
 
-  throw new Error(`ComfyUI generation timed out after ${COMFYUI_GEN_TIMEOUT_SECONDS} seconds`);
+  throw new Error(`ComfyUI generation timed out after ${Math.round(pollTimeoutMs / 1000)} seconds`);
 }
 
 // ── AUTOMATIC1111 / SD Web UI / Forge ──

@@ -82,6 +82,7 @@ async function embedLorebookTexts(texts: string[], options: LorebookEmbeddingOpt
   return embedMemoryRecallTexts(texts, {
     localEmbedder: options.localEmbedder ?? localEmbed,
     embeddingSource: options.embeddingSource,
+    signal: options.signal,
   });
 }
 

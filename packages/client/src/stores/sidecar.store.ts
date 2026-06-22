@@ -168,67 +168,78 @@ async function consumeDownloadStream(
     const decoder = new TextDecoder();
     let buffer = "";
 
+    type DownloadSseData = Partial<SidecarDownloadProgress> & {
+      done?: boolean;
+      status?: string;
+      error?: string;
+    };
+    const readSseData = (line: string): string | null => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) return null;
+      return trimmed.slice(5).trimStart();
+    };
+    const handleSseData = async (data: DownloadSseData): Promise<boolean> => {
+      if (data.done) {
+        set({ downloadProgress: null });
+        await get().fetchStatus();
+        return true;
+      }
+
+      if (data.status === "error") {
+        if (downloadCancelRequested || controller.signal.aborted) {
+          set({ downloadProgress: null });
+          await get().fetchStatus();
+          return true;
+        }
+        set({
+          downloadProgress: {
+            phase: (data.phase as SidecarDownloadProgress["phase"]) ?? "model",
+            status: "error",
+            downloaded: 0,
+            total: 0,
+            speed: 0,
+            error: data.error ?? "Download failed",
+            label: data.label,
+          },
+        });
+        await get().fetchStatus();
+        return true;
+      }
+
+      if (data.status === "downloading") {
+        set({
+          downloadProgress: {
+            phase: (data.phase as SidecarDownloadProgress["phase"]) ?? "model",
+            status: "downloading",
+            downloaded: Number(data.downloaded ?? 0),
+            total: Number(data.total ?? 0),
+            speed: Number(data.speed ?? 0),
+            label: data.label,
+          },
+          status: (data.phase === "runtime" ? "downloading_runtime" : "downloading_model") as SidecarStatus,
+        });
+      }
+
+      return false;
+    };
+
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = done ? "" : (lines.pop() ?? "");
 
       for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
+        const payload = readSseData(line);
+        if (payload == null) continue;
         try {
-          const data = JSON.parse(line.slice(6)) as Partial<SidecarDownloadProgress> & {
-            done?: boolean;
-            status?: string;
-            error?: string;
-          };
-
-          if (data.done) {
-            set({ downloadProgress: null });
-            await get().fetchStatus();
-            return;
-          }
-
-          if (data.status === "error") {
-            if (downloadCancelRequested || controller.signal.aborted) {
-              set({ downloadProgress: null });
-              await get().fetchStatus();
-              return;
-            }
-            set({
-              downloadProgress: {
-                phase: (data.phase as SidecarDownloadProgress["phase"]) ?? "model",
-                status: "error",
-                downloaded: 0,
-                total: 0,
-                speed: 0,
-                error: data.error ?? "Download failed",
-                label: data.label,
-              },
-            });
-            await get().fetchStatus();
-            return;
-          }
-
-          if (data.status === "downloading") {
-            set({
-              downloadProgress: {
-                phase: (data.phase as SidecarDownloadProgress["phase"]) ?? "model",
-                status: "downloading",
-                downloaded: Number(data.downloaded ?? 0),
-                total: Number(data.total ?? 0),
-                speed: Number(data.speed ?? 0),
-                label: data.label,
-              },
-              status: (data.phase === "runtime" ? "downloading_runtime" : "downloading_model") as SidecarStatus,
-            });
-          }
+          if (await handleSseData(JSON.parse(payload) as DownloadSseData)) return;
         } catch {
           // Ignore malformed SSE chunks.
         }
       }
+      if (done) break;
     }
 
     set({ downloadProgress: null });
