@@ -5,6 +5,10 @@ import {
   supportsXhighReasoningEffort,
   resolveMacros,
   stripMacroComments,
+  DEFAULT_CONVERSATION_PROMPT,
+  DEFAULT_GAME_SYSTEM_PROMPT,
+  wrapConversationInstructions,
+  unwrapConversationInstructions,
   type LorebookEntryTimingState,
 } from "@marinara-engine/shared";
 import { randomUUID } from "crypto";
@@ -26,6 +30,8 @@ import {
   collectCharacterDepthPromptEntries,
   resolveCharacterMacroData,
   resolveMacrosWithVariableSnapshot,
+  resolvePromptIdleDuration,
+  resolvePromptLastGenerationType,
   resolvePromptMessageMacros,
   type AssemblerInput,
 } from "../../services/prompt/index.js";
@@ -83,6 +89,68 @@ type DryRunPromptMessage = {
 
 function cardPromptText(value: unknown): string {
   return typeof value === "string" ? stripMacroComments(value).trim() : "";
+}
+
+function presetStringField(preset: Record<string, unknown> | null | undefined, field: string): string {
+  const value = preset?.[field];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+type PromptChoiceBlockRow = {
+  variableName: string;
+  options: unknown;
+  multiSelect?: unknown;
+  randomPick?: unknown;
+  separator?: unknown;
+};
+
+function parsePromptChoiceOptions(value: unknown): Array<{ value: string }> {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((option) => {
+      if (!option || typeof option !== "object" || Array.isArray(option)) return [];
+      const rawValue = (option as Record<string, unknown>).value;
+      return typeof rawValue === "string" ? [{ value: rawValue }] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function resolvePromptChoiceVariables(
+  choiceBlocks: PromptChoiceBlockRow[],
+  chatChoices: Record<string, string | string[]>,
+): Record<string, string> {
+  const variables: Record<string, string> = {};
+  for (const block of choiceBlocks) {
+    const options = parsePromptChoiceOptions(block.options);
+    const optionValues = new Set(options.map((option) => option.value));
+    const fallback = options[0]?.value ?? "";
+    const selected = chatChoices[block.variableName];
+    const isMulti = block.multiSelect === true || block.multiSelect === "true";
+    const isRandom = block.randomPick === true || block.randomPick === "true";
+    const separator = typeof block.separator === "string" ? block.separator : ", ";
+
+    if (isMulti) {
+      const selectedValues = Array.isArray(selected)
+        ? selected.filter((value) => optionValues.has(value))
+        : typeof selected === "string" && optionValues.has(selected)
+          ? [selected]
+          : [];
+      if (selectedValues.length === 0) {
+        variables[block.variableName] = fallback;
+      } else if (isRandom) {
+        variables[block.variableName] = selectedValues[Math.floor(Math.random() * selectedValues.length)] ?? "";
+      } else {
+        variables[block.variableName] = selectedValues.join(separator);
+      }
+      continue;
+    }
+
+    variables[block.variableName] = typeof selected === "string" && optionValues.has(selected) ? selected : fallback;
+  }
+  return variables;
 }
 
 function resolveDryRunLorebookGenerationTriggers(
@@ -602,6 +670,16 @@ export async function registerDryRunRoute(app: FastifyInstance) {
       },
       chatMode,
     );
+    const promptLastGenerationType = resolvePromptLastGenerationType({
+      autonomous: body.autonomous,
+      impersonate,
+      generationGuide: body.generationGuide,
+      generationGuideSource: body.generationGuideSource,
+      regenerateMessageId,
+      turnGameBots: body.turnGameBots,
+      userMessage,
+      attachments: body.attachments,
+    });
     const lorebookScopeExclusions = resolveGameLorebookScopeExclusions(chatMode, chatMeta);
     const lorebookTokenBudget = resolveDryRunLorebookTokenBudget(chatMeta);
     if (!impersonate && userMessage.trim()) {
@@ -620,6 +698,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
         } as any,
       ];
     }
+    const promptIdleDuration = resolvePromptIdleDuration(chatMessages, { excludeMessageId: "__dryrun_user__" });
 
     const isGoogleProvider = conn.provider === "google" || conn.provider === "google_vertex";
     const excludePastReasoning = chatMeta.excludePastReasoning !== false;
@@ -753,19 +832,30 @@ export async function registerDryRunRoute(app: FastifyInstance) {
 
     const chatChoices: Record<string, string | string[]> =
       requestChoices ?? (isDifferentPresetOverride ? (presetDefaultChoices ?? {}) : chatChoicesFromMeta);
+    const modePromptChoiceBlocks =
+      effectivePresetId && effectivePreset && (chatMode === "conversation" || chatMode === "game")
+        ? await presets.listChoiceBlocksForPreset(effectivePresetId)
+        : [];
+    const modePromptVariables = resolvePromptChoiceVariables(
+      modePromptChoiceBlocks as PromptChoiceBlockRow[],
+      chatChoices,
+    );
     const promptMacroContext = await buildPromptMacroContext({
       db: app.db,
       characterIds: promptCharacterIds,
       personaName,
       personaDescription,
       personaFields,
-      variables: {},
+      variables: modePromptVariables,
       groupScenarioOverrideText:
         typeof chatMeta.groupScenarioText === "string" && (chatMeta.groupScenarioText as string).trim()
           ? (chatMeta.groupScenarioText as string).trim()
           : null,
       lastInput: [...mappedMessages].reverse().find((message) => message.role === "user")?.content,
       chatId,
+      model: conn.model,
+      lastGenerationType: promptLastGenerationType,
+      idleDuration: promptIdleDuration,
     });
     const historyMacroProfilesById = (await resolveCharacterMacroData(app.db, allCharacterIds)).profilesById;
     const resolveHistoryMessageMacros = <T extends { content: string; characterId?: string | null }>(
@@ -1146,7 +1236,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
           continue;
         }
       }
-    } else if (effectivePresetId && effectivePreset) {
+    } else if (effectivePresetId && effectivePreset && chatMode !== "conversation" && chatMode !== "game") {
       const preset = effectivePreset;
       wrapFormat = (preset.wrapFormat as "xml" | "markdown" | "none") || "xml";
       const [sections, groups, choiceBlocks] = await Promise.all([
@@ -1212,6 +1302,8 @@ export async function registerDryRunRoute(app: FastifyInstance) {
           typeof chatMeta.groupScenarioText === "string" && (chatMeta.groupScenarioText as string).trim()
             ? (chatMeta.groupScenarioText as string).trim()
             : null,
+        lastGenerationType: promptLastGenerationType,
+        idleDuration: promptIdleDuration,
       };
 
       const assembled = await assemblePrompt(assemblerInput);
@@ -1237,7 +1329,14 @@ export async function registerDryRunRoute(app: FastifyInstance) {
       );
     }
 
-    if (!effectivePresetId) applyParameterOverrides(connectionParams);
+    const modePresetParameters =
+      effectivePresetId && effectivePreset && (chatMode === "conversation" || chatMode === "game")
+        ? parseStoredGenerationParameters(effectivePreset.parameters)
+        : null;
+    if (!effectivePresetId || (!modePresetParameters && (chatMode === "conversation" || chatMode === "game"))) {
+      applyParameterOverrides(connectionParams);
+    }
+    if (modePresetParameters) applyParameterOverrides(modePresetParameters);
     applyParameterOverrides(chatParams);
 
     if (!finalMessages.length) {
@@ -1248,6 +1347,43 @@ export async function registerDryRunRoute(app: FastifyInstance) {
         ...(m.images ? { images: m.images } : {}),
         ...(m.files ? { files: m.files } : {}),
       }));
+    }
+
+    if (chatMode === "conversation") {
+      const customPrompt =
+        typeof chatMeta.customSystemPrompt === "string" && chatMeta.customSystemPrompt.trim()
+          ? (chatMeta.customSystemPrompt as string)
+          : null;
+      const selectedConversationPrompt = presetStringField(
+        effectivePreset as Record<string, unknown> | null,
+        "conversationPrompt",
+      );
+      const characterNamesById = await resolveCharacterNameMap(promptCharacterIds, (id) => chars.getById(id));
+      const charNameList =
+        promptCharacterIds
+          .map((id) => characterNamesById.get(id))
+          .filter((name): name is string => Boolean(name))
+          .join(", ") || "Character";
+      const conversationPromptTemplate = customPrompt ?? (selectedConversationPrompt || DEFAULT_CONVERSATION_PROMPT);
+      const renderedConversationPrompt = resolvePromptMacros(
+        conversationPromptTemplate
+          .replace(/\{\{charName\}\}/g, charNameList)
+          .replace(/\{\{userName\}\}/g, personaName),
+      );
+      finalMessages = [
+        { role: "system", content: wrapConversationInstructions(unwrapConversationInstructions(renderedConversationPrompt)) },
+        ...finalMessages,
+      ];
+    }
+    if (chatMode === "game") {
+      const customPrompt =
+        typeof chatMeta.gameSystemPrompt === "string" && chatMeta.gameSystemPrompt.trim()
+          ? (chatMeta.gameSystemPrompt as string)
+          : null;
+      const selectedGamePrompt = presetStringField(effectivePreset as Record<string, unknown> | null, "gamePrompt");
+      const gamePromptTemplate = customPrompt ?? (selectedGamePrompt || DEFAULT_GAME_SYSTEM_PROMPT);
+      const renderedGamePrompt = resolvePromptMacros(gamePromptTemplate);
+      finalMessages = [{ role: "system", content: renderedGamePrompt }, ...finalMessages];
     }
 
     // Optional injection: extension-provided preset text (read-only, explicit opt-in via presetText)

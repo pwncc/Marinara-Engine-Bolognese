@@ -12,6 +12,8 @@ import {
   appendChatSummaryEntryToMetadata,
   compileChatSummaryEntries,
   createChatSummaryEntry,
+  DEFAULT_CONVERSATION_PROMPT,
+  DEFAULT_GAME_SYSTEM_PROMPT,
   DEFAULT_CHAT_SUMMARY_PROMPT,
   markAutonomousUnreadSchema,
   nameToXmlTag,
@@ -19,6 +21,8 @@ import {
   resolveMacros,
   stripMacroComments,
   summariesPatchSchema,
+  unwrapConversationInstructions,
+  wrapConversationInstructions,
   coerceGameStateTextValue,
   normalizeTrackerFieldLocks,
   parseTrackerFieldLocks,
@@ -86,6 +90,69 @@ type EntryStateOverrides = Record<string, { ephemeral?: number | null; enabled?:
 const MEMORY_RECALL_IMPORT_BODY_LIMIT_BYTES = 25 * 1024 * 1024;
 const MEMORY_RECALL_IMPORT_BATCH_SIZE = 500;
 const PROFESSOR_MARI_INTERNAL_CHAT_MARKER = "professor-mari";
+
+type PromptChoiceBlockRow = {
+  variableName: string;
+  options: unknown;
+  multiSelect?: unknown;
+  randomPick?: unknown;
+  separator?: unknown;
+};
+
+function presetStringField(preset: Record<string, unknown> | null | undefined, field: string): string {
+  const value = preset?.[field];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function parsePromptChoiceOptions(value: unknown): Array<{ value: string }> {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((option) => {
+      if (!option || typeof option !== "object" || Array.isArray(option)) return [];
+      const rawValue = (option as Record<string, unknown>).value;
+      return typeof rawValue === "string" ? [{ value: rawValue }] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function resolvePromptChoiceVariables(
+  choiceBlocks: PromptChoiceBlockRow[],
+  chatChoices: Record<string, string | string[]>,
+): Record<string, string> {
+  const variables: Record<string, string> = {};
+  for (const block of choiceBlocks) {
+    const options = parsePromptChoiceOptions(block.options);
+    const optionValues = new Set(options.map((option) => option.value));
+    const fallback = options[0]?.value ?? "";
+    const selected = chatChoices[block.variableName];
+    const isMulti = block.multiSelect === true || block.multiSelect === "true";
+    const isRandom = block.randomPick === true || block.randomPick === "true";
+    const separator = typeof block.separator === "string" ? block.separator : ", ";
+
+    if (isMulti) {
+      const selectedValues = Array.isArray(selected)
+        ? selected.filter((value) => optionValues.has(value))
+        : typeof selected === "string" && optionValues.has(selected)
+          ? [selected]
+          : [];
+      if (selectedValues.length === 0) {
+        variables[block.variableName] = fallback;
+      } else if (isRandom) {
+        variables[block.variableName] = selectedValues[Math.floor(Math.random() * selectedValues.length)] ?? "";
+      } else {
+        variables[block.variableName] = selectedValues.join(separator);
+      }
+      continue;
+    }
+
+    variables[block.variableName] =
+      typeof selected === "string" && optionValues.has(selected) ? selected : fallback;
+  }
+  return variables;
+}
 
 function parseSnapshotJson<T>(value: unknown, fallback: T): T {
   if (value == null) return fallback;
@@ -452,13 +519,6 @@ export async function chatsRoutes(app: FastifyInstance) {
     const existing = await storage.getById(req.params.id);
     if (!existing || (hasProfessorMariCharacter(existing) && !isHomeProfessorMariChat(existing))) {
       return reply.status(404).send({ error: "Chat not found" });
-    }
-    const nextMode = data.mode ?? existing.mode;
-    if (nextMode === "conversation") {
-      if (data.promptPresetId) {
-        return reply.status(400).send({ error: "Prompt presets cannot be applied to conversation chats" });
-      }
-      data.promptPresetId = null;
     }
     return storage.update(req.params.id, data);
   });
@@ -1559,17 +1619,25 @@ export async function chatsRoutes(app: FastifyInstance) {
     // ── Fallback: live assembly preview (no generation has happened yet) ──
     // This is a best-effort approximation; it won't include runtime-only
     // injections like cached game state, scene context, semantic memory, etc.
-    const presetId = chat.mode === "conversation" ? null : (chat.promptPresetId ?? chatMeta.presetId);
+    const presetId =
+      typeof chat.promptPresetId === "string" && chat.promptPresetId
+        ? chat.promptPresetId
+        : typeof chatMeta.presetId === "string" && chatMeta.presetId
+          ? chatMeta.presetId
+          : null;
     if (presetId) {
       try {
         const { createPromptsStorage } = await import("../services/storage/prompts.storage.js");
         const { createCharactersStorage } = await import("../services/storage/characters.storage.js");
-        const { assemblePrompt, buildPromptMacroContext } = await import("../services/prompt/index.js");
+        const { assemblePrompt, buildPromptMacroContext, resolvePromptIdleDuration } = await import(
+          "../services/prompt/index.js"
+        );
         const presetStore = createPromptsStorage(app.db);
         const charStore = createCharactersStorage(app.db);
 
         const preset = await presetStore.getById(presetId);
-        if (preset) {
+        const chatMode = (chat.mode as string) ?? "roleplay";
+        if (preset || chatMode === "conversation" || chatMode === "game") {
           // Apply conversation-start filter
           let scopedMessages = chatMessages;
           for (let i = chatMessages.length - 1; i >= 0; i--) {
@@ -1585,6 +1653,7 @@ export async function chatsRoutes(app: FastifyInstance) {
           let filteredMessages = supportsHiddenFromAI
             ? scopedMessages.filter((message: any) => !isMessageHiddenFromAI(message))
             : scopedMessages;
+          const promptIdleDuration = resolvePromptIdleDuration(filteredMessages);
 
           // Apply context message limit
           const contextLimit = chatMeta.contextMessageLimit as number | null;
@@ -1602,11 +1671,13 @@ export async function chatsRoutes(app: FastifyInstance) {
             mappedMessages.pop();
           }
 
-          const [sections, groups, choiceBlocks] = await Promise.all([
-            presetStore.listSections(presetId),
-            presetStore.listGroups(presetId),
-            presetStore.listChoiceBlocksForPreset(presetId),
-          ]);
+          const [sections, groups, choiceBlocks] = preset
+            ? await Promise.all([
+                presetStore.listSections(presetId),
+                presetStore.listGroups(presetId),
+                presetStore.listChoiceBlocksForPreset(presetId),
+              ])
+            : [[], [], []];
 
           const allCharacterIds = resolveChatCharacterIds(chat.characterIds);
           const characterIds = resolveActiveCharacterIds(allCharacterIds, chatMeta, {
@@ -1646,19 +1717,24 @@ export async function chatsRoutes(app: FastifyInstance) {
           })();
 
           const chatChoices = (chatMeta.presetChoices ?? {}) as Record<string, string | string[]>;
-          const promptMacroContext = await buildPromptMacroContext({
-            db: app.db,
-            characterIds,
-            personaName,
-            personaDescription,
-            personaFields,
-            variables: {},
+	          const promptMacroContext = await buildPromptMacroContext({
+	            db: app.db,
+	            characterIds,
+	            personaName,
+	            personaDescription,
+	            personaFields,
+	            variables:
+	              chatMode === "conversation" || chatMode === "game"
+	                ? resolvePromptChoiceVariables(choiceBlocks as PromptChoiceBlockRow[], chatChoices)
+	                : {},
             groupScenarioOverrideText:
               typeof chatMeta.groupScenarioText === "string" && (chatMeta.groupScenarioText as string).trim()
                 ? (chatMeta.groupScenarioText as string).trim()
                 : null,
             lastInput: [...mappedMessages].reverse().find((message) => message.role === "user")?.content,
             chatId: req.params.id,
+            lastGenerationType: "preview",
+            idleDuration: promptIdleDuration,
           });
           const resolvePromptMacros = (value: string) => resolveMacros(value, promptMacroContext);
           // Apply regex scripts to prompt context (mirrors generate.routes.ts).
@@ -1666,11 +1742,70 @@ export async function chatsRoutes(app: FastifyInstance) {
           applyRegexScriptsToPromptMessages(mappedMessages, await regexStore.list(), {
             resolveMacros: (value) => resolveMacros(value, promptMacroContext, { trimResult: false }),
           });
-          promptMacroContext.lastInput = [...mappedMessages]
-            .reverse()
-            .find((message) => message.role === "user")?.content;
+	          promptMacroContext.lastInput = [...mappedMessages]
+	            .reverse()
+	            .find((message) => message.role === "user")?.content;
+          if (chatMode === "conversation") {
+            const customPrompt =
+              typeof chatMeta.customSystemPrompt === "string" && chatMeta.customSystemPrompt.trim()
+                ? (chatMeta.customSystemPrompt as string).trim()
+                : null;
+		            const selectedConversationPrompt = presetStringField(
+		              preset as Record<string, unknown> | null,
+		              "conversationPrompt",
+		            );
+	            const conversationPromptTemplate =
+	              customPrompt ?? (selectedConversationPrompt || DEFAULT_CONVERSATION_PROMPT);
+	            const charNameList = promptMacroContext.characters.join(", ") || "Character";
+	            const renderedConversationPrompt = resolveMacros(
+	              conversationPromptTemplate
+	                .replace(/\{\{charName\}\}/g, charNameList)
+	                .replace(/\{\{userName\}\}/g, personaName),
+	              promptMacroContext,
+	            );
+	            const messages = [
+	              {
+	                role: "system" as const,
+	                content: wrapConversationInstructions(unwrapConversationInstructions(renderedConversationPrompt)),
+	              },
+	              ...mappedMessages,
+	            ];
+	            return {
+	              messages: toPeekPromptMessages(messages),
+	              parameters: null,
+	              source: "live_preview",
+	              exact: false,
+	              generationInfo: null,
+	              agentNote:
+                "No saved model request was available, so this is a live best-effort preview assembled without sending.",
+            };
+          }
+          if (chatMode === "game") {
+            const customPrompt =
+              typeof chatMeta.gameSystemPrompt === "string" && chatMeta.gameSystemPrompt.trim()
+                ? (chatMeta.gameSystemPrompt as string).trim()
+                : null;
+            const selectedGamePrompt = presetStringField(preset as Record<string, unknown> | null, "gamePrompt");
+            const gamePromptTemplate = customPrompt ?? (selectedGamePrompt || DEFAULT_GAME_SYSTEM_PROMPT);
+            const renderedGamePrompt = resolveMacros(gamePromptTemplate, promptMacroContext);
+            const messages = [
+              {
+                role: "system" as const,
+                content: renderedGamePrompt,
+              },
+              ...mappedMessages,
+            ];
+            return {
+              messages: toPeekPromptMessages(messages),
+              parameters: null,
+              source: "live_preview",
+              exact: false,
+              generationInfo: null,
+              agentNote:
+                "No saved model request was available, so this is a live best-effort preview assembled without sending.",
+            };
+          }
           const entryStateOverrides = resolveEntryStateOverrides(chatMeta.entryStateOverrides);
-          const chatMode = (chat.mode as string) ?? "roleplay";
           const lorebookScopeExclusions = resolveGameLorebookScopeExclusions(chatMode, chatMeta);
           const promptActiveAgentIds = Array.isArray(chatMeta.activeAgentIds)
             ? (chatMeta.activeAgentIds as string[])
@@ -1731,6 +1866,8 @@ export async function chatsRoutes(app: FastifyInstance) {
               typeof chatMeta.groupScenarioText === "string" && (chatMeta.groupScenarioText as string).trim()
                 ? (chatMeta.groupScenarioText as string).trim()
                 : null,
+            lastGenerationType: "preview",
+            idleDuration: promptIdleDuration,
           });
 
           // ── Strip <speaker> tags from chat history to save tokens (roleplay only) ──

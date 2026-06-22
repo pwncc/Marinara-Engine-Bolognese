@@ -150,7 +150,6 @@ export function ConversationSoundSetting() {
           setGameNotificationSound(v);
           if (v) playNotificationPing();
         }}
-        help="Play when a Game turn finishes loading."
       />
       <div className="mt-1 flex items-center gap-1.5">
         <Bell size="0.75rem" className="text-[var(--muted-foreground)]" />
@@ -236,7 +235,7 @@ export function SettingsCheckbox({
     <span className={cn("min-w-0 text-xs", labelClassName)}>
       <span className="inline-flex min-w-0 items-center gap-1.5">
         <span className="min-w-0">{label}</span>
-        {help && (
+        {align !== "between" && help && (
           <span onClick={(e) => e.preventDefault()}>
             <HelpTooltip text={help} />
           </span>
@@ -247,6 +246,16 @@ export function SettingsCheckbox({
           {description}
         </span>
       )}
+    </span>
+  );
+  const inputCluster = (
+    <span className="inline-flex shrink-0 items-center gap-1.5">
+      {align === "between" && help && (
+        <span onClick={(e) => e.preventDefault()}>
+          <HelpTooltip text={help} />
+        </span>
+      )}
+      {input}
     </span>
   );
 
@@ -262,7 +271,7 @@ export function SettingsCheckbox({
       {align === "between" ? (
         <>
           {text}
-          {input}
+          {inputCluster}
         </>
       ) : (
         <>
@@ -336,13 +345,18 @@ export function SettingsSwitch({
       </label>
     </span>
   );
+  const switchCluster = (
+    <span className="inline-flex shrink-0 items-center gap-1.5">
+      {help && <HelpTooltip text={help} />}
+      {switchControl}
+    </span>
+  );
   const text = label ? (
     <span className={cn("min-w-0 text-sm", labelClassName)}>
       <span className="inline-flex min-w-0 items-center gap-1.5">
         <label htmlFor={inputId} className={cn("min-w-0", disabled ? "cursor-not-allowed" : "cursor-pointer")}>
           {label}
         </label>
-        {help && <HelpTooltip text={help} />}
       </span>
       {description && (
         <label
@@ -368,7 +382,7 @@ export function SettingsSwitch({
       )}
     >
       {labelPosition === "start" && text}
-      {switchControl}
+      {switchCluster}
       {labelPosition === "end" && text}
     </div>
   );

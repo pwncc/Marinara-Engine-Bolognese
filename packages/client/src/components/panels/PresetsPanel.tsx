@@ -10,7 +10,6 @@ import {
   type Dispatch,
   type ReactNode,
   type SetStateAction,
-  type TouchEvent,
 } from "react";
 import { toast } from "sonner";
 import { usePresets, useDeletePreset, useDuplicatePreset, useSetDefaultPreset } from "../../hooks/use-presets";
@@ -51,8 +50,6 @@ import {
   Star,
   Regex,
   GripVertical,
-  ToggleLeft,
-  ToggleRight,
   Pencil,
   ChevronDown,
   ChevronRight,
@@ -63,6 +60,7 @@ import {
 import { cn } from "../../lib/utils";
 import { downloadJsonFile } from "../../lib/download-json";
 import { createFolderEntry, getFolderImportEntries, getFolderManifestConfig } from "@marinara-engine/shared";
+import { SettingsSwitch } from "./settings/SettingControls";
 import {
   getNextUnnamedLibraryFolderName,
   useCreateLibraryFolder,
@@ -72,7 +70,9 @@ import {
   useUpdateLibraryFolder,
 } from "../../hooks/use-library-folders";
 import { handleFolderRenameKeyDown, useFolderRenameGesture } from "../../hooks/use-folder-rename-gesture";
+import { useTouchFolderDrag } from "../../hooks/use-touch-folder-drag";
 import { SmoothFolderContent } from "../ui/SmoothFolderContent";
+import { getTouchReorderDropIndex } from "../../lib/touch-reorder";
 
 type PresetRow = {
   id: string;
@@ -281,7 +281,6 @@ export function PresetsPanel() {
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editFolderName, setEditFolderName] = useState("");
   const [draggedPresetId, setDraggedPresetId] = useState<string | null>(null);
-  const presetTouchDragRef = useRef<{ id: string; timer: number | null; active: boolean } | null>(null);
   const suppressPresetClickRef = useRef(false);
   const handleFolderRenameGesture = useFolderRenameGesture();
 
@@ -523,21 +522,32 @@ export function PresetsPanel() {
     [createCustomTool],
   );
 
-  const handleRegexDrop = useCallback(
-    (targetId: string) => {
-      if (!draggedRegexId || draggedRegexId === targetId) return;
+  const handleRegexReorderToIndex = useCallback(
+    (sourceId: string, targetIdx: number) => {
       const nextIds = sortedRegexScripts.map((script) => script.id);
-      const from = nextIds.indexOf(draggedRegexId);
-      const to = nextIds.indexOf(targetId);
-      if (from < 0 || to < 0) return;
+      const from = nextIds.indexOf(sourceId);
+      if (from < 0 || targetIdx < 0 || targetIdx > nextIds.length) return;
+      let insertAt = targetIdx;
+      if (from < insertAt) insertAt--;
+      if (from === insertAt) return;
       const [moved] = nextIds.splice(from, 1);
       if (!moved) return;
-      nextIds.splice(to, 0, moved);
+      nextIds.splice(insertAt, 0, moved);
       reorderRegexScripts.mutate(nextIds);
       setDraggedRegexId(null);
       setRegexDragReadyId(null);
     },
-    [draggedRegexId, reorderRegexScripts, sortedRegexScripts],
+    [reorderRegexScripts, sortedRegexScripts],
+  );
+
+  const handleRegexDrop = useCallback(
+    (targetId: string) => {
+      if (!draggedRegexId || draggedRegexId === targetId) return;
+      const targetIdx = sortedRegexScripts.findIndex((script) => script.id === targetId);
+      if (targetIdx < 0) return;
+      handleRegexReorderToIndex(draggedRegexId, targetIdx);
+    },
+    [draggedRegexId, handleRegexReorderToIndex, sortedRegexScripts],
   );
 
   const handleDeleteSelected = useCallback(async () => {
@@ -615,40 +625,15 @@ export function PresetsPanel() {
     [draggedPresetId, movePresetsToFolder],
   );
 
-  const startPresetTouchDrag = useCallback((event: TouchEvent, presetId: string) => {
-    const timer = window.setTimeout(() => {
-      presetTouchDragRef.current = { id: presetId, timer: null, active: true };
-      suppressPresetClickRef.current = true;
-      setDraggedPresetId(presetId);
-    }, 450);
-    presetTouchDragRef.current = { id: presetId, timer, active: false };
-    event.currentTarget.addEventListener(
-      "touchcancel",
-      () => {
-        const current = presetTouchDragRef.current;
-        if (current?.timer) window.clearTimeout(current.timer);
-        presetTouchDragRef.current = null;
-        setDraggedPresetId(null);
-      },
-      { once: true },
-    );
-  }, []);
-
   const finishPresetTouchDrag = useCallback(
-    (event: TouchEvent) => {
-      const current = presetTouchDragRef.current;
-      if (!current) return;
-      if (current.timer) window.clearTimeout(current.timer);
-      presetTouchDragRef.current = null;
-      if (!current.active) return;
-      const touch = event.changedTouches[0];
-      const target = touch ? document.elementFromPoint(touch.clientX, touch.clientY) : null;
+    (presetId: string, x: number, y: number) => {
+      const target = document.elementFromPoint(x, y);
       const folderElement = target?.closest("[data-preset-folder-id]") as HTMLElement | null;
       const rootElement = target?.closest("[data-preset-folder-root]") as HTMLElement | null;
       if (folderElement?.dataset.presetFolderId) {
-        movePresetsToFolder(getDraggedPresetIds(current.id), folderElement.dataset.presetFolderId);
+        movePresetsToFolder(getDraggedPresetIds(presetId), folderElement.dataset.presetFolderId);
       } else if (rootElement) {
-        movePresetsToFolder(getDraggedPresetIds(current.id), null);
+        movePresetsToFolder(getDraggedPresetIds(presetId), null);
       }
       setDraggedPresetId(null);
       window.setTimeout(() => {
@@ -657,6 +642,26 @@ export function PresetsPanel() {
     },
     [getDraggedPresetIds, movePresetsToFolder],
   );
+
+  const cancelPresetTouchDrag = useCallback((_presetId: string, wasActive: boolean) => {
+    setDraggedPresetId(null);
+    if (wasActive) {
+      window.setTimeout(() => {
+        suppressPresetClickRef.current = false;
+      }, 0);
+    } else {
+      suppressPresetClickRef.current = false;
+    }
+  }, []);
+
+  const { startTouchDrag: startPresetTouchDrag } = useTouchFolderDrag({
+    onActivate: (presetId) => {
+      suppressPresetClickRef.current = true;
+      setDraggedPresetId(presetId);
+    },
+    onDrop: finishPresetTouchDrag,
+    onCancel: cancelPresetTouchDrag,
+  });
 
   const renderPresetRow = useCallback(
     (preset: PresetRow) => {
@@ -688,7 +693,6 @@ export function PresetsPanel() {
           }}
           onDragEnd={() => setDraggedPresetId(null)}
           onTouchStart={(event) => startPresetTouchDrag(event, preset.id)}
-          onTouchEnd={finishPresetTouchDrag}
         >
           <div
             className="flex min-w-0 flex-1 items-center gap-3"
@@ -816,7 +820,6 @@ export function PresetsPanel() {
       deletePreset,
       draggedPresetId,
       duplicatePreset,
-      finishPresetTouchDrag,
       getDraggedPresetIds,
       getSectionCount,
       openPresetDetail,
@@ -1091,6 +1094,7 @@ export function PresetsPanel() {
         setDraggedRegexId={setDraggedRegexId}
         setRegexDragReadyId={setRegexDragReadyId}
         handleRegexDrop={handleRegexDrop}
+        handleRegexReorderToIndex={handleRegexReorderToIndex}
         openRegexDetail={openRegexDetail}
         updateRegex={updateRegex}
         deleteRegex={deleteRegex}
@@ -1111,6 +1115,7 @@ export function PresetsPanel() {
 
       {selectionMode && (
         <SelectionActionBar
+          placement="panel"
           selectedCount={selectedPresetIds.size}
           onExport={() => void handleExportSelected()}
           onDelete={handleDeleteSelected}
@@ -1148,6 +1153,7 @@ function RegexSection({
   setDraggedRegexId,
   setRegexDragReadyId,
   handleRegexDrop,
+  handleRegexReorderToIndex,
   openRegexDetail,
   updateRegex,
   deleteRegex,
@@ -1163,10 +1169,35 @@ function RegexSection({
   setDraggedRegexId: Dispatch<SetStateAction<string | null>>;
   setRegexDragReadyId: Dispatch<SetStateAction<string | null>>;
   handleRegexDrop: (targetId: string) => void;
+  handleRegexReorderToIndex: (sourceId: string, targetIdx: number) => void;
   openRegexDetail: (id: string) => void;
   updateRegex: ReturnType<typeof useUpdateRegexScript>;
   deleteRegex: ReturnType<typeof useDeleteRegexScript>;
 }) {
+  const { startTouchDrag: startRegexTouchDrag } = useTouchFolderDrag({
+    onActivate: (scriptId) => {
+      setDraggedRegexId(scriptId);
+      setRegexDragReadyId(scriptId);
+    },
+    onDrop: (scriptId, x, y) => {
+      const targetIdx = getTouchReorderDropIndex({
+        x,
+        y,
+        itemSelector: '[data-touch-reorder-item="preset-regex"]',
+        rootSelector: "[data-preset-regex-root]",
+        itemCount: sortedRegexScripts.length,
+      });
+      setDraggedRegexId(null);
+      setRegexDragReadyId(null);
+      if (targetIdx === null) return;
+      handleRegexReorderToIndex(scriptId, targetIdx);
+    },
+    onCancel: () => {
+      setDraggedRegexId(null);
+      setRegexDragReadyId(null);
+    },
+  });
+
   return (
     <PanelSection
       title="Regexes"
@@ -1211,120 +1242,135 @@ function RegexSection({
       {sortedRegexScripts.length === 0 ? (
         <p className="px-1 py-2 text-[0.625rem] text-[var(--muted-foreground)]">No regexes yet</p>
       ) : (
-        sortedRegexScripts.map((script) => {
-          const placements = (() => {
-            try {
-              return JSON.parse(script.placement) as string[];
-            } catch {
-              return [];
-            }
-          })();
-          const enabled = script.enabled === "true";
-          return (
-            <div
-              key={script.id}
-              className={cn(
-                "flex items-start gap-2.5 rounded-xl p-2 transition-colors hover:bg-[var(--sidebar-accent)]",
-                !enabled && "opacity-50",
-                draggedRegexId === script.id && "opacity-40",
-              )}
-              draggable={regexDragReadyId === script.id}
-              onDragStart={(event) => {
-                setDraggedRegexId(script.id);
-                event.dataTransfer.effectAllowed = "move";
-                event.dataTransfer.setData("text/plain", script.id);
-              }}
-              onDragOver={(event) => {
-                if (draggedRegexId && draggedRegexId !== script.id) {
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "move";
-                }
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                handleRegexDrop(script.id);
-              }}
-              onDragEnd={() => {
-                setDraggedRegexId(null);
-                setRegexDragReadyId(null);
-              }}
-            >
-              <button
-                className="mari-chrome-accent-text-muted mari-accent-animated mt-0.5 shrink-0 cursor-grab rounded p-0.5 transition-colors hover:bg-[var(--marinara-chat-chrome-highlight-bg)] hover:text-[var(--marinara-chat-chrome-button-text-hover)] active:cursor-grabbing"
-                title="Drag to reorder"
-                onClick={(event) => event.stopPropagation()}
-                onMouseDown={(event) => {
-                  event.stopPropagation();
-                  setRegexDragReadyId(script.id);
+        <div data-preset-regex-root className="flex flex-col gap-0.5">
+          {sortedRegexScripts.map((script, index) => {
+            const placements = (() => {
+              try {
+                return JSON.parse(script.placement) as string[];
+              } catch {
+                return [];
+              }
+            })();
+            const enabled = script.enabled === "true";
+            return (
+              <div
+                key={script.id}
+                data-touch-reorder-item="preset-regex"
+                data-touch-reorder-index={index}
+                className={cn(
+                  "flex items-start gap-2.5 rounded-xl p-2 transition-colors hover:bg-[var(--sidebar-accent)]",
+                  !enabled && "opacity-50",
+                  draggedRegexId === script.id && "opacity-40",
+                )}
+                draggable={regexDragReadyId === script.id}
+                onDragStart={(event) => {
+                  setDraggedRegexId(script.id);
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/plain", script.id);
                 }}
-                onMouseUp={(event) => {
-                  event.stopPropagation();
+                onDragOver={(event) => {
+                  if (draggedRegexId && draggedRegexId !== script.id) {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  handleRegexDrop(script.id);
+                }}
+                onDragEnd={() => {
+                  setDraggedRegexId(null);
                   setRegexDragReadyId(null);
                 }}
               >
-                <GripVertical size="0.8125rem" />
-              </button>
-              <Regex size="0.875rem" className="mt-0.5 shrink-0 text-[var(--marinara-chat-chrome-button-text)]" />
-              <button className="min-w-0 flex-1 text-left" onClick={() => openRegexDetail(script.id)}>
-                <div className="text-xs font-medium">{script.name}</div>
-                <div className="mt-0.5 flex items-center gap-1">
-                  {placements.map((placement) => (
-                    <span
-                      key={placement}
-                      className="rounded bg-[var(--secondary)] px-1 py-0.5 text-[0.5rem] text-[var(--muted-foreground)]"
-                    >
-                      {placement === "ai_output" ? "AI" : "User"}
+                <button
+                  className="mari-chrome-accent-text-muted mari-accent-animated mt-0.5 shrink-0 cursor-grab rounded p-0.5 transition-colors hover:bg-[var(--marinara-chat-chrome-highlight-bg)] hover:text-[var(--marinara-chat-chrome-button-text-hover)] active:cursor-grabbing"
+                  title="Drag to reorder"
+                  onClick={(event) => event.stopPropagation()}
+                  onMouseDown={(event) => {
+                    event.stopPropagation();
+                    setRegexDragReadyId(script.id);
+                  }}
+                  onMouseUp={(event) => {
+                    event.stopPropagation();
+                    setRegexDragReadyId(null);
+                  }}
+                  onTouchStart={(event) => {
+                    event.stopPropagation();
+                    startRegexTouchDrag(event, script.id, {
+                      allowInteractiveTarget: true,
+                      sourceElement: event.currentTarget.closest<HTMLElement>(
+                        '[data-touch-reorder-item="preset-regex"]',
+                      ),
+                    });
+                  }}
+                >
+                  <GripVertical size="0.8125rem" />
+                </button>
+                <Regex size="0.875rem" className="mt-0.5 shrink-0 text-[var(--marinara-chat-chrome-button-text)]" />
+                <button className="min-w-0 flex-1 text-left" onClick={() => openRegexDetail(script.id)}>
+                  <div className="text-xs font-medium">{script.name}</div>
+                  <div className="mt-0.5 flex items-center gap-1">
+                    {placements.map((placement) => (
+                      <span
+                        key={placement}
+                        className="rounded bg-[var(--secondary)] px-1 py-0.5 text-[0.5rem] text-[var(--muted-foreground)]"
+                      >
+                        {placement === "ai_output" ? "AI" : "User"}
+                      </span>
+                    ))}
+                    <span className="max-w-[6.25rem] truncate font-mono text-[0.5625rem] text-[var(--muted-foreground)]">
+                      /{script.findRegex}/{script.flags}
                     </span>
-                  ))}
-                  <span className="max-w-[6.25rem] truncate font-mono text-[0.5625rem] text-[var(--muted-foreground)]">
-                    /{script.findRegex}/{script.flags}
-                  </span>
+                  </div>
+                </button>
+                <div
+                  className="mt-0.5 shrink-0"
+                  title={enabled ? "Disable regex" : "Enable regex"}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                  }}
+                >
+                  <SettingsSwitch
+                    ariaLabel={enabled ? "Disable regex" : "Enable regex"}
+                    checked={enabled}
+                    onChange={(checked) => updateRegex.mutate({ id: script.id, enabled: checked })}
+                    className="p-0 hover:bg-transparent"
+                  />
                 </div>
-              </button>
-              <button
-                type="button"
-                className="mari-chrome-control mari-chrome-control--small mt-0.5 shrink-0 p-1"
-                title={enabled ? "Disable regex" : "Enable regex"}
-                aria-label={enabled ? "Disable regex" : "Enable regex"}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  updateRegex.mutate({ id: script.id, enabled: !enabled });
-                }}
-              >
-                {enabled ? <ToggleRight size="0.875rem" /> : <ToggleLeft size="0.875rem" />}
-              </button>
-              <button
-                type="button"
-                className="mari-chrome-control mari-chrome-control--small mt-0.5 shrink-0 p-1"
-                title="Edit regex"
-                aria-label="Edit regex"
-                onClick={() => openRegexDetail(script.id)}
-              >
-                <Pencil size="0.8125rem" />
-              </button>
-              <button
-                type="button"
-                className="mari-chrome-control mari-chrome-control--small mari-chrome-control--danger mt-0.5 shrink-0 p-1"
-                title="Delete regex"
-                aria-label="Delete regex"
-                onClick={async () => {
-                  if (
-                    await showConfirmDialog({
-                      title: "Delete Regex",
-                      message: `Delete "${script.name}"?`,
-                      confirmLabel: "Delete",
-                      tone: "destructive",
-                    })
-                  ) {
-                    deleteRegex.mutate(script.id);
-                  }
-                }}
-              >
-                <Trash2 size="0.8125rem" className="text-[var(--destructive)]" />
-              </button>
-            </div>
-          );
-        })
+                <button
+                  type="button"
+                  className="mari-chrome-control mari-chrome-control--small mt-0.5 shrink-0 p-1"
+                  title="Edit regex"
+                  aria-label="Edit regex"
+                  onClick={() => openRegexDetail(script.id)}
+                >
+                  <Pencil size="0.8125rem" />
+                </button>
+                <button
+                  type="button"
+                  className="mari-chrome-control mari-chrome-control--small mari-chrome-control--danger mt-0.5 shrink-0 p-1"
+                  title="Delete regex"
+                  aria-label="Delete regex"
+                  onClick={async () => {
+                    if (
+                      await showConfirmDialog({
+                        title: "Delete Regex",
+                        message: `Delete "${script.name}"?`,
+                        confirmLabel: "Delete",
+                        tone: "destructive",
+                      })
+                    ) {
+                      deleteRegex.mutate(script.id);
+                    }
+                  }}
+                >
+                  <Trash2 size="0.8125rem" className="text-[var(--destructive)]" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
       )}
     </PanelSection>
   );
@@ -1431,18 +1477,20 @@ function FunctionsSection({
                   {tool.description || "No description"}
                 </div>
               </button>
-              <button
-                type="button"
-                className="mari-chrome-control mari-chrome-control--small mt-0.5 shrink-0 p-1"
+              <div
+                className="mt-0.5 shrink-0"
                 title={enabled ? "Disable function" : "Enable function"}
-                aria-label={enabled ? "Disable function" : "Enable function"}
                 onClick={(event) => {
                   event.stopPropagation();
-                  updateCustomTool.mutate({ id: tool.id, enabled: !enabled });
                 }}
               >
-                {enabled ? <ToggleRight size="0.875rem" /> : <ToggleLeft size="0.875rem" />}
-              </button>
+                <SettingsSwitch
+                  ariaLabel={enabled ? "Disable function" : "Enable function"}
+                  checked={enabled}
+                  onChange={(checked) => updateCustomTool.mutate({ id: tool.id, enabled: checked })}
+                  className="p-0 hover:bg-transparent"
+                />
+              </div>
               <button
                 type="button"
                 className="mari-chrome-control mari-chrome-control--small mt-0.5 shrink-0 p-1"

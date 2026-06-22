@@ -552,16 +552,8 @@ export function SpotifyMiniPlayer({
   const showDjMariToast = useCallback(() => {
     dismissDjMariToast();
     djMariToastRef.current = toast.custom(
-      (id) => (
-        <div className="relative flex max-w-[22rem] items-center gap-3 rounded-xl border border-primary/35 bg-card/95 p-3 pr-9 text-card-foreground shadow-2xl backdrop-blur-xl">
-          <button
-            type="button"
-            onClick={() => toast.dismiss(id)}
-            className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground"
-            aria-label="Dismiss"
-          >
-            <X size="0.875rem" />
-          </button>
+      () => (
+        <div className="flex max-w-[22rem] items-center gap-3 pr-1 text-[var(--foreground)]">
           <img
             src={DOTTOR_SUPPORT_GIF}
             alt=""
@@ -569,6 +561,14 @@ export function SpotifyMiniPlayer({
             draggable={false}
           />
           <p className="text-sm font-medium leading-snug">DJ Mari is composing a playlist for you, hold on tight!</p>
+          <button
+            type="button"
+            onClick={dismissDjMariToast}
+            className="rounded-full p-1 text-foreground/45 transition-colors hover:bg-foreground/10 hover:text-foreground"
+            aria-label="Dismiss DJ Mari playlist toast"
+          >
+            <X size="0.75rem" />
+          </button>
         </div>
       ),
       { duration: Infinity, position: "bottom-right" },
@@ -703,6 +703,10 @@ export function SpotifyMiniPlayer({
   const startDrag = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (!floating) return;
+      if (event.target instanceof Element && event.target.closest("button,a,input,textarea,select,[role='button']")) {
+        return;
+      }
+      event.preventDefault();
       dragRef.current = {
         pointerId: event.pointerId,
         startX: event.clientX,
@@ -710,7 +714,11 @@ export function SpotifyMiniPlayer({
         originX: mobilePosition.x,
         originY: mobilePosition.y,
       };
-      event.currentTarget.setPointerCapture(event.pointerId);
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Some mobile browsers can deny capture if the pointer was already cancelled.
+      }
     },
     [floating, mobilePosition.x, mobilePosition.y],
   );
@@ -719,6 +727,7 @@ export function SpotifyMiniPlayer({
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const drag = dragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
+      event.preventDefault();
       const next = clampMobilePosition(
         drag.originX + event.clientX - drag.startX,
         drag.originY + event.clientY - drag.startY,
@@ -735,6 +744,13 @@ export function SpotifyMiniPlayer({
       if (!drag || drag.pointerId !== event.pointerId) return;
       const moved = Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY);
       dragRef.current = null;
+      try {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+      } catch {
+        // Ignore browsers that already released capture.
+      }
       if (moved < 6 && floating && collapsed) setCollapsed(false);
     },
     [collapsed, floating, setCollapsed],
@@ -1012,7 +1028,7 @@ export function SpotifyMiniPlayer({
   if (floating) {
     return (
       <div
-        className={cn("fixed z-[60]", mobile && "md:hidden")}
+        className={cn("fixed z-[60] touch-none select-none", mobile && "md:hidden")}
         style={mobileWidgetStyle}
         onPointerDown={startDrag}
         onPointerMove={moveDrag}

@@ -1,6 +1,6 @@
 // ──────────────────────────────────────────────
 // Full-Page Preset Editor
-// Tabs: Overview · Sections
+// Tabs: Overview · Sections · Prompts
 // ──────────────────────────────────────────────
 import { useState, useCallback, useEffect, useMemo, useRef, type FC, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -53,7 +53,6 @@ import {
   Maximize2,
   ListChecks,
   Shuffle,
-  ToggleLeft,
   Copy,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -66,6 +65,8 @@ import { useAgentConfigs, type AgentConfigRow } from "../../hooks/use-agents";
 import { type WrapFormat, type MarkerType } from "@marinara-engine/shared";
 import { useQuoteFormatter } from "../../hooks/use-quote-formatter";
 import { EditorTabRail } from "../ui/EditorTabRail";
+import { useTouchFolderDrag } from "../../hooks/use-touch-folder-drag";
+import { getTouchReorderDropIndex } from "../../lib/touch-reorder";
 
 /** Intercept Tab in a textarea to insert 2 spaces instead of changing focus. */
 function handleTextareaTab(
@@ -92,6 +93,7 @@ function handleTextareaTab(
 const TABS = [
   { id: "overview", label: "Overview", icon: FileText },
   { id: "sections", label: "Sections", icon: Layers },
+  { id: "prompts", label: "Prompts", icon: MessageSquare },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 
@@ -140,6 +142,32 @@ function reorderItems<T>(items: T[], sourceIndex: number, targetIndex: number): 
   const [moved] = next.splice(sourceIndex, 1);
   if (moved === undefined) return null;
   next.splice(targetIndex, 0, moved);
+  return next;
+}
+
+function reorderIdsToGap(items: Array<{ id: string }>, sourceIndex: number, targetGapIndex: number): string[] | null {
+  if (sourceIndex < 0 || sourceIndex >= items.length || targetGapIndex < 0 || targetGapIndex > items.length)
+    return null;
+  let insertAt = targetGapIndex;
+  if (sourceIndex < insertAt) insertAt--;
+  if (sourceIndex === insertAt) return null;
+  const ids = items.map((item) => item.id);
+  const [moved] = ids.splice(sourceIndex, 1);
+  if (!moved) return null;
+  ids.splice(insertAt, 0, moved);
+  return ids;
+}
+
+function reorderItemsToGap<T>(items: T[], sourceIndex: number, targetGapIndex: number): T[] | null {
+  if (sourceIndex < 0 || sourceIndex >= items.length || targetGapIndex < 0 || targetGapIndex > items.length)
+    return null;
+  let insertAt = targetGapIndex;
+  if (sourceIndex < insertAt) insertAt--;
+  if (sourceIndex === insertAt) return null;
+  const next = [...items];
+  const [moved] = next.splice(sourceIndex, 1);
+  if (moved === undefined) return null;
+  next.splice(insertAt, 0, moved);
   return next;
 }
 
@@ -210,6 +238,8 @@ export function PresetEditor() {
   const [localAuthor, setLocalAuthor] = useState("");
   const [localParams, setLocalParams] = useState<Record<string, unknown>>({});
   const [localParamsParseFailed, setLocalParamsParseFailed] = useState(false);
+  const [localConversationPrompt, setLocalConversationPrompt] = useState("");
+  const [localGamePrompt, setLocalGamePrompt] = useState("");
   const hydratedPresetIdRef = useRef<string | null>(null);
   const dirtyRef = useRef(false);
   const formatQuotes = useQuoteFormatter();
@@ -228,6 +258,8 @@ export function PresetEditor() {
     setLocalDescription(p.description ?? "");
     setLocalWrapFormat((p.wrapFormat ?? "xml") as WrapFormat);
     setLocalAuthor(p.author ?? "");
+    setLocalConversationPrompt(p.conversationPrompt ?? "");
+    setLocalGamePrompt(p.gamePrompt ?? "");
     try {
       setLocalParams(typeof p.parameters === "string" ? JSON.parse(p.parameters) : (p.parameters ?? {}));
       setLocalParamsParseFailed(false);
@@ -247,24 +279,14 @@ export function PresetEditor() {
 
   const handleSave = useCallback(async () => {
     if (!presetDetailId) return;
-    if (!localName.trim()) {
-      const error = new Error("Preset name is required.");
-      toast.error(error.message);
-      throw error;
-    }
-    const payload: {
-      id: string;
-      name: string;
-      description: string;
-      wrapFormat: WrapFormat;
-      author: string;
-      parameters?: Record<string, unknown>;
-    } = {
+    const payload: { id: string } & Record<string, unknown> = {
       id: presetDetailId,
       name: localName,
       description: localDescription,
       wrapFormat: localWrapFormat,
       author: localAuthor,
+      conversationPrompt: localConversationPrompt,
+      gamePrompt: localGamePrompt,
     };
     if (!localParamsParseFailed) payload.parameters = localParams;
     await updatePreset.mutateAsync(payload);
@@ -279,6 +301,8 @@ export function PresetEditor() {
     localAuthor,
     localParamsParseFailed,
     localParams,
+    localConversationPrompt,
+    localGamePrompt,
     updatePreset,
   ]);
 
@@ -286,14 +310,16 @@ export function PresetEditor() {
     if (!presetDetailId) return;
     if (dirty) {
       const shouldSave = await showConfirmDialog({
-        title: "Save Before Export",
-        message: "Exports use the saved preset. Save your current edits before exporting?",
-        confirmLabel: "Save & export",
+        title: "Save before exporting?",
+        message: "You have unsaved preset edits. Save them before exporting so the file includes the latest changes?",
+        confirmLabel: "Save and export",
+        cancelLabel: "Cancel",
       });
       if (!shouldSave) return;
       try {
         await handleSave();
       } catch {
+        toast.error("Could not save preset before export.");
         return;
       }
     }
@@ -396,10 +422,7 @@ export function PresetEditor() {
     <div className="mari-editor-shell flex flex-1 flex-col overflow-hidden">
       {/* ── Header ── */}
       <div className="mari-editor-header">
-        <button
-          onClick={handleClose}
-          className="mari-editor-action inline-flex"
-        >
+        <button onClick={handleClose} className="mari-editor-action inline-flex">
           <ArrowLeft size="1.125rem" />
         </button>
         <div className="mari-editor-icon-tile mari-panel-gradient-surface mari-panel-gradient--presets">
@@ -445,10 +468,7 @@ export function PresetEditor() {
               <rect x="3" y="15" width="14" height="2" rx="1" fill="currentColor" />
             </svg>
           </button>
-          <button
-            onClick={handleDelete}
-            className="mari-editor-action mari-editor-action--danger inline-flex"
-          >
+          <button onClick={handleDelete} className="mari-editor-action mari-editor-action--danger inline-flex">
             <Trash2 size="0.9375rem" />
           </button>
         </div>
@@ -463,12 +483,12 @@ export function PresetEditor() {
 
       {/* Unsaved warning */}
       {showUnsavedWarning && (
-        <div className="flex items-center justify-between bg-amber-500/10 px-4 py-2 text-xs text-amber-400">
+        <div className="flex items-center justify-between bg-[var(--warning)]/10 px-4 py-2 text-xs text-[var(--warning)]">
           <span>You have unsaved changes.</span>
           <div className="flex gap-2">
             <button
               onClick={() => setShowUnsavedWarning(false)}
-              className="rounded-lg px-3 py-1 hover:bg-[var(--accent)]"
+              className="mari-editor-action mari-editor-action--compact px-3 py-1"
             >
               Keep editing
             </button>
@@ -487,7 +507,7 @@ export function PresetEditor() {
                   // Keep the editor open so the user can fix the failed save.
                 }
               }}
-              className="rounded-lg bg-amber-500/20 px-3 py-1 hover:bg-amber-500/30"
+              className="mari-editor-action mari-editor-action--primary mari-editor-action--compact px-3 py-1"
             >
               Save & close
             </button>
@@ -553,6 +573,22 @@ export function PresetEditor() {
                 parentChatHasLorebook={parentChatHasLorebook}
               />
             )}
+
+            {/* ── Prompts Tab ── */}
+            {activeTab === "prompts" && (
+              <PromptsTab
+                conversationPrompt={localConversationPrompt}
+                onConversationPromptChange={(v) => {
+                  setLocalConversationPrompt(v);
+                  markDirty();
+                }}
+                gamePrompt={localGamePrompt}
+                onGamePromptChange={(v) => {
+                  setLocalGamePrompt(v);
+                  markDirty();
+                }}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -594,7 +630,7 @@ function OverviewTab({
           value={name}
           onChange={(e) => onNameChange(e.target.value)}
           placeholder="Preset name…"
-          className="w-full rounded-xl bg-[var(--secondary)] p-3 text-sm text-[var(--foreground)] ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+          className="mari-editor-field w-full p-3 text-sm"
         />
       </FieldGroup>
 
@@ -607,7 +643,7 @@ function OverviewTab({
           onFocus={(e) => e.target.select()}
           onChange={(e) => onDescriptionChange(e.target.value)}
           placeholder="What does this preset do?"
-          className="min-h-[5rem] w-full rounded-xl bg-[var(--secondary)] p-3 text-sm text-[var(--foreground)] ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+          className="mari-editor-field min-h-[5rem] w-full p-3 text-sm"
         />
       </FieldGroup>
 
@@ -624,7 +660,7 @@ function OverviewTab({
                 "flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-medium transition-all",
                 wrapFormat === fmt
                   ? "mari-chrome-accent-surface mari-accent-animated"
-                  : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
+                  : "mari-editor-action text-[var(--marinara-editor-muted)]",
               )}
             >
               {fmt === "xml" ? (
@@ -653,7 +689,7 @@ function OverviewTab({
           onFocus={(e) => e.target.select()}
           onChange={(e) => onAuthorChange(e.target.value)}
           placeholder="Your name (optional)"
-          className="w-full rounded-xl bg-[var(--secondary)] p-2.5 text-sm text-[var(--foreground)] ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+          className="mari-editor-field w-full p-2.5 text-sm"
         />
       </FieldGroup>
 
@@ -661,6 +697,68 @@ function OverviewTab({
         <StatCard label="Sections" value={sectionCount} />
         <StatCard label="Groups" value={groupCount} />
       </div>
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════
+//  Prompts Tab
+// ═══════════════════════════════════════════════
+
+function PromptsTab({
+  conversationPrompt,
+  onConversationPromptChange,
+  gamePrompt,
+  onGamePromptChange,
+}: {
+  conversationPrompt: string;
+  onConversationPromptChange: (v: string) => void;
+  gamePrompt: string;
+  onGamePromptChange: (v: string) => void;
+}) {
+  const quoteFormat = useUIStore((s) => s.quoteFormat);
+  const formatPrompt = useCallback(
+    (textarea: HTMLTextAreaElement) => applyTextareaQuoteFormat(textarea, quoteFormat),
+    [quoteFormat],
+  );
+
+  return (
+    <>
+      <FieldGroup
+        label="Conversation Mode"
+        help="Used as the prompt preset's Conversation prompt in Chat Settings and the conversation setup wizard."
+      >
+        <MacroTextarea
+          value={conversationPrompt}
+          onChange={onConversationPromptChange}
+          title="Edit Conversation Mode Prompt"
+          placeholder="Leave empty to use Marinara's built-in conversation prompt."
+          className="mari-editor-field min-h-[12rem] w-full p-3 font-mono text-xs"
+          formatOnChange={formatPrompt}
+          spellCheck={false}
+        />
+      </FieldGroup>
+
+      <FieldGroup label="Roleplay Mode" help="Roleplay prompt structure continues to come from this preset's Sections.">
+        <div className="rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs text-[var(--muted-foreground)] ring-1 ring-[var(--border)]">
+          Uses the assembled prompt from Sections.
+        </div>
+      </FieldGroup>
+
+      <FieldGroup
+        label="Game Mode"
+        help="Used as the prompt preset's Game prompt in Chat Settings and the game setup wizard."
+      >
+        <MacroTextarea
+          value={gamePrompt}
+          onChange={onGamePromptChange}
+          title="Edit Game Mode Prompt"
+          placeholder="Leave empty to use Marinara's built-in game prompt."
+          className="mari-editor-field min-h-[12rem] w-full p-3 font-mono text-xs"
+          formatOnChange={formatPrompt}
+          spellCheck={false}
+        />
+      </FieldGroup>
     </>
   );
 }
@@ -710,6 +808,7 @@ function SectionsTab({
 }) {
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const addMenuRef = useRef<HTMLDivElement>(null);
   const [showGroupsPanel, setShowGroupsPanel] = useState(false);
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
   const [dragReady, setDragReady] = useState<number | null>(null); // index of section ready to drag (grip held)
@@ -730,6 +829,25 @@ function SectionsTab({
       setLorebookWarningDismissed(false);
     }
   }, [presetId]);
+
+  useEffect(() => {
+    if (!showAddMenu) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && addMenuRef.current?.contains(target)) return;
+      setShowAddMenu(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowAddMenu(false);
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown, true);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown, true);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [showAddMenu]);
 
   const dismissLorebookWarning = useCallback(() => {
     try {
@@ -848,6 +966,15 @@ function SectionsTab({
     setDropIdx(sections.length);
   };
 
+  const commitSectionReorder = useCallback(
+    (sourceIdx: number, target: number) => {
+      const ids = reorderIdsToGap(sections, sourceIdx, target);
+      if (!ids) return;
+      onReorderSections.mutate({ presetId, sectionIds: ids });
+    },
+    [onReorderSections, presetId, sections],
+  );
+
   const commitDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const sourceIdx = draggingIdx;
@@ -855,15 +982,7 @@ function SectionsTab({
     setDraggingIdx(null);
     setDropIdx(null);
     if (sourceIdx === null || target === null) return;
-    // Adjust for removal: if source is before target, target shifts down by 1
-    let insertAt = target;
-    if (sourceIdx < insertAt) insertAt--;
-    if (sourceIdx === insertAt) return;
-
-    const ids = sections.map((s: any) => s.id);
-    const [moved] = ids.splice(sourceIdx, 1);
-    ids.splice(insertAt, 0, moved);
-    onReorderSections.mutate({ presetId, sectionIds: ids });
+    commitSectionReorder(sourceIdx, target);
   };
 
   const handleDragEnd = () => {
@@ -876,6 +995,35 @@ function SectionsTab({
     if (!sectionIds) return;
     onReorderSections.mutate({ presetId, sectionIds });
   };
+
+  const { startTouchDrag: startSectionTouchDrag } = useTouchFolderDrag({
+    onActivate: (sectionId) => {
+      const idx = sections.findIndex((section: any) => section.id === sectionId);
+      if (idx < 0) return;
+      setDraggingIdx(idx);
+      setDragReady(idx);
+    },
+    onDrop: (sectionId, x, y) => {
+      const sourceIdx = sections.findIndex((section: any) => section.id === sectionId);
+      const targetIdx = getTouchReorderDropIndex({
+        x,
+        y,
+        itemSelector: '[data-touch-reorder-item="preset-section"]',
+        rootSelector: "[data-preset-section-root]",
+        itemCount: sections.length,
+      });
+      setDraggingIdx(null);
+      setDropIdx(null);
+      setDragReady(null);
+      if (sourceIdx < 0 || targetIdx === null) return;
+      commitSectionReorder(sourceIdx, targetIdx);
+    },
+    onCancel: () => {
+      setDraggingIdx(null);
+      setDropIdx(null);
+      setDragReady(null);
+    },
+  });
 
   const duplicateSection = async (section: any, idx: number) => {
     try {
@@ -909,12 +1057,12 @@ function SectionsTab({
   return (
     <>
       {/* ── Toolbar ── */}
-      <div className="flex items-center gap-2">
+      <div className="mari-editor-toolbar flex flex-wrap items-center gap-2 p-2">
         <HelpTooltip
           text="Everything we send to a model is just text. A prompt is a formatted, written instruction we send to the model. Each section below becomes part of the final prompt."
           side="right"
         />
-        <div className="relative">
+        <div ref={addMenuRef} className="relative">
           <button
             onClick={() => setShowAddMenu(!showAddMenu)}
             className="mari-editor-action mari-editor-action--primary inline-flex"
@@ -922,70 +1070,65 @@ function SectionsTab({
             <Plus size="0.8125rem" /> Add Section
           </button>
           {showAddMenu && (
-            <>
-              {/* Backdrop to close menu */}
-              <div className="fixed inset-0 z-40" onClick={() => setShowAddMenu(false)} />
-              <div className="absolute left-0 top-full z-50 mt-1 w-56 max-h-80 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--card)] p-1 shadow-xl">
-                <button
-                  onClick={() => handleAddSection()}
-                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--foreground)] hover:bg-[var(--accent)]"
-                >
-                  <MessageSquare size="0.8125rem" /> Prompt Block
-                </button>
-                <div className="my-1 border-t border-[var(--border)]" />
-                <p className="px-3 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)]">Markers</p>
-                {(Object.keys(MARKER_LABELS) as MarkerType[])
-                  .filter((t) => t !== "agent_data")
-                  .map((type) => (
+            <div className="mari-editor-panel absolute left-0 top-full z-50 mt-1 max-h-80 w-56 overflow-y-auto p-1 shadow-xl">
+              <button
+                onClick={() => handleAddSection()}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--marinara-editor-text)] hover:bg-[var(--marinara-editor-control-bg-hover)]"
+              >
+                <MessageSquare size="0.8125rem" /> Prompt Block
+              </button>
+              <div className="my-1 border-t border-[var(--border)]" />
+              <p className="px-3 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)]">Markers</p>
+              {(Object.keys(MARKER_LABELS) as MarkerType[])
+                .filter((t) => t !== "agent_data")
+                .map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => handleAddSection({ isMarker: true, markerType: type })}
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--marinara-editor-text)] hover:bg-[var(--marinara-editor-control-bg-hover)]"
+                  >
+                    <Layers size="0.8125rem" className="mari-chrome-accent-icon mari-accent-animated" />{" "}
+                    {MARKER_LABELS[type]}
+                  </button>
+                ))}
+              {injectableAgents.length > 0 && (
+                <>
+                  <div className="my-1 border-t border-[var(--border)]" />
+                  <p className="px-3 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)]">Agent Sections</p>
+                  {injectableAgents.map((agent) => (
                     <button
-                      key={type}
-                      onClick={() => handleAddSection({ isMarker: true, markerType: type })}
-                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--foreground)] hover:bg-[var(--accent)]"
+                      key={agent.id}
+                      onClick={() => handleAddSection({ agentType: agent.type, agentName: agent.name })}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--marinara-editor-text)] hover:bg-[var(--marinara-editor-control-bg-hover)]"
                     >
-                      <Layers size="0.8125rem" className="mari-chrome-accent-icon mari-accent-animated" />{" "}
-                      {MARKER_LABELS[type]}
+                      <Sparkles size="0.8125rem" className="mari-chrome-accent-icon mari-accent-animated" />{" "}
+                      {agent.name} (Agent)
                     </button>
                   ))}
-                {injectableAgents.length > 0 && (
-                  <>
-                    <div className="my-1 border-t border-[var(--border)]" />
-                    <p className="px-3 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)]">
-                      Agent Sections
-                    </p>
-                    {injectableAgents.map((agent) => (
-                      <button
-                        key={agent.id}
-                        onClick={() => handleAddSection({ agentType: agent.type, agentName: agent.name })}
-                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--foreground)] hover:bg-[var(--accent)]"
-                      >
-                        <Sparkles size="0.8125rem" className="text-[var(--primary)]" /> {agent.name} (Agent)
-                      </button>
-                    ))}
-                  </>
-                )}
-              </div>
-            </>
+                </>
+              )}
+            </div>
           )}
         </div>
         <button
           onClick={() => setShowGroupsPanel(!showGroupsPanel)}
           className={cn(
-            "flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium ring-1 ring-[var(--border)] transition-all active:scale-[0.98]",
+            "flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium ring-1 transition-all active:scale-[0.98]",
             showGroupsPanel
-              ? "bg-sky-400/10 text-sky-400 ring-sky-400/30"
-              : "bg-[var(--secondary)] text-[var(--secondary-foreground)] hover:bg-[var(--accent)]",
+              ? "mari-chrome-accent-surface mari-accent-animated"
+              : "mari-editor-action text-[var(--marinara-editor-muted)]",
           )}
         >
           <FolderOpen size="0.8125rem" /> Groups ({groupMap.size})
         </button>
         {!hasLorebookMarker && parentChatHasLorebook && !lorebookWarningDismissed && (
-          <div className="flex items-center gap-1.5 rounded-lg bg-amber-400/10 px-2.5 py-1.5 text-[0.6875rem] text-amber-200 ring-1 ring-amber-400/25">
+          <div className="mari-editor-chip mari-editor-chip--warning shrink px-2.5 py-1.5 text-[0.6875rem]">
             <AlertTriangle size="0.75rem" className="shrink-0" />
             <span>Add a lorebook marker when this preset should receive active lorebook entries.</span>
             <button
               type="button"
               onClick={dismissLorebookWarning}
-              className="ml-0.5 rounded-md p-0.5 text-amber-200/75 transition-colors hover:bg-amber-400/15 hover:text-amber-100"
+              className="ml-0.5 rounded-md p-0.5 text-[var(--marinara-editor-muted)] transition-colors hover:bg-[var(--warning)]/15 hover:text-[var(--warning)]"
               title="Dismiss warning"
               aria-label="Dismiss warning"
             >
@@ -997,12 +1140,12 @@ function SectionsTab({
 
       {/* ── Groups Management Panel ── */}
       {showGroupsPanel && (
-        <div className="rounded-xl border border-sky-400/20 bg-sky-400/5 p-3 space-y-2">
+        <div className="mari-editor-panel space-y-2 p-3">
           <div className="flex items-center justify-between">
-            <h4 className="text-xs font-semibold text-sky-400">Groups</h4>
+            <h4 className="text-xs font-semibold text-[var(--marinara-editor-text)]">Groups</h4>
             <button
               onClick={handleAddGroup}
-              className="flex items-center gap-1 rounded-lg bg-sky-400/15 px-2 py-1 text-[0.625rem] font-medium text-sky-400 hover:bg-sky-400/25 active:scale-95"
+              className="mari-editor-action mari-editor-action--compact flex items-center gap-1 px-2 py-1 text-[0.625rem]"
             >
               <Plus size="0.625rem" /> New Group
             </button>
@@ -1019,7 +1162,7 @@ function SectionsTab({
               {[...groupMap.values()].map((g: any) => (
                 <div
                   key={g.id}
-                  className="flex items-center gap-2 rounded-lg bg-[var(--secondary)] px-2.5 py-1.5 ring-1 ring-[var(--border)]"
+                  className="mari-editor-panel mari-editor-panel--soft flex items-center gap-2 px-2.5 py-1.5"
                 >
                   {editingGroupId === g.id ? (
                     <input
@@ -1035,7 +1178,7 @@ function SectionsTab({
                         if (e.key === "Enter") (e.target as HTMLInputElement).blur();
                         if (e.key === "Escape") setEditingGroupId(null);
                       }}
-                      className="flex-1 rounded bg-[var(--background)] px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-[var(--ring)]"
+                      className="mari-editor-field flex-1 px-1.5 py-0.5 text-xs"
                       autoFocus
                     />
                   ) : (
@@ -1078,9 +1221,15 @@ function SectionsTab({
       )}
 
       {/* ── Section list with drag & drop ── */}
-      <div ref={containerRef} className="space-y-1" onDragOver={handleContainerDragOver} onDrop={commitDrop}>
+      <div
+        ref={containerRef}
+        data-preset-section-root
+        className="space-y-1"
+        onDragOver={handleContainerDragOver}
+        onDrop={commitDrop}
+      >
         {sections.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 py-10 text-center">
+          <div className="mari-editor-empty flex flex-col items-center gap-2 py-10 text-center">
             <Layers size="1.5rem" className="text-[var(--muted-foreground)]" />
             <p className="text-xs text-[var(--muted-foreground)]">No sections yet. Add one to get started.</p>
           </div>
@@ -1100,8 +1249,12 @@ function SectionsTab({
 
             return (
               <div key={section.id}>
-                {showDropBefore && <div className="mari-chrome-accent-progress mari-accent-animated mx-2 mb-1 h-0.5 rounded-full" />}
+                {showDropBefore && (
+                  <div className="mari-chrome-accent-progress mari-accent-animated mx-2 mb-1 h-0.5 rounded-full" />
+                )}
                 <div
+                  data-touch-reorder-item="preset-section"
+                  data-touch-reorder-index={idx}
                   draggable={dragReady === idx}
                   onDragStart={(e) => handleDragStart(idx, e)}
                   onDragOver={(e) => {
@@ -1117,8 +1270,10 @@ function SectionsTab({
                     setDragReady(null);
                   }}
                   className={cn(
-                    "rounded-xl border transition-all",
-                    isEnabled ? "border-[var(--border)]" : "border-[var(--border)]/50 opacity-50",
+                    "mari-editor-panel transition-all",
+                    isEnabled
+                      ? "border-[var(--marinara-editor-border)]"
+                      : "border-[var(--marinara-editor-border)]/50 opacity-50",
                     draggingIdx === idx && "opacity-40",
                   )}
                 >
@@ -1130,6 +1285,15 @@ function SectionsTab({
                         title="Drag to reorder"
                         onMouseDown={() => setDragReady(idx)}
                         onMouseUp={() => setDragReady(null)}
+                        onTouchStart={(event) => {
+                          event.stopPropagation();
+                          startSectionTouchDrag(event, section.id, {
+                            allowInteractiveTarget: true,
+                            sourceElement: event.currentTarget.closest<HTMLElement>(
+                              '[data-touch-reorder-item="preset-section"]',
+                            ),
+                          });
+                        }}
                       >
                         <GripVertical size="0.875rem" className="text-[var(--muted-foreground)]" />
                       </div>
@@ -1177,11 +1341,7 @@ function SectionsTab({
                         MARKER
                       </span>
                     )}
-                    {group && (
-                      <span className="shrink-0 rounded bg-sky-400/15 px-1.5 py-0.5 text-[0.5625rem] font-medium text-sky-400">
-                        {group.name}
-                      </span>
-                    )}
+                    {group && <span className="mari-editor-chip px-1.5 py-0.5 text-[0.5625rem]">{group.name}</span>}
                     <span className="hidden shrink-0 text-[0.625rem] text-[var(--muted-foreground)] sm:inline">
                       {role}
                     </span>
@@ -1226,7 +1386,7 @@ function SectionsTab({
 
                   {/* Expanded content */}
                   {isExpanded && (
-                    <div className="space-y-3 border-t border-[var(--border)] px-3 py-3">
+                    <div className="space-y-3 border-t border-[var(--marinara-editor-divider)] px-3 py-3">
                       {/* Name & Role */}
                       <div className="flex gap-2">
                         <SectionNameInput
@@ -1248,7 +1408,7 @@ function SectionsTab({
                               role: e.target.value,
                             })
                           }
-                          className="rounded-lg bg-[var(--secondary)] px-2 py-1.5 text-xs ring-1 ring-[var(--border)] focus:outline-none"
+                          className="mari-editor-field px-2 py-1.5 text-xs"
                         >
                           <option value="system">System</option>
                           <option value="user">User</option>
@@ -1282,7 +1442,7 @@ function SectionsTab({
                           const isAgentMarker = mc.type === "agent_data";
                           return isAgentMarker ? (
                             <div className="space-y-2">
-                              <div className="rounded-lg bg-[var(--primary)]/5 p-3 text-xs text-[var(--marinara-chat-chrome-panel-title)]">
+                              <div className="mari-editor-panel mari-editor-panel--soft p-3 text-xs text-[var(--marinara-editor-text)]">
                                 Agent section: <strong>{section.name}</strong>
                                 <p className="mt-1 text-[var(--muted-foreground)]">
                                   The{" "}
@@ -1306,7 +1466,7 @@ function SectionsTab({
                               />
                             </div>
                           ) : (
-                            <div className="mari-chrome-text rounded-lg bg-[var(--marinara-chat-chrome-highlight-bg)] p-3 text-xs">
+                            <div className="mari-editor-panel mari-editor-panel--soft p-3 text-xs text-[var(--marinara-editor-text)]">
                               Marker type: <strong>{MARKER_LABELS[mc.type as MarkerType] ?? "Unknown"}</strong>
                               <p className="mt-1 text-[var(--muted-foreground)]">
                                 {mc.type === "chat_summary"
@@ -1314,7 +1474,7 @@ function SectionsTab({
                                   : "Content is auto-generated at assembly time from your characters, lorebooks, etc."}
                               </p>
                               {["lorebook", "world_info_before", "world_info_after"].includes(mc.type) && (
-                                <p className="mt-1 text-amber-200">
+                                <p className="mt-1 text-[var(--warning)]">
                                   This is where active lorebook entries are inserted.
                                 </p>
                               )}
@@ -1334,7 +1494,7 @@ function SectionsTab({
                               injectionPosition: e.target.value,
                             })
                           }
-                          className="rounded-lg bg-[var(--secondary)] px-2 py-1 text-xs ring-1 ring-[var(--border)]"
+                          className="mari-editor-field px-2 py-1 text-xs"
                         >
                           <option value="ordered">Ordered (in sequence)</option>
                           <option value="depth">Depth (from end of chat)</option>
@@ -1353,7 +1513,7 @@ function SectionsTab({
                                   injectionDepth: nextValue,
                                 })
                               }
-                              className="w-16 rounded-lg bg-[var(--secondary)] px-2 py-1 text-xs ring-1 ring-[var(--border)]"
+                              className="mari-editor-field w-16 px-2 py-1 text-xs"
                             />
                             <span className="text-[var(--muted-foreground)]">(0 = after last message)</span>
                           </>
@@ -1372,7 +1532,7 @@ function SectionsTab({
                               groupId: e.target.value || null,
                             })
                           }
-                          className="rounded-lg bg-[var(--secondary)] px-2 py-1 text-xs ring-1 ring-[var(--border)]"
+                          className="mari-editor-field px-2 py-1 text-xs"
                         >
                           <option value="">No group</option>
                           {[...groupMap.values()].map((g: any) => (
@@ -1390,7 +1550,9 @@ function SectionsTab({
                     </div>
                   )}
                 </div>
-                {showDropAfter && <div className="mari-chrome-accent-progress mari-accent-animated mx-2 mt-1 h-0.5 rounded-full" />}
+                {showDropAfter && (
+                  <div className="mari-chrome-accent-progress mari-accent-animated mx-2 mt-1 h-0.5 rounded-full" />
+                )}
               </div>
             );
           })
@@ -1462,6 +1624,15 @@ function PresetVariablesEditor({
     setDropIdx(variables.length);
   };
 
+  const commitVariableReorder = useCallback(
+    (sourceIdx: number, target: number) => {
+      const ids = reorderIdsToGap(variables, sourceIdx, target);
+      if (!ids) return;
+      onReorderVariables.mutate({ presetId, variableIds: ids });
+    },
+    [onReorderVariables, presetId, variables],
+  );
+
   const commitDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const sourceIdx = draggingIdx;
@@ -1469,13 +1640,7 @@ function PresetVariablesEditor({
     setDraggingIdx(null);
     setDropIdx(null);
     if (sourceIdx === null || target === null) return;
-    let insertAt = target;
-    if (sourceIdx < insertAt) insertAt--;
-    if (sourceIdx === insertAt) return;
-    const ids = variables.map((v: any) => v.id);
-    const [moved] = ids.splice(sourceIdx, 1);
-    ids.splice(insertAt, 0, moved);
-    onReorderVariables.mutate({ presetId, variableIds: ids });
+    commitVariableReorder(sourceIdx, target);
   };
 
   const handleDragEnd = () => {
@@ -1489,13 +1654,42 @@ function PresetVariablesEditor({
     onReorderVariables.mutate({ presetId, variableIds });
   };
 
+  const { startTouchDrag: startVariableTouchDrag } = useTouchFolderDrag({
+    onActivate: (variableId) => {
+      const idx = variables.findIndex((variable: any) => variable.id === variableId);
+      if (idx < 0) return;
+      setDraggingIdx(idx);
+      setDragReady(idx);
+    },
+    onDrop: (variableId, x, y) => {
+      const sourceIdx = variables.findIndex((variable: any) => variable.id === variableId);
+      const targetIdx = getTouchReorderDropIndex({
+        x,
+        y,
+        itemSelector: '[data-touch-reorder-item="preset-variable"]',
+        rootSelector: "[data-preset-variable-root]",
+        itemCount: variables.length,
+      });
+      setDraggingIdx(null);
+      setDropIdx(null);
+      setDragReady(null);
+      if (sourceIdx < 0 || targetIdx === null) return;
+      commitVariableReorder(sourceIdx, targetIdx);
+    },
+    onCancel: () => {
+      setDraggingIdx(null);
+      setDropIdx(null);
+      setDragReady(null);
+    },
+  });
+
   return (
-    <div className="mt-6 space-y-3">
+    <div className="mari-editor-panel mt-6 space-y-3 p-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Hash size="0.875rem" className="text-amber-400" />
+          <Hash size="0.875rem" className="mari-chrome-accent-icon mari-accent-animated" />
           <span className="text-sm font-semibold">Preset Variables</span>
-          <span className="rounded-full bg-amber-400/15 px-1.5 py-0.5 text-[0.5625rem] font-medium text-amber-400">
+          <span className="mari-editor-chip mari-editor-chip--accent px-1.5 py-0.5 text-[0.5625rem]">
             {variables.length}
           </span>
         </div>
@@ -1511,7 +1705,7 @@ function PresetVariablesEditor({
               ],
             })
           }
-          className="flex items-center gap-1.5 rounded-lg bg-amber-400/10 px-2.5 py-1.5 text-[0.6875rem] font-medium text-amber-400 hover:bg-amber-400/20 active:scale-[0.98]"
+          className="mari-editor-action mari-editor-action--primary mari-editor-action--compact flex items-center gap-1.5 px-2.5 py-1.5 text-[0.6875rem]"
         >
           <Plus size="0.6875rem" /> Add Variable
         </button>
@@ -1519,19 +1713,21 @@ function PresetVariablesEditor({
 
       <p className="text-[0.625rem] text-[var(--muted-foreground)]">
         Define variables that users select when assigning this preset to a chat. Use{" "}
-        <code className="rounded bg-[var(--secondary)] px-1 text-amber-400">{"{{variable_name}}"}</code> in any section
-        to insert the selected value.
+        <code className="mari-editor-chip mari-editor-chip--accent rounded px-1 text-[0.625rem]">
+          {"{{variable_name}}"}
+        </code>{" "}
+        in any section to insert the selected value.
       </p>
 
       {variables.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-[var(--border)] py-6 text-center">
+        <div className="mari-editor-empty flex flex-col items-center gap-2 py-6 text-center">
           <Hash size="1.25rem" className="text-[var(--muted-foreground)]" />
           <p className="text-[0.6875rem] text-[var(--muted-foreground)]">
             No variables yet. Add one to let users customize prompts per chat.
           </p>
         </div>
       ) : (
-        <div className="space-y-2" onDragOver={handleContainerDragOver} onDrop={commitDrop}>
+        <div data-preset-variable-root className="space-y-2" onDragOver={handleContainerDragOver} onDrop={commitDrop}>
           {variables.map((variable: any, idx: number) => {
             const showDropBefore =
               dropIdx === idx && draggingIdx !== null && draggingIdx !== idx && draggingIdx !== idx - 1;
@@ -1542,8 +1738,12 @@ function PresetVariablesEditor({
               draggingIdx !== idx;
             return (
               <div key={variable.id}>
-                {showDropBefore && <div className="mx-2 mb-1 h-0.5 rounded-full bg-amber-400" />}
+                {showDropBefore && (
+                  <div className="mari-chrome-accent-progress mari-accent-animated mx-2 mb-1 h-0.5 rounded-full" />
+                )}
                 <div
+                  data-touch-reorder-item="preset-variable"
+                  data-touch-reorder-index={idx}
                   draggable={dragReady === idx}
                   onDragStart={(e) => handleDragStart(idx, e)}
                   onDragOver={(e) => {
@@ -1569,6 +1769,15 @@ function PresetVariablesEditor({
                     onDeleteVariable={onDeleteVariable}
                     onGripDown={() => setDragReady(idx)}
                     onGripUp={() => setDragReady(null)}
+                    onGripTouchStart={(event) => {
+                      event.stopPropagation();
+                      startVariableTouchDrag(event, variable.id, {
+                        allowInteractiveTarget: true,
+                        sourceElement: event.currentTarget.closest<HTMLElement>(
+                          '[data-touch-reorder-item="preset-variable"]',
+                        ),
+                      });
+                    }}
                     onMoveUp={() => moveVariableByOffset(idx, -1)}
                     onMoveDown={() => moveVariableByOffset(idx, 1)}
                     canMoveUp={idx > 0}
@@ -1576,7 +1785,9 @@ function PresetVariablesEditor({
                     isReordering={onReorderVariables.isPending}
                   />
                 </div>
-                {showDropAfter && <div className="mx-2 mt-1 h-0.5 rounded-full bg-amber-400" />}
+                {showDropAfter && (
+                  <div className="mari-chrome-accent-progress mari-accent-animated mx-2 mt-1 h-0.5 rounded-full" />
+                )}
               </div>
             );
           })}
@@ -1597,6 +1808,7 @@ function VariableCard({
   onDeleteVariable,
   onGripDown,
   onGripUp,
+  onGripTouchStart,
   onMoveUp,
   onMoveDown,
   canMoveUp,
@@ -1611,6 +1823,7 @@ function VariableCard({
   onDeleteVariable: any;
   onGripDown: () => void;
   onGripUp: () => void;
+  onGripTouchStart: (event: React.TouchEvent<HTMLElement>) => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
   canMoveUp: boolean;
@@ -1690,9 +1903,7 @@ function VariableCard({
     setDropOptIdx(null);
     setDragReadyOptIdx(null);
     if (optionOrderIsAlphabetical || sourceIdx === null || target === null) return;
-    let insertAt = target;
-    if (sourceIdx < insertAt) insertAt--;
-    const next = reorderItems(opts, sourceIdx, insertAt);
+    const next = reorderItemsToGap(currentOpts(), sourceIdx, target);
     if (next) updateOpts(next);
   };
 
@@ -1702,8 +1913,40 @@ function VariableCard({
     if (next) updateOpts(next);
   };
 
+  const { startTouchDrag: startOptionTouchDrag } = useTouchFolderDrag({
+    onActivate: (optionId) => {
+      if (optionOrderIsAlphabetical) return;
+      const idx = currentOpts().findIndex((option) => option.id === optionId);
+      if (idx < 0) return;
+      setDraggingOptIdx(idx);
+      setDragReadyOptIdx(idx);
+    },
+    onDrop: (optionId, x, y) => {
+      const options = currentOpts();
+      const sourceIdx = options.findIndex((option) => option.id === optionId);
+      const targetIdx = getTouchReorderDropIndex({
+        x,
+        y,
+        itemSelector: `[data-touch-reorder-item="preset-variable-option-${variable.id}"]`,
+        rootSelector: `[data-preset-variable-option-root="${variable.id}"]`,
+        itemCount: options.length,
+      });
+      setDraggingOptIdx(null);
+      setDropOptIdx(null);
+      setDragReadyOptIdx(null);
+      if (optionOrderIsAlphabetical || sourceIdx < 0 || targetIdx === null) return;
+      const next = reorderItemsToGap(options, sourceIdx, targetIdx);
+      if (next) updateOpts(next);
+    },
+    onCancel: () => {
+      setDraggingOptIdx(null);
+      setDropOptIdx(null);
+      setDragReadyOptIdx(null);
+    },
+  });
+
   return (
-    <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 transition-all">
+    <div className="mari-editor-panel mari-editor-panel--soft transition-all">
       {/* Header */}
       <div className="flex min-w-0 items-center gap-2 px-3 py-2.5">
         <div className="flex shrink-0 items-center gap-0.5">
@@ -1712,6 +1955,7 @@ function VariableCard({
             title="Drag to reorder"
             onMouseDown={onGripDown}
             onMouseUp={onGripUp}
+            onTouchStart={onGripTouchStart}
           >
             <GripVertical size="0.875rem" className="text-[var(--muted-foreground)]" />
           </div>
@@ -1743,11 +1987,14 @@ function VariableCard({
             <ChevronRight size="0.875rem" className="text-[var(--muted-foreground)]" />
           )}
         </button>
-        <Hash size="0.875rem" className="shrink-0 text-amber-400" />
-        <span className="min-w-0 flex-1 cursor-pointer truncate text-sm font-medium text-amber-400" onClick={onToggle}>
+        <Hash size="0.875rem" className="mari-chrome-accent-icon mari-accent-animated shrink-0" />
+        <span
+          className="mari-chrome-accent-text mari-accent-animated min-w-0 flex-1 cursor-pointer truncate text-sm font-medium"
+          onClick={onToggle}
+        >
           {varName}
         </span>
-        <span className="shrink-0 rounded bg-amber-400/15 px-1.5 py-0.5 text-[0.5625rem] font-medium text-amber-400">
+        <span className="mari-editor-chip mari-editor-chip--accent shrink-0 px-1.5 py-0.5 text-[0.5625rem]">
           {opts.length} options
         </span>
         {opts.length === 1 && !isMultiSelect && (
@@ -1783,14 +2030,14 @@ function VariableCard({
 
       {/* Expanded content */}
       {isExpanded && (
-        <div className="space-y-3 border-t border-amber-400/20 px-3 py-3">
+        <div className="space-y-3 border-t border-[var(--marinara-editor-divider)] px-3 py-3">
           {/* Variable Name */}
           <div className="space-y-1">
             <label className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Variable Name</label>
             <VariableNameInput value={varName} onCommit={(v) => update({ variableName: v })} />
             <p className="text-[0.5625rem] text-[var(--muted-foreground)]">
-              Use <code className="text-amber-400">{`{{${varName}}}`}</code> in any prompt section to insert the
-              selected value. Must be alphanumeric/underscores only.
+              Use <code className="mari-chrome-accent-text mari-accent-animated">{`{{${varName}}}`}</code> in any prompt
+              section to insert the selected value. Must be alphanumeric/underscores only.
             </p>
           </div>
 
@@ -1804,10 +2051,12 @@ function VariableCard({
 
           {/* Multi-Select & Random Pick (not shown for single-option/boolean variables) */}
           {opts.length === 1 && !isMultiSelect ? (
-            <div className="space-y-1.5 rounded-lg bg-[var(--secondary)] p-2.5 ring-1 ring-[var(--border)]">
+            <div className="mari-editor-panel mari-editor-panel--soft space-y-1.5 p-2.5">
               <div className="flex items-center gap-1.5">
-                <ToggleLeft size="0.75rem" className="mari-chrome-accent-icon mari-accent-animated" />
-                <span className="mari-chrome-accent-text mari-accent-animated text-[0.625rem] font-medium">Boolean Toggle</span>
+                <ListChecks size="0.75rem" className="mari-chrome-accent-icon mari-accent-animated" />
+                <span className="mari-chrome-accent-text mari-accent-animated text-[0.625rem] font-medium">
+                  Boolean Toggle
+                </span>
               </div>
               <p className="text-[0.5625rem] text-[var(--muted-foreground)]">
                 This variable has only one option, so it behaves as a Boolean toggle. Users can switch it on or off in
@@ -1815,7 +2064,7 @@ function VariableCard({
               </p>
             </div>
           ) : (
-            <div className="space-y-2 rounded-lg bg-[var(--secondary)] p-2.5 ring-1 ring-[var(--border)]">
+            <div className="mari-editor-panel mari-editor-panel--soft space-y-2 p-2.5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
                   <ListChecks size="0.75rem" className="mari-chrome-accent-icon mari-accent-animated" />
@@ -1845,14 +2094,14 @@ function VariableCard({
                   {/* Random Pick Toggle */}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
-                      <Shuffle size="0.75rem" className="text-amber-400" />
+                      <Shuffle size="0.75rem" className="mari-chrome-accent-icon mari-accent-animated" />
                       <span className="text-[0.625rem] font-medium text-[var(--foreground)]">Random Pick</span>
                     </div>
                     <button
                       onClick={() => update({ randomPick: !isRandomPick })}
                       className={cn(
                         "relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full transition-colors",
-                        isRandomPick ? "bg-amber-400" : "bg-[var(--border)]",
+                        isRandomPick ? "mari-chrome-accent-progress mari-accent-animated" : "bg-[var(--border)]",
                       )}
                     >
                       <span
@@ -1878,7 +2127,7 @@ function VariableCard({
                       <OptionFieldInput
                         value={separatorValue}
                         onCommit={(value) => update({ separator: value })}
-                        className="w-20 rounded bg-[var(--background)] px-1.5 py-0.5 text-center font-mono text-xs ring-1 ring-[var(--border)] focus:outline-none focus:ring-1 focus:ring-[var(--marinara-chat-chrome-input-border-focus)]"
+                        className="mari-editor-field w-20 px-1.5 py-0.5 text-center font-mono text-xs"
                         placeholder=", "
                       />
                       <span className="text-[0.5625rem] text-[var(--muted-foreground)]">
@@ -1892,13 +2141,13 @@ function VariableCard({
           )}
 
           {/* Presentation */}
-          <div className="space-y-2 rounded-lg bg-[var(--secondary)] p-2.5 ring-1 ring-[var(--border)]">
+          <div className="mari-editor-panel mari-editor-panel--soft space-y-2 p-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
-                <ListChecks size="0.75rem" className="text-amber-400" />
+                <ListChecks size="0.75rem" className="mari-chrome-accent-icon mari-accent-animated" />
                 <span className="text-[0.625rem] font-medium text-[var(--foreground)]">Presentation</span>
               </div>
-              <div className="flex rounded-lg bg-[var(--background)] p-0.5 ring-1 ring-[var(--border)]">
+              <div className="mari-editor-field flex p-0.5">
                 {(
                   [
                     ["auto", "Auto"],
@@ -1913,7 +2162,7 @@ function VariableCard({
                     className={cn(
                       "rounded-md px-2 py-1 text-[0.625rem] font-medium transition-colors",
                       displayMode === mode
-                        ? "bg-amber-400 text-black"
+                        ? "mari-chrome-accent-surface mari-accent-animated"
                         : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
                     )}
                   >
@@ -1936,7 +2185,7 @@ function VariableCard({
                 onClick={() => update({ optionSort: optionOrderIsAlphabetical ? "manual" : "alphabetical" })}
                 className={cn(
                   "relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full transition-colors",
-                  optionOrderIsAlphabetical ? "bg-amber-400" : "bg-[var(--border)]",
+                  optionOrderIsAlphabetical ? "mari-chrome-accent-progress mari-accent-animated" : "bg-[var(--border)]",
                 )}
               >
                 <span
@@ -1950,7 +2199,7 @@ function VariableCard({
           </div>
 
           {/* Options */}
-          <div className="space-y-1.5">
+          <div className="space-y-1.5" data-preset-variable-option-root={variable.id}>
             <label className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Options</label>
             {opts.map((opt, oi) => {
               const valueBlank = !opt.value || !opt.value.trim();
@@ -1963,8 +2212,12 @@ function VariableCard({
                 draggingOptIdx !== oi;
               return (
                 <div key={opt.id}>
-                  {showDropBefore && <div className="mx-2 mb-1 h-0.5 rounded-full bg-amber-400" />}
+                  {showDropBefore && (
+                    <div className="mari-chrome-accent-progress mari-accent-animated mx-2 mb-1 h-0.5 rounded-full" />
+                  )}
                   <div
+                    data-touch-reorder-item={`preset-variable-option-${variable.id}`}
+                    data-touch-reorder-index={oi}
                     draggable={dragReadyOptIdx === oi && !optionOrderIsAlphabetical}
                     onDragStart={(e) => handleOptionDragStart(oi, e)}
                     onDragOver={(e) => {
@@ -1984,7 +2237,7 @@ function VariableCard({
                       "flex items-center gap-2 rounded-lg px-2.5 py-1.5 ring-1",
                       valueBlank
                         ? "bg-[var(--destructive)]/5 ring-[var(--destructive)]/30"
-                        : "bg-[var(--secondary)] ring-[var(--border)]",
+                        : "mari-editor-panel mari-editor-panel--soft",
                       draggingOptIdx === oi && "opacity-40",
                     )}
                   >
@@ -1996,11 +2249,23 @@ function VariableCard({
                             ? "cursor-not-allowed opacity-30"
                             : "cursor-grab hover:bg-[var(--accent)] active:cursor-grabbing",
                         )}
-                        title={optionOrderIsAlphabetical ? "Disable alphabetical display to reorder" : "Drag to reorder"}
+                        title={
+                          optionOrderIsAlphabetical ? "Disable alphabetical display to reorder" : "Drag to reorder"
+                        }
                         onMouseDown={() => {
                           if (!optionOrderIsAlphabetical) setDragReadyOptIdx(oi);
                         }}
                         onMouseUp={() => setDragReadyOptIdx(null)}
+                        onTouchStart={(event) => {
+                          event.stopPropagation();
+                          if (optionOrderIsAlphabetical) return;
+                          startOptionTouchDrag(event, opt.id, {
+                            allowInteractiveTarget: true,
+                            sourceElement: event.currentTarget.closest<HTMLElement>(
+                              `[data-touch-reorder-item="preset-variable-option-${variable.id}"]`,
+                            ),
+                          });
+                        }}
                       >
                         <GripVertical size="0.75rem" className="text-[var(--muted-foreground)]" />
                       </div>
@@ -2025,11 +2290,17 @@ function VariableCard({
                         <ArrowDown size="0.625rem" />
                       </button>
                     </div>
-                    <span className="shrink-0 text-[0.625rem] font-medium text-amber-400">{oi + 1}.</span>
+                    <span className="mari-chrome-accent-text mari-accent-animated shrink-0 text-[0.625rem] font-medium">
+                      {oi + 1}.
+                    </span>
                     <OptionFieldInput
                       value={opt.label}
-                      onCommit={(v) => updateOptionField(opt.id, "label", v)}
-                      className="flex-1 rounded bg-[var(--background)] px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400/50"
+                      onCommit={(v) => {
+                        const next = [...opts];
+                        next[oi] = { ...next[oi], label: v };
+                        updateOpts(next);
+                      }}
+                      className="mari-editor-field flex-1 px-1.5 py-0.5 text-xs"
                       placeholder="Label…"
                     />
                     <OptionFieldInput
@@ -2039,7 +2310,7 @@ function VariableCard({
                         "flex-1 rounded px-1.5 py-0.5 font-mono text-xs focus:outline-none focus:ring-1",
                         valueBlank
                           ? "bg-[var(--destructive)]/10 ring-1 ring-[var(--destructive)]/30 placeholder:text-[var(--destructive)]/40"
-                          : "bg-[var(--background)] focus:ring-amber-400/50",
+                          : "mari-editor-field",
                       )}
                       placeholder="Value…"
                     />
@@ -2064,7 +2335,9 @@ function VariableCard({
                   {valueBlank && (
                     <p className="mt-1 pl-6 text-[0.5625rem] text-[var(--destructive)]">Value cannot be empty.</p>
                   )}
-                  {showDropAfter && <div className="mx-2 mt-1 h-0.5 rounded-full bg-amber-400" />}
+                  {showDropAfter && (
+                    <div className="mari-chrome-accent-progress mari-accent-animated mx-2 mt-1 h-0.5 rounded-full" />
+                  )}
                 </div>
               );
             })}
@@ -2077,7 +2350,7 @@ function VariableCard({
                 };
                 updateOpts([...currentOpts(), newOpt]);
               }}
-              className="flex items-center gap-1 rounded-lg px-2 py-1 text-[0.625rem] font-medium text-amber-400 hover:bg-amber-400/10 active:scale-[0.98]"
+              className="mari-editor-action mari-editor-action--compact flex items-center gap-1 px-2 py-1 text-[0.625rem]"
             >
               <Plus size="0.625rem" /> Add Option
             </button>
@@ -2117,7 +2390,7 @@ function VariableNameInput({ value, onCommit }: { value: string; onCommit: (v: s
           (e.target as HTMLInputElement).blur();
         }
       }}
-      className="w-full rounded bg-[var(--background)] px-2 py-1 font-mono text-xs ring-1 ring-[var(--border)] focus:outline-none focus:ring-1 focus:ring-amber-400/50"
+      className="mari-editor-field w-full px-2 py-1 font-mono text-xs"
       placeholder="VARIABLE_NAME"
     />
   );
@@ -2202,7 +2475,7 @@ function VariableQuestionInput({ value, onCommit }: { value: string; onCommit: (
           (e.target as HTMLInputElement).blur();
         }
       }}
-      className="w-full rounded bg-[var(--background)] px-2 py-1 text-xs ring-1 ring-[var(--border)] focus:outline-none focus:ring-1 focus:ring-amber-400/50"
+      className="mari-editor-field w-full px-2 py-1 text-xs"
       placeholder="What should the user choose?"
     />
   );
@@ -2274,7 +2547,7 @@ function SectionContentTextarea({
       onExpandedClose={commit}
       formatOnChange={(textarea) => applyTextareaQuoteFormat(textarea, quoteFormat)}
       title={sectionName ? `Edit: ${sectionName}` : "Edit Prompt"}
-      className="min-h-[7.5rem] w-full rounded-lg bg-[var(--secondary)] p-2.5 font-mono text-xs text-[var(--foreground)] ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+      className="mari-editor-field min-h-[7.5rem] w-full p-2.5 font-mono text-xs"
       placeholder="Prompt content… (supports {{user}}, {{char}}, {{// comment}}, {{trim}} macros)"
     />
   );
@@ -2384,7 +2657,7 @@ function ExpandedEditorModal({
                   formatQuotes,
                 )
               }
-              className="h-full w-full resize-none rounded-lg bg-[var(--secondary)] p-4 font-mono text-sm text-[var(--foreground)] ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+              className="mari-editor-field h-full w-full resize-none p-4 font-mono text-sm"
               placeholder="Prompt content… (supports macros like {{user}}, {{char}}, etc.)"
             />
           </div>
@@ -2431,7 +2704,7 @@ function SectionNameInput({ value, onCommit }: { value: string; onCommit: (v: st
           (e.target as HTMLInputElement).blur();
         }
       }}
-      className="flex-1 rounded-lg bg-[var(--secondary)] px-2.5 py-1.5 text-xs ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+      className="mari-editor-field flex-1 px-2.5 py-1.5 text-xs"
       placeholder="Section name"
     />
   );
@@ -2443,7 +2716,7 @@ function SectionNameInput({ value, onCommit }: { value: string; onCommit: (v: st
 
 function FieldGroup({ label, help, children }: { label: string; help?: string; children: React.ReactNode }) {
   return (
-    <div>
+    <div className="mari-editor-panel space-y-2 p-3">
       <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[var(--muted-foreground)]">
         {label}
         {help && <HelpTooltip text={help} />}
@@ -2455,7 +2728,7 @@ function FieldGroup({ label, help, children }: { label: string; help?: string; c
 
 function StatCard({ label, value }: { label: string; value: number }) {
   return (
-    <div className="flex flex-1 flex-col items-center rounded-xl bg-[var(--secondary)] p-3 ring-1 ring-[var(--border)]">
+    <div className="mari-editor-panel flex flex-1 flex-col items-center p-3">
       <span className="text-xl font-bold text-[var(--foreground)]">{value}</span>
       <span className="text-[0.625rem] text-[var(--muted-foreground)]">{label}</span>
     </div>

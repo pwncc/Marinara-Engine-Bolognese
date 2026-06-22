@@ -329,6 +329,10 @@ export function YouTubePlayer({ mobile = false }: { mobile?: boolean } = {}) {
   const startDrag = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (!mobile) return;
+      if (event.target instanceof Element && event.target.closest("button,a,input,textarea,select,[role='button']")) {
+        return;
+      }
+      event.preventDefault();
       dragRef.current = {
         pointerId: event.pointerId,
         startX: event.clientX,
@@ -336,7 +340,11 @@ export function YouTubePlayer({ mobile = false }: { mobile?: boolean } = {}) {
         originX: mobilePosition.x,
         originY: mobilePosition.y,
       };
-      event.currentTarget.setPointerCapture(event.pointerId);
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Some mobile browsers can deny capture if the pointer was already cancelled.
+      }
     },
     [mobile, mobilePosition.x, mobilePosition.y],
   );
@@ -345,6 +353,7 @@ export function YouTubePlayer({ mobile = false }: { mobile?: boolean } = {}) {
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const drag = dragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
+      event.preventDefault();
       const next = clampMobilePosition(
         drag.originX + event.clientX - drag.startX,
         drag.originY + event.clientY - drag.startY,
@@ -361,6 +370,13 @@ export function YouTubePlayer({ mobile = false }: { mobile?: boolean } = {}) {
       if (!drag || drag.pointerId !== event.pointerId) return;
       const moved = Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY);
       dragRef.current = null;
+      try {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+      } catch {
+        // Ignore browsers that already released capture.
+      }
       if (moved < 6 && mobile && collapsed) setCollapsed(false);
     },
     [collapsed, mobile, setCollapsed],
@@ -407,7 +423,7 @@ export function YouTubePlayer({ mobile = false }: { mobile?: boolean } = {}) {
         step={1}
         value={playerVolume}
         onChange={(event) => setPlayerVolume(Number(event.target.value))}
-        className="h-1.5 w-full cursor-pointer accent-[#FF0000]"
+        className="mari-youtube-volume-slider w-full"
         title="Volume"
         aria-label="YouTube volume"
       />
@@ -523,7 +539,7 @@ export function YouTubePlayer({ mobile = false }: { mobile?: boolean } = {}) {
       <>
         {active && (
           <div
-            className="fixed z-[60] md:hidden"
+            className="fixed z-[60] touch-none select-none md:hidden"
             style={mobileWidgetStyle}
             onPointerDown={startDrag}
             onPointerMove={moveDrag}

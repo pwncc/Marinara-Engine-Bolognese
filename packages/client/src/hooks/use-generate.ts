@@ -2397,7 +2397,12 @@ export function useGenerate() {
               for (const [id, msg] of persistedMessages) {
                 const textToTranslate =
                   chatData?.mode === "game" ? stripGmTagsKeepReadables(msg.content ?? "").trim() : (msg.content ?? "");
-                if (msg.role === "assistant" && textToTranslate && !store.translations[id]) {
+                if (
+                  msg.role === "assistant" &&
+                  textToTranslate &&
+                  !store.translations[id] &&
+                  !store.hiddenTranslationIds[id]
+                ) {
                   store.setTranslating(id, true);
                   api
                     .post<{ translatedText: string }>("/translate", {
@@ -2415,6 +2420,7 @@ export function useGenerate() {
                       api
                         .patch(`/chats/${params.chatId}/messages/${id}/extra`, {
                           translation: result.translatedText,
+                          translationHidden: false,
                         })
                         .catch(() => {});
                     })

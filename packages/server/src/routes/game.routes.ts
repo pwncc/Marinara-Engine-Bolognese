@@ -6,6 +6,8 @@ import { randomUUID } from "crypto";
 import { existsSync, readFileSync } from "fs";
 import { extname, join } from "path";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
+import { chats as chatsTable } from "../db/schema/index.js";
 import { logger, logDebugOverride } from "../lib/logger.js";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
@@ -141,6 +143,7 @@ import {
   type ImageGenerationSize,
 } from "../services/image/image-generation-settings.js";
 import { createPromptOverridesStorage } from "../services/storage/prompt-overrides.storage.js";
+import { now } from "../utils/id-generator.js";
 import {
   buildGameSpotifySceneQuery,
   getGameSpotifyCandidates,
@@ -544,6 +547,7 @@ const gameSetupConfigSchema = z.object({
   enableLorebookKeeper: z.boolean().optional(),
   language: z.string().min(1).max(100).optional(),
   generationParameters: generationParametersSchema.partial().optional(),
+  promptPresetId: z.string().nullable().optional(),
   gameSystemPrompt: z.string().max(50_000).nullable().optional(),
   gameSpecialInstructions: z.string().max(2000).nullable().optional(),
 });
@@ -560,6 +564,7 @@ const createGameSchema = z.object({
 const setupSchema = z.object({
   chatId: z.string().min(1),
   connectionId: z.string().optional(),
+  promptPresetId: z.string().nullable().optional(),
   preferences: z.string().max(5000).default(""),
   streaming: z.boolean().optional().default(true),
   debugMode: z.boolean().optional().default(false),
@@ -3582,6 +3587,7 @@ export async function gameRoutes(app: FastifyInstance) {
     logger.info("[game/create] Received request");
     const parsedCreateGameInput = createGameSchema.parse(req.body);
     const { name, connectionId, characterConnectionId, promptPresetId, chatId } = parsedCreateGameInput;
+    const selectedPromptPresetId = promptPresetId || parsedCreateGameInput.setupConfig.promptPresetId || null;
     const customHudWidgets = sanitizeGameHudWidgets(parsedCreateGameInput.setupConfig.customHudWidgets);
     const gameSystemPrompt = parsedCreateGameInput.setupConfig.gameSystemPrompt?.trim() || null;
     const gameSpecialInstructions = parsedCreateGameInput.setupConfig.gameSpecialInstructions?.trim() || null;
@@ -3615,6 +3621,7 @@ export async function gameRoutes(app: FastifyInstance) {
         groupId: gameId,
         connectionId: connectionId || sessionChat.connectionId,
         personaId: setupConfig.personaId ?? null,
+        promptPresetId: selectedPromptPresetId,
       });
       sessionChat = await chats.getById(chatId);
     } else {
@@ -3624,7 +3631,7 @@ export async function gameRoutes(app: FastifyInstance) {
         characterIds: setupConfig.partyCharacterIds,
         groupId: gameId,
         personaId: setupConfig.personaId || null,
-        promptPresetId: promptPresetId || null,
+        promptPresetId: selectedPromptPresetId,
         connectionId: connectionId || null,
       });
     }
@@ -3702,7 +3709,7 @@ export async function gameRoutes(app: FastifyInstance) {
   // ── POST /game/setup ──
   app.post("/setup", async (req, reply) => {
     logger.info("[game/setup] Received request");
-    const { chatId, connectionId, preferences, debugMode } = setupSchema.parse(req.body);
+    const { chatId, connectionId, preferences, streaming, debugMode, promptPresetId } = setupSchema.parse(req.body);
     const requestDebug = debugMode === true;
     const debugLogsEnabled = requestDebug || logger.isLevelEnabled("debug");
     const debugLog = (message: string, ...args: any[]) => {
@@ -3716,8 +3723,21 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!chat) throw new Error("Chat not found");
 
     const meta = parseMeta(chat.metadata);
-    const setupConfig = meta.gameSetupConfig as GameSetupConfig | null;
+    let setupConfig = meta.gameSetupConfig as GameSetupConfig | null;
     if (!setupConfig) throw new Error("No setup config found");
+    if (promptPresetId !== undefined) {
+      const selectedPromptPresetId = promptPresetId || null;
+      setupConfig = { ...setupConfig, promptPresetId: selectedPromptPresetId };
+      meta.gameSetupConfig = setupConfig;
+      await app.db
+        .update(chatsTable)
+        .set({
+          promptPresetId: selectedPromptPresetId,
+          metadata: JSON.stringify(meta),
+          updatedAt: now(),
+        })
+        .where(eq(chatsTable.id, chatId));
+    }
     const customHudWidgets = sanitizeGameHudWidgets(setupConfig.customHudWidgets);
 
     const { conn, baseUrl, defaultGenerationParameters } = await resolveConnection(
@@ -3831,6 +3851,8 @@ export async function gameRoutes(app: FastifyInstance) {
         personaFields: setupPersonaFields,
         variables: {},
         chatId,
+        lastGenerationType: "game_setup",
+        idleDuration: "0 seconds",
       });
       const resolveSetupLorebookMacrosForFinal = (value: string) =>
         resolveMacrosWithVariableSnapshot(value, setupPromptMacroContext);

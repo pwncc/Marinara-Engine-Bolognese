@@ -79,7 +79,7 @@ import { SecretPlotPanel } from "../agents/SecretPlotPanel";
 import { SummariesEditorModal } from "./SummariesEditorModal";
 import { useCharacters, usePersonas, useCharacterGroups, type SpriteInfo } from "../../hooks/use-characters";
 import { useLorebooks, useEntriesAcrossLorebooks } from "../../hooks/use-lorebooks";
-import { usePresetFull, usePresets } from "../../hooks/use-presets";
+import { useDefaultPreset, usePresetFull, usePresets } from "../../hooks/use-presets";
 import { useConnections } from "../../hooks/use-connections";
 import { useKnowledgeSources, useUploadKnowledgeSource } from "../../hooks/use-knowledge-sources";
 import { useGenerate } from "../../hooks/use-generate";
@@ -107,6 +107,7 @@ import { useRegexScripts, useUpdateRegexScript, type RegexScriptRow } from "../.
 import { api } from "../../lib/api-client";
 import { filterLanguageGenerationConnections } from "../../lib/connection-filters";
 import { getConnectedChatDisplayName } from "../../lib/chat-display";
+import { getTouchReorderDropIndex } from "../../lib/touch-reorder";
 import {
   getAgentRunIntervalMeta,
   getCadenceInputValue,
@@ -117,6 +118,7 @@ import { getCharacterTitle, parseCharacterDisplayData } from "../../lib/characte
 import { extractCreatorNotesCss } from "../../lib/creator-notes-css";
 import { isLorebookScopeActiveForChat } from "../../lib/lorebook-scope";
 import { useUIStore } from "../../stores/ui.store";
+import { useTouchFolderDrag } from "../../hooks/use-touch-folder-drag";
 import {
   useChatPresets,
   useSaveChatPresetSettings,
@@ -142,6 +144,7 @@ import type {
   HudWidget,
   KnowledgeAgentSourceSettings,
   Message,
+  PromptPreset,
 } from "@marinara-engine/shared";
 import { useAgentConfigs, useCreateAgent, useUpdateAgent, type AgentConfigRow } from "../../hooks/use-agents";
 import { useAgentStore } from "../../stores/agent.store";
@@ -398,6 +401,9 @@ const MODE_INTROS: Record<ChatMode, string> = {
   game: "Full Game Master with built-in dice, combat, encounters, world state, and session/map tracking — the Scene Analysis toggle below adds optional cinematic visuals (backgrounds, music, weather).",
 };
 
+const MARINARA_UNIVERSAL_PRESET_NAME = "Marinara's Universal Preset";
+const MARINARA_UNIVERSAL_PRESET_AUTHOR = "Marinara";
+
 const CHAT_SETTINGS_ORDER = {
   settingsPresets: -1600,
   modeIntro: -1500,
@@ -575,6 +581,7 @@ export function ChatSettingsDrawer({
 }: ChatSettingsDrawerProps) {
   const qc = useQueryClient();
   const scheduleControlsRef = useRef<HTMLDivElement | null>(null);
+  const modePromptDefaultAppliedRef = useRef<string | null>(null);
   const updateChat = useUpdateChat();
   const updateMeta = useUpdateChatMetadata();
   const updateGameWidgets = useUpdateGameWidgets();
@@ -595,18 +602,51 @@ export function ChatSettingsDrawer({
   const imageStyleProfiles = useUIStore((s) => s.imageStyleProfiles);
   const musicPlayerSource = useUIStore((s) => s.musicPlayerSource);
   const openToolDetail = useUIStore((s) => s.openToolDetail);
+  const openPresetDetail = useUIStore((s) => s.openPresetDetail);
 
   const { data: allCharacters } = useCharacters();
   const { data: characterGroups } = useCharacterGroups();
   const { data: lorebooks } = useLorebooks();
   const { data: presets } = usePresets();
+  const { data: defaultPromptPreset } = useDefaultPreset();
   const chatMode = (chat as unknown as { mode?: ChatMode }).mode ?? "roleplay";
   const isConversation = chatMode === "conversation";
   const isGame = chatMode === "game";
   const isRoleplayMode = chatMode === "roleplay" || chatMode === "visual_novel";
   const supportsNarrativeDirectorSecretPlot = chatMode === "roleplay";
   const modeCapabilities = useMemo(() => getChatModeCapabilities(chatMode), [chatMode]);
-  const { data: currentPromptPresetFull } = usePresetFull(isConversation ? null : (chat.promptPresetId ?? null));
+  const metadata = useMemo(
+    () => (typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {})),
+    [chat.metadata],
+  );
+  const { data: currentPromptPresetFull } = usePresetFull(isRoleplayMode ? (chat.promptPresetId ?? null) : null);
+  const promptPresetOptionsLoaded = Array.isArray(presets);
+  const promptPresetOptions = useMemo(() => (presets ?? []) as PromptPreset[], [presets]);
+  const marinaraUniversalPromptPreset = useMemo(
+    () =>
+      promptPresetOptions.find(
+        (preset) =>
+          preset.name === MARINARA_UNIVERSAL_PRESET_NAME && preset.author === MARINARA_UNIVERSAL_PRESET_AUTHOR,
+      ) ?? null,
+    [promptPresetOptions],
+  );
+  const fallbackPromptPreset = useMemo(() => {
+    return marinaraUniversalPromptPreset ?? defaultPromptPreset ?? promptPresetOptions.find((preset) => preset.isDefault) ?? null;
+  }, [defaultPromptPreset, marinaraUniversalPromptPreset, promptPresetOptions]);
+  const hasModeCustomPrompt =
+    isConversation && typeof metadata.customSystemPrompt === "string" && metadata.customSystemPrompt.trim().length > 0
+      ? true
+      : isGame && typeof metadata.gameSystemPrompt === "string" && metadata.gameSystemPrompt.trim().length > 0;
+  const shouldApplyModePromptDefault = (isConversation || isGame) && promptPresetOptionsLoaded && !hasModeCustomPrompt;
+  const effectiveModePromptPresetId =
+    chat.promptPresetId ?? (shouldApplyModePromptDefault ? (fallbackPromptPreset?.id ?? null) : null);
+  const selectedModePromptPreset = useMemo(() => {
+    if (!effectiveModePromptPresetId) return null;
+    return (
+      promptPresetOptions.find((preset) => preset.id === effectiveModePromptPresetId) ??
+      (fallbackPromptPreset?.id === effectiveModePromptPresetId ? fallbackPromptPreset : null)
+    );
+  }, [effectiveModePromptPresetId, fallbackPromptPreset, promptPresetOptions]);
   const { data: connections } = useConnections();
   const imageConnectionsList = useMemo(
     () =>
@@ -634,10 +674,6 @@ export function ChatSettingsDrawer({
     [chat.characterIds],
   );
 
-  const metadata = useMemo(
-    () => (typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {})),
-    [chat.metadata],
-  );
   const gameWidgetSource = useMemo<HudWidget[]>(() => {
     const persistedWidgets = normalizeGameHudWidgets(metadata.gameWidgetState);
     if (persistedWidgets.length > 0 || Array.isArray(metadata.gameWidgetState)) return persistedWidgets;
@@ -1749,6 +1785,21 @@ export function ChatSettingsDrawer({
     setDropIdx(e.clientY < midY ? cardIdx : cardIdx + 1);
   };
 
+  const commitCharacterReorder = useCallback(
+    (sourceIdx: number, targetIdx: number) => {
+      if (sourceIdx < 0 || sourceIdx >= chatCharIds.length || targetIdx < 0 || targetIdx > chatCharIds.length) return;
+      let insertAt = targetIdx;
+      if (sourceIdx < insertAt) insertAt--;
+      if (sourceIdx === insertAt) return;
+      const ids = [...chatCharIds];
+      const [moved] = ids.splice(sourceIdx, 1);
+      if (!moved) return;
+      ids.splice(insertAt, 0, moved);
+      updateChat.mutate({ id: chat.id, characterIds: ids });
+    },
+    [chat.id, chatCharIds, updateChat],
+  );
+
   const handleCharDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const src = dragIdx;
@@ -1756,19 +1807,39 @@ export function ChatSettingsDrawer({
     setDragIdx(null);
     setDropIdx(null);
     if (src === null || tgt === null) return;
-    let insertAt = tgt;
-    if (src < insertAt) insertAt--;
-    if (src === insertAt) return;
-    const ids = [...chatCharIds];
-    const [moved] = ids.splice(src, 1);
-    ids.splice(insertAt, 0, moved!);
-    updateChat.mutate({ id: chat.id, characterIds: ids });
+    commitCharacterReorder(src, tgt);
   };
 
   const handleCharDragEnd = () => {
     setDragIdx(null);
     setDropIdx(null);
   };
+
+  const { startTouchDrag: startCharacterReorderTouchDrag } = useTouchFolderDrag({
+    onActivate: (characterId) => {
+      const idx = chatCharIds.indexOf(characterId);
+      if (idx < 0) return;
+      setDragIdx(idx);
+    },
+    onDrop: (characterId, x, y) => {
+      const sourceIdx = chatCharIds.indexOf(characterId);
+      const targetIdx = getTouchReorderDropIndex({
+        x,
+        y,
+        itemSelector: '[data-touch-reorder-item="chat-settings-character"]',
+        rootSelector: "[data-chat-settings-character-root]",
+        itemCount: chatCharIds.length,
+      });
+      setDragIdx(null);
+      setDropIdx(null);
+      if (sourceIdx < 0 || targetIdx === null) return;
+      commitCharacterReorder(sourceIdx, targetIdx);
+    },
+    onCancel: () => {
+      setDragIdx(null);
+      setDropIdx(null);
+    },
+  });
 
   const toggleLorebook = (lbId: string) => {
     const current = [...activeLorebookIds];
@@ -1978,9 +2049,10 @@ export function ChatSettingsDrawer({
     lorebooks,
   ]);
   const showLorebookMarkerWarning =
-    !!chat.promptPresetId && hasScopedOrGlobalLorebooks && !currentPromptPresetHasLorebookMarker;
+    !!chat.promptPresetId && !isConversation && !isGame && hasScopedOrGlobalLorebooks && !currentPromptPresetHasLorebookMarker;
 
-  const setPreset = (presetId: string | null) => {
+  const [choiceModalPresetId, setChoiceModalPresetId] = useState<string | null>(null);
+  const setPreset = useCallback((presetId: string | null) => {
     updateChat.mutate(
       { id: chat.id, promptPresetId: presetId },
       {
@@ -2003,7 +2075,7 @@ export function ChatSettingsDrawer({
         },
       },
     );
-  };
+  }, [chat.id, updateChat]);
 
   const setConnection = (connectionId: string | null) => {
     updateChat.mutate({ id: chat.id, connectionId });
@@ -2033,7 +2105,6 @@ export function ChatSettingsDrawer({
   const [charSearch, setCharSearch] = useState("");
   const [lbSearch, setLbSearch] = useState("");
   const [toolSearch, setToolSearch] = useState("");
-  const [choiceModalPresetId, setChoiceModalPresetId] = useState<string | null>(null);
   const [agentAddPreview, setAgentAddPreview] = useState<AgentAddPreview | null>(null);
   const [agentAddCadenceInputFocused, setAgentAddCadenceInputFocused] = useState(false);
   const [addingAgentToChat, setAddingAgentToChat] = useState(false);
@@ -2179,6 +2250,25 @@ export function ChatSettingsDrawer({
   }, [chat.id, metadata.gameSystemPrompt]);
 
   useEffect(() => {
+    modePromptDefaultAppliedRef.current = null;
+  }, [chat.id]);
+
+  useEffect(() => {
+    if (!open || !shouldApplyModePromptDefault || chat.promptPresetId || !fallbackPromptPreset?.id) return;
+    const fallbackKey = `${chat.id}:${fallbackPromptPreset.id}`;
+    if (modePromptDefaultAppliedRef.current === fallbackKey) return;
+    modePromptDefaultAppliedRef.current = fallbackKey;
+    updateChat.mutate({ id: chat.id, promptPresetId: fallbackPromptPreset.id });
+  }, [
+    chat.id,
+    chat.promptPresetId,
+    fallbackPromptPreset?.id,
+    open,
+    shouldApplyModePromptDefault,
+    updateChat,
+  ]);
+
+  useEffect(() => {
     setGameSpecialInstructionsDraft((metadata.gameSpecialInstructions as string) ?? "");
   }, [chat.id, metadata.gameSpecialInstructions]);
 
@@ -2189,6 +2279,30 @@ export function ChatSettingsDrawer({
   useEffect(() => {
     setSpotifyArtistDraft(spotifyArtist);
   }, [chat.id, spotifyArtist]);
+
+  const handleModePromptPresetChange = useCallback(
+    (promptPresetId: string | null) => {
+      if (!promptPresetId && fallbackPromptPreset?.id) {
+        modePromptDefaultAppliedRef.current = `${chat.id}:${fallbackPromptPreset.id}`;
+      }
+      setPreset(promptPresetId);
+      if (isConversation) {
+        updateMeta.mutate({ id: chat.id, customSystemPrompt: null });
+        useUIStore.getState().setCustomConversationPrompt(null);
+      }
+      if (isGame) {
+        setGamePromptDraft("");
+        updateMeta.mutate({ id: chat.id, gameSystemPrompt: null });
+      }
+    },
+    [chat.id, fallbackPromptPreset?.id, isConversation, isGame, setPreset, updateMeta],
+  );
+
+  const openSelectedModePromptPreset = useCallback(() => {
+    if (!effectiveModePromptPresetId) return;
+    onClose();
+    openPresetDetail(effectiveModePromptPresetId);
+  }, [effectiveModePromptPresetId, onClose, openPresetDetail]);
 
   const openAgentAddModal = (agent: AvailableAgent) => {
     setAgentAddCadenceInputFocused(false);
@@ -2398,10 +2512,10 @@ export function ChatSettingsDrawer({
   const snapshotCurrentPresetSettings = useCallback((): ChatPresetSettings => {
     return {
       connectionId: chat.connectionId ?? null,
-      promptPresetId: isConversation ? null : (chat.promptPresetId ?? null),
+      promptPresetId: chat.promptPresetId ?? null,
       metadata: { ...metadata },
     };
-  }, [chat.connectionId, chat.promptPresetId, isConversation, metadata]);
+  }, [chat.connectionId, chat.promptPresetId, metadata]);
 
   const handleSelectPreset = (id: string) => {
     if (!id || id === CHAT_PRESET_UNAPPLIED_SELECT_VALUE || id === appliedChatPreset?.id) return;
@@ -2799,9 +2913,9 @@ export function ChatSettingsDrawer({
                 <HelpTooltip
                   side="left"
                   text={
-                    isConversation
-                      ? "Presets bundle this chat's connection, tools, translation, memory recall, advanced parameters, and other settings. Prompt presets are not applied in conversation mode. Characters, persona, lorebooks, sprites, summary, tags, and scene prompt stay tied to the chat. Star a preset to use it as the default for new chats in this mode."
-                      : "Presets bundle this chat's connection, prompt preset, agents, tools, translation, memory recall, advanced parameters, and other settings. They never touch your characters, persona, lorebooks, sprites, summary, tags, or scene prompt — those stay tied to the chat. Star a preset to use it as the default for new chats in this mode."
+                    isRoleplayMode
+                      ? "Presets bundle this chat's connection, prompt preset, agents, tools, translation, memory recall, advanced parameters, and other settings. They never touch your characters, persona, lorebooks, sprites, summary, tags, or scene prompt. Star a preset to use it as the default for new chats in this mode."
+                      : "Presets bundle this chat's connection, prompt source, agents, tools, translation, memory recall, advanced parameters, and other settings. Characters, persona, lorebooks, sprites, summary, tags, and scene prompt stay tied to the chat. Star a preset to use it as the default for new chats in this mode."
                   }
                 />
               </div>
@@ -2899,12 +3013,12 @@ export function ChatSettingsDrawer({
             />
           </div>
 
-          {/* Preset — hidden for conversation mode and game mode */}
-          {modeCapabilities.supportsPromptPresets && !metadata.sceneSystemPrompt && (
+          {/* Roleplay prompt preset */}
+          {modeCapabilities.supportsPromptPresets && isRoleplayMode && !metadata.sceneSystemPrompt && (
             <div style={{ order: CHAT_SETTINGS_ORDER.promptPreset }}>
               <PromptPresetSection
                 promptPresetId={chat.promptPresetId ?? null}
-                presets={(presets ?? []) as Array<{ id: string; name: string }>}
+                presets={promptPresetOptions}
                 hasVariables={currentPromptPresetHasVariables}
                 showLorebookMarkerWarning={showLorebookMarkerWarning}
                 onEditVariables={() => {
@@ -2915,14 +3029,34 @@ export function ChatSettingsDrawer({
             </div>
           )}
 
-          {/* Prompt — game mode only */}
+          {/* Conversation/Game prompt preset */}
+          {isConversation && (
+            <div style={{ order: CHAT_SETTINGS_ORDER.promptPreset }}>
+              <ConversationPromptSection
+                chatId={chat.id}
+                customPrompt={(metadata.customSystemPrompt as string) ?? ""}
+                promptPresetId={effectiveModePromptPresetId}
+                promptPresets={promptPresetOptions}
+                selectedPresetName={selectedModePromptPreset?.name ?? null}
+                selectedPresetPrompt={selectedModePromptPreset?.conversationPrompt ?? ""}
+                onCustomPromptChange={(id, customSystemPrompt) => updateMeta.mutate({ id, customSystemPrompt })}
+                onPromptPresetChange={handleModePromptPresetChange}
+                onOpenPromptPreset={openSelectedModePromptPreset}
+              />
+            </div>
+          )}
+
           {isGame && (
-            <div style={{ order: CHAT_SETTINGS_ORDER.gamePrompt }}>
+            <div style={{ order: CHAT_SETTINGS_ORDER.promptPreset }}>
               <GameExtraPromptSection
                 expanded={gamePromptExpanded}
                 storedValue={(metadata.gameSystemPrompt as string) ?? ""}
                 value={gamePromptDraft}
                 specialInstructionsValue={gameSpecialInstructionsDraft}
+                promptPresetId={effectiveModePromptPresetId}
+                promptPresets={promptPresetOptions}
+                selectedPresetName={selectedModePromptPreset?.name ?? null}
+                selectedPresetPrompt={selectedModePromptPreset?.gamePrompt ?? ""}
                 onCommit={(gameSystemPrompt) => updateMeta.mutate({ id: chat.id, gameSystemPrompt })}
                 onSpecialInstructionsCommit={(gameSpecialInstructions) =>
                   updateMeta.mutate({ id: chat.id, gameSpecialInstructions })
@@ -2930,6 +3064,8 @@ export function ChatSettingsDrawer({
                 onExpandedChange={setGamePromptExpanded}
                 onValueChange={setGamePromptDraft}
                 onSpecialInstructionsChange={setGameSpecialInstructionsDraft}
+                onPromptPresetChange={handleModePromptPresetChange}
+                onOpenPromptPreset={openSelectedModePromptPreset}
               />
             </div>
           )}
@@ -2971,7 +3107,7 @@ export function ChatSettingsDrawer({
                               className="h-7 w-7 shrink-0 rounded-full object-cover"
                             />
                           ) : (
-                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white">
+                            <div className="mari-avatar-placeholder mari-avatar-placeholder--persona flex h-7 w-7 shrink-0 items-center justify-center rounded-full">
                               <User size="0.75rem" />
                             </div>
                           )}
@@ -3059,7 +3195,7 @@ export function ChatSettingsDrawer({
                               className="h-6 w-6 shrink-0 rounded-full object-cover"
                             />
                           ) : (
-                            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white">
+                            <div className="mari-avatar-placeholder mari-avatar-placeholder--persona flex h-6 w-6 shrink-0 items-center justify-center rounded-full">
                               <User size="0.625rem" />
                             </div>
                           )}
@@ -3124,7 +3260,7 @@ export function ChatSettingsDrawer({
                                 />
                               </span>
                             ) : (
-                              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-[0.625rem] font-bold">
+                              <div className="mari-avatar-placeholder mari-avatar-placeholder--character flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[0.625rem] font-bold">
                                 {name[0]}
                               </div>
                             )}
@@ -3227,7 +3363,7 @@ export function ChatSettingsDrawer({
                             className="h-7 w-7 shrink-0 rounded-full object-cover"
                           />
                         ) : (
-                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white">
+                          <div className="mari-avatar-placeholder mari-avatar-placeholder--persona flex h-7 w-7 shrink-0 items-center justify-center rounded-full">
                             <User size="0.75rem" />
                           </div>
                         )}
@@ -3317,7 +3453,7 @@ export function ChatSettingsDrawer({
                             className="h-6 w-6 shrink-0 rounded-full object-cover"
                           />
                         ) : (
-                          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white">
+                          <div className="mari-avatar-placeholder mari-avatar-placeholder--persona flex h-6 w-6 shrink-0 items-center justify-center rounded-full">
                             <User size="0.625rem" />
                           </div>
                         )}
@@ -3362,6 +3498,7 @@ export function ChatSettingsDrawer({
                 <p className="text-[0.6875rem] text-[var(--muted-foreground)]">No characters added to this chat.</p>
               ) : (
                 <div
+                  data-chat-settings-character-root
                   className="flex flex-col gap-1"
                   onDragOver={(e) => {
                     e.preventDefault();
@@ -3380,6 +3517,8 @@ export function ChatSettingsDrawer({
                           <div className="h-0.5 rounded-full bg-[var(--primary)] mx-2 mb-1" />
                         )}
                         <div
+                          data-touch-reorder-item="chat-settings-character"
+                          data-touch-reorder-index={i}
                           draggable
                           onDragStart={(e) => handleCharDragStart(i, e)}
                           onDragOver={(e) => {
@@ -3397,6 +3536,15 @@ export function ChatSettingsDrawer({
                           <div
                             className="cursor-grab text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors active:cursor-grabbing"
                             title="Drag to reorder"
+                            onTouchStart={(event) => {
+                              event.stopPropagation();
+                              startCharacterReorderTouchDrag(event, c.id, {
+                                allowInteractiveTarget: true,
+                                sourceElement: event.currentTarget.closest<HTMLElement>(
+                                  '[data-touch-reorder-item="chat-settings-character"]',
+                                ),
+                              });
+                            }}
                           >
                             <GripVertical size="0.75rem" />
                           </div>
@@ -3419,7 +3567,7 @@ export function ChatSettingsDrawer({
                                 />
                               </span>
                             ) : (
-                              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--accent)] text-[0.625rem] font-bold">
+                              <div className="mari-avatar-placeholder mari-avatar-placeholder--character flex h-7 w-7 items-center justify-center rounded-full text-[0.625rem] font-bold">
                                 {name[0]}
                               </div>
                             )}
@@ -3513,7 +3661,7 @@ export function ChatSettingsDrawer({
                               />
                             </span>
                           ) : (
-                            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--accent)] text-[0.5625rem] font-bold">
+                            <div className="mari-avatar-placeholder mari-avatar-placeholder--character flex h-6 w-6 items-center justify-center rounded-full text-[0.5625rem] font-bold">
                               {name[0]}
                             </div>
                           )}
@@ -3606,14 +3754,6 @@ export function ChatSettingsDrawer({
                   </PickerDropdown>
                 ))}
             </Section>
-          )}
-
-          {isConversation && (
-            <ConversationPromptSection
-              chatId={chat.id}
-              customPrompt={(metadata.customSystemPrompt as string) ?? ""}
-              onCustomPromptChange={(id, customSystemPrompt) => updateMeta.mutate({ id, customSystemPrompt })}
-            />
           )}
 
           {/* Card Theming — only shown when an active character ships creator-notes CSS */}
@@ -5564,7 +5704,14 @@ export function ChatSettingsDrawer({
                                         />
                                       </span>
                                     ) : (
-                                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent)] text-[0.625rem] font-bold">
+                                      <div
+                                        className={cn(
+                                          "flex h-8 w-8 items-center justify-center rounded-full text-[0.625rem] font-bold",
+                                          isPersona
+                                            ? "mari-avatar-placeholder mari-avatar-placeholder--persona"
+                                            : "mari-avatar-placeholder mari-avatar-placeholder--character",
+                                        )}
+                                      >
                                         {name[0]}
                                       </div>
                                     )}

@@ -433,9 +433,13 @@ async function resolveProviderConnection(db: DB) {
   const connections = createConnectionsStorage(db);
   const spotifyAgent = await agents.getByType("spotify");
   const connId = spotifyAgent?.connectionId ?? null;
-  const conn = connId ? await connections.getWithKey(connId) : await connections.getDefaultForAgents();
+  if (!connId) {
+    fail(400, "Configure a model connection on the Music DJ agent before using DJ Mari.");
+  }
+
+  const conn = await connections.getWithKey(connId);
   if (!conn) {
-    fail(400, "Configure a model connection for the Music DJ agent, or set a default agent connection.");
+    fail(400, "The Music DJ agent's model connection could not be found.");
   }
 
   let baseUrl = conn.baseUrl;

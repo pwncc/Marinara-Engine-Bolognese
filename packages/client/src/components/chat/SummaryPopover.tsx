@@ -9,6 +9,7 @@ import {
   useCallback,
   useMemo,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
@@ -264,23 +265,35 @@ export function SummaryPopover({
     [chatId, contextSize, setSummaryPopoverSettings, updateMeta],
   );
 
-  // Close on click outside — defer by one frame so the synthesised
-  // mousedown from the tap that *opened* the popover doesn't
-  // immediately close it on touch devices (Android / iPadOS).
+  const eventTargetsPanel = useCallback((event: Event) => {
+    const panel = panelRef.current;
+    if (!panel) return false;
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+    if (path.includes(panel)) return true;
+    return event.target instanceof Node && panel.contains(event.target);
+  }, []);
+
+  // Close on outside interaction — defer by one frame so the synthesised
+  // pointer event from the tap that *opened* the popover doesn't immediately
+  // close it on touch devices (Android / iPadOS).
   useEffect(() => {
-    const handler = (e: globalThis.MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+    const handler = (e: globalThis.PointerEvent) => {
+      if (eventTargetsPanel(e)) return;
+      const activeElement = document.activeElement;
+      if (activeElement instanceof Node && panelRef.current?.contains(activeElement)) return;
+      if (rangeInputFocused.current || sizeInputFocused.current || automaticIntervalFocused.current) return;
+      if (panelRef.current) {
         onClose();
       }
     };
     const raf = requestAnimationFrame(() => {
-      document.addEventListener("mousedown", handler);
+      document.addEventListener("pointerdown", handler);
     });
     return () => {
       cancelAnimationFrame(raf);
-      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("pointerdown", handler);
     };
-  }, [onClose]);
+  }, [eventTargetsPanel, onClose]);
 
   // Close on Escape
   useEffect(() => {
@@ -701,14 +714,16 @@ export function SummaryPopover({
   const handlePanelMouseDown = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
     event.stopPropagation();
   }, []);
+  const handlePanelPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+  }, []);
 
   const content = (
     <div
       ref={panelRef}
       onMouseDown={handlePanelMouseDown}
-      className={cn(
-        isMobile ? "fixed z-[9999]" : "absolute right-0 top-full z-[100] mt-1",
-      )}
+      onPointerDown={handlePanelPointerDown}
+      className={cn(isMobile ? "fixed z-[9999]" : "absolute right-0 top-full z-[100] mt-1")}
       style={
         mobileFrame
           ? {

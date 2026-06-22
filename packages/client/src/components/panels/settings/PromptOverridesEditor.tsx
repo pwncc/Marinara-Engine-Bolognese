@@ -140,9 +140,7 @@ export function PromptOverridesEditor({
             </span>
           </span>
         </button>
-        <span className="mt-0.5 shrink-0">
-          <HelpTooltip text={help} />
-        </span>
+        <HelpTooltip text={help} />
       </div>
 
       {hasOpened && (
