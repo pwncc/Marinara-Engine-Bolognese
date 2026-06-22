@@ -118,6 +118,13 @@ function parsePositiveInteger(value: string): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function summaryErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return "Could not generate summary.";
+}
+
 function clampAutomaticSummaryInterval(value: unknown): number {
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) : NaN;
   if (!Number.isFinite(parsed)) return DEFAULT_AUTOMATIC_SUMMARY_INTERVAL;
@@ -450,7 +457,7 @@ export function SummaryPopover({
             setDraftEntry(null);
             maybeHideSummarisedMessages(data.messageIds);
           },
-          onError: () => toast.error("Could not generate summary."),
+          onError: (error) => toast.error(summaryErrorMessage(error)),
         },
       );
       return;
@@ -468,7 +475,7 @@ export function SummaryPopover({
           setDraftEntry(null);
           maybeHideSummarisedMessages(data.messageIds);
         },
-        onError: () => toast.error("Could not generate summary."),
+        onError: (error) => toast.error(summaryErrorMessage(error)),
       },
     );
   }, [

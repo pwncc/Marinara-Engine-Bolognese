@@ -1234,9 +1234,8 @@
   color: var(--marinara-chat-chrome-button-text-active);
   stroke: currentColor;
   transition:
-    color 140ms linear,
-    stroke 140ms linear,
-    filter 140ms linear;
+    color 180ms linear,
+    stroke 180ms linear;
 }
 
 .mari-topbar-active-underline {
@@ -1297,11 +1296,9 @@
     .mari-topbar-button
   ) {
   transition:
-    background 140ms linear,
-    background-color 140ms linear,
-    border-color 140ms linear,
-    color 140ms linear,
-    box-shadow 140ms linear;
+    background-color 180ms linear,
+    border-color 180ms linear,
+    color 180ms linear;
 }
 
 /* ─────────────────────────────────────────────
@@ -2708,6 +2705,11 @@ summary[class*="cursor-pointer"],
   background-position: 0% 50%;
   background-size: 220% 100%;
   animation: mari-logo-title-shift 5.2s ease-in-out infinite;
+}
+
+[data-marinara-effects-paused="true"] .mari-logo-gradient-text--active,
+[data-marinara-effects-paused="true"] .mari-rgb-toggle-track {
+  animation-play-state: paused;
 }
 
 @keyframes mari-logo-title-shift {

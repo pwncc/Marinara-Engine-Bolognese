@@ -569,6 +569,13 @@ function getChatActiveAgentIds(chat: Chat): string[] {
   return Array.isArray(activeIds) ? activeIds.filter((id): id is string => typeof id === "string") : [];
 }
 
+function getChatActiveLorebookIds(chat: Chat): string[] {
+  const metadata = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
+  const activeIds =
+    metadata && typeof metadata === "object" ? (metadata as { activeLorebookIds?: unknown }).activeLorebookIds : [];
+  return Array.isArray(activeIds) ? activeIds.filter((id): id is string => typeof id === "string") : [];
+}
+
 export function ChatSettingsDrawer({
   chat,
   open,
@@ -774,7 +781,6 @@ export function ChatSettingsDrawer({
     [chatCharIds, inactiveCharacterIds],
   );
   const supportsCharacterActivityToggle = chatCharIds.length > 1 && !isGame;
-  const isSceneChat = metadata.sceneStatus === "active" || typeof metadata.sceneOriginChatId === "string";
   useEffect(() => {
     if (!open || initialSection !== "autonomous" || !isConversation) return;
     const frame = window.requestAnimationFrame(() => {
@@ -797,6 +803,10 @@ export function ChatSettingsDrawer({
     () => (Array.isArray(metadata.activeLorebookIds) ? metadata.activeLorebookIds : []),
     [metadata.activeLorebookIds],
   );
+  const readLatestActiveLorebookIds = useCallback(() => {
+    const latestChat = qc.getQueryData<Chat>(chatKeys.detail(chat.id));
+    return latestChat ? getChatActiveLorebookIds(latestChat) : [...activeLorebookIds];
+  }, [activeLorebookIds, chat.id, qc]);
   const gameLorebookKeeperEnabled = metadata.gameLorebookKeeperEnabled === true;
   const gameLorebookKeeperLorebookId =
     typeof metadata.gameLorebookKeeperLorebookId === "string" ? metadata.gameLorebookKeeperLorebookId : null;
@@ -1857,7 +1867,7 @@ export function ChatSettingsDrawer({
   });
 
   const toggleLorebook = (lbId: string) => {
-    const current = [...activeLorebookIds];
+    const current = readLatestActiveLorebookIds();
     const idx = current.indexOf(lbId);
     if (idx >= 0) current.splice(idx, 1);
     else current.push(lbId);
@@ -1865,8 +1875,9 @@ export function ChatSettingsDrawer({
   };
 
   const pinLorebookToChat = (lbId: string) => {
-    if (activeLorebookIds.includes(lbId)) return;
-    updateMeta.mutate({ id: chat.id, activeLorebookIds: [...activeLorebookIds, lbId] });
+    const current = readLatestActiveLorebookIds();
+    if (current.includes(lbId)) return;
+    updateMeta.mutate({ id: chat.id, activeLorebookIds: [...current, lbId] });
   };
 
   const hasSecretPlotMemory = (memory: Record<string, unknown> | null | undefined) => {
@@ -2860,8 +2871,8 @@ export function ChatSettingsDrawer({
             "flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain pb-[calc(1rem+env(safe-area-inset-bottom))]",
           )}
         >
-          {/* Chat Settings Preset bar — hidden in Game Mode and scene chats. */}
-          {modeCapabilities.supportsChatSettingsPresets && !isSceneChat && (
+          {/* Chat Settings Preset bar — hidden in Game Mode. Scene chats keep it, but scene instructions stay chat-owned. */}
+          {modeCapabilities.supportsChatSettingsPresets && (
             <div
               style={{ order: CHAT_SETTINGS_ORDER.settingsPresets }}
               className="flex shrink-0 flex-col gap-2 border-b border-[var(--border)] px-4 py-3"

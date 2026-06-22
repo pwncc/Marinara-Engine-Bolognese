@@ -714,7 +714,7 @@ function useSummaryEntryMutation() {
       api.patch<Chat>(`/chats/${chatId}/summary-entries`, body),
     onSuccess: (data, vars) => {
       if (data) {
-        qc.setQueryData(chatKeys.detail(vars.chatId), data);
+        syncCachedChat(qc, data);
       } else {
         qc.invalidateQueries({ queryKey: chatKeys.detail(vars.chatId) });
       }
@@ -1106,7 +1106,18 @@ export function useGenerateSummary() {
         rangeEndIndex,
         promptTemplateId,
       }),
-    onSuccess: (_data, vars) => {
+    onSuccess: (data, vars) => {
+      const existing = qc.getQueryData<Chat>(chatKeys.detail(vars.chatId));
+      if (existing) {
+        syncCachedChat(qc, {
+          ...existing,
+          metadata: {
+            ...(normalizeChatMetadataValue(existing.metadata) as Record<string, unknown>),
+            summary: data.summary,
+            summaryEntries: data.entries,
+          } as Chat["metadata"],
+        });
+      }
       qc.invalidateQueries({ queryKey: chatKeys.detail(vars.chatId) });
     },
   });

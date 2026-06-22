@@ -752,7 +752,7 @@ function extractTaggedToolSnippets(content: string): string[] {
   const snippets: string[] = [];
   const patterns = [
     /<\|tool_call\|?>([\s\S]*?)(?:<tool_call\|>|<\|\/tool_call\|>|<\/tool_call>|$)/gi,
-    /<tool_call>([\s\S]*?)<\/tool_call>/gi,
+    /<tool_call>([\s\S]*?)(?:<\/tool_call>|<\/arg_value>|$)/gi,
     /<tool_code>([\s\S]*?)<\/tool_code>/gi,
   ];
   for (const pattern of patterns) {

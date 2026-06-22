@@ -212,6 +212,13 @@ type GameAssetGenerationOptions = {
   showSuccessToast?: boolean;
 };
 
+type ApplyGeneratedAssetsOptions = {
+  /** Manual gallery requests should never replace the active scene background. */
+  applyBackgroundToScene?: boolean;
+  /** Manual gallery illustrations should be saved to the gallery without replacing the active scene background. */
+  applyIllustrationToScene?: boolean;
+};
+
 type GameSpotifyCandidatesResponse = {
   enabled: boolean;
   tracks: SceneSpotifyTrackCandidate[];
@@ -4159,9 +4166,12 @@ export function GameSurface({
   }
 
   const installGeneratedIllustration = useCallback(
-    async (illustration: { tag: string; segment?: number }) => {
+    async (illustration: { tag: string; segment?: number }, options?: ApplyGeneratedAssetsOptions) => {
       void queryClient.invalidateQueries({ queryKey: ["gallery", activeChatId] });
       await fetchManifest();
+      if (options?.applyIllustrationToScene === false) {
+        return;
+      }
       if (illustration.segment !== undefined && illustration.segment > 0) {
         setPendingSegmentEffects((previous) => {
           const existingIndex = previous.findIndex((effect) => effect.segment === illustration.segment);
@@ -4284,14 +4294,14 @@ export function GameSurface({
   );
 
   const applyGeneratedAssets = useCallback(
-    async (res: GameAssetGenerationResult) => {
+    async (res: GameAssetGenerationResult, options?: ApplyGeneratedAssetsOptions) => {
       const nextBackground = res.generatedBackground ?? res.fallbackBackground;
-      if (nextBackground) {
+      if (nextBackground && options?.applyBackgroundToScene !== false) {
         await fetchManifest();
         useGameAssetStore.getState().setCurrentBackground(nextBackground);
       }
       if (res.generatedIllustration) {
-        await installGeneratedIllustration(res.generatedIllustration);
+        await installGeneratedIllustration(res.generatedIllustration, options);
       }
       if (res.generatedNpcAvatars?.length) {
         useGameModeStore.getState().patchNpcAvatars(res.generatedNpcAvatars);
@@ -4620,7 +4630,7 @@ export function GameSurface({
       const result = await runGameAssetGeneration(assetPayload, { allowPromptReview: true });
       setPendingAssetGeneration(null);
       if (!result) return;
-      await applyGeneratedAssets(result);
+      await applyGeneratedAssets(result, { applyBackgroundToScene: false, applyIllustrationToScene: false });
       if (result.generatedIllustration) {
         toast.success("Scene illustrated.", { duration: 1800 });
       } else {
@@ -8337,20 +8347,11 @@ export function GameSurface({
           <button
             type="button"
             onClick={() => setTutorialOpen(true)}
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--marinara-chat-chrome-button-text)] transition-colors hover:bg-[var(--marinara-chat-chrome-highlight-bg-hover)] hover:text-[var(--marinara-chat-chrome-highlight-text)]"
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--marinara-chat-chrome-button-border)] bg-[var(--marinara-chat-chrome-button-bg)] text-[var(--marinara-chat-chrome-button-text)] transition-colors hover:border-[var(--marinara-chat-chrome-button-border-hover)] hover:bg-[var(--marinara-chat-chrome-highlight-bg-hover)] hover:text-[var(--marinara-chat-chrome-highlight-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--marinara-chat-chrome-focus-ring)]"
             title="Game tutorial"
             aria-label="Game tutorial"
           >
             <CircleHelp size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setSessionPanelOpen(false)}
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--marinara-chat-chrome-button-text)] transition-colors hover:bg-[var(--marinara-chat-chrome-highlight-bg-hover)] hover:text-[var(--marinara-chat-chrome-highlight-text)]"
-            title="Close session"
-            aria-label="Close session"
-          >
-            <X size={14} />
           </button>
         </div>
       </div>

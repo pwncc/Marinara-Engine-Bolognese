@@ -49,7 +49,7 @@ function parseTaggedSnippets(content: string): string[] {
   const snippets: string[] = [];
   const patterns = [
     /<\|tool_call\|?>([\s\S]*?)(?:<tool_call\|>|<\|\/tool_call\|>|<\/tool_call>|$)/gi,
-    /<tool_call>([\s\S]*?)<\/tool_call>/gi,
+    /<tool_call>([\s\S]*?)(?:<\/tool_call>|<\/arg_value>|$)/gi,
     /<tool_code>([\s\S]*?)<\/tool_code>/gi,
     /```(?:json)?\s*([\s\S]*?)\s*```/gi,
   ];
@@ -72,7 +72,10 @@ function snippetToPayload(snippet: string): Record<string, unknown> | null {
       : { name: "mari_db", arguments: jsonPayload };
   }
   const callMatch = snippet.trim().match(/^(?:call\s*:\s*)?([A-Za-z_][\w.-]*)\s*(\{[\s\S]*\})\s*$/);
-  if (!callMatch) return null;
+  if (!callMatch) {
+    const command = normalizeMariCommand(snippet);
+    return command ? { name: "mari_db", arguments: { command } } : null;
+  }
   const name = callMatch[1];
   const argsText = callMatch[2];
   if (!name || !argsText) return null;
@@ -86,6 +89,7 @@ function normalizeMariCommand(value: unknown): string | null {
   const raw = typeof value === "string" ? value.trim() : "";
   if (!raw) return null;
   const command = raw.replace(/^\$+\s*/, "");
+  if (command.length > 800 || /[\r\n]/.test(command) || /[;&|`$<>]/.test(command)) return null;
   if (/^mari(?:\s|$)/i.test(command)) return command;
   if (/^[A-Za-z][\w-]*(?:\s+[A-Za-z0-9_.:-]+)*$/.test(command)) return `mari ${command}`;
   return null;
