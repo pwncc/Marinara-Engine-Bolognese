@@ -2132,6 +2132,7 @@ export function ChatSettingsDrawer({
         });
         await qc.refetchQueries({ queryKey: chatKeys.detail(chat.id) });
         await qc.invalidateQueries({ queryKey: chatKeys.list() });
+        await qc.invalidateQueries({ queryKey: ["conversation-status", chat.id] });
 
         const statuses = Object.values(result.results ?? {}).map((entry) => entry.status);
         const generatedCount = statuses.filter((status) => status === "generated").length;

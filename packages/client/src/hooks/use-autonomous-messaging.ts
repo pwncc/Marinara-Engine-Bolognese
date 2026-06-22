@@ -85,11 +85,13 @@ export function useAutonomousMessaging(
           characterIds,
           scheduleGenerationPreferences,
         });
+        await qc.invalidateQueries({ queryKey: chatKeys.detail(chatId) });
+        await qc.invalidateQueries({ queryKey: ["conversation-status", chatId] });
       } catch {
         // non-critical — schedule generation may fail if no connection
       }
     },
-    [chatId],
+    [chatId, qc],
   );
 
   const recordClientPresence = useCallback(

@@ -302,7 +302,7 @@ export const api = {
     path: string,
     body?: unknown,
     signal?: AbortSignal,
-  ): AsyncGenerator<{ type: string; data: unknown }> {
+  ): AsyncGenerator<{ type: string; data: unknown } & Record<string, unknown>> {
     const res = await fetch(`${BASE}${path}`, {
       method: "POST",
       headers: { ...getAdminSecretHeader(), [CSRF_HEADER]: CSRF_HEADER_VALUE, "Content-Type": "application/json" },
@@ -345,7 +345,7 @@ export const api = {
           if (data === "[DONE]") return;
           const parsed = parseSseJsonPayload(data);
           if (!parsed || typeof parsed.type !== "string") continue;
-          yield { type: parsed.type, data: parsed.data };
+          yield parsed as { type: string; data: unknown } & Record<string, unknown>;
           if (parsed.type === "error") return;
         }
       }
@@ -354,7 +354,7 @@ export const api = {
         if (data === "[DONE]") return;
         const parsed = parseSseJsonPayload(data);
         if (!parsed || typeof parsed.type !== "string") continue;
-        yield { type: parsed.type, data: parsed.data };
+        yield parsed as { type: string; data: unknown } & Record<string, unknown>;
         if (parsed.type === "error") return;
       }
     } finally {
