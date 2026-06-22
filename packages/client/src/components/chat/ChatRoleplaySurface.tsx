@@ -665,6 +665,7 @@ function SummaryButton({
   summaryContextSize,
   summaryPromptTemplates,
   activeSummaryPromptTemplateId,
+  summaryConnectionId,
   automaticSummaryEnabled,
   activeAgentIds,
   summaryRunInterval,
@@ -678,6 +679,7 @@ function SummaryButton({
   summaryContextSize: number;
   summaryPromptTemplates?: ComponentProps<typeof SummaryPopover>["promptTemplates"];
   activeSummaryPromptTemplateId?: string | null;
+  summaryConnectionId?: string | null;
   automaticSummaryEnabled: boolean;
   activeAgentIds: string[];
   summaryRunInterval?: number;
@@ -747,6 +749,7 @@ function SummaryButton({
             contextSize={summaryContextSize}
             promptTemplates={summaryPromptTemplates}
             activePromptTemplateId={activeSummaryPromptTemplateId}
+            summaryConnectionId={summaryConnectionId}
             automaticSummaryEnabled={automaticSummaryEnabled}
             activeAgentIds={activeAgentIds}
             summaryRunInterval={summaryRunInterval}
@@ -1348,6 +1351,9 @@ export function ChatRoleplaySurface({
                           ? chatMeta.activeSummaryPromptTemplateId
                           : null
                       }
+                      summaryConnectionId={
+                        typeof chatMeta.summaryConnectionId === "string" ? chatMeta.summaryConnectionId : null
+                      }
                       automaticSummaryEnabled={automaticSummaryEnabled}
                       activeAgentIds={summaryActiveAgentIds}
                       summaryRunInterval={summaryRunInterval}
@@ -1445,6 +1451,9 @@ export function ChatRoleplaySurface({
                               ? chatMeta.activeSummaryPromptTemplateId
                               : null
                           }
+                          summaryConnectionId={
+                            typeof chatMeta.summaryConnectionId === "string" ? chatMeta.summaryConnectionId : null
+                          }
                           automaticSummaryEnabled={automaticSummaryEnabled}
                           activeAgentIds={summaryActiveAgentIds}
                           summaryRunInterval={summaryRunInterval}
@@ -1508,6 +1517,9 @@ export function ChatRoleplaySurface({
                           typeof chatMeta.activeSummaryPromptTemplateId === "string"
                             ? chatMeta.activeSummaryPromptTemplateId
                             : null
+                        }
+                        summaryConnectionId={
+                          typeof chatMeta.summaryConnectionId === "string" ? chatMeta.summaryConnectionId : null
                         }
                         automaticSummaryEnabled={automaticSummaryEnabled}
                         activeAgentIds={summaryActiveAgentIds}

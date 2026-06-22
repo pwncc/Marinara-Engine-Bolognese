@@ -7261,20 +7261,31 @@ export async function generateRoutes(app: FastifyInstance) {
 
           let summaryProvider = provider;
           let summaryModel = conn.model;
-          const defaultAgentConn = await connections.getDefaultForAgents();
-          if (defaultAgentConn) {
-            const defaultAgentBaseUrl = resolveBaseUrl(defaultAgentConn);
-            if (defaultAgentBaseUrl) {
+          const summaryConnectionId =
+            typeof chatMeta.summaryConnectionId === "string" && chatMeta.summaryConnectionId.trim()
+              ? chatMeta.summaryConnectionId.trim()
+              : null;
+          const summaryConn = summaryConnectionId
+            ? await connections.getWithKey(summaryConnectionId)
+            : await connections.getDefaultForAgents();
+          if (summaryConn && summaryConn.provider !== "image_generation") {
+            const summaryBaseUrl = resolveBaseUrl(summaryConn);
+            if (summaryBaseUrl) {
               summaryProvider = createLLMProvider(
-                defaultAgentConn.provider,
-                defaultAgentBaseUrl,
-                defaultAgentConn.apiKey,
-                defaultAgentConn.maxContext,
-                defaultAgentConn.openrouterProvider,
-                defaultAgentConn.maxTokensOverride,
+                summaryConn.provider,
+                summaryBaseUrl,
+                summaryConn.apiKey,
+                summaryConn.maxContext,
+                summaryConn.openrouterProvider,
+                summaryConn.maxTokensOverride,
               );
-              summaryModel = defaultAgentConn.model;
+              summaryModel = summaryConn.model;
             }
+          } else if (summaryConnectionId) {
+            logger.warn(
+              { chatId: input.chatId, connectionId: summaryConnectionId },
+              "[chat-summary] Configured summary connection is unavailable or not a text connection; using chat connection",
+            );
           }
 
           const chatLog = selectedMessages

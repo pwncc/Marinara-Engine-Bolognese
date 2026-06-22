@@ -67,6 +67,7 @@ import {
   parseExtra,
   resolveRoleplayChatSummary,
   isMessageHiddenFromAI,
+  resolveBaseUrl,
   resolveActiveCharacterIds,
   resolveVisibleGameStateAnchor,
   shouldEnableAgentsForGeneration,
@@ -2673,21 +2674,19 @@ export async function chatsRoutes(app: FastifyInstance) {
     const hasRangeByIndex = requestedRangeStartIndex !== null && requestedRangeEndIndex !== null;
     const hasRange = hasRangeByMessageId || hasRangeByIndex;
 
-    const chatConnId = chat.connectionId;
-
     const connections = createConnectionsStorage(app.db);
 
     // Model resolution chain:
-    // 1. Default-for-agents connection
-    // 2. Chat's active connection
+    // 1. Chat summary override connection
+    // 2. Default-for-agents connection
+    // 3. Chat's active connection
+    const summaryConnectionId =
+      typeof chatMeta.summaryConnectionId === "string" && chatMeta.summaryConnectionId.trim()
+        ? chatMeta.summaryConnectionId.trim()
+        : null;
     const defaultAgentConn = await connections.getDefaultForAgents();
 
-    let resolvedConnId: string | null = defaultAgentConn?.id ?? null;
-
-    // Fall back to the chat connection
-    if (!resolvedConnId) {
-      resolvedConnId = chatConnId ?? null;
-    }
+    const resolvedConnId: string | null = summaryConnectionId ?? defaultAgentConn?.id ?? chat.connectionId ?? null;
 
     if (!resolvedConnId) return reply.status(400).send({ error: "No API connection configured for this chat" });
 
@@ -2703,15 +2702,11 @@ export async function chatsRoutes(app: FastifyInstance) {
       }
       const conn = await connections.getWithKey(id);
       if (!conn) return reply.status(400).send({ error: "API connection not found" });
-
-      let baseUrl = conn.baseUrl;
-      if (!baseUrl) {
-        const { PROVIDERS } = await import("@marinara-engine/shared");
-        const providerDef = PROVIDERS[conn.provider as keyof typeof PROVIDERS];
-        baseUrl = providerDef?.defaultBaseUrl ?? "";
+      if (conn.provider === "image_generation") {
+        return reply.status(400).send({ error: "Chat summary connection must be a text generation connection" });
       }
-      if (!baseUrl && conn.provider === "claude_subscription") baseUrl = "claude-agent-sdk://local";
-      if (!baseUrl && conn.provider === "openai_chatgpt") baseUrl = "openai-chatgpt://codex-auth";
+
+      const baseUrl = resolveBaseUrl(conn);
       if (!baseUrl) return reply.status(400).send({ error: "No base URL for this connection" });
 
       provider = createLLMProvider(

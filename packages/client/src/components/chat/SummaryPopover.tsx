@@ -38,6 +38,7 @@ import {
 import { toast } from "sonner";
 import { cn, generateClientId } from "../../lib/utils";
 import { useUIStore } from "../../stores/ui.store";
+import { useConnections } from "../../hooks/use-connections";
 import {
   ROLEPLAY_POPOVER_SCROLL_AREA,
   ROLEPLAY_POPOVER_SHELL,
@@ -45,6 +46,7 @@ import {
   ROLEPLAY_POPOVER_TITLE,
 } from "./roleplay-popover-styles";
 import {
+  type APIConnection,
   DEFAULT_CHAT_SUMMARY_PROMPT,
   estimateChatSummaryTokens,
   normalizeChatSummaryEntries,
@@ -60,6 +62,7 @@ interface SummaryPopoverProps {
   contextSize: number;
   promptTemplates?: ChatSummaryPromptTemplate[];
   activePromptTemplateId?: string | null;
+  summaryConnectionId?: string | null;
   automaticSummaryEnabled?: boolean;
   activeAgentIds?: string[];
   summaryRunInterval?: number;
@@ -79,6 +82,9 @@ interface SummaryPopoverAnchor {
 }
 
 type SummarySourceMode = "last" | "range";
+type SummaryConnectionOption = Pick<APIConnection, "id" | "name" | "provider" | "model"> & {
+  defaultForAgents?: boolean | string | null;
+};
 
 const MIN_SUMMARY_MESSAGES = 5;
 const MAX_SUMMARY_MESSAGES = 200;
@@ -129,6 +135,26 @@ function clampAutomaticSummaryInterval(value: unknown): number {
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) : NaN;
   if (!Number.isFinite(parsed)) return DEFAULT_AUTOMATIC_SUMMARY_INTERVAL;
   return Math.max(MIN_AUTOMATIC_SUMMARY_INTERVAL, Math.min(MAX_AUTOMATIC_SUMMARY_INTERVAL, Math.trunc(parsed)));
+}
+
+function isSummaryConnectionOption(value: unknown): value is SummaryConnectionOption {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.id === "string" &&
+    typeof record.name === "string" &&
+    typeof record.provider === "string" &&
+    record.provider !== "image_generation"
+  );
+}
+
+function isDefaultAgentConnection(connection: SummaryConnectionOption): boolean {
+  return connection.defaultForAgents === true || connection.defaultForAgents === "true";
+}
+
+function formatSummaryConnectionLabel(connection: SummaryConnectionOption): string {
+  const model = typeof connection.model === "string" && connection.model.trim() ? ` · ${connection.model.trim()}` : "";
+  return `${connection.name}${model}`;
 }
 
 function formatSummaryHeading(value: string): string {
@@ -218,6 +244,7 @@ export function SummaryPopover({
   contextSize,
   promptTemplates = [],
   activePromptTemplateId = null,
+  summaryConnectionId = null,
   automaticSummaryEnabled = false,
   activeAgentIds = [],
   summaryRunInterval,
@@ -255,6 +282,7 @@ export function SummaryPopover({
   const generateSummary = useGenerateSummary();
   const bulkSetMessagesHiddenFromAI = useBulkSetMessagesHiddenFromAI();
   const updateMeta = useUpdateChatMetadata();
+  const { data: connectionsData } = useConnections();
   const updateSummaryEntry = useUpdateSummaryEntry();
   const deleteSummaryEntry = useDeleteSummaryEntry();
   const toggleSummaryEntry = useToggleSummaryEntry();
@@ -396,6 +424,18 @@ export function SummaryPopover({
   const entryMutationPending =
     updateSummaryEntry.isPending || deleteSummaryEntry.isPending || toggleSummaryEntry.isPending;
   const automaticSummariesOn = automaticSummaryEnabled;
+  const summaryConnections = useMemo(
+    () => (connectionsData ?? []).filter(isSummaryConnectionOption),
+    [connectionsData],
+  );
+  const defaultAgentConnection = summaryConnections.find(isDefaultAgentConnection) ?? null;
+  const selectedSummaryConnectionId =
+    typeof summaryConnectionId === "string" && summaryConnectionId.trim() ? summaryConnectionId.trim() : "";
+  const selectedSummaryConnectionMissing =
+    !!selectedSummaryConnectionId && !summaryConnections.some((connection) => connection.id === selectedSummaryConnectionId);
+  const defaultConnectionLabel = defaultAgentConnection
+    ? `Agent default (${defaultAgentConnection.name})`
+    : "Agent default (falls back to chat connection)";
 
   useEffect(() => {
     if (!automaticIntervalFocused.current) {
@@ -422,6 +462,16 @@ export function SummaryPopover({
       });
     },
     [activeAgentIds, chatId, normalizedAutomaticSummaryInterval, updateMeta],
+  );
+
+  const handleSummaryConnectionChange = useCallback(
+    (connectionId: string) => {
+      updateMeta.mutate({
+        id: chatId,
+        summaryConnectionId: connectionId || null,
+      });
+    },
+    [chatId, updateMeta],
   );
 
   const handleSourceModeChange = useCallback(
@@ -1033,6 +1083,32 @@ export function SummaryPopover({
                   </div>
                 )}
               </div>
+            </div>
+
+            <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/35 p-2">
+              <div className="min-w-0">
+                <p className="text-[0.6875rem] font-semibold text-[var(--popover-foreground)]">Summary Connection</p>
+                <p className="mt-0.5 text-[0.625rem] leading-snug text-[var(--muted-foreground)]">
+                  Choose the model connection used for manual and automatic summaries.
+                </p>
+              </div>
+              <select
+                value={selectedSummaryConnectionId}
+                onChange={(event) => handleSummaryConnectionChange(event.target.value)}
+                disabled={updateMeta.isPending}
+                className="w-full rounded-md bg-[var(--card)] px-2 py-1.5 text-xs font-semibold text-[var(--foreground)] ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Summary connection"
+              >
+                <option value="">{defaultConnectionLabel}</option>
+                {selectedSummaryConnectionMissing && (
+                  <option value={selectedSummaryConnectionId}>Missing connection ({selectedSummaryConnectionId})</option>
+                )}
+                {summaryConnections.map((connection) => (
+                  <option key={connection.id} value={connection.id}>
+                    {formatSummaryConnectionLabel(connection)}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
