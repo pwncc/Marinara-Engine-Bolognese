@@ -7,6 +7,7 @@ type TouchFolderDragState = {
   sourceElement: HTMLElement;
   previousDraggable: string | null;
   previousTouchCallout: string;
+  previousTouchAction: string;
   previousUserDrag: string;
   previousUserSelect: string;
   previewElement: HTMLElement | null;
@@ -22,6 +23,7 @@ type TouchFolderDragState = {
 
 type TouchFolderDragOptions = {
   delayMs?: number;
+  moveActivateThresholdPx?: number;
   moveCancelThresholdPx?: number;
   autoScrollEdgePx?: number;
   autoScrollMaxSpeedPx?: number;
@@ -39,7 +41,7 @@ type AutoScrollTarget = {
 };
 
 const DEFAULT_TOUCH_DRAG_DELAY_MS = 320;
-const DEFAULT_TOUCH_DRAG_CANCEL_THRESHOLD_PX = 24;
+const DEFAULT_TOUCH_DRAG_ACTIVATE_THRESHOLD_PX = 10;
 const DEFAULT_AUTO_SCROLL_EDGE_PX = 76;
 const DEFAULT_AUTO_SCROLL_MAX_SPEED_PX = 18;
 const WEBKIT_TOUCH_CALLOUT_PROPERTY = "-webkit-touch-callout";
@@ -162,17 +164,20 @@ function getAutoScrollTargets(sourceElement: HTMLElement) {
 
 export function useTouchFolderDrag({
   delayMs = DEFAULT_TOUCH_DRAG_DELAY_MS,
-  moveCancelThresholdPx = DEFAULT_TOUCH_DRAG_CANCEL_THRESHOLD_PX,
+  moveActivateThresholdPx,
+  moveCancelThresholdPx,
   autoScrollEdgePx = DEFAULT_AUTO_SCROLL_EDGE_PX,
   autoScrollMaxSpeedPx = DEFAULT_AUTO_SCROLL_MAX_SPEED_PX,
   onActivate,
   onDrop,
   onCancel,
 }: TouchFolderDragOptions) {
+  const resolvedMoveActivateThresholdPx =
+    moveActivateThresholdPx ?? moveCancelThresholdPx ?? DEFAULT_TOUCH_DRAG_ACTIVATE_THRESHOLD_PX;
   const dragRef = useRef<TouchFolderDragState | null>(null);
   const optionsRef = useRef({
     delayMs,
-    moveCancelThresholdPx,
+    moveActivateThresholdPx: resolvedMoveActivateThresholdPx,
     autoScrollEdgePx,
     autoScrollMaxSpeedPx,
     onActivate,
@@ -183,7 +188,7 @@ export function useTouchFolderDrag({
 
   optionsRef.current = {
     delayMs,
-    moveCancelThresholdPx,
+    moveActivateThresholdPx: resolvedMoveActivateThresholdPx,
     autoScrollEdgePx,
     autoScrollMaxSpeedPx,
     onActivate,
@@ -251,6 +256,19 @@ export function useTouchFolderDrag({
     [getAutoScrollDelta, runAutoScroll],
   );
 
+  const activateTouchDrag = useCallback(
+    (drag: TouchFolderDragState) => {
+      if (drag.active || dragRef.current !== drag) return;
+      clearDragTimer(drag);
+      drag.active = true;
+      drag.sourceElement.style.touchAction = "none";
+      createPreviewElement(drag);
+      optionsRef.current.onActivate(drag.id);
+      scheduleAutoScroll(drag);
+    },
+    [clearDragTimer, scheduleAutoScroll],
+  );
+
   const restoreSourceElement = useCallback((drag: TouchFolderDragState) => {
     removePreviewElement(drag);
     if (drag.previousDraggable === null) {
@@ -260,6 +278,7 @@ export function useTouchFolderDrag({
     }
     restoreStyleProperty(drag.sourceElement.style, WEBKIT_TOUCH_CALLOUT_PROPERTY, drag.previousTouchCallout);
     restoreStyleProperty(drag.sourceElement.style, WEBKIT_USER_DRAG_PROPERTY, drag.previousUserDrag);
+    drag.sourceElement.style.touchAction = drag.previousTouchAction;
     drag.sourceElement.style.userSelect = drag.previousUserSelect;
   }, []);
 
@@ -301,25 +320,24 @@ export function useTouchFolderDrag({
       const movedY = touch.clientY - drag.startY;
       const moved = Math.hypot(movedX, movedY);
 
-      if (!drag.active && moved > optionsRef.current.moveCancelThresholdPx) {
-        cancelTouchDrag(false);
-        return;
+      if (!drag.active && moved > optionsRef.current.moveActivateThresholdPx) {
+        activateTouchDrag(drag);
       }
 
       if (drag.active) {
-        event.preventDefault();
+        if (event.cancelable) event.preventDefault();
         updatePreviewPosition(drag);
         scheduleAutoScroll(drag);
       }
     },
-    [cancelTouchDrag, scheduleAutoScroll],
+    [activateTouchDrag, scheduleAutoScroll],
   );
 
   const handleTouchEnd = useCallback(
     (event: TouchEvent) => {
       const drag = dragRef.current;
       if (drag?.active) {
-        event.preventDefault();
+        if (event.cancelable) event.preventDefault();
       }
       cancelTouchDrag(true);
     },
@@ -343,6 +361,9 @@ export function useTouchFolderDrag({
   const startTouchDrag = useCallback(
     (event: ReactTouchEvent<HTMLElement>, id: string) => {
       if (event.touches.length !== 1) return;
+      if (event.target instanceof Element && event.target.closest("button,a,input,textarea,select,[role='button']")) {
+        return;
+      }
       cancelTouchDrag(false);
       attachListeners();
 
@@ -350,6 +371,7 @@ export function useTouchFolderDrag({
       const sourceElement = event.currentTarget;
       const previousDraggable = sourceElement.getAttribute("draggable");
       const previousTouchCallout = sourceElement.style.getPropertyValue(WEBKIT_TOUCH_CALLOUT_PROPERTY);
+      const previousTouchAction = sourceElement.style.touchAction;
       const previousUserDrag = sourceElement.style.getPropertyValue(WEBKIT_USER_DRAG_PROPERTY);
       const previousUserSelect = sourceElement.style.userSelect;
 
@@ -365,6 +387,7 @@ export function useTouchFolderDrag({
         sourceElement,
         previousDraggable,
         previousTouchCallout,
+        previousTouchAction,
         previousUserDrag,
         previousUserSelect,
         previewElement: null,
@@ -379,17 +402,12 @@ export function useTouchFolderDrag({
       };
 
       drag.timer = window.setTimeout(() => {
-        if (dragRef.current !== drag) return;
-        drag.active = true;
-        drag.timer = null;
-        createPreviewElement(drag);
-        optionsRef.current.onActivate(id);
-        scheduleAutoScroll(drag);
+        activateTouchDrag(drag);
       }, optionsRef.current.delayMs);
 
       dragRef.current = drag;
     },
-    [attachListeners, cancelTouchDrag, scheduleAutoScroll],
+    [activateTouchDrag, attachListeners, cancelTouchDrag],
   );
 
   useEffect(
