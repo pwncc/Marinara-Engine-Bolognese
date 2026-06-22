@@ -321,8 +321,6 @@ function workspaceCommandProtocolPrompt() {
     (tool) => `- ${tool.name}: ${tool.description}\n  JSON arguments: ${JSON.stringify(tool.parameters)}`,
   ).join("\n");
   return `<workspace_command_protocol>
-Marinara gives Professor Mari two channels in one assistant turn: visible speech and hidden workspace actions. This is provider-agnostic like Conversation/Game command mode. Provider-native tool/function calling is never used.
-
 Preferred text action frame when commands are needed:
 {"say":"optional short user-visible progress note, or empty string for silent work","commands":[{"name":"read","arguments":{"path":"README.md","offset":1,"limit":80}},{"name":"grep","arguments":{"pattern":"Professor Mari","path":"packages","glob":"*.ts","limit":20}}]}
 
@@ -649,9 +647,11 @@ function findJsonPayloadMatch(content: string): JsonPayloadMatch | null {
 }
 
 function rawJsonCommandCalls(payload: Record<string, unknown>): unknown[] {
-  const plural = payload.commands ?? payload.calls;
+  // Accept legacy text-frame aliases too. These are parsed from ordinary model text;
+  // provider-native tool/function calling is still never offered or consumed.
+  const plural = payload.commands ?? payload.calls ?? payload.tool_calls ?? payload.toolCalls;
   if (Array.isArray(plural)) return plural;
-  const single = payload.command;
+  const single = payload.command ?? payload.tool_call ?? payload.toolCall;
   if (single !== undefined) return [single];
   if (typeof payload.name === "string") return [payload];
   return [];
@@ -734,15 +734,21 @@ function dedupeWorkspaceCommandCalls(calls: WorkspaceCommandCall[]): WorkspaceCo
   });
 }
 
-function removeJsonActionFrame(content: string): { content: string; match: JsonPayloadMatch | null } {
-  const match = findJsonPayloadMatch(content);
-  if (!match) return { content, match: null };
-  return { content: `${content.slice(0, match.start)}${content.slice(match.end)}`, match };
+function removeJsonActionFrames(content: string): { content: string; matches: JsonPayloadMatch[] } {
+  let next = content;
+  const matches: JsonPayloadMatch[] = [];
+  for (let index = 0; index < 20; index += 1) {
+    const match = findJsonPayloadMatch(next);
+    if (!match) break;
+    matches.push(match);
+    next = `${next.slice(0, match.start)}${next.slice(match.end)}`;
+  }
+  return { content: next, matches };
 }
 
 function stripWorkspaceCommands(content: string): string {
   if (!content.trim()) return "";
-  const withoutJson = removeJsonActionFrame(content).content;
+  const withoutJson = removeJsonActionFrames(content).content;
   return withoutJson
     .replace(COMMAND_BLOCK_RE, "")
     .replace(/\[(read|grep|find|ls|bash):\s*[^\]\r\n]+\]/gi, "")
@@ -751,10 +757,13 @@ function stripWorkspaceCommands(content: string): string {
 }
 
 function parseAssistantWorkspaceAction(content: string): AssistantWorkspaceAction {
-  const { content: contentWithoutJson, match } = removeJsonActionFrame(content);
-  const jsonCommands = match ? parseJsonCommandCallsFromPayload(match.payload) : [];
+  const { content: contentWithoutJson, matches } = removeJsonActionFrames(content);
+  const jsonCommands = matches.flatMap((match) => parseJsonCommandCallsFromPayload(match.payload));
   const inlineVisibleText = stripWorkspaceCommands(contentWithoutJson);
-  const frameVisibleText = match ? jsonPayloadVisibleText(match.payload) : "";
+  const frameVisibleText = matches
+    .map((match) => jsonPayloadVisibleText(match.payload))
+    .filter(Boolean)
+    .join("\n\n");
   const visibleText = [inlineVisibleText, frameVisibleText].filter(Boolean).join("\n\n").trim();
   const commands = dedupeWorkspaceCommandCalls([
     ...parseXmlCommandCalls(contentWithoutJson),
