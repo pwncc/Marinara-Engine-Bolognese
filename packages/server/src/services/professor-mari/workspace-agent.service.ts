@@ -7,7 +7,15 @@ import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
-import type { BaseLLMProvider, ChatMessage, ChatOptions, LLMToolCall, LLMUsage } from "../llm/base-provider.js";
+import type {
+  BaseLLMProvider,
+  ChatCompletionResult,
+  ChatMessage,
+  ChatOptions,
+  LLMToolCall,
+  LLMToolDefinition,
+  LLMUsage,
+} from "../llm/base-provider.js";
 import { createLLMProvider } from "../llm/provider-registry.js";
 import { getLocalSidecarProvider, LOCAL_SIDECAR_MODEL } from "../llm/local-sidecar.js";
 import { createChatsStorage } from "../storage/chats.storage.js";
@@ -77,11 +85,26 @@ type WorkspaceToolDefinition = {
   parameters: Record<string, unknown>;
 };
 
+type JsonPayloadMatch = {
+  payload: Record<string, unknown>;
+  raw: string;
+  start: number;
+  end: number;
+};
+
+type AssistantWorkspaceAction = {
+  visibleText: string;
+  commands: WorkspaceCommandCall[];
+  assistantHistoryContent: string;
+};
+
 const WORKSPACE_TOOLS: MariWorkspaceToolName[] = ["read", "grep", "find", "ls", "edit", "write", "bash"];
 const RUNTIME_API_KEY = "local-marinara-runtime";
 const SESSION_ID = "professor-mari-workspace";
 const MAX_COMMAND_ROUNDS = 12;
 const MAX_HISTORY_MESSAGES = 40;
+const MAX_PARALLEL_READONLY_COMMANDS = 4;
+const RECENT_WORKSPACE_CONTINUITY_LIMIT = 4;
 const COMMAND_OUTPUT_LIMIT = 32_000;
 const COMMAND_FILE_READ_LIMIT = 256_000;
 const DEFAULT_BASH_TIMEOUT_SECONDS = 120;
@@ -305,10 +328,19 @@ function workspaceCommandProtocolPrompt() {
     (tool) => `- ${tool.name}: ${tool.description}\n  JSON arguments: ${JSON.stringify(tool.parameters)}`,
   ).join("\n");
   return `<workspace_command_protocol>
-Marinara executes hidden Professor Mari commands from plain assistant text. This is the same provider-agnostic command style used by Conversation mode and Game mode; do not rely on provider-native tool/function calling.
+Marinara gives Professor Mari two channels in one assistant turn: visible speech and hidden workspace actions. This is provider-agnostic like Conversation/Game command mode, but native tool calls may also be used when the provider supports them.
 
-When you need workspace action, output one or more hidden command blocks using EXACTLY one of these forms:
+Preferred action frame when tools are needed:
+{"say":"optional short user-visible progress note, or empty string for silent work","tool_calls":[{"name":"read","arguments":{"path":"README.md","offset":1,"limit":80}},{"name":"grep","arguments":{"pattern":"Professor Mari","path":"packages","glob":"*.ts","limit":20}}]}
 
+Use this frame to be fluid:
+- Set \`say\` to \`""\` for routine inspection, verification, and file reads. Silent tool use is normal and preferred.
+- Put several independent read-only calls in the same \`tool_calls\` array. Marinara can run read/grep/find/ls in parallel.
+- Use a short \`say\` only when it helps the user understand progress, a decision, an error, or an approval/save boundary.
+- After tool results, either issue the next action frame, speak to the user, or do both. This lets you talk between tool batches without narrating every tiny step.
+- If the user says \`go ahead\`, \`yes\`, \`apply it\`, or similar, treat it as approval to continue the previously discussed plan. Use hidden continuity/tool evidence; do not restart discovery unless the evidence is missing or stale.
+
+Legacy hidden command blocks are still accepted when a model cannot reliably emit JSON frames:
 <read>{"path":"README.md","offset":1,"limit":80}</read>
 <grep>{"pattern":"Professor Mari","path":"packages","glob":"*.ts","limit":20}</grep>
 <find>{"pattern":"**/*.ts","path":"packages/server/src","limit":50}</find>
@@ -317,15 +349,12 @@ When you need workspace action, output one or more hidden command blocks using E
 <write>{"path":"tmp/payload.json","content":"{\n  \"ok\": true\n}"}</write>
 <bash>{"command":"mari db tables","timeout":60}</bash>
 
-You may also output only JSON for command batches:
-{"tool_calls":[{"name":"read","arguments":{"path":"README.md"}}]}
-
 Rules:
-- Command blocks are hidden and stripped from visible chat. You may include a short visible sentence before/after commands, but do not expose command syntax to the user.
+- Hidden commands/action frames are stripped from visible chat. Never expose command syntax unless the user explicitly asks.
 - Use commands iteratively: inspect, act, verify, then answer.
 - Use read/grep/find/ls/edit/write for files. Use bash mostly for simple \`mari ...\`, \`pnpm ...\`, or health/check commands.
 - For writes to live app data, prefer \`mari ...\` commands. \`--apply\` may wait for browser approval.
-- If no command is needed, answer normally with no command blocks.
+- If no command is needed, answer normally in plain text. You may also return {"say":"final answer"}.
 
 Available command schemas:
 ${toolDocs}
@@ -354,16 +383,6 @@ function parseJsonObject(value: unknown): Record<string, unknown> | null {
 
 function parseExtra(value: unknown): Record<string, unknown> {
   return parseJsonObject(value) ?? {};
-}
-
-function stringifyEventPayload(value: unknown): string | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
 }
 
 type MariWorkspaceTraceTool = Extract<MariWorkspaceTraceItem, { type: "tool" }>["tool"];
@@ -520,6 +539,29 @@ function createProviderForConnection(connection: WorkspaceConnection): BaseLLMPr
   );
 }
 
+function shouldOfferNativeToolCalls(connection: WorkspaceConnection): boolean {
+  return !isLocalSidecarConnection(connection) && !bool(connection.treatAsLocalEndpoint);
+}
+
+function workspaceNativeToolDefinitions(): LLMToolDefinition[] {
+  return WORKSPACE_TOOL_DEFINITIONS.map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    },
+  }));
+}
+
+function isNativeToolUnsupportedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    /\b(tool|function|tool_calls|function_call)\b/i.test(message) &&
+    /\b(unsupported|not supported|does not support|not enabled|invalid|unknown|400)\b/i.test(message)
+  );
+}
+
 function parseToolArgumentsValue(value: unknown): Record<string, unknown> {
   if (isRecord(value)) return value;
   if (typeof value === "string") return parseJsonObject(value) ?? {};
@@ -534,24 +576,59 @@ function newToolCallId(name: string, index: number) {
   return `mari_cmd_${name}_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function extractJsonToolPayload(content: string): Record<string, unknown> | null {
-  const trimmed = content.trim();
-  if (!trimmed) return null;
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)```$/i)?.[1]?.trim();
-  const objectStart = trimmed.indexOf("{");
-  const objectEnd = trimmed.lastIndexOf("}");
-  const candidates = [
-    trimmed,
-    fenced,
-    objectStart >= 0 && objectEnd > objectStart ? trimmed.slice(objectStart, objectEnd + 1) : null,
-  ].filter((candidate): candidate is string => !!candidate);
+function hasActionPayload(payload: Record<string, unknown>): boolean {
+  return (
+    rawJsonToolCalls(payload).length > 0 ||
+    ["say", "message", "response", "final", "answer"].some((key) => typeof payload[key] === "string")
+  );
+}
 
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate) as unknown;
-      if (isRecord(parsed)) return parsed;
-    } catch {
-      // Try the next candidate.
+function tryParseJsonPayload(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function findJsonPayloadMatch(content: string): JsonPayloadMatch | null {
+  const fencedRe = /```(?:json)?\s*([\s\S]*?)```/gi;
+  for (const match of content.matchAll(fencedRe)) {
+    const rawJson = match[1]?.trim();
+    if (!rawJson) continue;
+    const payload = tryParseJsonPayload(rawJson);
+    if (!payload || !hasActionPayload(payload)) continue;
+    const start = match.index ?? 0;
+    return { payload, raw: match[0], start, end: start + match[0].length };
+  }
+
+  for (let start = 0; start < content.length; start += 1) {
+    if (content[start] !== "{") continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < content.length; index += 1) {
+      const char = content[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') {
+        inString = true;
+        continue;
+      }
+      if (char === "{") depth += 1;
+      else if (char === "}") {
+        depth -= 1;
+        if (depth !== 0) continue;
+        const raw = content.slice(start, index + 1);
+        const payload = tryParseJsonPayload(raw);
+        if (payload && hasActionPayload(payload)) return { payload, raw, start, end: index + 1 };
+        break;
+      }
     }
   }
   return null;
@@ -566,9 +643,7 @@ function rawJsonToolCalls(payload: Record<string, unknown>): unknown[] {
   return [];
 }
 
-function parseJsonCommandCalls(content: string): WorkspaceCommandCall[] {
-  const payload = extractJsonToolPayload(content);
-  if (!payload) return [];
+function parseJsonCommandCallsFromPayload(payload: Record<string, unknown>): WorkspaceCommandCall[] {
   const calls: WorkspaceCommandCall[] = [];
   rawJsonToolCalls(payload).forEach((raw, index) => {
     if (!isRecord(raw) || typeof raw.name !== "string" || !isWorkspaceToolName(raw.name)) return;
@@ -577,6 +652,14 @@ function parseJsonCommandCalls(content: string): WorkspaceCommandCall[] {
     calls.push({ id, name: raw.name, arguments: args });
   });
   return calls;
+}
+
+function jsonPayloadVisibleText(payload: Record<string, unknown>): string {
+  for (const key of ["say", "message", "response", "final", "answer"]) {
+    const value = payload[key];
+    if (typeof value === "string") return value.trim();
+  }
+  return "";
 }
 
 function parseNativeToolCalls(toolCalls: LLMToolCall[] | undefined): WorkspaceCommandCall[] {
@@ -595,7 +678,6 @@ function parseNativeToolCalls(toolCalls: LLMToolCall[] | undefined): WorkspaceCo
 }
 
 const COMMAND_BLOCK_RE = /<(read|grep|find|ls|edit|write|bash)>\s*([\s\S]*?)\s*<\/\1>/gi;
-const COMMAND_FENCE_RE = /^```(?:json)?\s*[\s\S]*?```$/i;
 
 function parseXmlCommandCalls(content: string): WorkspaceCommandCall[] {
   const calls: WorkspaceCommandCall[] = [];
@@ -642,15 +724,9 @@ function parseBracketCommandCalls(content: string): WorkspaceCommandCall[] {
   return calls;
 }
 
-function parseWorkspaceCommandCalls(content: string, toolCalls?: LLMToolCall[]): WorkspaceCommandCall[] {
+function dedupeWorkspaceCommandCalls(calls: WorkspaceCommandCall[]): WorkspaceCommandCall[] {
   const seen = new Set<string>();
-  const all = [
-    ...parseNativeToolCalls(toolCalls),
-    ...parseXmlCommandCalls(content),
-    ...parseJsonCommandCalls(content),
-    ...parseBracketCommandCalls(content),
-  ];
-  return all.filter((call) => {
+  return calls.filter((call) => {
     const key = `${call.name}:${JSON.stringify(call.arguments)}`;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -658,21 +734,39 @@ function parseWorkspaceCommandCalls(content: string, toolCalls?: LLMToolCall[]):
   });
 }
 
-function contentIsPureJsonCommandPayload(content: string): boolean {
-  const trimmed = content.trim();
-  if (!trimmed) return false;
-  if (!trimmed.startsWith("{") && !COMMAND_FENCE_RE.test(trimmed)) return false;
-  return parseJsonCommandCalls(trimmed).length > 0;
+function removeJsonActionFrame(content: string): { content: string; match: JsonPayloadMatch | null } {
+  const match = findJsonPayloadMatch(content);
+  if (!match) return { content, match: null };
+  return { content: `${content.slice(0, match.start)}${content.slice(match.end)}`, match };
 }
 
 function stripWorkspaceCommands(content: string): string {
   if (!content.trim()) return "";
-  if (contentIsPureJsonCommandPayload(content)) return "";
-  return content
+  const withoutJson = removeJsonActionFrame(content).content;
+  return withoutJson
     .replace(COMMAND_BLOCK_RE, "")
     .replace(/\[(read|grep|find|ls|bash):\s*[^\]\r\n]+\]/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function parseAssistantWorkspaceAction(content: string, toolCalls?: LLMToolCall[]): AssistantWorkspaceAction {
+  const { content: contentWithoutJson, match } = removeJsonActionFrame(content);
+  const jsonCommands = match ? parseJsonCommandCallsFromPayload(match.payload) : [];
+  const inlineVisibleText = stripWorkspaceCommands(contentWithoutJson);
+  const frameVisibleText = match ? jsonPayloadVisibleText(match.payload) : "";
+  const visibleText = [inlineVisibleText, frameVisibleText].filter(Boolean).join("\n\n").trim();
+  const commands = dedupeWorkspaceCommandCalls([
+    ...parseNativeToolCalls(toolCalls),
+    ...parseXmlCommandCalls(contentWithoutJson),
+    ...jsonCommands,
+    ...parseBracketCommandCalls(contentWithoutJson),
+  ]);
+  return {
+    visibleText,
+    commands,
+    assistantHistoryContent: visibleText || stripWorkspaceCommands(content) || " ",
+  };
 }
 
 function roleForMessage(row: { role: string }): "system" | "user" | "assistant" {
@@ -692,6 +786,75 @@ ${result.output}
 </workspace_command_result>`;
   });
   return `Marinara executed Professor Mari's hidden workspace command${results.length === 1 ? "" : "s"}. Use these results to decide the next command or final answer.\n\n${blocks.join("\n\n")}`;
+}
+
+function formatContinuityResult(result: WorkspaceCommandResult, index: number): string {
+  const input = JSON.stringify(compactTraceValue(result.input, 600));
+  const output = compactTraceText(result.output, 1000);
+  return `${index + 1}. ${result.name} ${result.success ? "succeeded" : "failed"} input=${input}\n${output}`;
+}
+
+function buildWorkspaceContinuitySnapshot(args: {
+  userText: string;
+  assistantText: string;
+  commandResults: WorkspaceCommandResult[];
+}): string | null {
+  const sections: string[] = [];
+  if (args.userText.trim()) sections.push(`User request: ${compactTraceText(args.userText, 900)}`);
+  if (args.assistantText.trim()) sections.push(`Visible assistant response/plan: ${compactTraceText(args.assistantText, 1400)}`);
+  if (args.commandResults.length > 0) {
+    sections.push(
+      `Hidden workspace evidence/results:\n${args.commandResults
+        .slice(-12)
+        .map((result, index) => formatContinuityResult(result, index))
+        .join("\n\n")}`,
+    );
+  }
+  return sections.length > 0 ? sections.join("\n\n") : null;
+}
+
+function summarizeStoredTimeline(timeline: unknown): string | null {
+  if (!Array.isArray(timeline) || timeline.length === 0) return null;
+  const lines: string[] = [];
+  for (const item of timeline.slice(-16)) {
+    if (!isRecord(item)) continue;
+    if (item.type === "tool" && isRecord(item.tool)) {
+      const name = typeof item.tool.name === "string" ? item.tool.name : "tool";
+      const status = typeof item.tool.status === "string" ? item.tool.status : "unknown";
+      const input = item.tool.input === undefined ? "" : ` input=${JSON.stringify(compactTraceValue(item.tool.input, 480))}`;
+      const output = typeof item.tool.output === "string" ? `\n${compactTraceText(item.tool.output, 800)}` : "";
+      lines.push(`- ${name} ${status}${input}${output}`);
+    } else if ((item.type === "status" || item.type === "text") && typeof item.content === "string") {
+      lines.push(`- ${item.type}: ${compactTraceText(item.content, 500)}`);
+    }
+  }
+  return lines.length > 0 ? lines.join("\n") : null;
+}
+
+function workspaceContinuityFromExtra(extra: Record<string, unknown>): string | null {
+  if (typeof extra.mariWorkspaceContinuity === "string" && extra.mariWorkspaceContinuity.trim()) {
+    return compactTraceText(extra.mariWorkspaceContinuity, 5000);
+  }
+  return summarizeStoredTimeline(extra.mariWorkspaceTimeline);
+}
+
+function buildRecentWorkspaceContinuityPrompt(rows: Array<{ role: string; content: string; extra?: unknown }>): string | null {
+  const entries = rows
+    .filter((row) => row.role === "assistant")
+    .map((row) => {
+      const extra = parseExtra(row.extra);
+      const continuity = workspaceContinuityFromExtra(extra);
+      if (!continuity) return null;
+      return `<previous_workspace_turn>\n${continuity}\n</previous_workspace_turn>`;
+    })
+    .filter((entry): entry is string => !!entry)
+    .slice(-RECENT_WORKSPACE_CONTINUITY_LIMIT);
+  if (entries.length === 0) return null;
+  return `<workspace_continuity>
+Recent hidden workspace evidence and plans are below. Use this to continue fluidly across short confirmations such as "go ahead" or "yes". Do not repeat completed discovery unless needed.
+
+${entries.join("\n\n")}
+</workspace_continuity>`;
 }
 
 function chunkText(value: string, chunkSize = 1200): string[] {
@@ -756,6 +919,10 @@ function isWithin(parent: string, child: string): boolean {
   const normalizedParent = process.platform === "win32" ? parent.toLowerCase() : parent;
   const normalizedChild = process.platform === "win32" ? child.toLowerCase() : child;
   return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}${process.platform === "win32" ? "\\" : "/"}`);
+}
+
+function isReadOnlyWorkspaceCommand(command: WorkspaceCommandCall): boolean {
+  return command.name === "read" || command.name === "grep" || command.name === "find" || command.name === "ls";
 }
 
 export class ProfessorMariWorkspaceService {
@@ -839,10 +1006,14 @@ export class ProfessorMariWorkspaceService {
         appendTraceThinking(workspaceTrace, delta);
         args.onEvent({ type: "thinking", data: delta });
       });
+      let nativeToolsEnabled = shouldOfferNativeToolCalls(connection);
+      const commandResultsForContinuity: WorkspaceCommandResult[] = [];
 
       for (let round = 0; round < MAX_COMMAND_ROUNDS; round += 1) {
         if (controller.signal.aborted) throw new Error("aborted");
-        const result = await provider.chatComplete(messages, { ...baseOptions, stream: false });
+        const completion = await this.chatCompleteWorkspace(provider, messages, baseOptions, nativeToolsEnabled);
+        if (completion.nativeToolsDisabled) nativeToolsEnabled = false;
+        const result = completion.result;
         const usage = mapUsage(result.usage);
         totalUsage = {
           promptTokens: totalUsage.promptTokens + usage.promptTokens,
@@ -851,17 +1022,16 @@ export class ProfessorMariWorkspaceService {
         };
 
         const rawContent = result.content ?? "";
-        const visibleText = stripWorkspaceCommands(rawContent);
-        if (visibleText) {
-          assistantText = appendVisibleText(assistantText, visibleText);
-          appendTraceText(workspaceTrace, `${visibleText}\n`);
-          for (const chunk of chunkText(`${visibleText}\n`)) args.onEvent({ type: "token", data: chunk });
+        const action = parseAssistantWorkspaceAction(rawContent, result.toolCalls);
+        if (action.visibleText) {
+          assistantText = appendVisibleText(assistantText, action.visibleText);
+          appendTraceText(workspaceTrace, `${action.visibleText}\n`);
+          for (const chunk of chunkText(`${action.visibleText}\n`)) args.onEvent({ type: "token", data: chunk });
         }
 
-        const commands = parseWorkspaceCommandCalls(rawContent, result.toolCalls);
-        messages.push({ role: "assistant", content: rawContent || " " });
+        messages.push({ role: "assistant", content: action.assistantHistoryContent });
 
-        if (commands.length === 0) {
+        if (action.commands.length === 0) {
           if (isLengthFinishReason(result.finishReason)) {
             const content = "Mari hit the model output limit. Ask her to continue and she can pick up from here.";
             appendTraceStatus(workspaceTrace, content);
@@ -870,11 +1040,13 @@ export class ProfessorMariWorkspaceService {
           break;
         }
 
-        const commandResults: WorkspaceCommandResult[] = [];
-        for (const command of commands) {
-          const commandResult = await this.executeWorkspaceCommand(command, controller.signal, workspaceTrace, args.onEvent);
-          commandResults.push(commandResult);
-        }
+        const commandResults = await this.executeWorkspaceCommandBatch(
+          action.commands,
+          controller.signal,
+          workspaceTrace,
+          args.onEvent,
+        );
+        commandResultsForContinuity.push(...commandResults);
         messages.push({ role: "user", content: formatCommandResultForPrompt(commandResults), contextKind: "history" });
 
         if (round === MAX_COMMAND_ROUNDS - 1) {
@@ -886,12 +1058,19 @@ export class ProfessorMariWorkspaceService {
             content:
               "You reached the workspace command round limit. Do not issue more commands. Summarize what you learned or what remains blocked.",
           });
-          const finalResult = await provider.chatComplete(messages, { ...baseOptions, stream: false });
-          const finalText = stripWorkspaceCommands(finalResult.content ?? "");
-          if (finalText) {
-            assistantText = appendVisibleText(assistantText, finalText);
-            appendTraceText(workspaceTrace, finalText);
-            for (const chunk of chunkText(finalText)) args.onEvent({ type: "token", data: chunk });
+          const finalCompletion = await this.chatCompleteWorkspace(provider, messages, baseOptions, false);
+          const finalResult = finalCompletion.result;
+          const finalUsage = mapUsage(finalResult.usage);
+          totalUsage = {
+            promptTokens: totalUsage.promptTokens + finalUsage.promptTokens,
+            completionTokens: totalUsage.completionTokens + finalUsage.completionTokens,
+            totalTokens: totalUsage.totalTokens + finalUsage.totalTokens,
+          };
+          const finalAction = parseAssistantWorkspaceAction(finalResult.content ?? "", finalResult.toolCalls);
+          if (finalAction.visibleText) {
+            assistantText = appendVisibleText(assistantText, finalAction.visibleText);
+            appendTraceText(workspaceTrace, finalAction.visibleText);
+            for (const chunk of chunkText(finalAction.visibleText)) args.onEvent({ type: "token", data: chunk });
           }
         }
       }
@@ -909,6 +1088,12 @@ export class ProfessorMariWorkspaceService {
           const storedTrace = sanitizeTraceForStorage(workspaceTrace);
           if (thinkingText.trim()) extraUpdate.thinking = thinkingText;
           if (storedTrace.length > 0) extraUpdate.mariWorkspaceTimeline = storedTrace;
+          const continuity = buildWorkspaceContinuitySnapshot({
+            userText: args.text,
+            assistantText: persistedText,
+            commandResults: commandResultsForContinuity,
+          });
+          if (continuity) extraUpdate.mariWorkspaceContinuity = continuity;
           extraUpdate.generationInfo = { provider: connection.provider, model: connection.model, usage: totalUsage };
           await chatStorage.updateMessageExtra(message.id, extraUpdate);
           await chatStorage.updateSwipeExtra(message.id, 0, extraUpdate);
@@ -933,6 +1118,7 @@ export class ProfessorMariWorkspaceService {
   private async buildPromptMessages(chatId: string, connection: WorkspaceConnection): Promise<ChatMessage[]> {
     const chatStorage = createChatsStorage(this.app.db);
     const history = (await chatStorage.listMessages(chatId)).slice(-MAX_HISTORY_MESSAGES);
+    const continuityPrompt = buildRecentWorkspaceContinuityPrompt(history);
     const skillsPrompt = await this.buildSkillsPrompt();
     const workspaceInfo = [
       `<workspace_context>`,
@@ -957,6 +1143,7 @@ export class ProfessorMariWorkspaceService {
       if (!content.trim()) continue;
       messages.push({ role: roleForMessage(row), content, contextKind: "history" });
     }
+    if (continuityPrompt) messages.push({ role: "system", content: continuityPrompt, contextKind: "injection" });
     return messages;
   }
 
@@ -1002,6 +1189,59 @@ ${sections.join("\n\n")}
       signal,
       onThinking,
     };
+  }
+
+  private async chatCompleteWorkspace(
+    provider: BaseLLMProvider,
+    messages: ChatMessage[],
+    baseOptions: ChatOptions,
+    nativeToolsEnabled: boolean,
+  ): Promise<{ result: ChatCompletionResult; nativeToolsDisabled: boolean }> {
+    if (!nativeToolsEnabled) {
+      return { result: await provider.chatComplete(messages, { ...baseOptions, stream: false }), nativeToolsDisabled: false };
+    }
+    try {
+      return {
+        result: await provider.chatComplete(messages, {
+          ...baseOptions,
+          stream: false,
+          tools: workspaceNativeToolDefinitions(),
+        }),
+        nativeToolsDisabled: false,
+      };
+    } catch (err) {
+      if (!isNativeToolUnsupportedError(err)) throw err;
+      logger.warn(err, "[Professor Mari] native workspace tool calls failed; retrying with text command protocol");
+      return { result: await provider.chatComplete(messages, { ...baseOptions, stream: false }), nativeToolsDisabled: true };
+    }
+  }
+
+  private async executeWorkspaceCommandBatch(
+    commands: WorkspaceCommandCall[],
+    signal: AbortSignal,
+    trace: MariWorkspaceTraceItem[],
+    onEvent: PromptEventSink,
+  ): Promise<WorkspaceCommandResult[]> {
+    const results: WorkspaceCommandResult[] = [];
+    for (let index = 0; index < commands.length; ) {
+      const command = commands[index]!;
+      if (!isReadOnlyWorkspaceCommand(command)) {
+        results.push(await this.executeWorkspaceCommand(command, signal, trace, onEvent));
+        index += 1;
+        continue;
+      }
+      const group: WorkspaceCommandCall[] = [];
+      while (
+        index < commands.length &&
+        group.length < MAX_PARALLEL_READONLY_COMMANDS &&
+        isReadOnlyWorkspaceCommand(commands[index]!)
+      ) {
+        group.push(commands[index]!);
+        index += 1;
+      }
+      results.push(...(await Promise.all(group.map((entry) => this.executeWorkspaceCommand(entry, signal, trace, onEvent)))));
+    }
+    return results;
   }
 
   private async executeWorkspaceCommand(
