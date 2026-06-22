@@ -3323,7 +3323,6 @@ function ThemesSettings() {
   const updateTheme = useUpdateTheme();
   const deleteTheme = useDeleteTheme();
   const setActiveTheme = useSetActiveTheme();
-  const fileRef = useRef<HTMLInputElement>(null);
   const activeCustomTheme = syncedThemes.find((theme) => theme.isActive) ?? null;
   const isSavingTheme = createTheme.isPending || updateTheme.isPending || setActiveTheme.isPending;
 
@@ -3392,9 +3391,7 @@ function ThemesSettings() {
     }
   }, [createTheme, editingId, setActiveTheme, themeCss, themeName, updateTheme]);
 
-  const handleImportTheme = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleImportThemeFile = async (file: File) => {
     try {
       const text = await file.text();
       const latestThemes = await api.get<Theme[]>("/themes");
@@ -3465,7 +3462,6 @@ function ThemesSettings() {
       console.error("[ThemesSettings] Failed to import theme:", err);
       toast.error("Failed to import theme. Ensure it's a valid CSS or JSON file.");
     }
-    e.target.value = "";
   };
   // ── CSS Editor View ──
   if (editorOpen) {
@@ -3589,13 +3585,20 @@ function ThemesSettings() {
               <Plus size="0.875rem" /> Create Theme
             </button>
             <button
-              onClick={() => fileRef.current?.click()}
+              onClick={() => {
+                triggerFilePicker({
+                  accept: ".css,.json",
+                  onSelect: (files) => {
+                    const file = files[0];
+                    if (file) void handleImportThemeFile(file);
+                  },
+                });
+              }}
               className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-[var(--border)] p-3 text-xs text-[var(--muted-foreground)] transition-all hover:border-[var(--primary)]/40 hover:bg-[var(--secondary)]/50"
             >
               <Download size="0.875rem" /> Import File
             </button>
           </div>
-          <input ref={fileRef} type="file" accept=".css,.json" className="hidden" onChange={handleImportTheme} />
 
           {/* Active theme: None option */}
           <div className="flex flex-col gap-1.5">
@@ -3874,6 +3877,35 @@ function describeExtensionImportError(error: unknown, name?: string) {
     return `${subject} Installing extensions requires loopback access or admin access. Open Marinara Engine through localhost, or set ADMIN_SECRET on the server and enter it in Settings.`;
   }
   return subject;
+}
+
+function triggerFilePicker(options: {
+  accept?: string;
+  multiple?: boolean;
+  webkitdirectory?: boolean;
+  onSelect: (files: FileList) => void;
+}) {
+  const el = document.createElement("input");
+  el.type = "file";
+  el.style.position = "fixed";
+  el.style.top = "10px";
+  el.style.left = "10px";
+  el.style.zIndex = "99999";
+  el.style.opacity = "0";
+  if (options.accept) el.accept = options.accept;
+  if (options.multiple) el.multiple = true;
+  if (options.webkitdirectory) {
+    el.setAttribute("webkitdirectory", "");
+  }
+  el.addEventListener("change", (e) => {
+    const files = (e.target as HTMLInputElement).files;
+    if (files && files.length > 0) {
+      void options.onSelect(files);
+    }
+    document.body.removeChild(el);
+  });
+  document.body.appendChild(el);
+  el.click();
 }
 
 function ExtensionsSettings() {
