@@ -7,15 +7,7 @@ import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
-import type {
-  BaseLLMProvider,
-  ChatCompletionResult,
-  ChatMessage,
-  ChatOptions,
-  LLMToolCall,
-  LLMToolDefinition,
-  LLMUsage,
-} from "../llm/base-provider.js";
+import type { BaseLLMProvider, ChatMessage, ChatOptions, LLMUsage } from "../llm/base-provider.js";
 import { createLLMProvider } from "../llm/provider-registry.js";
 import { getLocalSidecarProvider, LOCAL_SIDECAR_MODEL } from "../llm/local-sidecar.js";
 import { createChatsStorage } from "../storage/chats.storage.js";
@@ -329,14 +321,14 @@ function workspaceCommandProtocolPrompt() {
     (tool) => `- ${tool.name}: ${tool.description}\n  JSON arguments: ${JSON.stringify(tool.parameters)}`,
   ).join("\n");
   return `<workspace_command_protocol>
-Marinara gives Professor Mari two channels in one assistant turn: visible speech and hidden workspace actions. This is provider-agnostic like Conversation/Game command mode, but native tool calls may also be used when the provider supports them.
+Marinara gives Professor Mari two channels in one assistant turn: visible speech and hidden workspace actions. This is provider-agnostic like Conversation/Game command mode. Provider-native tool/function calling is never used.
 
-Preferred action frame when tools are needed:
-{"say":"optional short user-visible progress note, or empty string for silent work","tool_calls":[{"name":"read","arguments":{"path":"README.md","offset":1,"limit":80}},{"name":"grep","arguments":{"pattern":"Professor Mari","path":"packages","glob":"*.ts","limit":20}}]}
+Preferred text action frame when commands are needed:
+{"say":"optional short user-visible progress note, or empty string for silent work","commands":[{"name":"read","arguments":{"path":"README.md","offset":1,"limit":80}},{"name":"grep","arguments":{"pattern":"Professor Mari","path":"packages","glob":"*.ts","limit":20}}]}
 
 Use this frame to be fluid:
-- Set \`say\` to \`""\` for routine inspection, verification, and file reads. Silent tool use is normal and preferred.
-- Put several independent read-only calls in the same \`tool_calls\` array. Marinara can run read/grep/find/ls in parallel.
+- Set \`say\` to \`""\` for routine inspection, verification, and file reads. Silent command use is normal and preferred.
+- Put several independent read-only calls in the same \`commands\` array. Marinara can run read/grep/find/ls in parallel.
 - Use a short \`say\` only when it helps the user understand progress, a decision, an error, or an approval/save boundary.
 - After tool results, either issue the next action frame, speak to the user, or do both. This lets you talk between tool batches without narrating every tiny step.
 - If the user says \`go ahead\`, \`yes\`, \`apply it\`, or similar, treat it as approval to continue the previously discussed plan. Use hidden continuity/tool evidence; do not restart discovery unless the evidence is missing or stale.
@@ -584,29 +576,6 @@ function createProviderForConnection(connection: WorkspaceConnection): BaseLLMPr
   );
 }
 
-function shouldOfferNativeToolCalls(connection: WorkspaceConnection): boolean {
-  return !isLocalSidecarConnection(connection) && !bool(connection.treatAsLocalEndpoint);
-}
-
-function workspaceNativeToolDefinitions(): LLMToolDefinition[] {
-  return WORKSPACE_TOOL_DEFINITIONS.map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-    },
-  }));
-}
-
-function isNativeToolUnsupportedError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return (
-    /\b(tool|function|tool_calls|function_call)\b/i.test(message) &&
-    /\b(unsupported|not supported|does not support|not enabled|invalid|unknown|400)\b/i.test(message)
-  );
-}
-
 function parseToolArgumentsValue(value: unknown): Record<string, unknown> {
   if (isRecord(value)) return value;
   if (typeof value === "string") return parseJsonObject(value) ?? {};
@@ -623,7 +592,7 @@ function newToolCallId(name: string, index: number) {
 
 function hasActionPayload(payload: Record<string, unknown>): boolean {
   return (
-    rawJsonToolCalls(payload).length > 0 ||
+    rawJsonCommandCalls(payload).length > 0 ||
     ["say", "message", "response", "final", "answer"].some((key) => typeof payload[key] === "string")
   );
 }
@@ -679,10 +648,10 @@ function findJsonPayloadMatch(content: string): JsonPayloadMatch | null {
   return null;
 }
 
-function rawJsonToolCalls(payload: Record<string, unknown>): unknown[] {
-  const plural = payload.tool_calls ?? payload.toolCalls ?? payload.commands ?? payload.calls;
+function rawJsonCommandCalls(payload: Record<string, unknown>): unknown[] {
+  const plural = payload.commands ?? payload.calls;
   if (Array.isArray(plural)) return plural;
-  const single = payload.tool_call ?? payload.toolCall ?? payload.command;
+  const single = payload.command;
   if (single !== undefined) return [single];
   if (typeof payload.name === "string") return [payload];
   return [];
@@ -690,7 +659,7 @@ function rawJsonToolCalls(payload: Record<string, unknown>): unknown[] {
 
 function parseJsonCommandCallsFromPayload(payload: Record<string, unknown>): WorkspaceCommandCall[] {
   const calls: WorkspaceCommandCall[] = [];
-  rawJsonToolCalls(payload).forEach((raw, index) => {
+  rawJsonCommandCalls(payload).forEach((raw, index) => {
     if (!isRecord(raw) || typeof raw.name !== "string" || !isWorkspaceToolName(raw.name)) return;
     const args = parseToolArgumentsValue(raw.arguments ?? raw.args ?? raw.input ?? {});
     const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : newToolCallId(raw.name, index);
@@ -705,21 +674,6 @@ function jsonPayloadVisibleText(payload: Record<string, unknown>): string {
     if (typeof value === "string") return value.trim();
   }
   return "";
-}
-
-function parseNativeToolCalls(toolCalls: LLMToolCall[] | undefined): WorkspaceCommandCall[] {
-  if (!toolCalls?.length) return [];
-  return toolCalls
-    .map((call, index): WorkspaceCommandCall | null => {
-      const name = call.function.name;
-      if (!isWorkspaceToolName(name)) return null;
-      return {
-        id: call.id || newToolCallId(name, index),
-        name,
-        arguments: parseToolArgumentsValue(call.function.arguments),
-      };
-    })
-    .filter((call): call is WorkspaceCommandCall => call !== null);
 }
 
 const COMMAND_BLOCK_RE = /<(read|grep|find|ls|edit|write|bash)>\s*([\s\S]*?)\s*<\/\1>/gi;
@@ -764,7 +718,8 @@ function parseBracketCommandCalls(content: string): WorkspaceCommandCall[] {
       const numberMatch = params.match(new RegExp(`${key}=(-?[0-9]+)`, "i"));
       if (numberMatch) args[key] = Number.parseInt(numberMatch[1] ?? "", 10);
     }
-    if (Object.keys(args).length > 0) calls.push({ id: newToolCallId(name, index), name, arguments: args, raw: match[0] });
+    if (Object.keys(args).length > 0)
+      calls.push({ id: newToolCallId(name, index), name, arguments: args, raw: match[0] });
   }
   return calls;
 }
@@ -795,14 +750,13 @@ function stripWorkspaceCommands(content: string): string {
     .trim();
 }
 
-function parseAssistantWorkspaceAction(content: string, toolCalls?: LLMToolCall[]): AssistantWorkspaceAction {
+function parseAssistantWorkspaceAction(content: string): AssistantWorkspaceAction {
   const { content: contentWithoutJson, match } = removeJsonActionFrame(content);
   const jsonCommands = match ? parseJsonCommandCallsFromPayload(match.payload) : [];
   const inlineVisibleText = stripWorkspaceCommands(contentWithoutJson);
   const frameVisibleText = match ? jsonPayloadVisibleText(match.payload) : "";
   const visibleText = [inlineVisibleText, frameVisibleText].filter(Boolean).join("\n\n").trim();
   const commands = dedupeWorkspaceCommandCalls([
-    ...parseNativeToolCalls(toolCalls),
     ...parseXmlCommandCalls(contentWithoutJson),
     ...jsonCommands,
     ...parseBracketCommandCalls(contentWithoutJson),
@@ -846,7 +800,8 @@ function buildWorkspaceContinuitySnapshot(args: {
 }): string | null {
   const sections: string[] = [];
   if (args.userText.trim()) sections.push(`User request: ${compactTraceText(args.userText, 900)}`);
-  if (args.assistantText.trim()) sections.push(`Visible assistant response/plan: ${compactTraceText(args.assistantText, 1400)}`);
+  if (args.assistantText.trim())
+    sections.push(`Visible assistant response/plan: ${compactTraceText(args.assistantText, 1400)}`);
   if (args.commandResults.length > 0) {
     sections.push(
       `Hidden workspace evidence/results:\n${args.commandResults
@@ -866,7 +821,8 @@ function summarizeStoredTimeline(timeline: unknown): string | null {
     if (item.type === "tool" && isRecord(item.tool)) {
       const name = typeof item.tool.name === "string" ? item.tool.name : "tool";
       const status = typeof item.tool.status === "string" ? item.tool.status : "unknown";
-      const input = item.tool.input === undefined ? "" : ` input=${JSON.stringify(compactTraceValue(item.tool.input, 480))}`;
+      const input =
+        item.tool.input === undefined ? "" : ` input=${JSON.stringify(compactTraceValue(item.tool.input, 480))}`;
       const output = typeof item.tool.output === "string" ? `\n${compactTraceText(item.tool.output, 800)}` : "";
       lines.push(`- ${name} ${status}${input}${output}`);
     } else if ((item.type === "status" || item.type === "text") && typeof item.content === "string") {
@@ -883,7 +839,9 @@ function workspaceContinuityFromExtra(extra: Record<string, unknown>): string | 
   return summarizeStoredTimeline(extra.mariWorkspaceTimeline);
 }
 
-function buildRecentWorkspaceContinuityPrompt(rows: Array<{ role: string; content: string; extra?: unknown }>): string | null {
+function buildRecentWorkspaceContinuityPrompt(
+  rows: Array<{ role: string; content: string; extra?: unknown }>,
+): string | null {
   const entries = rows
     .filter((row) => row.role === "assistant")
     .map((row) => {
@@ -908,7 +866,11 @@ function chunkText(value: string, chunkSize = 1200): string[] {
   return chunks;
 }
 
-function mapUsage(usage: LLMUsage | undefined): { promptTokens: number; completionTokens: number; totalTokens: number } {
+function mapUsage(usage: LLMUsage | undefined): {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+} {
   if (!usage) return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   return {
     promptTokens: usage.promptTokens,
@@ -963,7 +925,10 @@ function booleanArg(args: Record<string, unknown>, key: string, fallback = false
 function isWithin(parent: string, child: string): boolean {
   const normalizedParent = process.platform === "win32" ? parent.toLowerCase() : parent;
   const normalizedChild = process.platform === "win32" ? child.toLowerCase() : child;
-  return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}${process.platform === "win32" ? "\\" : "/"}`);
+  return (
+    normalizedChild === normalizedParent ||
+    normalizedChild.startsWith(`${normalizedParent}${process.platform === "win32" ? "\\" : "/"}`)
+  );
 }
 
 function isReadOnlyWorkspaceCommand(command: WorkspaceCommandCall): boolean {
@@ -985,7 +950,9 @@ function bashLooksMutating(command: string): boolean {
   return (
     /\b--apply\b/.test(normalized) ||
     /\bmari\s+db\s+(insert|patch|replace|delete|transform)\b/.test(normalized) ||
-    /\bmari\s+(characters?|personas?|lorebooks?)\s+(create|update|delete|add-entry|link-character|unlink-character)\b/.test(normalized) ||
+    /\bmari\s+(characters?|personas?|lorebooks?)\s+(create|update|delete|add-entry|link-character|unlink-character)\b/.test(
+      normalized,
+    ) ||
     /\bmari\s+themes\s+(create|update|set-active)\b/.test(normalized) ||
     /\bmari\s+images\s+(generate|edit|assign|delete)\b/.test(normalized)
   );
@@ -1177,14 +1144,11 @@ export class ProfessorMariWorkspaceService {
         appendTraceThinking(workspaceTrace, delta);
         args.onEvent({ type: "thinking", data: delta });
       });
-      let nativeToolsEnabled = shouldOfferNativeToolCalls(connection);
       const commandResultsForContinuity: WorkspaceCommandResult[] = [];
 
       for (let round = 0; round < MAX_COMMAND_ROUNDS; round += 1) {
         if (controller.signal.aborted) throw new Error("aborted");
-        const completion = await this.chatCompleteWorkspace(provider, messages, baseOptions, nativeToolsEnabled);
-        if (completion.nativeToolsDisabled) nativeToolsEnabled = false;
-        const result = completion.result;
+        const result = await provider.chatComplete(messages, { ...baseOptions, stream: false });
         const usage = mapUsage(result.usage);
         totalUsage = {
           promptTokens: totalUsage.promptTokens + usage.promptTokens,
@@ -1193,7 +1157,7 @@ export class ProfessorMariWorkspaceService {
         };
 
         const rawContent = result.content ?? "";
-        const parsedAction = parseAssistantWorkspaceAction(rawContent, result.toolCalls);
+        const parsedAction = parseAssistantWorkspaceAction(rawContent);
         const shouldDeferMutations =
           parsedAction.visibleText &&
           visibleTextRequestsUserApproval(parsedAction.visibleText) &&
@@ -1240,15 +1204,14 @@ export class ProfessorMariWorkspaceService {
             content:
               "You reached the workspace command round limit. Do not issue more commands. Summarize what you learned or what remains blocked.",
           });
-          const finalCompletion = await this.chatCompleteWorkspace(provider, messages, baseOptions, false);
-          const finalResult = finalCompletion.result;
+          const finalResult = await provider.chatComplete(messages, { ...baseOptions, stream: false });
           const finalUsage = mapUsage(finalResult.usage);
           totalUsage = {
             promptTokens: totalUsage.promptTokens + finalUsage.promptTokens,
             completionTokens: totalUsage.completionTokens + finalUsage.completionTokens,
             totalTokens: totalUsage.totalTokens + finalUsage.totalTokens,
           };
-          const finalAction = parseAssistantWorkspaceAction(finalResult.content ?? "", finalResult.toolCalls);
+          const finalAction = parseAssistantWorkspaceAction(finalResult.content ?? "");
           if (finalAction.visibleText) {
             assistantText = appendVisibleText(assistantText, finalAction.visibleText);
             appendTraceText(workspaceTrace, finalAction.visibleText);
@@ -1373,31 +1336,6 @@ ${sections.join("\n\n")}
     };
   }
 
-  private async chatCompleteWorkspace(
-    provider: BaseLLMProvider,
-    messages: ChatMessage[],
-    baseOptions: ChatOptions,
-    nativeToolsEnabled: boolean,
-  ): Promise<{ result: ChatCompletionResult; nativeToolsDisabled: boolean }> {
-    if (!nativeToolsEnabled) {
-      return { result: await provider.chatComplete(messages, { ...baseOptions, stream: false }), nativeToolsDisabled: false };
-    }
-    try {
-      return {
-        result: await provider.chatComplete(messages, {
-          ...baseOptions,
-          stream: false,
-          tools: workspaceNativeToolDefinitions(),
-        }),
-        nativeToolsDisabled: false,
-      };
-    } catch (err) {
-      if (!isNativeToolUnsupportedError(err)) throw err;
-      logger.warn(err, "[Professor Mari] native workspace tool calls failed; retrying with text command protocol");
-      return { result: await provider.chatComplete(messages, { ...baseOptions, stream: false }), nativeToolsDisabled: true };
-    }
-  }
-
   private async executeWorkspaceCommandBatch(
     commands: WorkspaceCommandCall[],
     signal: AbortSignal,
@@ -1421,7 +1359,9 @@ ${sections.join("\n\n")}
         group.push(commands[index]!);
         index += 1;
       }
-      results.push(...(await Promise.all(group.map((entry) => this.executeWorkspaceCommand(entry, signal, trace, onEvent)))));
+      results.push(
+        ...(await Promise.all(group.map((entry) => this.executeWorkspaceCommand(entry, signal, trace, onEvent)))),
+      );
     }
     return results;
   }
@@ -1433,12 +1373,25 @@ ${sections.join("\n\n")}
     onEvent: PromptEventSink,
   ): Promise<WorkspaceCommandResult> {
     const input = command.arguments;
-    upsertTraceTool(trace, { id: command.id, name: command.name, status: "running", input, output: null, updatedAt: Date.now() });
+    upsertTraceTool(trace, {
+      id: command.id,
+      name: command.name,
+      status: "running",
+      input,
+      output: null,
+      updatedAt: Date.now(),
+    });
     onEvent({ type: "tool_start", data: { id: command.id, name: command.name, input } });
     try {
       const output = await this.runWorkspaceCommand(command, signal);
       const compacted = compactOutput(output);
-      upsertTraceTool(trace, { id: command.id, name: command.name, status: "done", output: compacted, updatedAt: Date.now() });
+      upsertTraceTool(trace, {
+        id: command.id,
+        name: command.name,
+        status: "done",
+        output: compacted,
+        updatedAt: Date.now(),
+      });
       onEvent({ type: "tool_end", data: { id: command.id, name: command.name, isError: false, output: compacted } });
       return { id: command.id, name: command.name, input, output: compacted, success: true };
     } catch (err) {
@@ -1470,7 +1423,10 @@ ${sections.join("\n\n")}
     }
   }
 
-  private resolveWorkspacePath(inputPath: string, options: { allowMissing?: boolean; forbidStorageMutation?: boolean } = {}) {
+  private resolveWorkspacePath(
+    inputPath: string,
+    options: { allowMissing?: boolean; forbidStorageMutation?: boolean } = {},
+  ) {
     const rawPath = inputPath.trim() || ".";
     const absolute = resolve(this.workspaceRoot, rawPath);
     const workspaceRoot = resolve(this.workspaceRoot);
@@ -1507,7 +1463,11 @@ ${sections.join("\n\n")}
     const normalized = normalizeSlashPath(command);
     const tablesRoot = normalizeSlashPath(resolve(getFileStorageDir(), "tables"));
     const tablesRel = normalizeSlashPath(relative(this.workspaceRoot, resolve(getFileStorageDir(), "tables")));
-    if (!normalized.includes("data/storage/tables/") && !normalized.includes(tablesRoot) && !normalized.includes(tablesRel)) {
+    if (
+      !normalized.includes("data/storage/tables/") &&
+      !normalized.includes(tablesRoot) &&
+      !normalized.includes(tablesRel)
+    ) {
       return null;
     }
     return "Do not pass DATA_DIR/storage/tables/*.json to mari --json-file/--file. Those are full raw table exports; create a temp file containing one row/card payload instead.";
@@ -1549,7 +1509,11 @@ ${sections.join("\n\n")}
       .sort((a, b) => a.localeCompare(b))
       .slice(0, limit);
     const truncated = entries.length > names.length;
-    return [`Directory: ${this.displayPath(dirPath)}`, ...names, truncated ? `… ${entries.length - names.length} more` : ""]
+    return [
+      `Directory: ${this.displayPath(dirPath)}`,
+      ...names,
+      truncated ? `… ${entries.length - names.length} more` : "",
+    ]
       .filter(Boolean)
       .join("\n");
   }
@@ -1637,7 +1601,10 @@ ${sections.join("\n\n")}
   }
 
   private async commandWrite(args: Record<string, unknown>): Promise<string> {
-    const filePath = this.resolveWorkspacePath(stringArg(args, "path"), { allowMissing: true, forbidStorageMutation: true });
+    const filePath = this.resolveWorkspacePath(stringArg(args, "path"), {
+      allowMissing: true,
+      forbidStorageMutation: true,
+    });
     const content = stringArg(args, "content");
     await mkdir(dirname(filePath), { recursive: true });
     await writeFile(filePath, content, "utf8");
@@ -1695,13 +1662,7 @@ ${sections.join("\n\n")}
     if (storageIssue) throw new Error(storageIssue);
     const storageTableJsonIssue = this.storageTableJsonFileIssue(command);
     if (storageTableJsonIssue) throw new Error(storageTableJsonIssue);
-    const timeoutSeconds = numberArg(
-      args,
-      "timeout",
-      DEFAULT_BASH_TIMEOUT_SECONDS,
-      1,
-      MAX_BASH_TIMEOUT_SECONDS,
-    );
+    const timeoutSeconds = numberArg(args, "timeout", DEFAULT_BASH_TIMEOUT_SECONDS, 1, MAX_BASH_TIMEOUT_SECONDS);
     const mariCliBinDir = await this.ensureMariCliShim();
     const env = this.withMariRuntimeEnv({ ...process.env }, mariCliBinDir);
     const directMariArgv = parseDirectMariArgv(command, this.workspaceRoot);
@@ -1747,12 +1708,14 @@ ${sections.join("\n\n")}
       child.on("error", (err) => finish(() => rejectRun(err)));
       child.on("close", (exitCode) =>
         finish(() => {
-          const output = compactOutput([
-            `Command: ${command}`,
-            `Exit code: ${exitCode}${timedOut ? ` (timeout after ${timeoutSeconds}s)` : ""}`,
-            stdout ? `\nstdout:\n${stdout.trimEnd()}` : "",
-            stderr ? `\nstderr:\n${stderr.trimEnd()}` : "",
-          ].join("\n"));
+          const output = compactOutput(
+            [
+              `Command: ${command}`,
+              `Exit code: ${exitCode}${timedOut ? ` (timeout after ${timeoutSeconds}s)` : ""}`,
+              stdout ? `\nstdout:\n${stdout.trimEnd()}` : "",
+              stderr ? `\nstderr:\n${stderr.trimEnd()}` : "",
+            ].join("\n"),
+          );
           if (timedOut || exitCode !== 0) rejectRun(new Error(output));
           else resolveRun(output);
         }),
@@ -1767,9 +1730,8 @@ ${sections.join("\n\n")}
       cwd: this.workspaceRoot,
       sessionId: SESSION_ID,
     });
-    const printable = isRecord(result) && "output" in result && !("summary" in result)
-      ? result.output
-      : compactMutationResult(result);
+    const printable =
+      isRecord(result) && "output" in result && !("summary" in result) ? result.output : compactMutationResult(result);
     const output = compactOutput(
       [
         `Command: ${command}`,
