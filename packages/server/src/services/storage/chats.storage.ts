@@ -933,8 +933,10 @@ export function createChatsStorage(db: DB) {
         // all-or-nothing and a caller never records ownership of a half-applied
         // batch. (db.transaction() is intentionally avoided in this store — see the
         // bulk-insert note re: the libSQL stateful-transaction crash #73 — so this
-        // compensating undo is the atomicity mechanism.) The original error is
-        // always rethrown; an undo failure is logged, never allowed to mask it.
+        // compensating undo is the atomicity mechanism.) A clean undo preserves
+        // the original error. A failed undo is surfaced as a compound failure so
+        // callers never mistake a partially restored batch for a clean rollback.
+        const undoErrors: unknown[] = [];
         for (const id of flipped) {
           try {
             await this.updateMessageExtra(id, { hiddenFromAI: !hidden });
@@ -943,8 +945,15 @@ export function createChatsStorage(db: DB) {
               await this.updateSwipeExtra(id, swipe.index, { hiddenFromAI: !hidden });
             }
           } catch (undoErr) {
+            undoErrors.push(undoErr);
             logger.error(undoErr, "bulkSetHiddenFromAI: failed to undo partial hide for message %s", id);
           }
+        }
+        if (undoErrors.length > 0) {
+          throw new AggregateError(
+            [err, ...undoErrors],
+            `bulkSetHiddenFromAI failed and rollback failed for ${undoErrors.length} of ${flipped.length} flipped messages`,
+          );
         }
         throw err;
       }
