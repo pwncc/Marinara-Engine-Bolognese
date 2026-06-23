@@ -1547,6 +1547,9 @@ export function HomeProfessorMariChat({
   const workspaceAbortRef = useRef<AbortController | null>(null);
   const handledWorkspaceRefreshIdsRef = useRef<Set<string>>(new Set());
   const workspaceStatusErrorToastShownRef = useRef(false);
+  const latestConnectionSelectionRef = useRef<string | null>(selectedConnectionId);
+  const pendingConnectionPersistRef = useRef<string | null>(null);
+  const connectionPersistInFlightRef = useRef(false);
 
   const hasActiveGeneration = useChatStore((state) => (chatId ? state.abortControllers.has(chatId) : false));
   const mariPhase = useChatStore((state) => (chatId ? (state.mariPhaseByChatId.get(chatId) ?? null) : null));
@@ -1656,6 +1659,10 @@ export function HomeProfessorMariChat({
       });
     });
   }, [invalidateWorkspaceData, workspaceStatus?.history]);
+
+  useEffect(() => {
+    latestConnectionSelectionRef.current = selectedConnectionId;
+  }, [selectedConnectionId]);
 
   useEffect(() => {
     if (hasLoadedRef.current || connectionsLoading) return;
@@ -1769,17 +1776,40 @@ export function HomeProfessorMariChat({
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [connectionMenuOpen]);
 
+  const persistLatestConnectionSelection = useCallback(() => {
+    if (connectionPersistInFlightRef.current) return;
+    connectionPersistInFlightRef.current = true;
+
+    void (async () => {
+      try {
+        while (pendingConnectionPersistRef.current) {
+          const id = pendingConnectionPersistRef.current;
+          pendingConnectionPersistRef.current = null;
+          try {
+            await ensureProfessorMariChat(id);
+          } catch (error) {
+            if (!pendingConnectionPersistRef.current && latestConnectionSelectionRef.current === id) {
+              console.error("[Professor Mari] Failed to save selected connection", error);
+              toast.error("Professor Mari could not remember that connection.", {
+                description: describeProfessorMariError(error),
+                duration: 12_000,
+              });
+            }
+          }
+        }
+      } finally {
+        connectionPersistInFlightRef.current = false;
+      }
+    })();
+  }, [ensureProfessorMariChat]);
+
   const handleConnectionChange = (id: string) => {
     setSelectedConnectionId(id);
+    latestConnectionSelectionRef.current = id;
+    pendingConnectionPersistRef.current = id;
     rememberConnectionId(id);
     setConnectionMenuOpen(false);
-    void ensureProfessorMariChat(id).catch((error) => {
-      console.error("[Professor Mari] Failed to save selected connection", error);
-      toast.error("Professor Mari could not remember that connection.", {
-        description: describeProfessorMariError(error),
-        duration: 12_000,
-      });
-    });
+    persistLatestConnectionSelection();
   };
 
   const closeMobileFocusMode = useCallback(() => {
