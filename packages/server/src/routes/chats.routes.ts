@@ -656,11 +656,13 @@ export async function chatsRoutes(app: FastifyInstance) {
       });
       const target = currentEntries.find((entry) => entry.id === body.entryId);
       if (target) {
-        const covered = target.messageIds ?? [];
+        // Restore exactly what this entry hid. `hiddenMessageIds` records the
+        // precise hidden subset; older entries without it fall back to messageIds.
+        const covered = target.hiddenMessageIds ?? target.messageIds ?? [];
         const stillCovered = new Set<string>();
         for (const entry of currentEntries) {
           if (entry.id === body.entryId || !entry.enabled) continue;
-          for (const id of entry.messageIds ?? []) stillCovered.add(id);
+          for (const id of entry.hiddenMessageIds ?? entry.messageIds ?? []) stillCovered.add(id);
         }
         const toUnhide = covered.filter((id) => !stillCovered.has(id));
         if (toUnhide.length > 0) {
@@ -2846,6 +2848,20 @@ export async function chatsRoutes(app: FastifyInstance) {
       summaryText = result.content.trim();
     }
 
+    const messageIds = selectedMessages.map((message) => message.id);
+    // Subset eligible to be hidden when "Hide summarised messages" is on: the
+    // summarized set minus the protected tail, so manual hiding honors
+    // `summaryTailMessages` like the automatic path. Persisted on the entry (when
+    // hiding is enabled) so deletion restores exactly what was hidden.
+    const hideEnabled = chatMeta.hideSummarisedMessages === true;
+    const hideMessageIds = hideEnabled
+      ? computeSummaryHideIds({
+          messages: allMessages,
+          entryMessageIds: messageIds,
+          tail: resolveRoleplaySummaryTail(chatMeta.summaryTailMessages),
+        })
+      : [];
+
     // Append as a structured entry and recompile the prompt-facing summary
     // without replacing concurrent metadata changes.
     let combined: string | null = summaryText;
@@ -2864,7 +2880,8 @@ export async function chatsRoutes(app: FastifyInstance) {
           messageCount: selectedMessages.length,
           rangeStartIndex: selectedRangeStartIndex,
           rangeEndIndex: selectedRangeEndIndex,
-          messageIds: selectedMessages.map((message) => message.id),
+          messageIds,
+          ...(hideMessageIds.length > 0 ? { hiddenMessageIds: hideMessageIds } : {}),
           promptTemplateId: requestedPromptTemplateId,
           createdAt: now,
           updatedAt: now,
@@ -2881,16 +2898,6 @@ export async function chatsRoutes(app: FastifyInstance) {
       };
     });
     if (!updatedChat) return reply.status(404).send({ error: "Chat not found" });
-
-    const messageIds = selectedMessages.map((message) => message.id);
-    // The subset eligible to be hidden when "Hide summarised messages" is on:
-    // the summarized messages minus the protected recent tail, so manual hiding
-    // honors `summaryTailMessages` exactly like the automatic path does.
-    const hideMessageIds = computeSummaryHideIds({
-      messages: allMessages,
-      entryMessageIds: messageIds,
-      tail: resolveRoleplaySummaryTail(chatMeta.summaryTailMessages),
-    });
 
     return {
       summary: combined,

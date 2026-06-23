@@ -509,8 +509,7 @@ export function SummaryPopover({
 
   const handleGenerate = useCallback(() => {
     if (!canGenerate) return;
-    // Hide the server-computed tail-excluded subset, so manual generation honors
-    // `summaryTailMessages` (keep the last N visible) just like the auto path.
+    // Hide the server-computed tail-excluded subset (data.hideMessageIds).
     const maybeHideSummarisedMessages = (hideMessageIds: string[] | undefined) => {
       if (!hideSummarisedResolved || !hideMessageIds?.length) return;
       bulkSetMessagesHiddenFromAI.mutate({ chatId, messageIds: hideMessageIds, hidden: true });
@@ -545,7 +544,7 @@ export function SummaryPopover({
           }
           setEditingEntryId(null);
           setDraftEntry(null);
-          maybeHideSummarisedMessages(data.messageIds);
+          maybeHideSummarisedMessages(data.hideMessageIds);
         },
         onError: (error) => toast.error(summaryErrorMessage(error)),
       },

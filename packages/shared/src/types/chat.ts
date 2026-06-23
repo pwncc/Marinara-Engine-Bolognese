@@ -149,6 +149,13 @@ export interface ChatSummaryEntry {
   rangeStartIndex?: number;
   rangeEndIndex?: number;
   messageIds?: string[];
+  /**
+   * The exact messages this entry hid from AI when "Hide summarised messages" was
+   * on (the summarized set minus the protected tail). Persisted so deletion can
+   * restore precisely what was hidden, rather than assuming it equals messageIds.
+   * Absent on entries created before this field or when nothing was hidden.
+   */
+  hiddenMessageIds?: string[];
   promptTemplateId?: string | null;
   tokenEstimate: number;
   createdAt: string;

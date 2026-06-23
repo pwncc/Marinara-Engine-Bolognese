@@ -182,6 +182,8 @@ export function normalizeChatSummaryEntry(
   if (rangeEndIndex !== undefined) base.rangeEndIndex = rangeEndIndex;
   const messageIds = normalizeMessageIds(value.messageIds);
   if (messageIds) base.messageIds = messageIds;
+  const hiddenMessageIds = normalizeMessageIds(value.hiddenMessageIds);
+  if (hiddenMessageIds) base.hiddenMessageIds = hiddenMessageIds;
   if (typeof value.promptTemplateId === "string") {
     base.promptTemplateId = value.promptTemplateId.trim() || null;
   } else if (value.promptTemplateId === null) {
