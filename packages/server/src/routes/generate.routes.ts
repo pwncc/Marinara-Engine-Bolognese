@@ -108,6 +108,7 @@ import { generateChatBackground } from "../services/game/game-asset-generation.j
 import { sanitizeGameNpcAvatarUrls } from "../services/game/npc-avatar-utils.js";
 import {
   parseCharacterCommands,
+  parseCharacterCommandsBySpeaker,
   parseDirectMessageCommands,
   parseDuration,
   type CharacterCommand,
@@ -203,7 +204,9 @@ import {
   buildLockedPersonaTrackerPatch,
   extractImageAttachmentDataUrls,
   appendNonLeadingSystemMessagesToLastUser,
+  appendSeparateAgentInjectionMessage,
   computeSummaryHideIds,
+  selectRollingSummaryMessages,
   injectIntoOutputFormatOrLastUser,
   isManualTrackerCharacterId,
   isMessageHiddenFromAI,
@@ -2247,6 +2250,7 @@ export async function generateRoutes(app: FastifyInstance) {
             lastGenerationType: promptLastGenerationType,
             idleDuration: promptIdleDuration,
             timeZone: promptTimeZone,
+            impersonate: input.impersonate === true,
             deferCharacterMacros,
           };
 
@@ -3090,8 +3094,14 @@ export async function generateRoutes(app: FastifyInstance) {
           // conversation asset context below. Whether
           // to react — and how warmly or dryly — is emergent from personality, not
           // dictated here.
-          conversationSystemPrompt +=
-            '\n\nYou can react to the user\'s most recent message with a single emoji by writing [react: emoji="😂"] on its own line — any standard emoji, or a custom one you have access to as [react: emoji=":name:"]. It posts as a small badge on their message, the way you\'d react in a chat app. Use it only when it genuinely fits how your character feels in the moment; it is optional, may stand alone or sit alongside your reply, and choosing a flat reaction or none at all is itself a valid choice.';
+          // Gated on `conversationCommandsEnabled`: the `[react: …]` tag is parsed,
+          // stripped, and applied inside the command pipeline, which only runs when
+          // Character Commands are enabled. Advertising the syntax while that pipeline
+          // is off leaves the raw tag in the visible message with no badge (#2877).
+          if (conversationCommandsEnabled) {
+            conversationSystemPrompt +=
+              '\n\nYou can react to the user\'s most recent message with a single emoji by writing [react: emoji="😂"] on its own line — any standard emoji, or a custom one you have access to as [react: emoji=":name:"]. It posts as a small badge on their message, the way you\'d react in a chat app. Use it only when it genuinely fits how your character feels in the moment; it is optional, may stand alone or sit alongside your reply, and choosing a flat reaction or none at all is itself a valid choice.';
+          }
           // ── Home Professor Mari: inject assistant knowledge & commands ──
           if (isHomeProfessorMariAssistantChat) {
             conversationSystemPrompt += "\n\n" + MARI_ASSISTANT_PROMPT;
@@ -5310,36 +5320,11 @@ export async function generateRoutes(app: FastifyInstance) {
           return results;
         };
 
-        // Helper: wrap a separate-injection agent's text and append it to the last
-        // user message. Used by both knowledge-retrieval and knowledge-router on
-        // both fresh generations AND regen-cache replays — keeping the wrap+append
-        // in one place prevents the two paths from drifting again (PR #228 had to
-        // fix exactly that drift once already).
+        // Helper: wrap a separate-injection agent's text as protected prompt
+        // context. Used by both knowledge-retrieval and knowledge-router on both
+        // fresh generations AND regen-cache replays so the two paths stay aligned.
         const appendSeparateAgentInjection = (agentType: string, text: string): void => {
-          const meta =
-            agentType === "knowledge-router"
-              ? { heading: "Knowledge Router", tag: "knowledge_router" }
-              : agentType === "knowledge-retrieval"
-                ? { heading: "Knowledge Retrieval", tag: "knowledge_retrieval" }
-                : agentType === "director"
-                  ? { heading: "Narrative Director", tag: "narrative_director" }
-                  : { heading: agentType, tag: agentType.replace(/[^a-z0-9_-]/gi, "_") };
-          // Honor all three wrapFormat values (the previous KR-only injection had
-          // a markdown-or-xml-fallback bug that "none" silently fell into).
-          const wrapped =
-            wrapFormat === "none"
-              ? `\n\n${meta.heading}:\n${text}`
-              : wrapFormat === "markdown"
-                ? `\n\n## ${meta.heading}\n${text}`
-                : `\n\n<${meta.tag}>\n${text}\n</${meta.tag}>`;
-          const lastUserIdx = findLastIndex(finalMessages, "user");
-          if (lastUserIdx >= 0) {
-            const target = finalMessages[lastUserIdx]!;
-            finalMessages[lastUserIdx] = { ...target, content: target.content + wrapped };
-          } else {
-            const last = finalMessages[finalMessages.length - 1]!;
-            finalMessages[finalMessages.length - 1] = { ...last, content: last.content + wrapped };
-          }
+          appendSeparateAgentInjectionMessage(finalMessages, agentType, text, wrapFormat);
         };
 
         if (shouldRunDirectorSecretPlot || shouldRunPreGen || shouldRunKR || shouldRunRouter) {
@@ -6114,6 +6099,7 @@ export async function generateRoutes(app: FastifyInstance) {
           savedMsg: Awaited<ReturnType<typeof chats.createMessage>>;
           response: string;
           commands: CharacterCommand[];
+          commandCharacterIds: (string | null)[] | null;
           oocMessages: string[];
           characterId: string | null;
         } | null> => {
@@ -6684,6 +6670,9 @@ export async function generateRoutes(app: FastifyInstance) {
 
           // ── Parse and strip hidden character commands ──
           let parsedCommands: CharacterCommand[] = [];
+          // Parallel to parsedCommands: per-command character attribution for merged
+          // group conversations (null elsewhere — caller falls back to the message char).
+          let parsedCommandCharacterIds: (string | null)[] | null = null;
           let conversationCommandContent: string | null = null;
           let contentReplaced = false;
           if (tailMessages.assistantPrefillInjected && assistantPrefill && fullResponse.startsWith(assistantPrefill)) {
@@ -6725,11 +6714,31 @@ export async function generateRoutes(app: FastifyInstance) {
           }
           if (conversationCommandsEnabled && !input.impersonate) {
             const responseBeforeCommandParsing = fullResponse;
-            const parsed = parseCharacterCommands(fullResponse);
+            // Merged group conversations carry multiple characters' turns in one
+            // response; attribute each command to its speaker so e.g. a [selfie]
+            // renders the character that took it, not always the first one.
+            const useSpeakerAttribution =
+              isGroupChat && groupChatMode === "merged" && chatMode === "conversation";
+            const speakerParse = useSpeakerAttribution
+              ? parseCharacterCommandsBySpeaker(fullResponse, charInfo, targetCharId)
+              : null;
+            const parsed = speakerParse ?? parseCharacterCommands(fullResponse);
+            const speakerIdByCommand = speakerParse
+              ? new Map(
+                  speakerParse.commands.map(
+                    (command, index) => [command, speakerParse.commandCharacterIds[index] ?? targetCharId] as const,
+                  ),
+                )
+              : null;
             if (parsed.commands.length > 0) {
               parsedCommands = filterEnabledConversationCommands(parsed.commands, chatMeta);
               if (parsedCommands.length > 0) {
                 conversationCommandContent = responseBeforeCommandParsing.trim();
+                if (speakerIdByCommand) {
+                  parsedCommandCharacterIds = parsedCommands.map(
+                    (command) => speakerIdByCommand.get(command) ?? targetCharId,
+                  );
+                }
               }
               fullResponse = parsed.cleanContent;
               contentReplaced = true;
@@ -6751,6 +6760,9 @@ export async function generateRoutes(app: FastifyInstance) {
             });
             if (recoveredSelfieCommand) {
               parsedCommands = [...parsedCommands, recoveredSelfieCommand];
+              // Recovered (implicit) selfies have no speaker prefix to attribute to;
+              // fall back to the generation's character.
+              if (parsedCommandCharacterIds) parsedCommandCharacterIds = [...parsedCommandCharacterIds, targetCharId];
               logger.info("[generate] Recovered implicit selfie command for chat %s", input.chatId);
             }
           }
@@ -6928,6 +6940,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 savedMsg: anchoredMsg,
                 response: "",
                 commands: parsedCommands,
+                commandCharacterIds: parsedCommandCharacterIds,
                 oocMessages,
                 characterId: targetCharId,
               };
@@ -7139,6 +7152,7 @@ export async function generateRoutes(app: FastifyInstance) {
             savedMsg,
             response: fullResponse,
             commands: parsedCommands,
+            commandCharacterIds: parsedCommandCharacterIds,
             oocMessages,
             characterId: targetCharId,
           };
@@ -7158,7 +7172,17 @@ export async function generateRoutes(app: FastifyInstance) {
         // (firstSavedMsg/lastSavedMsg/collectedCommands/collectedOocMessages
         // are declared above the follow-up loop so they survive iterations.)
 
-        const normalizedGenerationGuide = typeof input.generationGuide === "string" ? input.generationGuide.trim() : "";
+        const rawGenerationGuide = typeof input.generationGuide === "string" ? input.generationGuide.trim() : "";
+        const normalizedGenerationGuide = rawGenerationGuide
+          ? resolveMacros(
+              rawGenerationGuide,
+              {
+                ...promptMacroContext,
+                variables: { ...promptMacroContext.variables },
+              },
+              { trimResult: false },
+            ).trim()
+          : "";
         const generationGuideInstruction = normalizedGenerationGuide
           ? `Take the following into special consideration for your next message: ${normalizedGenerationGuide}`
           : null;
@@ -7299,10 +7323,12 @@ export async function generateRoutes(app: FastifyInstance) {
             firstSavedMsg ??= genResult.savedMsg;
             lastSavedMsg = genResult.savedMsg;
             recordExpressionTarget(genResult.savedMsg, genResult.characterId);
-            for (const cmd of genResult.commands) {
+            for (let cmdIndex = 0; cmdIndex < genResult.commands.length; cmdIndex++) {
               collectedCommands.push({
-                command: cmd,
-                characterId: genResult.characterId,
+                command: genResult.commands[cmdIndex]!,
+                // Merged group responses attribute each command to its speaker; fall
+                // back to the generation's character when no attribution is available.
+                characterId: genResult.commandCharacterIds?.[cmdIndex] ?? genResult.characterId,
                 messageId: genResult.savedMsg?.id ?? "",
                 swipeIndex: genResult.savedMsg?.activeSwipeIndex ?? 0,
               });
@@ -7394,9 +7420,11 @@ export async function generateRoutes(app: FastifyInstance) {
           if (messagesSinceLastSummary < interval) return;
 
           const contextSize = clampRoleplaySummaryContextSize(chatMeta.summaryContextSize);
-          const selectedMessages = freshMessages
-            .filter((message: any) => !isMessageHiddenFromAI(message))
-            .slice(-contextSize);
+          const selectedMessages = selectRollingSummaryMessages({
+            messages: freshMessages,
+            contextSize,
+            summaryEntries: chatMeta.summaryEntries as ChatSummaryEntry[] | undefined,
+          });
           if (selectedMessages.length === 0) return;
 
           const resolvedSummaryConnection = await resolveChatSummaryConnection({
@@ -8286,11 +8314,14 @@ export async function generateRoutes(app: FastifyInstance) {
                 }
 
                 for (const char of chars) {
-                  if (char.avatarPath) continue; // already set
                   if (isManualTrackerCharacterId(char.characterId)) continue;
                   const name = (char.name as string) ?? "";
                   // Try matching against the chat's character cards (case-insensitive)
                   const matched = charInfo.find((c) => normalizeTextForMatch(c.name) === normalizeTextForMatch(name));
+                  if (!char.avatarCrop && matched?.avatarCrop) {
+                    char.avatarCrop = matched.avatarCrop;
+                  }
+                  if (char.avatarPath) continue; // already set
                   if (matched?.avatarPath) {
                     char.avatarPath = matched.avatarPath;
                     continue;
@@ -10959,7 +10990,11 @@ export async function generateRoutes(app: FastifyInstance) {
               app.db,
               input.chatId,
               { userName: personaName, characterNames: charNameMap },
-              { embeddingSource: memoryRecallEmbeddingSource },
+              {
+                embeddingSource: memoryRecallEmbeddingSource,
+                readBehindMessageCount:
+                  typeof contextMessageLimit === "number" && contextMessageLimit > 0 ? contextMessageLimit : undefined,
+              },
             ).catch((err) => logger.error(err, "[memory-recall] Background chunking failed"));
           }
         }
