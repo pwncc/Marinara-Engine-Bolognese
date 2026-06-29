@@ -139,6 +139,7 @@ import {
 } from "../services/conversation/character-commands.js";
 import {
   ILLUSTRATOR_TEXT_NEGATIVE_PROMPT,
+  isNovelAiImageConnection,
   resolveIllustratorCharacterReferences,
 } from "./generate/illustrator-references.js";
 import {
@@ -9019,6 +9020,12 @@ export async function generateRoutes(app: FastifyInstance) {
                       const imgApiKey = imgConnFull.apiKey || "";
                       const imgSource = (imgConnFull as any).imageGenerationSource || imgModel;
                       const imgServiceHint = imgConnFull.imageService || imgSource;
+                      const suppressReferencePromptLine = isNovelAiImageConnection({
+                        model: imgModel,
+                        baseUrl: imgBaseUrl,
+                        imageService: imgServiceHint,
+                        imageGenerationSource: imgSource,
+                      });
                       const imageDefaults = resolveConnectionImageDefaults(imgConnFull);
                       const imageSettings = await loadImageGenerationUserSettings(app.db);
                       const styleProfileId =
@@ -9046,8 +9053,8 @@ export async function generateRoutes(app: FastifyInstance) {
 
                       logger.debug(`[illustrator] Starting image generation (${imgWidth}x${imgHeight})...`);
 
-                      // Collect optional character visual context. Prefer full-body
-                      // sprites for references, then fall back to avatar portraits.
+                      // Collect optional character visual context. Prefer avatar
+                      // portraits for references, then fall back to full-body sprites.
                       const useAvatarRefs =
                         typeof chatMeta.illustratorUseAvatarReferences === "boolean"
                           ? chatMeta.illustratorUseAvatarReferences
@@ -9092,7 +9099,7 @@ export async function generateRoutes(app: FastifyInstance) {
                         }
                         if (useAvatarRefs && referenceResolution.referenceImages.length > 0) {
                           illustratorRefImages = referenceResolution.referenceImages;
-                          if (referenceResolution.referenceLine)
+                          if (referenceResolution.referenceLine && !suppressReferencePromptLine)
                             fullPrompt += `\n\n${referenceResolution.referenceLine}`;
                           logger.debug(
                             "[illustrator] Sending %d character reference(s) for: %s",
@@ -9563,6 +9570,12 @@ export async function generateRoutes(app: FastifyInstance) {
 
                       const imagePrompt = (promptResult.content ?? "").trim();
                       if (imagePrompt) {
+                        const suppressReferencePromptLine = isNovelAiImageConnection({
+                          model: imgConnFull.model,
+                          baseUrl: imgConnFull.baseUrl,
+                          imageService: imgConnFull.imageService,
+                          imageGenerationSource: (imgConnFull as any).imageGenerationSource,
+                        });
                         let finalSelfiePrompt = selfiePositivePrompt
                           ? `${imagePrompt}, ${selfiePositivePrompt}`
                           : imagePrompt;
@@ -9591,7 +9604,7 @@ export async function generateRoutes(app: FastifyInstance) {
                           });
                           if (referenceResolution.referenceImages.length > 0) {
                             selfieReferenceImages = referenceResolution.referenceImages;
-                            if (referenceResolution.referenceLine) {
+                            if (referenceResolution.referenceLine && !suppressReferencePromptLine) {
                               finalSelfiePrompt += `\n\n${referenceResolution.referenceLine}`;
                             }
                             logger.debug(
