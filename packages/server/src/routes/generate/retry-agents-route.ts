@@ -107,7 +107,11 @@ import {
   normalizeSpriteDisplayModes,
   validateSpriteExpressionEntries,
 } from "./expression-agent-utils.js";
-import { ILLUSTRATOR_TEXT_NEGATIVE_PROMPT, resolveIllustratorCharacterReferences } from "./illustrator-references.js";
+import {
+  ILLUSTRATOR_TEXT_NEGATIVE_PROMPT,
+  isNovelAiImageConnection,
+  resolveIllustratorCharacterReferences,
+} from "./illustrator-references.js";
 import {
   applyTextRewriteAgentChatSettings,
   mergePairedBuiltInRewriteAgents,
@@ -2678,6 +2682,12 @@ async function applyRetryResultEffects(args: {
             const imgApiKey = imgConnFull.apiKey || "";
             const imgSource = (imgConnFull as any).imageGenerationSource || imgModel;
             const imgServiceHint = imgConnFull.imageService || imgSource;
+            const suppressReferencePromptLine = isNovelAiImageConnection({
+              model: imgModel,
+              baseUrl: imgBaseUrl,
+              imageService: imgServiceHint,
+              imageGenerationSource: imgSource,
+            });
             const imageDefaults = resolveConnectionImageDefaults(imgConnFull);
             const imageSettings = await loadImageGenerationUserSettings(app.db);
 
@@ -2705,8 +2715,8 @@ async function applyRetryResultEffects(args: {
               .filter(Boolean)
               .join(", ");
 
-            // Collect optional character visual context. Prefer full-body sprites
-            // for references, then fall back to avatar portraits.
+            // Collect optional character visual context. Prefer avatar portraits
+            // for references, then fall back to full-body sprites.
             const useAvatarRefs =
               typeof chatMeta.illustratorUseAvatarReferences === "boolean"
                 ? chatMeta.illustratorUseAvatarReferences
@@ -2753,7 +2763,8 @@ async function applyRetryResultEffects(args: {
               }
               if (useAvatarRefs && referenceResolution.referenceImages.length > 0) {
                 referenceImages = referenceResolution.referenceImages;
-                if (referenceResolution.referenceLine) fullPrompt += `\n\n${referenceResolution.referenceLine}`;
+                if (referenceResolution.referenceLine && !suppressReferencePromptLine)
+                  fullPrompt += `\n\n${referenceResolution.referenceLine}`;
                 logger.debug(
                   "[retry-agents] Illustrator sending %d character reference(s) for: %s",
                   referenceResolution.referenceImages.length,
