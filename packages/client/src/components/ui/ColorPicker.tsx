@@ -110,9 +110,6 @@ export function ColorPicker({
   const [expanded, setExpanded] = useState(false);
   const nativeRef = useRef<HTMLInputElement>(null);
   const activeStopRef = useRef<number>(0);
-  const onChangeRef = useRef(onChange);
-  const pendingChangeRef = useRef<string | null>(null);
-  const pendingFrameRef = useRef<number | null>(null);
 
   // Sync value → local state when value changes externally
   useEffect(() => {
@@ -132,100 +129,57 @@ export function ColorPicker({
     }
   }, [disabled]);
 
-  useEffect(() => {
-    onChangeRef.current = onChange;
-  }, [onChange]);
-
-  const flushPendingChange = useCallback(() => {
-    if (pendingFrameRef.current !== null) {
-      window.cancelAnimationFrame(pendingFrameRef.current);
-      pendingFrameRef.current = null;
-    }
-    const pending = pendingChangeRef.current;
-    pendingChangeRef.current = null;
-    if (pending !== null) {
-      onChangeRef.current(pending);
-    }
-  }, []);
-
-  const cancelPendingChange = useCallback(() => {
-    if (pendingFrameRef.current !== null) {
-      window.cancelAnimationFrame(pendingFrameRef.current);
-      pendingFrameRef.current = null;
-    }
-    pendingChangeRef.current = null;
-  }, []);
-
-  useEffect(
-    () => () => {
-      flushPendingChange();
-    },
-    [flushPendingChange],
-  );
-
-  const commitChange = useCallback((nextValue: string, defer = false) => {
-    if (!defer) {
-      cancelPendingChange();
-      onChangeRef.current(nextValue);
-      return;
-    }
-
-    pendingChangeRef.current = nextValue;
-    if (pendingFrameRef.current !== null) return;
-    pendingFrameRef.current = window.requestAnimationFrame(() => {
-      pendingFrameRef.current = null;
-      const pending = pendingChangeRef.current;
-      pendingChangeRef.current = null;
-      if (pending !== null) {
-        onChangeRef.current(pending);
-      }
-    });
-  }, [cancelPendingChange]);
-
   const handleSolidChange = useCallback(
-    (color: string, defer = false) => {
-      commitChange(color, defer);
+    (color: string) => {
+      onChange(color);
     },
-    [commitChange],
+    [onChange],
   );
 
   const handleGradientStopChange = useCallback(
-    (index: number, color: string, defer = false) => {
-      const updated = gradientStops.map((stop, i) => (i === index ? color : stop));
-      setGradientStops(updated);
-      commitChange(buildGradient(gradientAngle, updated), defer);
+    (index: number, color: string) => {
+      setGradientStops((prev) => {
+        const updated = [...prev];
+        updated[index] = color;
+        onChange(buildGradient(gradientAngle, updated));
+        return updated;
+      });
     },
-    [commitChange, gradientAngle, gradientStops],
+    [onChange, gradientAngle],
   );
 
   const addStop = useCallback(() => {
-    const updated = [...gradientStops, "#ffffff"];
-    setGradientStops(updated);
-    commitChange(buildGradient(gradientAngle, updated));
-  }, [commitChange, gradientAngle, gradientStops]);
+    setGradientStops((prev) => {
+      const updated = [...prev, "#ffffff"];
+      onChange(buildGradient(gradientAngle, updated));
+      return updated;
+    });
+  }, [onChange, gradientAngle]);
 
   const removeStop = useCallback(
     (index: number) => {
       if (gradientStops.length <= 2) return;
-      const updated = gradientStops.filter((_, i) => i !== index);
-      setGradientStops(updated);
-      commitChange(buildGradient(gradientAngle, updated));
+      setGradientStops((prev) => {
+        const updated = prev.filter((_, i) => i !== index);
+        onChange(buildGradient(gradientAngle, updated));
+        return updated;
+      });
     },
-    [commitChange, gradientAngle, gradientStops],
+    [onChange, gradientAngle, gradientStops.length],
   );
 
   const handleAngleChange = useCallback(
-    (angle: number, defer = false) => {
+    (angle: number) => {
       setGradientAngle(angle);
-      commitChange(buildGradient(angle, gradientStops), defer);
+      onChange(buildGradient(angle, gradientStops));
     },
-    [commitChange, gradientStops],
+    [onChange, gradientStops],
   );
 
   const clearColor = useCallback(() => {
-    commitChange(clearValue);
+    onChange(clearValue);
     setExpanded(false);
-  }, [clearValue, commitChange]);
+  }, [clearValue, onChange]);
 
   const previewValue = value || emptyPreviewValue;
   const showClear = clearValue ? value !== clearValue : !!value;
@@ -352,9 +306,7 @@ export function ColorPicker({
                     type="color"
                     aria-label={`Pick ${label} color`}
                     value={!isCssGradient(previewValue) ? getNativeColorValue(previewValue) : "#6c5ce7"}
-                    onInput={(e) => handleSolidChange(e.currentTarget.value, true)}
-                    onChange={(e) => handleSolidChange(e.currentTarget.value, true)}
-                    onBlur={flushPendingChange}
+                    onChange={(e) => handleSolidChange(e.target.value)}
                     className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
                   />
                 </label>
@@ -419,15 +371,10 @@ export function ColorPicker({
                     <input
                       type="color"
                       value={stop}
-                      onInput={(e) => {
-                        activeStopRef.current = i;
-                        handleGradientStopChange(i, e.currentTarget.value, true);
-                      }}
                       onChange={(e) => {
                         activeStopRef.current = i;
-                        handleGradientStopChange(i, e.currentTarget.value, true);
+                        handleGradientStopChange(i, e.target.value);
                       }}
-                      onBlur={flushPendingChange}
                       className="h-7 w-7 cursor-pointer rounded-md border-0 bg-transparent p-0"
                     />
                     <input
@@ -462,10 +409,7 @@ export function ColorPicker({
                   min={0}
                   max={360}
                   value={gradientAngle}
-                  onChange={(e) => handleAngleChange(parseInt(e.target.value), true)}
-                  onPointerUp={flushPendingChange}
-                  onKeyUp={flushPendingChange}
-                  onBlur={flushPendingChange}
+                  onChange={(e) => handleAngleChange(parseInt(e.target.value))}
                   className="h-1.5 w-full cursor-pointer accent-[var(--primary)]"
                 />
               </div>

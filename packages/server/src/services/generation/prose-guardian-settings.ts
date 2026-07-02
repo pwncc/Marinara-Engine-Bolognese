@@ -2,11 +2,10 @@ import type { ResolvedAgent } from "../agents/agent-pipeline.js";
 
 export const PROSE_GUARDIAN_PENDING_MESSAGE = "Prose Guardian is working!";
 export const CONTINUITY_PENDING_MESSAGE = "Continuity Checker is working!";
-export const HTML_PENDING_MESSAGE = "Immersive HTML is working!";
 export const TEXT_REWRITE_PENDING_MESSAGE = "Rewrite agents are working!";
 const LEGACY_PROSE_GUARDIAN_PROMPT_PREFIX =
   "Study the last few assistant messages and produce concrete, actionable writing directives";
-const REWRITE_AGENT_TYPES = new Set(["prose-guardian", "continuity", "html"]);
+const REWRITE_AGENT_TYPES = new Set(["prose-guardian", "continuity"]);
 
 function readString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
@@ -56,17 +55,6 @@ export function applyContinuityCheckerChatSettings(
   };
 }
 
-export function applyImmersiveHtmlChatSettings(
-  settings: Record<string, unknown>,
-  chatMetadata: Record<string, unknown> | null | undefined,
-): Record<string, unknown> {
-  return {
-    ...settings,
-    holdForRewrite: readSharedHoldForRewrite(settings, chatMetadata),
-    resultType: "text_rewrite",
-  };
-}
-
 export function applyTextRewriteAgentChatSettings(
   agentType: string,
   settings: Record<string, unknown>,
@@ -74,12 +62,7 @@ export function applyTextRewriteAgentChatSettings(
 ): Record<string, unknown> {
   if (agentType === "prose-guardian") return applyProseGuardianChatSettings(settings, chatMetadata);
   if (agentType === "continuity") return applyContinuityCheckerChatSettings(settings, chatMetadata);
-  if (agentType === "html") return applyImmersiveHtmlChatSettings(settings, chatMetadata);
   return settings;
-}
-
-export function isBuiltInTextRewriteAgentType(agentType: string | null | undefined): boolean {
-  return typeof agentType === "string" && REWRITE_AGENT_TYPES.has(agentType);
 }
 
 export function shouldHoldForTextRewrite(agents: ResolvedAgent[]): boolean {
@@ -93,14 +76,11 @@ export function getTextRewritePendingState(agents: ResolvedAgent[]): { agentType
       .map((agent) => agent.type),
   );
   if (heldTypes.size === 0) return null;
-  if (heldTypes.size > 1) {
+  if (heldTypes.has("prose-guardian") && heldTypes.has("continuity")) {
     return { agentType: "text-rewrite", message: TEXT_REWRITE_PENDING_MESSAGE };
   }
   if (heldTypes.has("continuity")) {
     return { agentType: "continuity", message: CONTINUITY_PENDING_MESSAGE };
-  }
-  if (heldTypes.has("html")) {
-    return { agentType: "html", message: HTML_PENDING_MESSAGE };
   }
   return { agentType: "prose-guardian", message: PROSE_GUARDIAN_PENDING_MESSAGE };
 }
@@ -119,31 +99,22 @@ function maxSetting(...values: unknown[]): number | undefined {
   return numbers.length > 0 ? Math.max(...numbers) : undefined;
 }
 
-function getRewritePromptLabel(agentType: string): string {
-  switch (agentType) {
-    case "prose-guardian":
-      return "style_editor";
-    case "continuity":
-      return "continuity_editor";
-    case "html":
-      return "immersive_html_editor";
-    default:
-      return "rewrite_editor";
-  }
-}
-
-function buildMergedRewritePrompt(agents: ResolvedAgent[]): string {
-  const agentBlocks = agents.flatMap((agent) => {
-    const label = getRewritePromptLabel(agent.type);
-    return [`<${label}>`, `Agent: ${agent.name}`, agent.promptTemplate, `</${label}>`, ``];
-  });
-
+function buildMergedRewritePrompt(proseGuardian: ResolvedAgent, continuity: ResolvedAgent): string {
   return [
     `You are a combined post-processing editor. Rewrite only <assistant_response>.`,
-    `Apply every instruction set below in one pass. Preserve events, facts, dialogue intent, speaker meaning, order, tags, and formatting. Do not add story beats.`,
-    `If instructions conflict, physical continuity and preserving meaning outrank style preferences; visual enhancements must stay diegetic and must not introduce new facts.`,
+    `Apply both instruction sets below in one pass. Preserve events, facts, dialogue intent, speaker meaning, order, tags, and formatting. Do not add story beats.`,
+    `If instructions conflict, physical continuity and preserving meaning outrank style preferences.`,
     ``,
-    ...agentBlocks,
+    `<style_editor>`,
+    `Agent: ${proseGuardian.name}`,
+    proseGuardian.promptTemplate,
+    `</style_editor>`,
+    ``,
+    `<continuity_editor>`,
+    `Agent: ${continuity.name}`,
+    continuity.promptTemplate,
+    `</continuity_editor>`,
+    ``,
     `Return only one JSON object:`,
     `{"editNeeded":false,"editedText":"","changes":[]}`,
     `If rewriting is needed, set editNeeded to true:`,
@@ -154,25 +125,29 @@ function buildMergedRewritePrompt(agents: ResolvedAgent[]): string {
 }
 
 export function mergePairedBuiltInRewriteAgents(agents: ResolvedAgent[]): ResolvedAgent[] {
-  const builtInRewriteAgents = agents.filter((agent) => REWRITE_AGENT_TYPES.has(agent.type));
-  if (builtInRewriteAgents.length <= 1) return agents;
+  const proseGuardian = agents.find((agent) => agent.type === "prose-guardian");
+  const continuity = agents.find((agent) => agent.type === "continuity");
+  if (!proseGuardian || !continuity) return agents;
 
-  const firstMergeIndex = Math.min(...builtInRewriteAgents.map((agent) => agents.indexOf(agent)));
-  const baseAgent = builtInRewriteAgents[0]!;
-  const contextSize = maxSetting(...builtInRewriteAgents.map((agent) => agent.settings.contextSize));
-  const maxTokens = maxSetting(...builtInRewriteAgents.map((agent) => agent.settings.maxTokens));
+  const firstMergeIndex = Math.min(agents.indexOf(proseGuardian), agents.indexOf(continuity));
   const mergedAgent: ResolvedAgent = {
-    ...baseAgent,
-    name: builtInRewriteAgents.map((agent) => agent.name).join(" + "),
-    promptTemplate: buildMergedRewritePrompt(builtInRewriteAgents),
+    ...proseGuardian,
+    name: `${proseGuardian.name} + ${continuity.name}`,
+    promptTemplate: buildMergedRewritePrompt(proseGuardian, continuity),
     settings: {
-      ...baseAgent.settings,
+      ...proseGuardian.settings,
       resultType: "text_rewrite",
-      holdForRewrite: builtInRewriteAgents.some((agent) => agent.settings.holdForRewrite !== false),
-      includePreGenInjections: builtInRewriteAgents.some((agent) => agent.settings.includePreGenInjections === true),
-      includeParallelResults: builtInRewriteAgents.some((agent) => agent.settings.includeParallelResults === true),
-      ...(contextSize !== undefined ? { contextSize } : {}),
-      ...(maxTokens !== undefined ? { maxTokens } : {}),
+      holdForRewrite: proseGuardian.settings.holdForRewrite !== false || continuity.settings.holdForRewrite !== false,
+      includePreGenInjections:
+        proseGuardian.settings.includePreGenInjections === true || continuity.settings.includePreGenInjections === true,
+      includeParallelResults:
+        proseGuardian.settings.includeParallelResults === true || continuity.settings.includeParallelResults === true,
+      ...(maxSetting(proseGuardian.settings.contextSize, continuity.settings.contextSize) !== undefined
+        ? { contextSize: maxSetting(proseGuardian.settings.contextSize, continuity.settings.contextSize) }
+        : {}),
+      ...(maxSetting(proseGuardian.settings.maxTokens, continuity.settings.maxTokens) !== undefined
+        ? { maxTokens: maxSetting(proseGuardian.settings.maxTokens, continuity.settings.maxTokens) }
+        : {}),
     },
   };
 
@@ -180,7 +155,7 @@ export function mergePairedBuiltInRewriteAgents(agents: ResolvedAgent[]): Resolv
   for (let index = 0; index < agents.length; index++) {
     const agent = agents[index]!;
     if (index === firstMergeIndex) merged.push(mergedAgent);
-    if (REWRITE_AGENT_TYPES.has(agent.type)) continue;
+    if (agent.type === "prose-guardian" || agent.type === "continuity") continue;
     merged.push(agent);
   }
   return merged;

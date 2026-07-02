@@ -451,9 +451,6 @@ export function isUpdatesRemoteApplyAllowed() {
 }
 
 export function isProviderLocalUrlsEnabled() {
-  if (process.platform === "android" && normalizeEnvValue(process.env.PROVIDER_LOCAL_URLS_ENABLED) === null) {
-    return true;
-  }
   return isEnabledFlag(process.env.PROVIDER_LOCAL_URLS_ENABLED);
 }
 

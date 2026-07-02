@@ -785,41 +785,25 @@ async function generateOpenAI(baseUrl: string, apiKey: string, request: ImageGen
   return readOpenAIImageResult(resp, request, "generation");
 }
 
-function xAIImagesUrl(baseUrl: string, endpoint: "generations" | "edits"): string {
-  return openAIImagesUrl(baseUrl, endpoint);
-}
-
-function xAIReferenceImages(request: ImageGenRequest): string[] {
-  return openAIReferenceImages(request).slice(0, 3);
-}
-
-function xAIImageInput(reference: string): { type: "image_url"; url: string } {
-  const decoded = decodeReferenceImage(reference);
-  return {
-    type: "image_url",
-    url: `data:${decoded.mimeType};base64,${decoded.base64}`,
-  };
+function xAIImagesUrl(baseUrl: string): string {
+  return openAIImagesUrl(baseUrl, "generations");
 }
 
 async function generateXAI(baseUrl: string, apiKey: string, request: ImageGenRequest): Promise<ImageGenResult> {
-  const references = xAIReferenceImages(request);
-  const endpoint = references.length > 0 ? "edits" : "generations";
+  if (request.referenceImage || request.referenceImages?.length) {
+    throw new Error("xAI image generation does not support reference images in Marinara yet.");
+  }
+
   const body: Record<string, unknown> = {
     prompt: request.prompt,
     n: 1,
     aspect_ratio: xAIImageAspectRatio(request.width, request.height),
+    response_format: "b64_json",
   };
   if (request.model) body.model = request.model;
-  if (references.length === 0) {
-    body.response_format = "b64_json";
-  } else if (references.length === 1) {
-    body.image = xAIImageInput(references[0]!);
-  } else {
-    body.images = references.map(xAIImageInput);
-  }
 
   const resp = await imageFetch(
-    xAIImagesUrl(baseUrl, endpoint),
+    xAIImagesUrl(baseUrl),
     {
       method: "POST",
       headers: {
@@ -834,8 +818,7 @@ async function generateXAI(baseUrl: string, apiKey: string, request: ImageGenReq
 
   if (!resp.ok) {
     const errText = await resp.text().catch(() => "Unknown error");
-    const operation = endpoint === "edits" ? "edit" : "generation";
-    throw new Error(`xAI image ${operation} failed (${resp.status}): ${sanitizeErrorText(errText)}`);
+    throw new Error(`xAI image generation failed (${resp.status}): ${sanitizeErrorText(errText)}`);
   }
 
   const data = (await resp.json()) as { data?: Array<{ b64_json?: string; url?: string }> };

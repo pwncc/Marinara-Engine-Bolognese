@@ -4160,19 +4160,14 @@ strong {
 }
 
 @media (max-width: 767px) {
-  /*
-   * WKWebView native backing color is set by the literal background-color in
-   * index.html <style> (inline critical CSS — not cached by SW, always fresh).
-   * Do NOT set html { background-color } here; a CSS variable would override
-   * the literal and WKWebView cannot resolve variables → shows black instead.
-   */
-  html {
-    min-height: 100dvh;
-    overflow: hidden;
+  .mari-app {
+    height: var(--mari-visual-viewport-height, 100dvh) !important;
+    max-height: var(--mari-visual-viewport-height, 100dvh) !important;
   }
 
   body {
-    /* Safe-area insets handled by AppShell — only apply sides here */
+    /* Safe-area insets handled by AppShell — only apply sides + bottom here */
+    padding-bottom: env(safe-area-inset-bottom);
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
   }
@@ -4333,15 +4328,13 @@ strong {
     padding: 0.25em 2% max(0.5em, env(safe-area-inset-bottom)) !important;
     scroll-margin-bottom: max(4.5rem, env(safe-area-inset-bottom));
   }
-  .chat-input-container .marinara-chat-input-shell {
-    gap: 0.25rem !important;
-    padding-left: 0.5rem !important;
-    padding-right: 0.375rem !important;
+  .chat-input-container .rounded-2xl {
+    padding-left: 0.75em !important;
+    padding-right: 0.5em !important;
   }
 
   .mari-chat-input-textarea {
-    max-height: min(8rem, calc(var(--mari-visual-viewport-height, 100dvh) * 0.24)) !important;
-    overflow-y: auto;
+    max-height: min(12.5rem, calc(var(--mari-visual-viewport-height, 100dvh) * 0.32)) !important;
   }
 }
 
@@ -4371,7 +4364,7 @@ strong {
     white-space: nowrap;
   }
 
-  .chat-input-container .marinara-chat-input-shell {
+  .chat-input-container .rounded-2xl {
     border-radius: 1em !important;
   }
 }

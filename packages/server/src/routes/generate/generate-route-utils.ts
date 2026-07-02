@@ -75,11 +75,6 @@ export type PromptAttachment = {
   name?: string | null;
   prompt?: string | null;
   galleryId?: string | null;
-  imageCaption?: string | null;
-  imageCaptionConnectionId?: string | null;
-  imageCaptionModel?: string | null;
-  imageCaptionProvider?: string | null;
-  imageCaptionedAt?: string | null;
 };
 
 export function createLocalSidecarGenerationConnection(): LocalSidecarGenerationConnection {
@@ -1022,7 +1017,7 @@ function decodeDataUrlText(dataUrl: string): string | null {
   }
 }
 
-export function escapeXmlAttribute(value: string): string {
+function escapeXmlAttribute(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 

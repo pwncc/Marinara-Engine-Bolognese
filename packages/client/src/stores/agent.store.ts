@@ -93,12 +93,8 @@ interface AgentState {
   lastResults: Map<string, AgentResult>;
   debugLog: AgentDebugEntry[];
   isProcessing: boolean;
-  /** Chat IDs with agent work currently in flight. Keeps active-chat UI from flashing for background runs. */
-  processingChatIds: string[];
   /** Agent types that failed even after auto-retry — manual retry available */
   failedAgentTypes: string[];
-  /** Chat ID the failed-agent list belongs to. Null means legacy/global failures. */
-  failedAgentChatId: string | null;
   /** Rich failure details for the retry UI and troubleshooting copy */
   failedAgentFailures: AgentFailure[];
   thoughtBubbles: Array<{
@@ -136,13 +132,13 @@ interface AgentState {
 
   // Actions
   setActiveAgents: (agents: string[]) => void;
-  setProcessing: (processing: boolean, chatId?: string | null) => void;
+  setProcessing: (processing: boolean) => void;
   addResult: (agentId: string, result: AgentResult) => void;
   addDebugEntry: (entry: Omit<AgentDebugEntry, "timestamp"> & { timestamp?: number }) => void;
   clearDebugLog: () => void;
-  setFailedAgentTypes: (types: string[], chatId?: string | null) => void;
-  setFailedAgentFailures: (failures: AgentFailure[], chatId?: string | null) => void;
-  clearFailedAgentTypes: (chatId?: string | null) => void;
+  setFailedAgentTypes: (types: string[]) => void;
+  setFailedAgentFailures: (failures: AgentFailure[]) => void;
+  clearFailedAgentTypes: () => void;
   addThoughtBubble: (agentId: string, agentName: string, content: string) => void;
   dismissThoughtBubble: (index: number) => void;
   clearThoughtBubbles: () => void;
@@ -175,9 +171,7 @@ type AgentDataState = Pick<
   | "lastResults"
   | "debugLog"
   | "isProcessing"
-  | "processingChatIds"
   | "failedAgentTypes"
-  | "failedAgentChatId"
   | "failedAgentFailures"
   | "thoughtBubbles"
   | "echoMessages"
@@ -200,9 +194,7 @@ function createInitialAgentDataState(): AgentDataState {
     lastResults: new Map(),
     debugLog: [],
     isProcessing: false,
-    processingChatIds: [],
     failedAgentTypes: [],
-    failedAgentChatId: null,
     failedAgentFailures: [],
     thoughtBubbles: [],
     echoMessages: [],
@@ -224,26 +216,7 @@ export const useAgentStore = create<AgentState>((set) => ({
   ...createInitialAgentDataState(),
 
   setActiveAgents: (agents) => set({ activeAgents: agents }),
-  setProcessing: (processing, chatId = null) =>
-    set((s) => {
-      if (!chatId) {
-        return {
-          isProcessing: processing,
-          processingChatIds: processing ? s.processingChatIds : [],
-        };
-      }
-
-      const processingChatIds = processing
-        ? s.processingChatIds.includes(chatId)
-          ? s.processingChatIds
-          : [...s.processingChatIds, chatId]
-        : s.processingChatIds.filter((id) => id !== chatId);
-
-      return {
-        processingChatIds,
-        isProcessing: processingChatIds.length > 0,
-      };
-    }),
+  setProcessing: (processing) => set({ isProcessing: processing }),
 
   addResult: (agentId, result) =>
     set((s) => {
@@ -267,10 +240,9 @@ export const useAgentStore = create<AgentState>((set) => ({
 
   clearDebugLog: () => set({ debugLog: [] }),
 
-  setFailedAgentTypes: (types, chatId = null) =>
+  setFailedAgentTypes: (types) =>
     set({
       failedAgentTypes: types,
-      failedAgentChatId: chatId,
       failedAgentFailures: types.map((agentType) => ({
         agentType,
         agentName: agentType,
@@ -278,17 +250,12 @@ export const useAgentStore = create<AgentState>((set) => ({
         reasonLabel: null,
       })),
     }),
-  setFailedAgentFailures: (failures, chatId = null) =>
+  setFailedAgentFailures: (failures) =>
     set({
       failedAgentTypes: failures.map((failure) => failure.agentType),
-      failedAgentChatId: chatId,
       failedAgentFailures: failures,
     }),
-  clearFailedAgentTypes: (chatId = null) =>
-    set((s) => {
-      if (chatId && s.failedAgentChatId && s.failedAgentChatId !== chatId) return {};
-      return { failedAgentTypes: [], failedAgentChatId: null, failedAgentFailures: [] };
-    }),
+  clearFailedAgentTypes: () => set({ failedAgentTypes: [], failedAgentFailures: [] }),
 
   addThoughtBubble: (agentId, agentName, content) =>
     set((s) => ({

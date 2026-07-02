@@ -14,10 +14,8 @@ function mapExtension(row: ExtensionRow): InstalledExtension {
     id: row.id,
     name: row.name,
     description: row.description,
-    runtime: row.runtime === "server" ? "server" : "client",
     css: row.css ?? null,
     js: row.js ?? null,
-    serverJs: row.serverJs ?? null,
     enabled: row.enabled === "true",
     installedAt: row.installedAt,
     createdAt: row.createdAt,
@@ -49,10 +47,8 @@ export function createExtensionsStorage(db: DB) {
         id,
         name: input.name,
         description: input.description ?? "",
-        runtime: input.runtime === "server" ? "server" : "client",
-        css: input.runtime === "server" ? null : (input.css ?? null),
-        js: input.runtime === "server" ? null : (input.js ?? null),
-        serverJs: input.runtime === "server" ? (input.serverJs ?? null) : null,
+        css: input.css ?? null,
+        js: input.js ?? null,
         enabled: input.enabled === false ? "false" : "true",
         installedAt: input.installedAt ?? timestamp,
         createdAt: timestamp,
@@ -67,17 +63,9 @@ export function createExtensionsStorage(db: DB) {
       };
       if (data.name !== undefined) updateFields.name = data.name;
       if (data.description !== undefined) updateFields.description = data.description;
-      if (data.runtime !== undefined) updateFields.runtime = data.runtime === "server" ? "server" : "client";
       if (data.css !== undefined) updateFields.css = data.css;
       if (data.js !== undefined) updateFields.js = data.js;
-      if (data.serverJs !== undefined) updateFields.serverJs = data.serverJs;
       if (data.enabled !== undefined) updateFields.enabled = data.enabled ? "true" : "false";
-      if (data.runtime === "server") {
-        updateFields.css = null;
-        updateFields.js = null;
-      } else if (data.runtime === "client") {
-        updateFields.serverJs = null;
-      }
       await db.update(installedExtensions).set(updateFields).where(eq(installedExtensions.id, id));
       return getById(id);
     },

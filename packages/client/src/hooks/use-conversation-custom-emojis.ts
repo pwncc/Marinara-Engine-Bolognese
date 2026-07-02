@@ -13,7 +13,8 @@ import { getChatCharacterIds } from "../lib/chat-macros";
 import { parseCharacterDisplayData } from "../lib/character-display";
 import { useCustomEmojis } from "./use-custom-emojis";
 import {
-  usePersona,
+  useCharacters,
+  usePersonas,
   usePersonaGalleryImages,
   characterKeys,
   type CharacterGalleryImage,
@@ -43,16 +44,8 @@ export function useConversationCustomEmojis(): { list: ConversationCustomEmoji[]
 
   const { data: globalEmojis } = useCustomEmojis();
   const { data: personaImages } = usePersonaGalleryImages(personaId);
-  const { data: persona } = usePersona(personaId);
-  const characterQueries = useQueries({
-    queries: characterIds.map((id) => ({
-      queryKey: characterKeys.detail(id),
-      queryFn: () => api.get<{ id: string; data?: unknown; name?: unknown }>(`/characters/${id}`),
-      enabled: !!id,
-      retry: false,
-      staleTime: 5 * 60_000,
-    })),
-  });
+  const { data: characters } = useCharacters();
+  const { data: personas } = usePersonas();
 
   const charGalleries = useQueries({
     queries: characterIds.map((id) => ({
@@ -63,10 +56,9 @@ export function useConversationCustomEmojis(): { list: ConversationCustomEmoji[]
     })),
   });
 
-  const characterRows = characterQueries
-    .map((query) => query.data)
-    .filter((row): row is { id: string; data?: unknown; name?: unknown } => typeof row?.id === "string");
-  const personaName = personaId ? displayName(persona, "Persona") : "Persona";
+  const personaRows = (personas as Array<{ id: string; data?: unknown; name?: unknown }>) ?? [];
+  const characterRows = (characters as Array<{ id: string; data?: unknown; name?: unknown }>) ?? [];
+  const personaName = personaId ? displayName(personaRows.find((p) => p.id === personaId), "Persona") : "Persona";
   const charNameById = new Map<string, string>();
   for (const row of characterRows) charNameById.set(row.id, displayName(row, "Character"));
 

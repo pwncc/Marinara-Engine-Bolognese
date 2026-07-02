@@ -12,7 +12,6 @@ import { formatGenerationParameterError } from "../lib/generation-parameter-erro
 import { requestChatScrollToBottom } from "../lib/chat-scroll-events";
 import { agentKeys } from "./use-agents";
 import { discardPendingGameStatePatch } from "./use-game-state-patcher";
-import { turnGameKeys } from "./turn-game-keys";
 import type { PendingAgentWriteApproval, PendingCardUpdate } from "../stores/agent.store";
 import type { DelayedCharacterInfo } from "../stores/chat.store";
 import {
@@ -378,7 +377,6 @@ import { useAgentStore } from "../stores/agent.store";
 import { useGameModeStore } from "../stores/game-mode.store";
 import { useGameStateStore } from "../stores/game-state.store";
 import { useUnoGameStore } from "../stores/uno-game.store";
-import { useChessGameStore } from "../stores/chess-game.store";
 import { useTranslationStore } from "../stores/translation.store";
 import { useUIStore } from "../stores/ui.store";
 import {
@@ -971,7 +969,7 @@ export function useGenerate() {
         clearStreamBuffer(params.chatId);
         clearThoughtBubbles();
         clearCyoaChoices();
-        clearFailedAgentTypes(params.chatId);
+        clearFailedAgentTypes();
         setRegenerateMessageId(params.regenerateMessageId ?? null);
       }
       if (useUIStore.getState().debugMode) {
@@ -1346,7 +1344,7 @@ export function useGenerate() {
             }
 
             case "agent_start": {
-              setProcessing(true, params.chatId);
+              if (isActiveChat()) setProcessing(true);
               break;
             }
 
@@ -1725,25 +1723,8 @@ export function useGenerate() {
             }
 
             case "turn_game_state_patch": {
-              // The payload carries a gameType discriminator — route it to the matching
-              // board store only; a view from one game rendered by another board crashes.
-              const turnGameType = (event.data as { gameType?: string } | null)?.gameType;
-              if (!isActiveChat()) {
-                // A background chat's board can't be painted, but a silently
-                // dropped patch leaves a stale snapshot that blocks re-hydration
-                // on switch-back (the state query is disabled while a snapshot
-                // exists). Drop the snapshot and mark the query stale so
-                // returning to the chat refetches the board.
-                if (turnGameType === "chess") useChessGameStore.getState().clearChess(params.chatId);
-                else if (turnGameType === "uno") useUnoGameStore.getState().clearUno(params.chatId);
-                void qc.invalidateQueries({ queryKey: turnGameKeys.state(params.chatId) });
-                break;
-              }
-              if (turnGameType === "chess") {
-                useChessGameStore.getState().setChess(event.data as never, params.chatId);
-              } else if (turnGameType === "uno") {
-                useUnoGameStore.getState().setUno(event.data as never, params.chatId);
-              }
+              if (!isActiveChat()) break;
+              useUnoGameStore.getState().setUno(event.data as never, params.chatId);
               break;
             }
 
@@ -1791,9 +1772,9 @@ export function useGenerate() {
               };
               if (rw.editedText) {
                 const rewrittenText = normalizeLineBreakSpacing(rw.editedText);
-                const builtInRewriteApplied =
+                const proseGuardianRewriteApplied =
                   rw.rewriteApplied === true &&
-                  (rw.agentType === "prose-guardian" || rw.agentType === "continuity" || rw.agentType === "html") &&
+                  (rw.agentType === "prose-guardian" || rw.agentType === "continuity") &&
                   typeof rw.originalText === "string";
                 leadingSpeakerPrefixFilter.discard();
                 if (holdingTextRewrite && heldTextRewriteMessage) {
@@ -1814,7 +1795,7 @@ export function useGenerate() {
                   }
                   const heldExtra = parseMessageExtraRecordForMerge(heldTextRewriteMessage.extra);
                   delete heldExtra.postProcessingPending;
-                  if (builtInRewriteApplied) {
+                  if (proseGuardianRewriteApplied) {
                     heldExtra.proseGuardianOriginalText = rw.originalText;
                     heldExtra.proseGuardianRewrittenAt = new Date().toISOString();
                   } else {
@@ -1849,7 +1830,7 @@ export function useGenerate() {
                   const latestSavedMessage = latestAssistantMessage(persistedMessages.values());
                   if (latestSavedMessage) {
                     const nextExtra = parseMessageExtraRecordForMerge(latestSavedMessage.extra);
-                    if (builtInRewriteApplied) {
+                    if (proseGuardianRewriteApplied) {
                       nextExtra.proseGuardianOriginalText = rw.originalText;
                       nextExtra.proseGuardianRewrittenAt = new Date().toISOString();
                     }
@@ -1905,10 +1886,10 @@ export function useGenerate() {
                 !Array.isArray(pendingPostProcessing) &&
                 (pendingPostProcessingAgentType === "prose-guardian" ||
                   pendingPostProcessingAgentType === "continuity" ||
-                  pendingPostProcessingAgentType === "html" ||
                   pendingPostProcessingAgentType === "text-rewrite")
               ) {
                 const heldExtra = { ...savedExtra };
+                delete heldExtra.postProcessingPending;
                 flushThinkingStreamFilter();
                 flushLeadingSpeakerPrefix();
                 thinkingStreamFilter.reset();
@@ -2044,7 +2025,7 @@ export function useGenerate() {
             case "agent_error": {
               const errData = event.data as { agentType: string; agentName?: string | null; error: string };
               const failure = toAgentFailure(errData);
-              setFailedAgentFailures([failure], params.chatId);
+              setFailedAgentFailures([failure]);
               showAgentFailuresError([failure], () => {
                 void retryAgentsRef.current?.(params.chatId, [failure.agentType]);
               });
@@ -2154,12 +2135,12 @@ export function useGenerate() {
               if (spriteChangeReceived) {
                 qc.invalidateQueries({ queryKey: chatKeys.messages(params.chatId) });
               }
-              setProcessing(false, params.chatId);
               if (isActiveChat()) {
                 if (useChatStore.getState().streamingChatId === params.chatId) {
                   setStreaming(false);
                   clearStreamBuffer(params.chatId);
                 }
+                setProcessing(false);
               }
               clearMariPhaseForThisChat();
               break;
@@ -2205,7 +2186,7 @@ export function useGenerate() {
               const names = (event as any).characters as string[] | undefined;
               const label = names?.length === 1 ? names[0] : "Characters";
               toast(`${label} is offline. They'll respond when they're back online.`, { icon: "💤" });
-              setProcessing(false, params.chatId);
+              if (isActiveChat()) setProcessing(false);
               break;
             }
 
@@ -2223,7 +2204,7 @@ export function useGenerate() {
               // Flush pending text so the user sees what arrived before the error
               flushLeadingSpeakerPrefix();
               flushTypewriterBuffer();
-              setProcessing(false, params.chatId);
+              if (isActiveChat()) setProcessing(false);
               clearMariPhaseForThisChat();
               showError((event.data as string) || "Generation failed");
               window.dispatchEvent(new CustomEvent("marinara:generation-error", { detail: { chatId: params.chatId } }));
@@ -2237,7 +2218,7 @@ export function useGenerate() {
                 error: string | null;
               }>;
               const failures = failedList.map(toAgentFailure);
-              setFailedAgentFailures(failures, params.chatId);
+              setFailedAgentFailures(failures);
               showAgentFailuresError(failures, () => {
                 void retryAgentsRef.current?.(
                   params.chatId,
@@ -2416,7 +2397,7 @@ export function useGenerate() {
             clearStreamBuffer(params.chatId);
           }
           if (isActiveChat()) {
-            setProcessing(false, params.chatId);
+            setProcessing(false);
             setRegenerateMessageId(null);
             setStreamingCharacterId(null);
             setTypingCharacterName(null);
@@ -2542,10 +2523,10 @@ export function useGenerate() {
       const isTrackerRetry = agentTypes.some(
         (agentType) => BUILT_IN_TRACKER_AGENT_TYPE_SET.has(agentType) || !BUILT_IN_AGENT_TYPE_SET.has(agentType),
       );
-      setProcessing(true, chatId);
+      setProcessing(true);
       if (isTrackerRetry) useGameStateStore.getState().setRefreshingChat(chatId);
-      clearFailedAgentTypes(chatId);
-      if (isActiveChat()) clearThoughtBubbles();
+      clearFailedAgentTypes();
+      clearThoughtBubbles();
       let hasError = false;
 
       try {
@@ -2660,7 +2641,7 @@ export function useGenerate() {
                 ? (formatAgentBubble(result.agentType, result.agentName, result.data) ??
                   formatRetryAgentActivityBubble(result, isTrackerRetry))
                 : null;
-              if (isActiveChat() && bubble) addThoughtBubble(result.agentType, result.agentName, bubble);
+              if (bubble) addThoughtBubble(result.agentType, result.agentName, bubble);
 
               if (result.success && result.data) {
                 if (result.agentType === "echo-chamber") {
@@ -2737,7 +2718,7 @@ export function useGenerate() {
                 hasError = true;
                 const failure = toAgentFailure(result);
                 failedRetryFailures.push(failure);
-                setFailedAgentFailures(failedRetryFailures, chatId);
+                setFailedAgentFailures(failedRetryFailures);
                 showAgentFailuresError([failure], () => {
                   void retryAgentsRef.current?.(chatId, [failure.agentType], options);
                 });
@@ -2760,7 +2741,7 @@ export function useGenerate() {
                 error: string | null;
               }>;
               const failures = failedList.map(toAgentFailure);
-              setFailedAgentFailures(failures, chatId);
+              setFailedAgentFailures(failures);
               showAgentFailuresError(failures, () => {
                 void retryAgentsRef.current?.(
                   chatId,
@@ -2781,25 +2762,8 @@ export function useGenerate() {
               break;
             }
             case "turn_game_state_patch": {
-              // The payload carries a gameType discriminator — route it to the matching
-              // board store only; a view from one game rendered by another board crashes.
-              const turnGameType = (event.data as { gameType?: string } | null)?.gameType;
-              if (!isActiveChat()) {
-                // A background chat's board can't be painted, but a silently
-                // dropped patch leaves a stale snapshot that blocks re-hydration
-                // on switch-back (the state query is disabled while a snapshot
-                // exists). Drop the snapshot and mark the query stale so
-                // returning to the chat refetches the board.
-                if (turnGameType === "chess") useChessGameStore.getState().clearChess(chatId);
-                else if (turnGameType === "uno") useUnoGameStore.getState().clearUno(chatId);
-                void qc.invalidateQueries({ queryKey: turnGameKeys.state(chatId) });
-                break;
-              }
-              if (turnGameType === "chess") {
-                useChessGameStore.getState().setChess(event.data as never, chatId);
-              } else if (turnGameType === "uno") {
-                useUnoGameStore.getState().setUno(event.data as never, chatId);
-              }
+              if (!isActiveChat()) break;
+              useUnoGameStore.getState().setUno(event.data as never, chatId);
               break;
             }
             case "game_map_update": {
@@ -2829,7 +2793,7 @@ export function useGenerate() {
               const errData = event.data as { agentType: string; agentName?: string | null; error: string };
               hasError = true;
               const failure = toAgentFailure(errData);
-              setFailedAgentFailures([failure], chatId);
+              setFailedAgentFailures([failure]);
               showAgentFailuresError([failure], () => {
                 void retryAgentsRef.current?.(chatId, [failure.agentType], options);
               });
@@ -2870,7 +2834,7 @@ export function useGenerate() {
             : "Agent retry failed";
         showError(msg);
       } finally {
-        setProcessing(false, chatId);
+        setProcessing(false);
         if (useChatStore.getState().abortControllers.get(chatId) === abortController) {
           useChatStore.getState().setAbortController(chatId, null);
         }

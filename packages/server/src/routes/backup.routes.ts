@@ -1426,18 +1426,7 @@ async function readProfileEnvelopeFromArchive(zip: ProfileZipArchive) {
     zip.entries.find((entry) => !entry.isDirectory && entry.entryName.endsWith("/marinara-profile.json"));
 
   if (!profileEntry) {
-    const sampleEntries = zip.entries
-      .filter((entry) => !entry.isDirectory)
-      .slice(0, 8)
-      .map((entry) => entry.entryName)
-      .join(", ");
-    throw new ProfileImportRequestError(
-      [
-        "Profile archive is missing marinara-profile.json.",
-        "Select a Marinara profile export or a full backup ZIP downloaded from Settings -> Advanced -> Backups.",
-        sampleEntries ? `This ZIP starts with: ${sampleEntries}` : "This ZIP did not contain any readable files.",
-      ].join(" "),
-    );
+    throw new ProfileImportRequestError("Profile archive is missing marinara-profile.json.");
   }
 
   try {

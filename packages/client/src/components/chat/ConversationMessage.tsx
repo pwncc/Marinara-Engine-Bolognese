@@ -58,7 +58,6 @@ interface ConversationMessageProps {
   messageStyle?: ConversationMessageStyle;
   contentParts?: string[];
   visiblePartCount?: number;
-  visibleSegmentCount?: number;
   bubbleGroupPosition?: "single" | "first" | "middle" | "last";
   originalContent?: string;
   onDelete?: (messageId: string) => void;
@@ -98,7 +97,6 @@ export const ConversationMessage = memo(function ConversationMessage({
   messageStyle = "classic",
   contentParts,
   visiblePartCount,
-  visibleSegmentCount,
   bubbleGroupPosition = "single",
   originalContent,
   onDelete,
@@ -387,32 +385,30 @@ export const ConversationMessage = memo(function ConversationMessage({
   const segmentCount = groupedSegments?.length ?? 0;
   const prevContentRef = useRef(renderedContent);
   const initialRenderRef = useRef(true);
-  const [internalVisibleSegments, setInternalVisibleSegments] = useState(segmentCount);
+  const [visibleSegments, setVisibleSegments] = useState(segmentCount);
 
   useEffect(() => {
     if (initialRenderRef.current) {
       initialRenderRef.current = false;
-      setInternalVisibleSegments(segmentCount);
+      setVisibleSegments(segmentCount);
       prevContentRef.current = renderedContent;
       return;
     }
     if (renderedContent !== prevContentRef.current && segmentCount > 1) {
       prevContentRef.current = renderedContent;
-      setInternalVisibleSegments(1);
+      setVisibleSegments(1);
       let count = 1;
       const reveal = () => {
         count++;
-        setInternalVisibleSegments(count);
+        setVisibleSegments(count);
       };
       const timers: ReturnType<typeof setTimeout>[] = [];
       for (let i = 1; i < segmentCount; i++) timers.push(setTimeout(reveal, i * 1500));
       return () => timers.forEach(clearTimeout);
     }
-    setInternalVisibleSegments(segmentCount);
+    setVisibleSegments(segmentCount);
     prevContentRef.current = renderedContent;
   }, [renderedContent, segmentCount]);
-  const visibleSegments =
-    segmentCount > 0 ? Math.max(1, Math.min(visibleSegmentCount ?? internalVisibleSegments, segmentCount)) : 0;
 
   // ── Hidden from AI ──
   const isHiddenExpanded =
