@@ -547,7 +547,9 @@ export function ChatArea() {
   }, []);
 
   useEffect(() => {
-    if (activeChatId) setHomeProfessorChatOpen(false);
+    if (!activeChatId) return;
+    setHomeProfessorChatOpen(false);
+    setHomeProfessorChatActive(false);
   }, [activeChatId]);
   const closeFloatingChatDrawers = useCallback(() => {
     setSettingsOpen(false);
