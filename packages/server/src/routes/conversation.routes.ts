@@ -422,6 +422,11 @@ export async function conversationRoutes(app: FastifyInstance) {
       if (typeof existing.dndResponseDelayMinutes === "number") {
         merged.dndResponseDelayMinutes = existing.dndResponseDelayMinutes;
       }
+      if (typeof existing.autonomousDailyCapOverride === "number") {
+        merged.autonomousDailyCapOverride = existing.autonomousDailyCapOverride;
+      } else if (existing.autonomousDailyCapOverride === null) {
+        merged.autonomousDailyCapOverride = null;
+      }
       return merged;
     };
 

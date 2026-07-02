@@ -232,6 +232,7 @@ type ChatCommonOverlaysProps = {
   sceneSettings: SharedSceneSettingsProps;
   onCloseSettings: () => void;
   onCloseGallery: () => void;
+  onOpenScheduleEditor?: (characterId: string, options?: { initialDay?: string | null }) => void;
   /** Manually trigger the Illustrator agent */
   onIllustrate?: () => void;
   /** Generate and apply a background for the current scene. */
@@ -267,6 +268,7 @@ export function ChatCommonOverlays({
   sceneSettings,
   onCloseSettings,
   onCloseGallery,
+  onOpenScheduleEditor,
   onIllustrate,
   onGenerateBackground,
   onWizardFinish,
@@ -297,6 +299,7 @@ export function ChatCommonOverlays({
             onSpriteSideChange={sceneSettings.onSpriteSideChange}
             spriteVisualSettings={sceneSettings.spriteVisualSettings}
             onSpriteVisualSettingsChange={sceneSettings.onSpriteVisualSettingsChange}
+            onOpenScheduleEditor={onOpenScheduleEditor}
           />
         </Suspense>
       )}

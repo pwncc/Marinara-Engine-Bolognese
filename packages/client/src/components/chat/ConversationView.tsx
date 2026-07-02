@@ -71,6 +71,7 @@ interface ConversationViewProps {
   onPeekPrompt: () => void;
   lastAssistantMessageId: string | null;
   onOpenSettings: (event?: ReactMouseEvent<HTMLElement>, options?: { initialSection?: "autonomous" | null }) => void;
+  onOpenScheduleEditor?: (characterId: string, options?: { initialDay?: string | null }) => void;
   onOpenGallery: (event?: ReactMouseEvent<HTMLElement>) => void;
   onBranch?: (messageId: string) => void;
   multiSelectMode?: boolean;
@@ -277,6 +278,7 @@ export function ConversationView({
   onPeekPrompt,
   lastAssistantMessageId,
   onOpenSettings,
+  onOpenScheduleEditor,
   onOpenGallery,
   onBranch,
   multiSelectMode,
@@ -991,6 +993,7 @@ export function ConversationView({
             characterMap={characterMap}
             messages={messages}
             onOpenSettings={onOpenSettings}
+            onOpenScheduleEditor={onOpenScheduleEditor}
           />
 
           <ChatToolbarMenu
