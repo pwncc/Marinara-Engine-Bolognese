@@ -49,6 +49,7 @@ import {
   Music2,
   ShieldCheck,
   Loader2,
+  Wrench,
 } from "lucide-react";
 import {
   ROLEPLAY_POPOVER_CLOSE_BUTTON,
@@ -80,6 +81,7 @@ import { Modal } from "../ui/Modal";
 import { ChoiceSelectionModal } from "../presets/ChoiceSelectionModal";
 import { SecretPlotPanel } from "../agents/SecretPlotPanel";
 import { SummariesEditorModal } from "./SummariesEditorModal";
+import { AgentSuiteModal } from "./AgentSuiteModal";
 import { useCharacters, usePersonas, useCharacterGroups, type SpriteInfo } from "../../hooks/use-characters";
 import { useLorebooks, useEntriesAcrossLorebooks } from "../../hooks/use-lorebooks";
 import { useDefaultPreset, usePresetFull, usePresets } from "../../hooks/use-presets";
@@ -1162,6 +1164,13 @@ export function ChatSettingsDrawer({
   const visibleActiveAgentIds = useMemo(
     () => activeAgentIds.filter((agentId) => availableAgents.some((agent) => agent.id === agentId)),
     [activeAgentIds, availableAgents],
+  );
+  const agentSuiteAgents = useMemo(
+    () =>
+      visibleActiveAgentIds
+        .map((agentId) => availableAgents.find((agent) => agent.id === agentId))
+        .filter((agent): agent is AvailableAgent => !!agent),
+    [availableAgents, visibleActiveAgentIds],
   );
   const getAgentDisplayMeta = useCallback(
     (agentId: string, fallback: { name: string; description: string }) => {
@@ -2278,6 +2287,7 @@ export function ChatSettingsDrawer({
   const [showPersonaPicker, setShowPersonaPicker] = useState(false);
   const [showConnectionPicker, setShowConnectionPicker] = useState(false);
   const [showSummariesModal, setShowSummariesModal] = useState(false);
+  const [showAgentSuiteModal, setShowAgentSuiteModal] = useState(false);
   const [showMemoriesModal, setShowMemoriesModal] = useState(false);
   // Session-ephemeral: did the user change Day Rollover Hour in this drawer mount?
   // Used to gate the "transitional duplication" warning so it only appears
@@ -5345,6 +5355,18 @@ export function ChatSettingsDrawer({
                     </div>
                   </button>
                 )}
+                <button
+                  onClick={() => setShowAgentSuiteModal(true)}
+                  className="flex w-full items-center justify-between rounded-lg bg-[var(--secondary)] px-3 py-2.5 text-left transition-all hover:bg-[var(--accent)]"
+                >
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[0.6875rem] font-medium">Agent Suite</span>
+                    <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                      View and edit everything agents have stored in this chat — manually or with AI.
+                    </p>
+                  </div>
+                  <Wrench size="0.875rem" className="shrink-0 text-[var(--muted-foreground)]" />
+                </button>
                 {roleplayAgentMenuLinks.length > 0 && (
                   <div className="rounded-lg bg-[var(--background)]/45 px-2.5 py-2 ring-1 ring-[var(--border)]">
                     <div className="mb-1.5 flex items-center gap-1.5 text-[0.625rem] font-medium text-[var(--muted-foreground)]">
@@ -7177,6 +7199,14 @@ export function ChatSettingsDrawer({
 
       {/* Automatic summarization editor */}
       <SummariesEditorModal chat={chat} open={showSummariesModal} onClose={() => setShowSummariesModal(false)} />
+
+      {/* Agent Suite — stored agent data viewer/editor */}
+      <AgentSuiteModal
+        chat={chat}
+        open={showAgentSuiteModal}
+        onClose={() => setShowAgentSuiteModal(false)}
+        agents={agentSuiteAgents}
+      />
 
       {/* Memory recall chunk viewer */}
       <MemoryRecallMemoriesModal
