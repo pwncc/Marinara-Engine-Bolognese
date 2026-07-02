@@ -150,9 +150,18 @@ export function PersonasPanel() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedPersonaIds, setSelectedPersonaIds] = useState<Set<string>>(new Set());
   const [exportingSelected, setExportingSelected] = useState(false);
+  const clientOnlyPersonaFilterActive = favFilter !== "all" || activeTag !== null;
+  const [completeFilteredPersonas, setCompleteFilteredPersonas] = useState<PersonaRow[] | null>(null);
+  const [completePersonasLoading, setCompletePersonasLoading] = useState(false);
   const personaPages = usePersonaPages({ search, sort });
-  const personas = useMemo(() => flattenPersonaPages(personaPages.data), [personaPages.data]);
-  const isLoading = personaPages.isLoading;
+  const pagedPersonas = useMemo(() => flattenPersonaPages(personaPages.data), [personaPages.data]);
+  const personas = useMemo(
+    () => (clientOnlyPersonaFilterActive ? (completeFilteredPersonas ?? []) : pagedPersonas),
+    [clientOnlyPersonaFilterActive, completeFilteredPersonas, pagedPersonas],
+  );
+  const isLoading =
+    personaPages.isLoading ||
+    (clientOnlyPersonaFilterActive && completePersonasLoading && completeFilteredPersonas === null);
 
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
@@ -164,6 +173,36 @@ export function PersonasPanel() {
   const nativePersonaDragEnabled = !touchSafePersonaDragMode;
 
   const isActive = (p: PersonaRow) => p.isActive === true || p.isActive === "true";
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!clientOnlyPersonaFilterActive) {
+      setCompleteFilteredPersonas(null);
+      setCompletePersonasLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setCompletePersonasLoading(true);
+    fetchAllPersonaPages({ search, sort })
+      .then((rows) => {
+        if (!cancelled) setCompleteFilteredPersonas(rows as PersonaRow[]);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCompleteFilteredPersonas(null);
+          toast.error("Failed to load all matching personas");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCompletePersonasLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clientOnlyPersonaFilterActive, search, sort]);
 
   const handleCreate = () => {
     openModal("create-persona");
@@ -1125,7 +1164,7 @@ export function PersonasPanel() {
         })}
       </div>
 
-      {personaPages.hasNextPage && (
+      {!clientOnlyPersonaFilterActive && personaPages.hasNextPage && (
         <button
           type="button"
           onClick={() => void personaPages.fetchNextPage()}

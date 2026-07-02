@@ -311,11 +311,11 @@ export function ChatSidebar() {
   );
   const sidebarCharacterIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const chat of modeChats) {
+    for (const chat of chats ?? []) {
       for (const id of normalizeChatCharacterIds((chat as { characterIds?: unknown }).characterIds)) ids.add(id);
     }
     return Array.from(ids);
-  }, [modeChats]);
+  }, [chats]);
   const { data: characterSummaries } = useCharacterSummaries(sidebarCharacterIds);
 
   // Build character lookup: id → { name, avatarUrl, avatarCrop, conversationStatus }
