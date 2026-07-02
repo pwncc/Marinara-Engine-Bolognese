@@ -124,6 +124,21 @@ function booleanText(value: unknown): boolean {
   return value === true || value === "true" || value === "1" || value === 1;
 }
 
+function booleanFalseText(value: unknown): boolean {
+  return value === false || value === "false" || value === "0" || value === 0;
+}
+
+function isSpotifyMusicAgent(agent: ResolvedAgent): boolean {
+  const settings = parseSettings(agent.settings);
+  return (
+    agent.type === "spotify" &&
+    settings.musicProvider !== "youtube" &&
+    settings.musicPlayerSource !== "youtube" &&
+    settings.musicProvider !== "custom" &&
+    settings.musicPlayerSource !== "custom"
+  );
+}
+
 function stringRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const out: Record<string, string> = {};
@@ -164,7 +179,9 @@ function buildCustomToolHiddenContext(args: {
   const personaName = args.agentContext.persona?.name ?? null;
   const primaryCharacterName = primaryCharacterId ? (characterNamesById.get(primaryCharacterId) ?? null) : null;
   const primaryCharacter =
-    (primaryCharacterId ? args.agentContext.characters.find((character) => character.id === primaryCharacterId) : null) ??
+    (primaryCharacterId
+      ? args.agentContext.characters.find((character) => character.id === primaryCharacterId)
+      : null) ??
     args.agentContext.characters[0] ??
     null;
   const personaFields = args.agentContext.persona
@@ -302,7 +319,11 @@ async function loadToolDefinitions(args: {
   resolveTools: boolean;
   enableChatTools: boolean;
   activeToolIds: string[];
-}): Promise<{ toolDefs: LLMToolDefinition[] | undefined; allToolDefs: LLMToolDefinition[]; customToolDefs: CustomToolDef[] }> {
+}): Promise<{
+  toolDefs: LLMToolDefinition[] | undefined;
+  allToolDefs: LLMToolDefinition[];
+  customToolDefs: CustomToolDef[];
+}> {
   let toolDefs: LLMToolDefinition[] | undefined;
   const allToolDefs: LLMToolDefinition[] = [];
   const customToolDefs: CustomToolDef[] = [];
@@ -314,7 +335,9 @@ async function loadToolDefinitions(args: {
   for (const tool of BUILT_IN_TOOLS) {
     const existingSource = registeredToolSources.get(tool.name);
     if (existingSource) {
-      throw new Error(`Duplicate tool name "${tool.name}" from built-in tool collides with existing ${existingSource} tool`);
+      throw new Error(
+        `Duplicate tool name "${tool.name}" from built-in tool collides with existing ${existingSource} tool`,
+      );
     }
     registeredToolSources.set(tool.name, "built-in");
     allToolDefs.push({
@@ -533,6 +556,34 @@ function resetSpotifyAgentRuntime(agent: ResolvedAgent): void {
   spotifyAgent.__spotifyDevice = null;
 }
 
+async function attachSpotifyCurrentPlaybackContext(args: {
+  agentContext: AgentContext;
+  resolvedAgents: ResolvedAgent[];
+  spotify: { accessToken: string } | undefined;
+}): Promise<void> {
+  if (!args.spotify || !args.resolvedAgents.some(isSpotifyMusicAgent)) return;
+  try {
+    const results = await executeToolCalls(
+      [
+        {
+          id: "spotify-dj-current-playback",
+          type: "function",
+          function: { name: "spotify_get_current_playback", arguments: "{}" },
+        },
+      ],
+      { spotify: args.spotify },
+    );
+    const raw = results[0]?.result;
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      args.agentContext.memory._spotifyDjCurrentPlayback = parsed;
+    }
+  } catch (error) {
+    logger.debug(error, "[spotify] Failed to preload Music DJ current playback context");
+  }
+}
+
 export async function resolveGenerationTools({
   requestBody,
   chatId,
@@ -553,7 +604,9 @@ export async function resolveGenerationTools({
   agentContext,
   emitMetadataPatch,
 }: ResolveGenerationToolsArgs): Promise<ResolvedGenerationTools> {
-  const enableChatTools = requestBody.enableTools === true || chatMetadata.enableTools === true;
+  const chatToolsExplicitlyDisabled = booleanFalseText(chatMetadata.enableTools);
+  const enableChatTools =
+    !chatToolsExplicitlyDisabled && (requestBody.enableTools === true || booleanText(chatMetadata.enableTools));
   const enableAgentTools = resolvedAgents.some((agent) => {
     const agentSettings = parseSettings(agent.settings);
     return (
@@ -603,8 +656,8 @@ export async function resolveGenerationTools({
       : undefined;
   const spotifyToolsAvailable = Boolean(
     spotifyCredentials &&
-      "accessToken" in spotifyCredentials &&
-      spotifyHasScope(spotifyCredentials.scopes, "user-modify-playback-state"),
+    "accessToken" in spotifyCredentials &&
+    spotifyHasScope(spotifyCredentials.scopes, "user-modify-playback-state"),
   );
   if (!spotifyToolsAvailable && toolDefs) {
     const beforeCount = toolDefs.length;
@@ -706,6 +759,12 @@ export async function resolveGenerationTools({
     chatMeta: chatMetadata,
     onUpdateMetadata: updateChatMetadataForTools,
   };
+
+  await attachSpotifyCurrentPlaybackContext({
+    agentContext,
+    resolvedAgents,
+    spotify: spotifyCreds,
+  });
 
   for (const agent of resolvedAgents) {
     if (agent.toolContext) continue;
