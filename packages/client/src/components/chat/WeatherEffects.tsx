@@ -60,15 +60,6 @@ function parseWeather(weather?: string | null): {
   if (w.includes("thunder") || w.includes("lightning")) {
     return { type: "rain", count: 120, overlay: "rgba(50,80,120,0.10)", lightning: true };
   }
-  if (w.includes("rain") || w.includes("storm") || w.includes("downpour")) {
-    const isHeavy = w.includes("heavy") || w.includes("storm") || w.includes("downpour");
-    return {
-      type: "rain",
-      count: isHeavy ? 120 : 55,
-      overlay: "rgba(50,80,120,0.08)",
-      lightning: isHeavy && w.includes("storm"),
-    };
-  }
   if (w.includes("hail")) {
     return { type: "hail", count: 40, overlay: "rgba(180,200,230,0.06)", lightning: false };
   }
@@ -102,6 +93,15 @@ function parseWeather(weather?: string | null): {
   }
   if (w.includes("aurora") || w.includes("northern light") || w.includes("polar light")) {
     return { type: "aurora", count: 6, overlay: "rgba(20,60,40,0.08)", lightning: false };
+  }
+  if (w.includes("rain") || w.includes("storm") || w.includes("downpour")) {
+    const isHeavy = w.includes("heavy") || w.includes("storm") || w.includes("downpour");
+    return {
+      type: "rain",
+      count: isHeavy ? 120 : 55,
+      overlay: "rgba(50,80,120,0.08)",
+      lightning: isHeavy && w.includes("storm"),
+    };
   }
   if (w.includes("clear") || w.includes("sunny") || w.includes("bright")) {
     return { type: "dust", count: 8, overlay: "", lightning: false };

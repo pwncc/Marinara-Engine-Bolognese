@@ -561,6 +561,7 @@ async function attachSpotifyCurrentPlaybackContext(args: {
   resolvedAgents: ResolvedAgent[];
   spotify: { accessToken: string } | undefined;
 }): Promise<void> {
+  delete args.agentContext.memory._spotifyDjCurrentPlayback;
   if (!args.spotify || !args.resolvedAgents.some(isSpotifyMusicAgent)) return;
   try {
     const results = await executeToolCalls(
@@ -606,7 +607,15 @@ export async function resolveGenerationTools({
 }: ResolveGenerationToolsArgs): Promise<ResolvedGenerationTools> {
   const chatToolsExplicitlyDisabled = booleanFalseText(chatMetadata.enableTools);
   const enableChatTools =
-    !chatToolsExplicitlyDisabled && (requestBody.enableTools === true || booleanText(chatMetadata.enableTools));
+    requestBody.enableTools === true || (!chatToolsExplicitlyDisabled && booleanText(chatMetadata.enableTools));
+  const spotifyToolNames = new Set(DEFAULT_AGENT_TOOLS.spotify ?? []);
+  for (const agent of resolvedAgents) {
+    const agentSettings = parseSettings(agent.settings);
+    const agentEnabledNames = Array.isArray(agentSettings.enabledTools) ? (agentSettings.enabledTools as string[]) : [];
+    if (isSpotifyMusicAgent(agent) && agentEnabledNames.length === 0 && spotifyToolNames.size > 0) {
+      agent.settings = { ...agentSettings, enabledTools: [...spotifyToolNames] };
+    }
+  }
   const enableAgentTools = resolvedAgents.some((agent) => {
     const agentSettings = parseSettings(agent.settings);
     return (
@@ -627,7 +636,6 @@ export async function resolveGenerationTools({
 
   const resolvedToolNames = new Set(allToolDefs.map((toolDef) => toolDef.function.name));
   let chatResolvedToolNames = new Set((toolDefs ?? []).map((toolDef) => toolDef.function.name));
-  const spotifyToolNames = new Set(DEFAULT_AGENT_TOOLS.spotify ?? []);
   const agentResolvedSpotifyToolGroups = resolvedAgents.map((agent) => {
     const agentSettings = parseSettings(agent.settings);
     const agentEnabledNames = Array.isArray(agentSettings.enabledTools) ? (agentSettings.enabledTools as string[]) : [];
