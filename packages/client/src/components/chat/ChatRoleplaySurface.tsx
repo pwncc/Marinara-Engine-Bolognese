@@ -1061,7 +1061,6 @@ type RoleplaySurfaceProps = {
   settingsOpen: boolean;
   settingsAnchor: ComponentProps<typeof ChatCommonOverlays>["settingsAnchor"];
   settingsInitialSection?: ComponentProps<typeof ChatCommonOverlays>["settingsInitialSection"];
-  filesOpen: boolean;
   galleryOpen: boolean;
   galleryAnchor: ComponentProps<typeof ChatCommonOverlays>["galleryAnchor"];
   wizardOpen: boolean;
@@ -1098,7 +1097,6 @@ type RoleplaySurfaceProps = {
   onOpenSettings: (event?: ReactMouseEvent<HTMLElement>) => void;
   onOpenGallery: (event?: ReactMouseEvent<HTMLElement>) => void;
   onCloseSettings: () => void;
-  onCloseFiles: () => void;
   onCloseGallery: () => void;
   onIllustrate?: () => void;
   onGenerateBackground?: () => void | Promise<void>;
@@ -1171,7 +1169,6 @@ export function ChatRoleplaySurface({
   settingsOpen,
   settingsAnchor,
   settingsInitialSection,
-  filesOpen,
   galleryOpen,
   galleryAnchor,
   wizardOpen,
@@ -1208,7 +1205,6 @@ export function ChatRoleplaySurface({
   onOpenSettings,
   onOpenGallery,
   onCloseSettings,
-  onCloseFiles,
   onCloseGallery,
   onIllustrate,
   onGenerateBackground,
@@ -1296,8 +1292,7 @@ export function ChatRoleplaySurface({
     },
     [],
   );
-  const hideEchoChamberOnMobile =
-    sidebarOpen || rightPanelOpen || settingsOpen || filesOpen || galleryOpen || wizardOpen;
+  const hideEchoChamberOnMobile = sidebarOpen || rightPanelOpen || settingsOpen || galleryOpen || wizardOpen;
   const showSpriteOverlay = expressionAgentEnabled && spriteCharacterIds.length > 0 && spriteDisplayModes.length > 0;
 
   useLayoutEffect(() => {
@@ -1990,7 +1985,6 @@ export function ChatRoleplaySurface({
         settingsOpen={settingsOpen}
         settingsAnchor={settingsAnchor}
         settingsInitialSection={settingsInitialSection}
-        filesOpen={filesOpen}
         galleryOpen={galleryOpen}
         galleryAnchor={galleryAnchor}
         wizardOpen={wizardOpen}
@@ -2010,7 +2004,6 @@ export function ChatRoleplaySurface({
           onSpriteVisualSettingsChange,
         }}
         onCloseSettings={onCloseSettings}
-        onCloseFiles={onCloseFiles}
         onCloseGallery={onCloseGallery}
         onIllustrate={onIllustrate}
         onGenerateBackground={onGenerateBackground}
