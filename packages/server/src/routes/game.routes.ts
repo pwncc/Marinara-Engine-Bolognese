@@ -896,9 +896,15 @@ const stateTransitionSchema = z.object({
 const mapGenerateSchema = z.object({
   chatId: z.string().min(1),
   locationType: z.string().min(1).max(200),
-  context: z.string().max(1000).default(""),
+  context: z.string().max(50000).default(""),
   connectionId: z.string().optional(),
 });
+
+function normalizeMapGenerationContext(context: string): string {
+  const compact = context.replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ").trim();
+  if (compact.length <= 4000) return compact;
+  return compact.slice(-4000).replace(/^[^\n]*\n?/, "").trim() || compact.slice(-4000).trim();
+}
 
 const mapMoveSchema = z.object({
   chatId: z.string().min(1),
@@ -6471,6 +6477,7 @@ export async function gameRoutes(app: FastifyInstance) {
   // ── POST /game/map/generate ──
   app.post("/map/generate", async (req, reply) => {
     const { chatId, locationType, context, connectionId } = mapGenerateSchema.parse(req.body);
+    const mapContext = normalizeMapGenerationContext(context);
     const chats = createChatsStorage(app.db);
     const connections = createConnectionsStorage(app.db);
 
@@ -6488,7 +6495,7 @@ export async function gameRoutes(app: FastifyInstance) {
     );
 
     const messages: ChatMessage[] = [
-      { role: "system", content: buildMapGenerationPrompt(locationType, context) },
+      { role: "system", content: buildMapGenerationPrompt(locationType, mapContext) },
       { role: "user", content: "Generate the map." },
     ];
 

@@ -2714,6 +2714,7 @@ export function ChatArea() {
           hasNextPage={!!hasNextPage}
           isFetchingNextPage={isFetchingNextPage}
           isStreaming={isStreaming}
+          agentProcessing={agentProcessing}
           regenerateMessageId={regenerateMessageId}
           shouldAnimateMessages={shouldAnimateMessages}
           summaryContextSize={summaryContextSize}

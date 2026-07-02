@@ -1053,6 +1053,7 @@ type RoleplaySurfaceProps = {
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
   isStreaming: boolean;
+  agentProcessing: boolean;
   regenerateMessageId: string | null;
   shouldAnimateMessages: boolean;
   summaryContextSize: number;
@@ -1161,6 +1162,7 @@ export function ChatRoleplaySurface({
   hasNextPage,
   isFetchingNextPage,
   isStreaming,
+  agentProcessing,
   regenerateMessageId,
   shouldAnimateMessages,
   summaryContextSize,
@@ -1968,6 +1970,7 @@ export function ChatRoleplaySurface({
                     })}
                   onExpressionChange={onExpressionChange}
                   onPeekPrompt={onPeekPrompt}
+                  interactionsLocked={agentProcessing}
                 />
               </div>
             </div>
