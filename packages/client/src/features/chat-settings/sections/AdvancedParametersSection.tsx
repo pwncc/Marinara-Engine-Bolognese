@@ -12,6 +12,7 @@ import {
 import { DraftNumberInput } from "../../../components/ui/DraftNumberInput";
 import { SettingsSwitch } from "../../../components/panels/settings/SettingControls";
 import { useSaveConnectionDefaults } from "../../../hooks/use-connections";
+import { isLanguageGenerationConnection, type ConnectionProviderLike } from "../../../lib/connection-filters";
 import { cn } from "../../../lib/utils";
 
 const EDITABLE_PARAMETER_KEYS: Array<keyof EditableGenerationParameters> = [
@@ -30,16 +31,13 @@ const EDITABLE_PARAMETER_KEYS: Array<keyof EditableGenerationParameters> = [
   "enabledParameters",
 ];
 
-function isCaptioningSelectableConnection(connection: Record<string, unknown>): boolean {
-  const provider = typeof connection.provider === "string" ? connection.provider : "";
-  return provider !== "image_generation";
-}
+type AdvancedConnection = ConnectionProviderLike & Record<string, unknown>;
 
 interface AdvancedParametersSectionProps {
   metadata: Record<string, unknown>;
   isConversation: boolean;
   connectionId: string | null;
-  connections: Record<string, unknown>[];
+  connections: AdvancedConnection[];
   contextMessageLimit: number | null | undefined;
   excludePastReasoning: boolean | undefined;
   imageCaptioningEnabled: boolean | undefined;
@@ -81,11 +79,11 @@ export function AdvancedParametersSection({
   const effectiveParams = getEditableGenerationParameters(defaults, params);
   const excludeReasoningEnabled = excludePastReasoning !== false;
   const captioningEnabled = imageCaptioningEnabled === true;
-  const chatConnectionCanCaption = !!conn && isCaptioningSelectableConnection(conn);
+  const chatConnectionCanCaption = !!conn && isLanguageGenerationConnection(conn);
   const connectionOptions = useMemo(
     () =>
       connections.flatMap((connection) => {
-        if (!isCaptioningSelectableConnection(connection)) return [];
+        if (!isLanguageGenerationConnection(connection)) return [];
         const id = typeof connection.id === "string" ? connection.id : "";
         if (!id) return [];
         const name = typeof connection.name === "string" && connection.name.trim() ? connection.name.trim() : id;

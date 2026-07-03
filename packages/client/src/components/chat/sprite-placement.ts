@@ -49,7 +49,7 @@ export function getDefaultSpritePlacement(index: number, total: number, side: Sp
   if (total > 3) {
     const start = side === "right" ? 86 : 14;
     const end = side === "right" ? 14 : 86;
-    const x = total <= 1 ? 50 : start + ((end - start) * index) / (total - 1);
+    const x = start + ((end - start) * index) / (total - 1);
     const y = 98 - (index % 4) * 1.5;
     return clampSpritePlacement({ x, y });
   }
