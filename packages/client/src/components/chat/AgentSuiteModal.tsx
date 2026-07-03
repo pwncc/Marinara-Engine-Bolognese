@@ -3,11 +3,23 @@
 // active chat have stored (memory, tracker state, custom
 // outputs), manually or via AI-assisted selection rewrites.
 // ──────────────────────────────────────────────
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Bot, Eye, EyeOff, Loader2, RotateCcw, Save, Trash2, Wand2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Bot,
+  ChevronDown,
+  Eye,
+  EyeOff,
+  Loader2,
+  Paperclip,
+  RotateCcw,
+  Save,
+  Trash2,
+  Wand2,
+} from "lucide-react";
 import { toast } from "sonner";
-import type { Chat, GameState, PlayerStats } from "@marinara-engine/shared";
+import type { Chat, GameState, Lorebook, PlayerStats } from "@marinara-engine/shared";
 import {
   useAgentMemory,
   useAgentSuiteRewrite,
@@ -17,10 +29,14 @@ import {
   agentKeys,
   type AgentRunRow,
 } from "../../hooks/use-agents";
+import { useCharacters } from "../../hooks/use-characters";
 import { useConnections } from "../../hooks/use-connections";
+import { useEntriesAcrossLorebooks, useLorebooks } from "../../hooks/use-lorebooks";
 import { api } from "../../lib/api-client";
 import { showConfirmDialog } from "../../lib/app-dialogs";
+import { getChatCharacterIds } from "../../lib/chat-macros";
 import { filterLanguageGenerationConnections } from "../../lib/connection-filters";
+import { isLorebookScopeActiveForChat } from "../../lib/lorebook-scope";
 import { cn } from "../../lib/utils";
 import { useAgentStore } from "../../stores/agent.store";
 import { useChatStore } from "../../stores/chat.store";
@@ -52,6 +68,38 @@ type ConnectionOption = {
 
 const MAX_REWRITE_SELECTION_CHARS = 50000;
 const MAX_REWRITE_DOCUMENT_CHARS = 100000;
+const MAX_CONTEXT_SECTION_CHARS = 20000;
+const MAX_CONTEXT_TOTAL_CHARS = 100000;
+const MAX_CONTEXT_SECTIONS = 20;
+const CONTEXT_TRUNCATION_MARKER = "\n…[truncated for length]";
+
+/** A selectable grounding source for AI rewrites (character card, lorebook entry). */
+type ContextSource = {
+  key: string;
+  group: string;
+  /** Short name shown in the picker (the group header carries the rest). */
+  display: string;
+  /** Full label sent to the model. */
+  label: string;
+  content: string;
+};
+
+function clampContextContent(content: string): string {
+  if (content.length <= MAX_CONTEXT_SECTION_CHARS) return content;
+  // Strip a lone trailing high surrogate so the cut never splits an emoji
+  // (same guard as tool-executor.ts / chat-summary-entries.ts truncation).
+  const head = content
+    .slice(0, MAX_CONTEXT_SECTION_CHARS - CONTEXT_TRUNCATION_MARKER.length)
+    .replace(/[\uD800-\uDBFF]$/, "");
+  return head + CONTEXT_TRUNCATION_MARKER;
+}
+
+const MAX_CONTEXT_LABEL_CHARS = 200;
+
+function clampContextLabel(label: string): string {
+  if (label.length <= MAX_CONTEXT_LABEL_CHARS) return label;
+  return `${label.slice(0, MAX_CONTEXT_LABEL_CHARS - 1).replace(/[\uD800-\uDBFF]$/, "")}…`;
+}
 
 const CATEGORY_LABELS: Record<string, string> = {
   writer: "Writer",
@@ -165,6 +213,10 @@ interface DataBlockProps {
   connectionOptions: ConnectionOption[];
   rewriteConnectionId: string;
   onRewriteConnectionChange: (id: string) => void;
+  contextPicker: ReactNode;
+  contextCount: number;
+  contextOverLimit: boolean;
+  buildContextSections: () => Array<{ label: string; content: string }>;
 }
 
 function DataBlock({
@@ -180,6 +232,10 @@ function DataBlock({
   connectionOptions,
   rewriteConnectionId,
   onRewriteConnectionChange,
+  contextPicker,
+  contextCount,
+  contextOverLimit,
+  buildContextSections,
 }: DataBlockProps) {
   const rewrite = useAgentSuiteRewrite();
 
@@ -189,6 +245,7 @@ function DataBlock({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
   const [instruction, setInstruction] = useState("");
   const [selection, setSelection] = useState<{ start: number; end: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -247,8 +304,15 @@ function DataBlock({
       setError(`Selection too large for AI rewrite (max ${MAX_REWRITE_SELECTION_CHARS.toLocaleString()} characters)`);
       return;
     }
+    if (contextOverLimit) {
+      setError(
+        `Attached context is too large (max ${MAX_CONTEXT_SECTIONS} sources / ${MAX_CONTEXT_TOTAL_CHARS.toLocaleString()} characters) — deselect some sources`,
+      );
+      return;
+    }
     setError(null);
     try {
+      const contextSections = buildContextSections();
       const result = await rewrite.mutateAsync({
         connectionId: rewriteConnectionId,
         instruction: instruction.trim(),
@@ -256,6 +320,7 @@ function DataBlock({
         documentText: clamped && text.length <= MAX_REWRITE_DOCUMENT_CHARS ? text : undefined,
         agentName,
         dataLabel: label,
+        contextSections: contextSections.length > 0 ? contextSections : undefined,
       });
       const next = clamped
         ? text.slice(0, clamped.start) + result.rewrittenText + text.slice(clamped.end)
@@ -266,7 +331,18 @@ function DataBlock({
     } catch (err) {
       setError(err instanceof Error ? err.message : "AI rewrite failed");
     }
-  }, [agentName, busy, currentText, instruction, label, rewrite, rewriteConnectionId, selection]);
+  }, [
+    agentName,
+    buildContextSections,
+    busy,
+    contextOverLimit,
+    currentText,
+    instruction,
+    label,
+    rewrite,
+    rewriteConnectionId,
+    selection,
+  ]);
 
   return (
     <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/35 p-2.5">
@@ -340,6 +416,22 @@ function DataBlock({
             spellCheck={false}
             className="w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)]/60 px-2 py-1.5 text-[0.625rem] leading-relaxed text-[var(--foreground)] outline-none transition-colors placeholder:text-[var(--muted-foreground)] focus:border-[var(--ring)] focus:ring-1 focus:ring-[var(--ring)]"
           />
+          <button
+            type="button"
+            onClick={() => setContextOpen((open) => !open)}
+            className="inline-flex min-h-7 items-center gap-1 rounded-md border border-[var(--border)]/70 bg-[var(--secondary)]/45 px-2 py-1 text-[0.625rem] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)]"
+            title="Attach character cards or lorebook entries so the model knows what the data refers to"
+          >
+            <Paperclip size="0.6875rem" />
+            Add Context
+            {contextCount > 0 && (
+              <span className="rounded-full bg-[var(--primary)]/15 px-1.5 py-0.5 text-[0.5625rem] font-medium text-[var(--primary)]">
+                {contextCount}
+              </span>
+            )}
+            <ChevronDown size="0.625rem" className={cn("transition-transform", contextOpen && "rotate-180")} />
+          </button>
+          {contextOpen && contextPicker}
           <div className="flex flex-wrap items-center gap-1.5">
             <select
               value={rewriteConnectionId}
@@ -425,9 +517,73 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
   const customRunsQuery = useCustomAgentRuns(chat.id, open && selectedAgent?.category === "custom");
   const updateRunData = useUpdateAgentRunData();
 
+  // Context sources for AI rewrites: the chat's character cards + entries of
+  // its pinned lorebooks. Queries are gated on the modal being open.
+  const metadata = useMemo<Record<string, unknown>>(() => {
+    const raw = chat.metadata as unknown;
+    if (typeof raw === "string") {
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+      } catch {
+        return {};
+      }
+    }
+    return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  }, [chat.metadata]);
+  const activeLorebookIds = useMemo<string[]>(
+    () =>
+      Array.isArray(metadata.activeLorebookIds)
+        ? metadata.activeLorebookIds.filter((id): id is string => typeof id === "string")
+        : [],
+    [metadata.activeLorebookIds],
+  );
+  const excludedLorebookIds = useMemo<string[]>(
+    () =>
+      Array.isArray(metadata.excludedLorebookIds)
+        ? metadata.excludedLorebookIds.filter((id): id is string => typeof id === "string")
+        : [],
+    [metadata.excludedLorebookIds],
+  );
+  // chat.characterIds arrives as a JSON string from the API despite the shared type.
+  const chatCharacterIds = useMemo(() => getChatCharacterIds({ characterIds: chat.characterIds }), [chat.characterIds]);
+  // includeBuiltIn matches the drawer's query so built-ins (Professor Mari)
+  // resolve and the already-cached list is reused instead of refetched.
+  const { data: allCharacters, isLoading: charactersLoading } = useCharacters({ enabled: open, includeBuiltIn: true });
+  const { data: allLorebooks } = useLorebooks();
+  // Mirror the drawer's active-lorebook derivation: pinned + global + chat-scoped
+  // + character-linked + persona-linked, minus explicit exclusions.
+  const contextLorebooks = useMemo<Array<{ id: string; name: string }>>(() => {
+    const pinnedIds = new Set(activeLorebookIds);
+    const excludedIds = new Set(excludedLorebookIds);
+    return ((allLorebooks ?? []) as Lorebook[])
+      .filter((lorebook) => {
+        if (excludedIds.has(lorebook.id)) return false;
+        if (lorebook.enabled === false || !isLorebookScopeActiveForChat(lorebook.scope, chat.id)) return false;
+        return (
+          pinnedIds.has(lorebook.id) ||
+          lorebook.isGlobal ||
+          lorebook.chatId === chat.id ||
+          (lorebook.characterIds ?? []).some((id) => chatCharacterIds.includes(id)) ||
+          (!!lorebook.characterId && chatCharacterIds.includes(lorebook.characterId)) ||
+          (!!chat.personaId &&
+            ((lorebook.personaIds ?? []).includes(chat.personaId) || lorebook.personaId === chat.personaId))
+        );
+      })
+      .map((lorebook) => ({ id: lorebook.id, name: lorebook.name }));
+  }, [activeLorebookIds, allLorebooks, chat.id, chat.personaId, chatCharacterIds, excludedLorebookIds]);
+  const contextLorebookIds = useMemo(() => contextLorebooks.map((lorebook) => lorebook.id), [contextLorebooks]);
+  const {
+    entries: lorebookEntries,
+    isLoading: entriesLoading,
+    isError: entriesError,
+  } = useEntriesAcrossLorebooks(open ? contextLorebookIds : []);
+  const contextSourcesLoading = charactersLoading || entriesLoading;
+
   // 3. Local state
   const [rewriteConnectionId, setRewriteConnectionId] = useState("");
   const [spoilersRevealed, setSpoilersRevealed] = useState(false);
+  const [contextSelection, setContextSelection] = useState<Set<string>>(() => new Set());
   const dirtyBlocksRef = useRef<Set<string>>(new Set());
   const closingRef = useRef(false);
   const wasProcessingRef = useRef(isAgentProcessing);
@@ -499,6 +655,91 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
       })();
     },
     [confirmDiscardDrafts, effectiveAgentId],
+  );
+
+  const contextSources = useMemo<ContextSource[]>(() => {
+    const sources: ContextSource[] = [];
+    const charactersById = new Map(
+      ((allCharacters ?? []) as Array<{ id: string; data: unknown }>).map((row) => [row.id, row]),
+    );
+    for (const characterId of chatCharacterIds) {
+      const row = charactersById.get(characterId);
+      if (!row) continue;
+      let data: Record<string, unknown>;
+      try {
+        data = (typeof row.data === "string" ? JSON.parse(row.data) : row.data) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (!data || typeof data !== "object") continue;
+      const name = typeof data.name === "string" && data.name.trim() ? data.name.trim() : "Unnamed character";
+      const parts: string[] = [];
+      for (const [field, fieldLabel] of [
+        ["description", "Description"],
+        ["personality", "Personality"],
+        ["scenario", "Scenario"],
+      ] as const) {
+        const value = data[field];
+        if (typeof value === "string" && value.trim()) parts.push(`${fieldLabel}:\n${value.trim()}`);
+      }
+      if (parts.length === 0) continue;
+      sources.push({
+        key: `char:${characterId}`,
+        group: "Characters",
+        display: name,
+        label: clampContextLabel(`Character card — ${name}`),
+        content: clampContextContent(`Name: ${name}\n\n${parts.join("\n\n")}`),
+      });
+    }
+    const lorebookNames = new Map(contextLorebooks.map((lorebook) => [lorebook.id, lorebook.name]));
+    for (const entry of lorebookEntries ?? []) {
+      if (!entry.content?.trim()) continue;
+      const lorebookName = lorebookNames.get(entry.lorebookId) ?? "Lorebook";
+      const entryName = entry.name?.trim() || "Untitled entry";
+      sources.push({
+        key: `lore:${entry.id}`,
+        group: `Lorebook — ${lorebookName}`,
+        display: entryName,
+        label: clampContextLabel(`Lorebook "${lorebookName}" — ${entryName}`),
+        content: clampContextContent(entry.content.trim()),
+      });
+    }
+    return sources;
+  }, [allCharacters, chatCharacterIds, contextLorebooks, lorebookEntries]);
+
+  const groupedContextSources = useMemo(() => {
+    const groups = new Map<string, ContextSource[]>();
+    for (const source of contextSources) {
+      const list = groups.get(source.group);
+      if (list) list.push(source);
+      else groups.set(source.group, [source]);
+    }
+    return Array.from(groups.entries());
+  }, [contextSources]);
+
+  const selectedContextSources = useMemo(
+    () => contextSources.filter((source) => contextSelection.has(source.key)),
+    [contextSelection, contextSources],
+  );
+  const contextTotalChars = useMemo(
+    () => selectedContextSources.reduce((total, source) => total + source.content.length, 0),
+    [selectedContextSources],
+  );
+  const contextOverLimit =
+    selectedContextSources.length > MAX_CONTEXT_SECTIONS || contextTotalChars > MAX_CONTEXT_TOTAL_CHARS;
+
+  const toggleContextSource = useCallback((key: string) => {
+    setContextSelection((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const buildContextSections = useCallback(
+    () => selectedContextSources.map(({ label, content }) => ({ label, content })),
+    [selectedContextSources],
   );
 
   const refreshGameState = useCallback(async () => {
@@ -605,6 +846,75 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
 
   const hideSpoilers = selectedAgent?.id === "director" && !spoilersRevealed && memoryEntries.length > 0;
   const trackerSlice = selectedAgent ? TRACKER_SLICES[selectedAgent.id] : undefined;
+
+  const contextPicker: ReactNode = (
+    <div className="space-y-1.5 rounded-md border border-[var(--border)] bg-[var(--background)]/40 p-2">
+      <p className="text-[0.5625rem] text-[var(--muted-foreground)]">
+        Attached sources ground the rewrite. The selection applies to every AI Edit in this window.
+      </p>
+      {contextSourcesLoading ? (
+        <p className="py-1 text-center text-[0.625rem] text-[var(--muted-foreground)]">Loading context sources...</p>
+      ) : contextSources.length === 0 ? (
+        <p
+          className={cn(
+            "py-1 text-center text-[0.625rem]",
+            entriesError ? "text-[var(--destructive)]" : "text-[var(--muted-foreground)]",
+          )}
+        >
+          {entriesError
+            ? "Couldn't load lorebook entries — close and reopen the Agent Suite to retry."
+            : "No context sources available — this chat has no character cards or active lorebooks."}
+        </p>
+      ) : (
+        <>
+          {entriesError && (
+            <p className="text-[0.5625rem] text-[var(--destructive)]">
+              Couldn't load lorebook entries — showing character cards only.
+            </p>
+          )}
+          {groupedContextSources.map(([group, sources]) => (
+          <div key={group}>
+            <p className="mb-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+              {group}
+            </p>
+            <div className="max-h-32 space-y-0.5 overflow-y-auto">
+              {sources.map((source) => (
+                <label
+                  key={source.key}
+                  className="flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-[0.625rem] transition-colors hover:bg-[var(--accent)]/40"
+                >
+                  <input
+                    type="checkbox"
+                    checked={contextSelection.has(source.key)}
+                    onChange={() => toggleContextSource(source.key)}
+                    className="h-3 w-3 shrink-0 accent-[var(--primary)]"
+                  />
+                  <span className="min-w-0 flex-1 truncate">{source.display}</span>
+                  <span className="shrink-0 text-[0.5rem] text-[var(--muted-foreground)]">
+                    ~{Math.ceil(source.content.length / 4).toLocaleString()} tokens
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+          ))}
+        </>
+      )}
+      {selectedContextSources.length > 0 && (
+        <p
+          className={cn(
+            "text-[0.5625rem]",
+            contextOverLimit ? "text-[var(--destructive)]" : "text-[var(--muted-foreground)]",
+          )}
+        >
+          {selectedContextSources.length} source{selectedContextSources.length === 1 ? "" : "s"} attached · ~
+          {Math.ceil(contextTotalChars / 4).toLocaleString()} tokens
+          {contextOverLimit &&
+            ` — too large (max ${MAX_CONTEXT_SECTIONS} sources / ${MAX_CONTEXT_TOTAL_CHARS.toLocaleString()} characters), deselect some sources`}
+        </p>
+      )}
+    </div>
+  );
 
   // 5. Render
   return (
@@ -731,6 +1041,10 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
                         connectionOptions={connectionOptions}
                         rewriteConnectionId={effectiveRewriteConnectionId}
                         onRewriteConnectionChange={setRewriteConnectionId}
+                        contextPicker={contextPicker}
+                        contextCount={selectedContextSources.length}
+                        contextOverLimit={contextOverLimit}
+                        buildContextSections={buildContextSections}
                       />
                     ))
                   )}
@@ -771,6 +1085,10 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
                           connectionOptions={connectionOptions}
                           rewriteConnectionId={effectiveRewriteConnectionId}
                           onRewriteConnectionChange={setRewriteConnectionId}
+                          contextPicker={contextPicker}
+                          contextCount={selectedContextSources.length}
+                          contextOverLimit={contextOverLimit}
+                          buildContextSections={buildContextSections}
                         />
                         {selectedAgent.id === "world-state" && (gameStateQuery.data.recentEvents?.length ?? 0) > 0 && (
                           <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/35 p-2.5">
@@ -824,6 +1142,10 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
                           connectionOptions={connectionOptions}
                           rewriteConnectionId={effectiveRewriteConnectionId}
                           onRewriteConnectionChange={setRewriteConnectionId}
+                          contextPicker={contextPicker}
+                          contextCount={selectedContextSources.length}
+                          contextOverLimit={contextOverLimit}
+                          buildContextSections={buildContextSections}
                         />
                       );
                     })}

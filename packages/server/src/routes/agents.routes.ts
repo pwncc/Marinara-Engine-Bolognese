@@ -34,8 +34,9 @@ const AGENT_SUITE_REWRITE_SYSTEM_PROMPT = [
   "Rules:",
   "- Return ONLY the rewritten excerpt. No explanations, no preamble, no code fences.",
   "- The excerpt may be a fragment of a larger document; the surrounding document is provided for context but must NOT be included in your output.",
+  "- Reference context blocks (character cards, lorebook entries) may be provided. Use them to ground names, facts, and details, but never copy them into the output beyond what the instruction requires.",
   "- If the excerpt is JSON or a fragment of JSON, keep the same structural shape so the result can be spliced back without breaking the document.",
-  "- Preserve everything the instruction does not ask to change. Do not invent new facts beyond what the instruction requires.",
+  "- Preserve everything the instruction does not ask to change. Do not invent new facts beyond what the instruction and provided context support.",
 ].join("\n");
 
 /** Strip a single markdown code fence when it wraps the entire response. */
@@ -467,12 +468,26 @@ export async function agentsRoutes(app: FastifyInstance) {
     const contextLines: string[] = [];
     if (input.agentName) contextLines.push(`Agent: ${input.agentName}`);
     if (input.dataLabel) contextLines.push(`Data: ${input.dataLabel}`);
+    // Keep the frame intact: labels stay single-line and content can't
+    // close the delimiter early (names/entries are user- or import-authored).
+    const referenceBlock = input.contextSections?.length
+      ? `Reference context selected by the user (grounding only — do not output):\n${input.contextSections
+          .map(
+            (section) =>
+              `<<<CONTEXT: ${section.label.replace(/[\r\n]+/g, " ")}\n${section.content.replace(
+                /^CONTEXT>>>/gm,
+                "CONTEXT >>>",
+              )}\nCONTEXT>>>`,
+          )
+          .join("\n")}\n\n`
+      : "";
     const documentBlock =
       input.documentText && input.documentText !== input.selectedText
         ? `Full document (context only — do not output):\n<<<DOCUMENT\n${input.documentText}\nDOCUMENT>>>\n\n`
         : "";
     const userContent =
       `${contextLines.length ? `${contextLines.join("\n")}\n\n` : ""}` +
+      `${referenceBlock}` +
       `${documentBlock}` +
       `Excerpt to rewrite:\n<<<EXCERPT\n${input.selectedText}\nEXCERPT>>>\n\n` +
       `Instruction: ${input.instruction}`;

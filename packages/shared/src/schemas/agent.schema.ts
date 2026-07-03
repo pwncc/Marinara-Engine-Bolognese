@@ -66,6 +66,19 @@ export const agentSuiteRewriteSchema = z.object({
   documentText: z.string().max(100000).optional(),
   agentName: z.string().max(200).optional(),
   dataLabel: z.string().max(200).optional(),
+  /** User-selected grounding context (character cards, lorebook entries) — never rewritten. */
+  contextSections: z
+    .array(
+      z.object({
+        label: z.string().min(1).max(200),
+        content: z.string().min(1).max(20000),
+      }),
+    )
+    .max(20)
+    .refine((sections) => sections.reduce((total, section) => total + section.content.length, 0) <= 100000, {
+      message: "Combined context is too large (max 100,000 characters)",
+    })
+    .optional(),
 });
 
 export type CreateAgentConfigInput = z.infer<typeof createAgentConfigSchema>;
