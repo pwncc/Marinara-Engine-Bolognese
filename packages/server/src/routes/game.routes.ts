@@ -2313,6 +2313,7 @@ const GAME_GENERATION_TIMEOUT_MS = 5 * 60 * 1000;
 const GAME_ASSET_GENERATION_TIMEOUT_MS = 220 * 1000;
 const GAME_SCENE_VIDEO_GENERATION_TIMEOUT_MS = 31 * 60 * 1000;
 const GAME_ILLUSTRATION_SUMMARY_TIMEOUT_MS = 60 * 1000;
+const GAME_STORYBOARD_DIRECTOR_TIMEOUT_MS = 3 * 60 * 1000;
 const GAME_ASSET_PORTRAIT_CONCURRENCY = 2;
 const gameAssetGenerationLocks = new Map<string, Promise<void>>();
 
@@ -3947,6 +3948,14 @@ function normalizeStoryboardDuration(value: unknown, fallback: number): number {
 function compactStoryboardText(value: unknown, max: number): string {
   const text = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
   return text.length > max ? `${text.slice(0, max - 1).trim()}...` : text;
+}
+
+function compactStoryboardSourceNarration(value: string): string {
+  return value
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function parseStoryboardCharacters(value: unknown): string[] {
@@ -8845,7 +8854,7 @@ export async function gameRoutes(app: FastifyInstance) {
       }
 
       const rawNarration = await resolveMessageContentForSwipe(chats, message, input.swipeIndex);
-      const sourceNarration = stripGmCommandTags(rawNarration).trim();
+      const sourceNarration = compactStoryboardSourceNarration(stripGmCommandTags(rawNarration));
       if (!sourceNarration) return reply.status(400).send({ error: "This GM turn has no narration to storyboard." });
 
       const meta = parseMeta(chat.metadata);
@@ -8898,32 +8907,48 @@ export async function gameRoutes(app: FastifyInstance) {
         debugLog("[debug/game/storyboard-director] messages:\n%s", JSON.stringify(directorMessages.messages, null, 2));
       }
 
-      const directorResult = await runGameChatComplete(
-        provider,
-        directorMessages.messages,
-        gameGenOptions(
-          conn.model ?? "",
-          {
-            stream: false,
-            maxTokens: 5000,
-            responseFormat: { type: "json_object" },
-            signal: storyboardAbortSignal,
-          },
-          parameters,
-          conn.provider,
-        ),
-        "Game storyboard director",
-        GAME_ILLUSTRATION_SUMMARY_TIMEOUT_MS,
-      );
-      const extraction = extractLeadingThinkingBlocks(directorResult.content || "", parameters?.customThinkingTags);
-      const rawPlan = extraction.content.trim();
-      if (debugLogsEnabled) debugLog("[debug/game/storyboard-director] raw response:\n%s", rawPlan);
-      const plan = sanitizeStoryboardPlan(parseJSON(rawPlan), {
-        sourceNarration,
-        keyframeCount: input.keyframeCount,
-        durationSeconds: input.durationSeconds,
-        aspectRatio: input.aspectRatio,
-      });
+      let directorErrorMessage: string | null = null;
+      let plan: PlannedStoryboard;
+      try {
+        const directorResult = await runGameChatComplete(
+          provider,
+          directorMessages.messages,
+          gameGenOptions(
+            conn.model ?? "",
+            {
+              stream: false,
+              maxTokens: 4000,
+              responseFormat: { type: "json_object" },
+              signal: storyboardAbortSignal,
+            },
+            parameters,
+            conn.provider,
+          ),
+          "Game storyboard director",
+          GAME_STORYBOARD_DIRECTOR_TIMEOUT_MS,
+        );
+        const extraction = extractLeadingThinkingBlocks(directorResult.content || "", parameters?.customThinkingTags);
+        const rawPlan = extraction.content.trim();
+        if (debugLogsEnabled) debugLog("[debug/game/storyboard-director] raw response:\n%s", rawPlan);
+        plan = sanitizeStoryboardPlan(parseJSON(rawPlan), {
+          sourceNarration,
+          keyframeCount: input.keyframeCount,
+          durationSeconds: input.durationSeconds,
+          aspectRatio: input.aspectRatio,
+        });
+      } catch (err) {
+        directorErrorMessage =
+          err instanceof Error
+            ? `${err.message}; used fallback storyboard planner.`
+            : "Used fallback storyboard planner.";
+        logger.warn(err, "[game/storyboard] Prompt Director failed; using fallback storyboard planner");
+        plan = fallbackStoryboardPlan({
+          sourceNarration,
+          keyframeCount: input.keyframeCount,
+          durationSeconds: input.durationSeconds,
+          aspectRatio: input.aspectRatio,
+        });
+      }
 
       const allMessages = await chats.listMessages(input.chatId);
       const snapshot = await createGameStateStorage(app.db)
@@ -8943,6 +8968,7 @@ export async function gameRoutes(app: FastifyInstance) {
         provider: conn.provider,
         model: conn.model ?? "",
         directorPrompt: directorMessages.systemPrompt,
+        error: directorErrorMessage,
       });
       if (!storyboardRow) throw new Error("Storyboard metadata could not be saved");
       await storyboards.replaceKeyframes(

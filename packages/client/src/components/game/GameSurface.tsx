@@ -9112,6 +9112,11 @@ function GameSurfaceComponent({
                   Creating storyboard keyframes
                 </div>
               ) : null}
+              {latestTurnStoryboard?.error ? (
+                <p className="mb-3 rounded-lg border border-[var(--marinara-chat-chrome-panel-divider)] px-3 py-2 text-[0.6875rem] text-[var(--destructive)]">
+                  {latestTurnStoryboard.error}
+                </p>
+              ) : null}
               {latestTurnStoryboard ? (
                 <div className="grid gap-3 md:grid-cols-2">
                   {latestTurnStoryboard.keyframes.map((frame) => (
