@@ -2709,6 +2709,54 @@ export function HomeProfessorMariChat({
           void handleSubmit();
         }}
       >
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(event: ChangeEvent<HTMLInputElement>) => {
+            void handleImageUpload(event.target.files);
+            event.target.value = "";
+          }}
+        />
+        {(imageAttachments.length > 0 || isReadingImages) && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {imageAttachments.map((attachment, index) => (
+              <div
+                key={`${attachment.name}-${index}`}
+                className="group relative flex max-w-[9rem] items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--background)]/70 p-1.5 pr-7"
+              >
+                <img
+                  src={attachment.data}
+                  alt={attachment.name}
+                  className="h-9 w-9 shrink-0 rounded-md object-cover"
+                  draggable={false}
+                />
+                <span className="min-w-0 flex-1 truncate text-[0.6875rem] text-[var(--muted-foreground)]">
+                  {attachment.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setImageAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                  }
+                  className="absolute right-1.5 top-1.5 rounded-md p-0.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                  aria-label={`Remove ${attachment.name}`}
+                  title="Remove image"
+                >
+                  <X size="0.7rem" />
+                </button>
+              </div>
+            ))}
+            {isReadingImages && (
+              <div className="flex min-h-12 items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--background)]/70 px-2 text-[0.6875rem] text-[var(--muted-foreground)]">
+                <Loader2 size="0.8rem" className="animate-spin" />
+                Reading image...
+              </div>
+            )}
+          </div>
+        )}
         <div className="relative flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-2 py-1.5 shadow-inner shadow-black/10 focus-within:border-[var(--primary)]/50">
           <button
             ref={connectionButtonRef}
@@ -2776,6 +2824,23 @@ export function HomeProfessorMariChat({
             </div>
           )}
 
+          <button
+            type="button"
+            onClick={() => imageInputRef.current?.click()}
+            disabled={isBusy || isReadingImages}
+            className={cn(
+              "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition-all",
+              imageAttachments.length > 0
+                ? "bg-foreground/10 text-foreground/75"
+                : "text-foreground/40 hover:bg-foreground/10 hover:text-foreground/70",
+              (isBusy || isReadingImages) && "cursor-not-allowed opacity-40",
+            )}
+            title="Attach images"
+            aria-label="Attach images"
+          >
+            {isReadingImages ? <Loader2 size="1rem" className="animate-spin" /> : <ImageIcon size="1rem" />}
+          </button>
+
           <textarea
             value={draft}
             onChange={(event) => {
@@ -2795,15 +2860,15 @@ export function HomeProfessorMariChat({
           />
           <button
             type="submit"
-            disabled={!draft.trim() || isBusy}
+            disabled={!canSubmitMessage || isBusy}
             className={cn(
               "mari-chat-send-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-white transition-all duration-200",
-              draft.trim() && !isBusy ? "hover:text-white active:scale-90" : "cursor-not-allowed opacity-40",
+              canSubmitMessage && !isBusy ? "hover:text-white active:scale-90" : "cursor-not-allowed opacity-40",
             )}
             aria-label="Send to Professor Mari"
             title="Send"
           >
-            <Send size="0.9375rem" className={cn(draft.trim() && "translate-x-[1px]")} />
+            <Send size="0.9375rem" className={cn(canSubmitMessage && "translate-x-[1px]")} />
           </button>
         </div>
       </form>
