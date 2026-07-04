@@ -3422,6 +3422,16 @@ function GameSurfaceComponent({
     () => findStoryboardKeyframeForSegment(latestTurnStoryboard?.keyframes ?? [], activeStoryboardSegmentIndex),
     [activeStoryboardSegmentIndex, latestTurnStoryboard?.keyframes],
   );
+  const latestStoryboardViewerTurnKey = useMemo(() => {
+    if (!latestAssistantMsg?.id) return null;
+    return activeChatId ? `${activeChatId}:${latestAssistantMsg.id}:${latestAssistantSwipeIndex}` : latestAssistantMsg.id;
+  }, [activeChatId, latestAssistantMsg?.id, latestAssistantSwipeIndex]);
+  const storyboardViewerDismissed =
+    !!latestStoryboardViewerTurnKey && storyboardViewerDismissedKey === latestStoryboardViewerTurnKey;
+  const handleReopenStoryboardViewer = useCallback(() => {
+    setStoryboardViewerDismissedKey(null);
+    setStoryboardViewerPosition((pos) => clampStoryboardViewerPosition(pos, storyboardViewerWidth));
+  }, [storyboardViewerWidth]);
   useEffect(() => {
     const video = storyboardViewerVideoRef.current;
     if (!video) return;
@@ -9356,10 +9366,7 @@ function GameSurfaceComponent({
   const renderStoryboardInlineViewer = () => {
     if (!latestAssistantMsg?.id) return null;
     if (!latestTurnStoryboard && !storyboardGenerating) return null;
-    const storyboardViewerTurnKey = activeChatId
-      ? `${activeChatId}:${latestAssistantMsg.id}:${latestAssistantSwipeIndex}`
-      : latestAssistantMsg.id;
-    if (storyboardViewerDismissedKey === storyboardViewerTurnKey) return null;
+    if (storyboardViewerDismissed) return null;
 
     const frame = activeStoryboardKeyframe;
     const framePosition =
@@ -9389,7 +9396,7 @@ function GameSurfaceComponent({
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              setStoryboardViewerDismissedKey(storyboardViewerTurnKey);
+              setStoryboardViewerDismissedKey(latestStoryboardViewerTurnKey);
             }}
             onPointerDown={(event) => event.stopPropagation()}
             className={getChatToolbarButtonClass({
@@ -9594,11 +9601,24 @@ function GameSurfaceComponent({
                     {storyboardGenerating ? "Generating" : (latestTurnStoryboard?.status ?? "ready").replace("_", " ")}
                   </p>
                 </div>
-                {latestTurnStoryboard?.turnNumber ? (
-                  <span className="shrink-0 rounded-md border border-[var(--marinara-chat-chrome-panel-divider)] px-2 py-1 text-[0.6875rem] text-[var(--marinara-chat-chrome-panel-muted)]">
-                    Turn {latestTurnStoryboard.turnNumber}
-                  </span>
-                ) : null}
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                  {storyboardViewerDismissed && latestTurnStoryboard ? (
+                    <button
+                      type="button"
+                      onClick={handleReopenStoryboardViewer}
+                      className="marinara-chat-popover__item flex items-center gap-1.5 rounded-md border border-[var(--marinara-chat-chrome-panel-divider)] px-2 py-1 text-[0.6875rem] font-medium text-[var(--marinara-chat-chrome-panel-text)] transition-colors hover:bg-[var(--marinara-chat-chrome-highlight-bg-hover)] hover:text-[var(--marinara-chat-chrome-highlight-text)]"
+                      title="Show the floating storyboard viewer"
+                    >
+                      <PanelsTopLeft size={12} />
+                      Show viewer
+                    </button>
+                  ) : null}
+                  {latestTurnStoryboard?.turnNumber ? (
+                    <span className="rounded-md border border-[var(--marinara-chat-chrome-panel-divider)] px-2 py-1 text-[0.6875rem] text-[var(--marinara-chat-chrome-panel-muted)]">
+                      Turn {latestTurnStoryboard.turnNumber}
+                    </span>
+                  ) : null}
+                </div>
               </div>
               {storyboardGenerating && !latestTurnStoryboard ? (
                 <div className="flex items-center gap-2 rounded-lg border border-[var(--marinara-chat-chrome-panel-divider)] px-3 py-4 text-xs text-[var(--marinara-chat-chrome-panel-muted)]">

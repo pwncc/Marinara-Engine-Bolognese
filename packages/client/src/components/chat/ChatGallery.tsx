@@ -36,7 +36,7 @@ import type { PinnedGalleryMedia } from "../../stores/gallery.store";
 import { toast } from "sonner";
 import { ImageUploadDropzone } from "../ui/ImageUploadDropzone";
 import { buildCardAssetMarkdown, dispatchCardAssetInsert } from "../../lib/card-asset-links";
-import { copyToClipboard } from "../../lib/utils";
+import { cn, copyToClipboard } from "../../lib/utils";
 import {
   ChatImageLightbox,
   ChatVideoLightbox,
@@ -58,6 +58,7 @@ interface ChatGalleryProps {
 }
 
 const EMPTY_SCENE_VIDEOS: GeneratedSceneVideo[] = [];
+type GalleryTab = "images" | "videos";
 
 function formatAssetKind(asset: ChatAssetBrowserItem) {
   if (asset.kind === "chat-gallery") return "Chat gallery";
@@ -92,6 +93,7 @@ export function ChatGallery({
   const [assetBrowserOpen, setAssetBrowserOpen] = useState(false);
   const [assetSearch, setAssetSearch] = useState("");
   const [copiedPromptImageId, setCopiedPromptImageId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<GalleryTab>("images");
   const copyResetTimerRef = useRef<number | null>(null);
   const isIllustrating = useGalleryStore((s) => s.illustratingChatIds.has(chatId));
   const isGeneratingVideo = useGalleryStore((s) => s.videoGeneratingChatIds.has(chatId));
@@ -280,6 +282,12 @@ export function ChatGallery({
     actionCount >= 3 ? "grid grid-cols-3 gap-2" : actionCount === 2 ? "grid grid-cols-2 gap-2" : "grid gap-2";
   const hasImages = !!images && images.length > 0;
   const hasVideos = sceneVideos.length > 0;
+  const imageCount = images?.length ?? 0;
+  const videoCount = sceneVideos.length;
+
+  useEffect(() => {
+    if (!sceneVideosEnabled && activeTab === "videos") setActiveTab("images");
+  }, [activeTab, sceneVideosEnabled]);
 
   return (
     <>
@@ -378,6 +386,54 @@ export function ChatGallery({
           </div>
         )}
 
+        <div
+          className="grid grid-cols-2 gap-1 rounded-xl border border-[var(--border)] bg-[var(--secondary)]/60 p-1"
+          role="tablist"
+          aria-label="Gallery media type"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "images"}
+            onClick={() => setActiveTab("images")}
+            className={cn(
+              "flex min-w-0 items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors",
+              activeTab === "images"
+                ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm"
+                : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+            )}
+          >
+            <Image size="0.875rem" className="shrink-0" />
+            <span className="truncate">Images</span>
+            <span className="rounded-md bg-[var(--muted)] px-1.5 py-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
+              {imageCount}
+            </span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "videos"}
+            onClick={() => setActiveTab("videos")}
+            disabled={!sceneVideosEnabled}
+            className={cn(
+              "flex min-w-0 items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors",
+              !sceneVideosEnabled
+                ? "cursor-not-allowed text-[var(--muted-foreground)] opacity-50"
+                : activeTab === "videos"
+                  ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm"
+                  : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+            )}
+          >
+            <Film size="0.875rem" className="shrink-0" />
+            <span className="truncate">Videos</span>
+            <span className="rounded-md bg-[var(--muted)] px-1.5 py-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
+              {videoCount}
+            </span>
+          </button>
+        </div>
+
+        {activeTab === "images" && (
+          <>
         <ImageUploadDropzone
           label="Upload Images"
           pending={upload.isPending}
@@ -391,11 +447,11 @@ export function ChatGallery({
         {isLoading && <p className="text-center text-xs text-[var(--muted-foreground)]">Loading gallery…</p>}
 
         {/* Empty state */}
-        {!isLoading && !sceneVideosQuery.isLoading && !hasImages && !hasVideos && (
+        {!isLoading && !hasImages && (
           <div className="flex flex-col items-center gap-2 py-8 text-[var(--muted-foreground)]">
             <Sparkles size="1.5rem" className="opacity-40" />
-            <p className="text-xs">No media yet</p>
-            <p className="text-[0.625rem] opacity-60">Upload images or generate media to build your gallery</p>
+            <p className="text-xs">No images yet</p>
+            <p className="text-[0.625rem] opacity-60">Upload images or generate illustrations to build your gallery</p>
           </div>
         )}
 
@@ -485,8 +541,21 @@ export function ChatGallery({
           </div>
         )}
 
+          </>
+        )}
+
+        {activeTab === "videos" && (
+          <>
         {sceneVideosQuery.isLoading && sceneVideosEnabled && (
           <p className="text-center text-xs text-[var(--muted-foreground)]">Loading scene videos...</p>
+        )}
+
+        {!sceneVideosQuery.isLoading && !hasVideos && (
+          <div className="flex flex-col items-center gap-2 py-8 text-[var(--muted-foreground)]">
+            <Film size="1.5rem" className="opacity-40" />
+            <p className="text-xs">No videos yet</p>
+            <p className="text-[0.625rem] opacity-60">Generate or animate scene videos to fill this tab</p>
+          </div>
         )}
 
         {hasVideos && (
@@ -549,6 +618,8 @@ export function ChatGallery({
               ))}
             </div>
           </section>
+        )}
+          </>
         )}
       </div>
 
