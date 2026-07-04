@@ -3673,7 +3673,7 @@ export async function generateRoutes(app: FastifyInstance) {
           // is off leaves the raw tag in the visible message with no badge (#2877).
           if (conversationCommandsEnabled) {
             conversationSystemPrompt +=
-              '\n\nYou can react to the user\'s most recent message with a single emoji by writing [react: emoji="😂"] on its own line — any standard emoji, or a custom one you have access to as [react: emoji=":name:"]. It posts as a small badge on their message, the way you\'d react in a chat app. You can also react to another character instead by adding their name: [react: emoji="🙄" to "Character Name"] puts the badge on that character\'s most recent message. Use it only when it genuinely fits how your character feels in the moment; it is optional, may stand alone or sit alongside your reply, and choosing a flat reaction or none at all is itself a valid choice.';
+              '\n\nYou can react to the user\'s most recent message with a single emoji by writing [react: emoji="😂"] on its own line — any standard emoji, or a custom one you have access to as [react: emoji=":name:"]. It posts as a small badge on their message, the way you\'d react in a chat app. You can also react to another character instead by adding their name: [react: emoji="🙄" to "Character Name"] puts the badge on that character\'s most recent message. Only the [react: …] tag posts a badge — an emoji typed in your message body is just text. Use it only when it genuinely fits how your character feels in the moment; it is optional, may stand alone or sit alongside your reply, and choosing a flat reaction or none at all is itself a valid choice.';
           }
           // ── Home Professor Mari: inject assistant knowledge & commands ──
           if (isHomeProfessorMariAssistantChat) {
@@ -10477,9 +10477,13 @@ export async function generateRoutes(app: FastifyInstance) {
                         // Segments the DISPLAY shape (shared timestamp strip) with
                         // the client's known-name set so the stored index lands on
                         // the same part the client renders the chip under.
+                        // `beforePartByNorm`: only consider parts BEFORE that
+                        // speaker's first part — a reactor can't have been reacting
+                        // to something written after their own turn in the same reply.
                         const lastPartBy = async (
                           content: unknown,
                           authorId: unknown,
+                          beforePartByNorm?: string | null,
                         ): Promise<{ segment: number; speaker: string | null } | null> => {
                           const text = stripLeadingMessageTimestamps(
                             typeof content === "string" ? content : String(content ?? ""),
@@ -10490,7 +10494,14 @@ export async function generateRoutes(app: FastifyInstance) {
                           if (author) names.add(normalizeTextForMatch(author));
                           const groups = parseGroupedSpeakerSegments(text, names);
                           if (!groups) return null;
-                          for (let gi = groups.length - 1; gi >= 0; gi--) {
+                          let cutoff = groups.length;
+                          if (beforePartByNorm) {
+                            const reactorFirst = groups.findIndex(
+                              (g) => g.speaker != null && normalizeTextForMatch(g.speaker) === beforePartByNorm,
+                            );
+                            if (reactorFirst >= 0) cutoff = reactorFirst;
+                          }
+                          for (let gi = cutoff - 1; gi >= 0; gi--) {
                             const g = groups[gi]!;
                             if (
                               g.speaker != null &&
@@ -10507,11 +10518,18 @@ export async function generateRoutes(app: FastifyInstance) {
                           target: { segment: number; speaker: string | null } | null;
                         } | null = null;
                         // The reply this command came from (already saved) — same-turn
-                        // reactions like reacting to another speaker's part above yours.
+                        // reactions like reacting to another speaker's part above
+                        // yours. Only parts before the reactor's own turn count;
+                        // otherwise the search falls through to earlier messages.
                         if (messageId) {
                           const ownMsg = await chats.getMessage(messageId);
                           if (ownMsg) {
-                            const part = await lastPartBy(ownMsg.content, (ownMsg as { characterId?: unknown }).characterId);
+                            const reactorName = chatMembers.find((m) => m.id === characterId)?.name ?? null;
+                            const part = await lastPartBy(
+                              ownMsg.content,
+                              (ownMsg as { characterId?: unknown }).characterId,
+                              reactorName ? normalizeTextForMatch(reactorName) : null,
+                            );
                             if (part) resolved = { id: messageId, target: part };
                           }
                         }
