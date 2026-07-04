@@ -16,6 +16,7 @@ import {
   Images,
   Search,
   Film,
+  PanelsTopLeft,
   Eye,
   EyeOff,
   Copy,
@@ -51,6 +52,8 @@ interface ChatGalleryProps {
   onIllustrate?: () => void | Promise<void>;
   /** Generate and apply a background for the current scene. */
   onGenerateBackground?: () => void | Promise<void>;
+  /** Generate a storyboard for the latest completed Game Mode GM turn. */
+  onGenerateStoryboard?: () => void | Promise<void>;
   /** Generate a scene video from the latest illustration. */
   onGenerateVideo?: () => void | Promise<void>;
   /** Generate a scene video from a specific gallery illustration. */
@@ -78,6 +81,7 @@ export function ChatGallery({
   mode,
   onIllustrate,
   onGenerateBackground,
+  onGenerateStoryboard,
   onGenerateVideo,
   onAnimateImage,
 }: ChatGalleryProps) {
@@ -98,6 +102,7 @@ export function ChatGallery({
   const isIllustrating = useGalleryStore((s) => s.illustratingChatIds.has(chatId));
   const isGeneratingVideo = useGalleryStore((s) => s.videoGeneratingChatIds.has(chatId));
   const isGeneratingBackground = useGalleryStore((s) => s.backgroundGeneratingChatIds.has(chatId));
+  const isGeneratingStoryboard = useGalleryStore((s) => s.storyboardGeneratingChatIds.has(chatId));
   const pinImage = useGalleryStore((s) => s.pinImage);
   const pinVideo = useGalleryStore((s) => s.pinVideo);
   const latestViewerChatId = useGalleryStore((s) => s.latestViewerChatId);
@@ -108,6 +113,7 @@ export function ChatGallery({
   const setChatIllustrating = useGalleryStore((s) => s.setChatIllustrating);
   const setChatGeneratingVideo = useGalleryStore((s) => s.setChatGeneratingVideo);
   const setChatGeneratingBackground = useGalleryStore((s) => s.setChatGeneratingBackground);
+  const setChatGeneratingStoryboard = useGalleryStore((s) => s.setChatGeneratingStoryboard);
   const canBrowseAssets = mode === "roleplay";
   const { data: assetItems, isLoading: assetsLoading } = useChatAssetBrowser(
     chatId,
@@ -209,6 +215,19 @@ export function ChatGallery({
     }
   };
 
+  const handleGenerateStoryboard = async () => {
+    if (!onGenerateStoryboard || useGalleryStore.getState().storyboardGeneratingChatIds.has(chatId)) return;
+
+    setChatGeneratingStoryboard(chatId, true);
+    try {
+      await onGenerateStoryboard();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Storyboard generation failed.");
+    } finally {
+      setChatGeneratingStoryboard(chatId, false);
+    }
+  };
+
   const handleAnimateImage = async (image: ChatImage) => {
     if (!onAnimateImage || useGalleryStore.getState().videoGeneratingChatIds.has(chatId)) return;
 
@@ -277,9 +296,15 @@ export function ChatGallery({
     [chatId],
   );
 
-  const actionCount = [onIllustrate, onGenerateVideo, onGenerateBackground].filter(Boolean).length;
+  const actionCount = [onIllustrate, onGenerateStoryboard, onGenerateVideo, onGenerateBackground].filter(Boolean).length;
   const actionGridClass =
-    actionCount >= 3 ? "grid grid-cols-3 gap-2" : actionCount === 2 ? "grid grid-cols-2 gap-2" : "grid gap-2";
+    actionCount >= 4
+      ? "grid grid-cols-2 gap-2"
+      : actionCount === 3
+        ? "grid grid-cols-3 gap-2"
+        : actionCount === 2
+          ? "grid grid-cols-2 gap-2"
+          : "grid gap-2";
   const hasImages = !!images && images.length > 0;
   const hasVideos = sceneVideos.length > 0;
   const imageCount = images?.length ?? 0;
@@ -292,7 +317,7 @@ export function ChatGallery({
   return (
     <>
       <div className="flex flex-col gap-3 p-4">
-        {(onIllustrate || onGenerateVideo || onGenerateBackground) && (
+        {(onIllustrate || onGenerateStoryboard || onGenerateVideo || onGenerateBackground) && (
           <div className={actionGridClass}>
             {onIllustrate && (
               <button
@@ -308,6 +333,22 @@ export function ChatGallery({
                   <Paintbrush size="1rem" className="shrink-0" />
                 )}
                 <span className="min-w-0 truncate">{isIllustrating ? "Generating..." : "Illustrate"}</span>
+              </button>
+            )}
+            {onGenerateStoryboard && (
+              <button
+                type="button"
+                onClick={() => void handleGenerateStoryboard()}
+                disabled={isGeneratingStoryboard}
+                aria-busy={isGeneratingStoryboard}
+                className="flex min-w-0 items-center justify-center gap-2 rounded-xl bg-[var(--primary)]/15 px-3 py-3 text-xs font-medium text-[var(--primary)] transition-all hover:bg-[var(--primary)]/25 disabled:cursor-wait disabled:opacity-75"
+              >
+                {isGeneratingStoryboard ? (
+                  <Loader2 size="1rem" className="shrink-0 animate-spin" />
+                ) : (
+                  <PanelsTopLeft size="1rem" className="shrink-0" />
+                )}
+                <span className="min-w-0 truncate">{isGeneratingStoryboard ? "Generating..." : "Storyboard"}</span>
               </button>
             )}
             {onGenerateVideo && (
@@ -372,7 +413,7 @@ export function ChatGallery({
           </button>
         )}
 
-        {(isIllustrating || isGeneratingVideo || isGeneratingBackground) && (
+        {(isIllustrating || isGeneratingVideo || isGeneratingBackground || isGeneratingStoryboard) && (
           <div
             className="rounded-xl border border-[var(--primary)]/25 bg-[var(--primary)]/10 px-3 py-2 text-xs text-[var(--primary)]"
             role="status"
@@ -380,9 +421,11 @@ export function ChatGallery({
           >
             {isGeneratingVideo
               ? "AI video generation is running. The new video will appear here when it finishes."
-              : isGeneratingBackground
-                ? "AI background generation is running. The new background will be applied when it finishes."
-                : "AI image generation is running. The new image will appear here when it finishes."}
+              : isGeneratingStoryboard
+                ? "Storyboard generation is running. Keyframes will appear in the game storyboard viewer when ready."
+                : isGeneratingBackground
+                  ? "AI background generation is running. The new background will be applied when it finishes."
+                  : "AI image generation is running. The new image will appear here when it finishes."}
           </div>
         )}
 

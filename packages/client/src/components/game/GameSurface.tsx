@@ -5327,8 +5327,8 @@ function GameSurfaceComponent({
       toast.error("No GM narration turn is available to storyboard.");
       return;
     }
-    if (!narrationDone) {
-      toast.error("Finish the current GM narration before storyboarding this turn.");
+    if (isStreaming) {
+      toast.error("Wait for the current GM narration to finish before storyboarding this turn.");
       return;
     }
     if (!gameImageGenerationEnabled) {
@@ -5369,10 +5369,10 @@ function GameSurfaceComponent({
     gameStoryboardAutoAnimationsEnabled,
     gameVideoGenerationEnabled,
     generateTurnStoryboard,
+    isStreaming,
     latestAssistantMsg?.id,
     latestAssistantStoryboardSections,
     latestAssistantSwipeIndex,
-    narrationDone,
     queryClient,
     sceneVideosQuery,
     storyboardGenerating,
@@ -5385,7 +5385,6 @@ function GameSurfaceComponent({
       autoStoryboardGenerationKeyRef.current = null;
       return;
     }
-    if (!narrationDone) return;
     if (isStreaming || scenePreparing || pendingAssetGeneration || storyboardGenerating) return;
     if (turnStoryboardsLoading || turnStoryboardsFetching) return;
     if (latestAssistantStoryboardSections.length === 0) return;
@@ -5442,7 +5441,6 @@ function GameSurfaceComponent({
     latestAssistantMsg?.id,
     latestAssistantStoryboardSections,
     latestAssistantSwipeIndex,
-    narrationDone,
     pendingAssetGeneration,
     queryClient,
     scenePreparing,
@@ -9605,7 +9603,7 @@ function GameSurfaceComponent({
           <button
             type="button"
             onClick={() => void handleGenerateTurnStoryboard()}
-            disabled={storyboardGenerating || !gameImageGenerationEnabled || !latestAssistantMsg?.id || !narrationDone}
+            disabled={storyboardGenerating || isStreaming || !gameImageGenerationEnabled || !latestAssistantMsg?.id}
             className="marinara-chat-popover__item flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[var(--marinara-chat-chrome-panel-text)] transition-colors hover:bg-[var(--marinara-chat-chrome-highlight-bg-hover)] hover:text-[var(--marinara-chat-chrome-highlight-text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
             title="Create manga keyframes and animation prompts from the current GM narration"
           >
@@ -10773,6 +10771,7 @@ function GameSurfaceComponent({
                   onClose={handleCloseGalleryPanel}
                   anchor={galleryAnchor}
                   onIllustrate={handleManualSceneIllustration}
+                  onGenerateStoryboard={handleGenerateTurnStoryboard}
                   onGenerateVideo={handleGenerateSceneVideo}
                   onAnimateImage={(image) => handleGenerateSceneVideo({ galleryImageId: image.id })}
                   onGenerateBackground={handleManualSceneBackground}
