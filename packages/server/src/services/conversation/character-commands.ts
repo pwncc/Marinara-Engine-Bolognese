@@ -761,11 +761,37 @@ function parseCreatePresetBlock(raw: string): CreatePresetCommand | null {
       .map((choiceBlock): CreatePresetChoiceBlockCommand | null => {
         if (!choiceBlock || typeof choiceBlock !== "object") return null;
         const data = choiceBlock as Record<string, unknown>;
-        const variableName = typeof data.variableName === "string" ? data.variableName.trim() : "";
-        const question = typeof data.question === "string" ? data.question.trim() : "";
-        const rawOptions = Array.isArray(data.options) ? data.options : [];
+        const variableName =
+          typeof data.variableName === "string"
+            ? data.variableName.trim()
+            : typeof data.variable === "string"
+              ? data.variable.trim()
+              : typeof data.name === "string"
+                ? data.name.trim()
+                : typeof data.key === "string"
+                  ? data.key.trim()
+                  : "";
+        const question =
+          typeof data.question === "string"
+            ? data.question.trim()
+            : typeof data.prompt === "string"
+              ? data.prompt.trim()
+              : typeof data.label === "string"
+                ? data.label.trim()
+                : "";
+        const rawOptions = Array.isArray(data.options)
+          ? data.options
+          : Array.isArray(data.choices)
+            ? data.choices
+            : Array.isArray(data.values)
+              ? data.values
+              : [];
         const options = rawOptions
           .map((option): CreatePresetChoiceOptionCommand | null => {
+            if (typeof option === "string" || typeof option === "number" || typeof option === "boolean") {
+              const text = String(option).trim();
+              return text ? { label: text, value: text } : null;
+            }
             if (!option || typeof option !== "object") return null;
             const optionData = option as Record<string, unknown>;
             const label =

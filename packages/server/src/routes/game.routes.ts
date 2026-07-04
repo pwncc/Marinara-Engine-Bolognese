@@ -1378,6 +1378,8 @@ export interface MergeRecruitInput {
   fallbackSetupConfig: GameSetupConfig;
   /** Chat `characterIds` column from the request; used only as a fallback party source. */
   chatCharacterIds: string[];
+  /** Game-scoped NPC to persist when a mid-session recruit was not tracked yet. */
+  npcToTrack?: GameNpc | null;
 }
 
 export interface MergeRecruitResult {
@@ -1403,11 +1405,21 @@ export interface MergeRecruitResult {
  * from being reverted on the blob-level metadata write (#2627, residual concurrency facet of #2613).
  */
 export function mergeRecruitIntoGameMetadata(input: MergeRecruitInput): MergeRecruitResult {
-  const { current, recruitId, recruitName, nextCard, existingCardIndex, fallbackSetupConfig, chatCharacterIds } = input;
+  const {
+    current,
+    recruitId,
+    recruitName,
+    nextCard,
+    existingCardIndex,
+    fallbackSetupConfig,
+    chatCharacterIds,
+    npcToTrack,
+  } = input;
 
   const freshSetupConfig = (current.gameSetupConfig as GameSetupConfig | null) ?? fallbackSetupConfig;
   const freshCards = (current.gameCharacterCards as Array<Record<string, unknown>>) ?? [];
   const freshPartyIds = getStoredPartyCharacterIds(current, freshSetupConfig, chatCharacterIds);
+  const freshNpcs = Array.isArray(current.gameNpcs) ? (current.gameNpcs as GameNpc[]) : [];
 
   const alreadyInFreshParty = freshPartyIds.includes(recruitId);
   const mergedPartyIds = alreadyInFreshParty ? freshPartyIds : [...freshPartyIds, recruitId];
@@ -1427,11 +1439,25 @@ export function mergeRecruitIntoGameMetadata(input: MergeRecruitInput): MergeRec
     }
   }
 
+  const patch: MergeRecruitResult["patch"] & { gameNpcs?: GameNpc[] } = {
+    gameSetupConfig: syncSetupConfigPartyIds(freshSetupConfig, mergedPartyIds),
+    gamePartyCharacterIds: mergedPartyIds,
+    gameCharacterCards: mergedCards,
+  };
+  if (
+    npcToTrack &&
+    !freshNpcs.some(
+      (npc) =>
+        normalizeCharacterLookupName(npc.name) === normalizeCharacterLookupName(npcToTrack.name) ||
+        buildPartyNpcId(npc.name) === buildPartyNpcId(npcToTrack.name),
+    )
+  ) {
+    patch.gameNpcs = [...freshNpcs, npcToTrack];
+  }
+
   return {
     patch: {
-      gameSetupConfig: syncSetupConfigPartyIds(freshSetupConfig, mergedPartyIds),
-      gamePartyCharacterIds: mergedPartyIds,
-      gameCharacterCards: mergedCards,
+      ...patch,
     },
     mergedChatCharacterIds: mergedPartyIds.filter((id) => !isPartyNpcId(id)),
     added: !alreadyInFreshParty,
@@ -1494,6 +1520,22 @@ function findGameNpcByName(npcs: GameNpc[], requestedName: string): GameNpc | nu
     });
   }
   return matches.length === 1 ? matches[0]! : null;
+}
+
+function buildFallbackTrackedGameNpc(name: string): GameNpc {
+  return {
+    id: buildGameNpcId(name),
+    name,
+    emoji: "👤",
+    description: `${name} is a mid-session NPC the party has recruited.`,
+    descriptionSource: "user",
+    gender: null,
+    pronouns: null,
+    location: "",
+    reputation: 25,
+    notes: ["Recruited into the party before a full NPC profile existed."],
+    avatarUrl: null,
+  };
 }
 
 function buildNpcPartyCard(npc: Pick<GameNpc, "name" | "description" | "location" | "notes">): Record<string, unknown> {
@@ -6948,9 +6990,15 @@ export async function gameRoutes(app: FastifyInstance) {
     }
 
     const gameNpcs = (meta.gameNpcs as GameNpc[]) ?? [];
-    const npcRecruit = matches.length === 0 ? findGameNpcByName(gameNpcs, requestedName) : null;
-    if (matches.length === 0 && !npcRecruit) {
-      throw new Error(`Character or tracked NPC "${requestedName}" was not found`);
+    let npcRecruit = matches.length === 0 ? findGameNpcByName(gameNpcs, requestedName) : null;
+    const fallbackTrackedNpc = matches.length === 0 && !npcRecruit ? buildFallbackTrackedGameNpc(requestedName) : null;
+    if (fallbackTrackedNpc) {
+      npcRecruit = fallbackTrackedNpc;
+      logger.info(
+        '[game/party/recruit] Created fallback tracked NPC "%s" for mid-session party recruit in chat %s',
+        requestedName,
+        input.chatId,
+      );
     }
 
     const recruit = matches[0] ?? null;
@@ -7141,6 +7189,7 @@ export async function gameRoutes(app: FastifyInstance) {
         existingCardIndex,
         fallbackSetupConfig: setupConfig,
         chatCharacterIds,
+        npcToTrack: fallbackTrackedNpc,
       });
       added = didAdd;
       return { metadata: patch, characterIds: mergedChatCharacterIds };

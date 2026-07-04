@@ -2477,33 +2477,53 @@ export function useGenerate() {
         // so the superseded one knows it no longer owns the state.
         const stillOwner = stillOwnerAtCleanupStart;
         const partialContent = normalizeLineBreakSpacing(fullBuffer + pendingText).trim();
-        const unpersistedPartialMessage: Message | null =
+        let unpersistedPartialMessage: Message | null = null;
+        if (
           receivedContent &&
           persistedMessages.size === 0 &&
           partialContent &&
           !params.regenerateMessageId &&
           !params.continueMessageId
-            ? {
-                id: `__partial_${params.chatId}_${Date.now()}`,
-                chatId: params.chatId,
-                role: params.impersonate ? "user" : "assistant",
-                characterId: params.impersonate
-                  ? null
-                  : (params.forCharacterId ?? useChatStore.getState().streamingCharacterId ?? null),
-                content: partialContent,
-                activeSwipeIndex: 0,
-                extra: {
-                  displayText: null,
-                  isGenerated: !params.impersonate,
-                  tokenCount: null,
-                  generationInfo: null,
-                },
-                createdAt: new Date().toISOString(),
-              }
-            : null;
+        ) {
+          const createdAt = new Date().toISOString();
+          const partialRole = params.impersonate ? "user" : "assistant";
+          const partialCharacterId = params.impersonate
+            ? null
+            : (params.forCharacterId ?? useChatStore.getState().streamingCharacterId ?? null);
+          try {
+            const created = await api.post<Message>(`/chats/${params.chatId}/messages`, {
+              role: partialRole,
+              characterId: partialCharacterId,
+              content: partialContent,
+              createdAt,
+              updatedAt: createdAt,
+            });
+            unpersistedPartialMessage = created;
+            persistedMessages.set(created.id, created);
+          } catch (error) {
+            console.warn("[use-generate] Failed to persist stopped partial message; keeping cache-only fallback", error);
+            unpersistedPartialMessage = {
+              id: `__partial_${params.chatId}_${Date.now()}`,
+              chatId: params.chatId,
+              role: partialRole,
+              characterId: partialCharacterId,
+              content: partialContent,
+              activeSwipeIndex: 0,
+              extra: {
+                displayText: null,
+                isGenerated: !params.impersonate,
+                tokenCount: null,
+                generationInfo: null,
+              },
+              createdAt,
+            };
+          }
+        }
         const persistedForRefresh = [
           ...persistedMessages.values(),
-          ...(unpersistedPartialMessage ? [unpersistedPartialMessage] : []),
+          ...(unpersistedPartialMessage && !persistedMessages.has(unpersistedPartialMessage.id)
+            ? [unpersistedPartialMessage]
+            : []),
         ];
         const primeMessagesFromSaved = () => {
           if (persistedForRefresh.length > 0) {

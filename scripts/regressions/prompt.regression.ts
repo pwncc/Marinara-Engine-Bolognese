@@ -1116,7 +1116,7 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
     },
   },
   {
-    name: "impersonate assembly skips regular preset instructions but keeps markers",
+    name: "impersonate assembly skips fallback preset sections but preserves dedicated impersonate presets",
     async run() {
       const chatMessages: ChatMLMessage[] = [
         { role: "user", content: "Can you answer as me?" },
@@ -1183,13 +1183,22 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
 
       const normal = await assemblePrompt(baseInput);
       const impersonate = await assemblePrompt({ ...baseInput, impersonate: true });
+      const dedicatedImpersonate = await assemblePrompt({
+        ...baseInput,
+        impersonate: true,
+        preserveImpersonatePresetSections: true,
+      });
       const normalText = normal.messages.map((message) => message.content).join("\n");
       const impersonateText = impersonate.messages.map((message) => message.content).join("\n");
+      const dedicatedImpersonateText = dedicatedImpersonate.messages.map((message) => message.content).join("\n");
 
       assert.match(normalText, /Never answer as Mari/);
       assert.equal(impersonateText.includes("Never answer as Mari"), false);
       assert.match(impersonateText, /Can you answer as me\?/);
       assert.match(impersonateText, /I can help\./);
+      assert.match(dedicatedImpersonateText, /Never answer as Mari/);
+      assert.match(dedicatedImpersonateText, /Can you answer as me\?/);
+      assert.match(dedicatedImpersonateText, /I can help\./);
     },
   },
   {
