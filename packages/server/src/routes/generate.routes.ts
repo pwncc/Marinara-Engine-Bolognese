@@ -3691,7 +3691,10 @@ export async function generateRoutes(app: FastifyInstance) {
           if (conversationCommandsEnabled && isConversationCommandEnabled(chatMeta, "react")) {
             conversationSystemPrompt +=
               '\n\nYou can react to the user\'s most recent message with a single emoji by writing [react: emoji="😂"] on its own line — any standard emoji, or a custom one you have access to as [react: emoji=":name:"]. It posts as a small badge on their message, the way you\'d react in a chat app. You can also react to another character instead by adding their name: [react: emoji="🙄" to "Character Name"] puts the badge on that character\'s most recent message. Only the [react: …] tag posts a badge — an emoji typed in your message body is just text. Use it only when it genuinely fits how your character feels in the moment; it is optional, may stand alone or sit alongside your reply, and choosing a flat reaction or none at all is itself a valid choice.';
-            if (characterIds.length > 1) {
+            // Merged group replies only: individual-order group chats forbid
+            // name-prefixed sections entirely (matching the other name-prefix
+            // instructions gated on earlyGroupMode !== "individual").
+            if (characterIds.length > 1 && earlyGroupMode !== "individual") {
               conversationSystemPrompt +=
                 " In this group chat, each character reacts for themselves: write the tag inside that character's own section of the reply, directly under their name line, so the reaction is credited to them — never above the first name line.";
             }
@@ -10536,14 +10539,7 @@ export async function generateRoutes(app: FastifyInstance) {
                       | string
                       | undefined;
                     let segmentTarget: { segment: number; speaker: string | null } | null = null;
-                    // Models name the human too ("to \"User\"" / the persona name) —
-                    // that IS the default target, so resolve it explicitly instead
-                    // of relying on the unknown-name fallback (#3220).
-                    const targetsPersona =
-                      !!reactCmd.targetCharacter &&
-                      (normalizeTextForMatch(reactCmd.targetCharacter) === normalizeTextForMatch(personaName) ||
-                        normalizeTextForMatch(reactCmd.targetCharacter) === "user");
-                    if (reactCmd.targetCharacter && !targetsPersona) {
+                    if (reactCmd.targetCharacter) {
                       // Resolve names against ALL chat members (disabled ones
                       // included) — the client renders and segments with the full
                       // member set, so a stored segment index derived from a
@@ -10566,10 +10562,18 @@ export async function generateRoutes(app: FastifyInstance) {
                       const wanted = normalizeTextForMatch(reactCmd.targetCharacter);
                       const targetChar = chatMembers.find((m) => normalizeTextForMatch(m.name) === wanted);
                       if (!targetChar) {
-                        logger.debug(
-                          '[react/conversation] Unknown react target "%s" — falling back to the user message',
-                          reactCmd.targetCharacter,
-                        );
+                        // Chat members take precedence; with none matching, a react
+                        // aimed at the human — the persona's name or "User" — IS the
+                        // default target, so keep it silently. Other unknown names
+                        // fall back the same way, with a log.
+                        const targetsPersona =
+                          wanted === normalizeTextForMatch(personaName) || wanted === "user";
+                        if (!targetsPersona) {
+                          logger.debug(
+                            '[react/conversation] Unknown react target "%s" — falling back to the user message',
+                            reactCmd.targetCharacter,
+                          );
+                        }
                       } else {
                         const baseNames = new Set(chatMembers.map((m) => normalizeTextForMatch(m.name)));
                         // A walked message's author may have been removed from the
