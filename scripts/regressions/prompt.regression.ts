@@ -53,6 +53,10 @@ import { assemblePrompt, type AssemblerInput } from "../../packages/server/src/s
 import { executeToolCalls } from "../../packages/server/src/services/tools/tool-executor.js";
 import { parseRouterResponse } from "../../packages/server/src/services/agents/knowledge-router.js";
 import { buildNpcPortraitProviderPrompt } from "../../packages/server/src/services/game/game-asset-generation.js";
+import {
+  GAME_STORYBOARD_DIRECTOR,
+  GAME_STORYBOARD_ILLUSTRATION_DIRECTOR,
+} from "../../packages/server/src/services/prompt-overrides/index.js";
 import type { LLMToolCall } from "../../packages/server/src/services/llm/base-provider.js";
 import { resolveTTSVoiceForSpeaker } from "../../packages/client/src/lib/tts-dialogue.js";
 
@@ -522,6 +526,31 @@ const cases: RegressionCase[] = [
       assert.equal(createRegexScriptSchema.safeParse({ ...base, applyMode: "both" }).success, true);
       assert.equal(createRegexScriptSchema.safeParse({ ...base, flags: "gg" }).success, false);
       assert.equal(createRegexScriptSchema.safeParse({ ...base, minDepth: 5, maxDepth: 2 }).success, false);
+    },
+  },
+  {
+    name: "game storyboard directors split illustration and animation prompt contracts",
+    run() {
+      const ctx = {
+        gameContextBlock: "<game_context>\nMode: exploration\n</game_context>",
+        sourceSectionsBlock: '<turn_sections>\n<section index="0" kind="narration">A door opens.</section>\n</turn_sections>',
+        sourceNarration: "A door opens.",
+        keyframeCount: 4,
+        durationSeconds: 6,
+        aspectRatio: "16:9",
+      };
+
+      const illustrationPrompt = GAME_STORYBOARD_ILLUSTRATION_DIRECTOR.defaultBuilder(ctx);
+      const animationPrompt = GAME_STORYBOARD_DIRECTOR.defaultBuilder(ctx);
+
+      assert.match(illustrationPrompt, /image-only anime storyboard/);
+      assert.match(illustrationPrompt, /"imagePrompt"/);
+      assert.doesNotMatch(illustrationPrompt, /"videoPrompt"/);
+      assert.doesNotMatch(illustrationPrompt, /"cameraMotion"/);
+      assert.doesNotMatch(illustrationPrompt, /"transitionHint"/);
+      assert.match(animationPrompt, /"videoPrompt"/);
+      assert.match(animationPrompt, /"cameraMotion"/);
+      assert.match(animationPrompt, /"transitionHint"/);
     },
   },
   {
