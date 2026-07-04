@@ -1339,23 +1339,70 @@ function excerptSegmentText(lines: string[]): string {
  */
 const REACTION_ANNOTATION_CONTENT_CAP = 32_000;
 
-function buildReactionAnnotation(
+/** Whether a grouped segment is a reaction-attributable speaker part (has a speaker + text). */
+function isAttributableGroup(group: GroupedSegment): boolean {
+  return group.speaker != null && group.lines.some((line) => line.trim().length > 0);
+}
+
+/**
+ * Annotate a prompt message with its reactions and return the new content.
+ *
+ * Segment-targeted reactions are injected INLINE — a `[X reacted with E]` line
+ * directly under the part they were aimed at (position conveys the target, the
+ * way a chat app renders reactions under a specific message) — grouped so one
+ * part's reactions share a line: `[User reacted with 😹, Aurey reacted with 🙄]`.
+ *
+ * Because `promptContent` (regex-scripted, command-bearing) can be shaped
+ * differently from the content the client stored the segment index against,
+ * the target is resolved in two steps: the stored index is resolved against
+ * `clientShapeContent` (timestamp-stripped stored content — client parity),
+ * then mapped into `promptContent`'s segmentation by (speaker, ordinal). When
+ * the mapping fails, the reaction falls back to an end-of-message note —
+ * quoting the part when it resolved, naming just the speaker when only the
+ * speaker matched, plain otherwise. Whole-message reactions always use the
+ * end-of-message note. Only canonical character names are echoed; the stored
+ * segmentSpeaker string is used solely for normalized matching.
+ */
+function annotateContentWithReactions(
+  promptContent: string,
+  clientShapeContent: string,
   reactions: unknown,
-  content: string,
   knownSpeakersByNorm: Map<string, string>,
   resolveReactorName: (reactorId: string) => string,
 ): string {
-  if (!Array.isArray(reactions) || reactions.length === 0) return "";
-  // Segment the annotated content the same way the client's grouped layout does
-  // (shared parseGroupedSpeakerSegments over the same known-speaker set), so a
-  // stored segment index resolves to the same part the reaction chip renders
-  // under. `knownSpeakersByNorm` maps normalized names to canonical display
-  // names; only canonical names are ever echoed into the prompt.
-  const groups: GroupedSegment[] | null =
-    content.length <= REACTION_ANNOTATION_CONTENT_CAP
-      ? parseGroupedSpeakerSegments(content, new Set(knownSpeakersByNorm.keys()))
+  if (!Array.isArray(reactions) || reactions.length === 0) return promptContent;
+  const knownNames = new Set(knownSpeakersByNorm.keys());
+  const clientGroups: GroupedSegment[] | null =
+    clientShapeContent.length <= REACTION_ANNOTATION_CONTENT_CAP
+      ? parseGroupedSpeakerSegments(clientShapeContent, knownNames)
       : null;
-  const parts: string[] = [];
+  const promptGroups: GroupedSegment[] | null =
+    promptContent.length <= REACTION_ANNOTATION_CONTENT_CAP
+      ? parseGroupedSpeakerSegments(promptContent, knownNames)
+      : null;
+
+  // Map a resolved client-shape group onto the prompt-shape segmentation:
+  // the Nth attributable part by the same speaker on both sides.
+  const promptGroupFor = (clientIndex: number): GroupedSegment | null => {
+    if (!clientGroups || !promptGroups) return null;
+    const target = clientGroups[clientIndex]!;
+    const norm = normalizeTextForMatch(target.speaker!);
+    let ordinal = 0;
+    for (let i = 0; i < clientIndex; i++) {
+      const g = clientGroups[i]!;
+      if (isAttributableGroup(g) && normalizeTextForMatch(g.speaker!) === norm) ordinal++;
+    }
+    let seen = 0;
+    for (const g of promptGroups) {
+      if (!isAttributableGroup(g) || normalizeTextForMatch(g.speaker!) !== norm) continue;
+      if (seen === ordinal) return g;
+      seen++;
+    }
+    return null;
+  };
+
+  const inlineByGroup = new Map<GroupedSegment, string[]>();
+  const endParts: string[] = [];
   for (const entry of reactions as Array<{
     emoji?: unknown;
     by?: unknown;
@@ -1372,49 +1419,62 @@ function buildReactionAnnotation(
         : names.length === 2
           ? `${names[0]} and ${names[1]}`
           : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-    // A segment-targeted reaction quotes the exact part it was aimed at so the
-    // characters can respond to it specifically. Attribution tiers, mirroring
-    // the client's orphan fallback: (1) stored index still resolves to a part
-    // by the stored speaker (entries without a stored speaker align by index
-    // alone, like the client's legacy branch) → quote that part; (2) index
-    // stale but the speaker still has a part in this content (e.g. another
-    // swipe's layout) → name the speaker only; (3) speaker absent or content
-    // unparseable → plain reaction, no attribution. The stored segmentSpeaker
-    // string is client-supplied and only ever used for normalized matching —
-    // the wording interpolates the canonical name instead.
+    const phrase = `${who} reacted with ${emoji}`;
+
     const storedSpeaker =
       typeof entry.segmentSpeaker === "string" && entry.segmentSpeaker.trim() ? entry.segmentSpeaker : null;
     const wanted = storedSpeaker !== null ? normalizeTextForMatch(storedSpeaker) : null;
-    let suffix = "";
-    if (groups) {
-      const segIdx = typeof entry.segment === "number" && Number.isInteger(entry.segment) ? entry.segment : null;
-      const seg = segIdx !== null && segIdx >= 0 && segIdx < groups.length ? groups[segIdx] : undefined;
-      const segSpeakerNorm = seg?.speaker != null ? normalizeTextForMatch(seg.speaker) : null;
-      const segAligned =
-        seg !== undefined &&
-        segSpeakerNorm !== null &&
-        (wanted === null || segSpeakerNorm === wanted) &&
-        seg.lines.some((line) => line.trim().length > 0);
-      if (segAligned) {
-        const canonical = knownSpeakersByNorm.get(segSpeakerNorm!);
-        if (canonical) suffix = ` to ${canonical}'s part ("${excerptSegmentText(seg!.lines)}")`;
-      } else if (wanted !== null) {
-        const speakerGroup = groups.find(
-          (g) =>
-            g.speaker != null &&
-            normalizeTextForMatch(g.speaker) === wanted &&
-            g.lines.some((line) => line.trim().length > 0),
-        );
-        const canonical = speakerGroup ? knownSpeakersByNorm.get(wanted) : undefined;
-        if (canonical) suffix = ` to ${canonical}'s part`;
+    const segIdx = typeof entry.segment === "number" && Number.isInteger(entry.segment) ? entry.segment : null;
+    const seg = clientGroups && segIdx !== null && segIdx >= 0 && segIdx < clientGroups.length
+      ? clientGroups[segIdx]
+      : undefined;
+    const segSpeakerNorm = seg?.speaker != null ? normalizeTextForMatch(seg.speaker) : null;
+    // Entries without a stored speaker align by index alone (client legacy branch).
+    const segAligned =
+      seg !== undefined &&
+      segSpeakerNorm !== null &&
+      (wanted === null || segSpeakerNorm === wanted) &&
+      isAttributableGroup(seg);
+
+    if (segAligned) {
+      const promptGroup = promptGroupFor(segIdx!);
+      if (promptGroup) {
+        const lines = inlineByGroup.get(promptGroup) ?? [];
+        if (!lines.includes(phrase)) lines.push(phrase);
+        inlineByGroup.set(promptGroup, lines);
+        continue;
+      }
+      // Part exists but isn't locatable in the prompt-shaped content — fall
+      // back to the quoted end note so the target stays unambiguous.
+      const canonical = knownSpeakersByNorm.get(segSpeakerNorm!);
+      if (canonical) {
+        endParts.push(`${phrase} to ${canonical}'s part ("${excerptSegmentText(seg!.lines)}")`);
+        continue;
+      }
+    } else if (wanted !== null && clientGroups) {
+      const speakerGroup = clientGroups.find(
+        (g) => isAttributableGroup(g) && normalizeTextForMatch(g.speaker!) === wanted,
+      );
+      const canonical = speakerGroup ? knownSpeakersByNorm.get(wanted) : undefined;
+      if (canonical) {
+        endParts.push(`${phrase} to ${canonical}'s part`);
+        continue;
       }
     }
-    parts.push(`${who} reacted with ${emoji}${suffix}`);
+    endParts.push(phrase);
   }
-  // Dedupe: entries for the same emoji+speaker can exist at different segment
-  // indices (stale targets synced across swipes) and collapse to one wording.
-  const uniqueParts = [...new Set(parts)];
-  return uniqueParts.length === 0 ? "" : `\n[${uniqueParts.join("; ")}]`;
+
+  // Inject inline notes back-to-front so earlier offsets stay valid.
+  let annotated = promptContent;
+  const injections = [...inlineByGroup.entries()].sort((a, b) => b[0].end - a[0].end);
+  for (const [group, lines] of injections) {
+    annotated = `${annotated.slice(0, group.end)}\n[${lines.join(", ")}]${annotated.slice(group.end)}`;
+  }
+  // Dedupe end notes: entries for the same emoji+speaker can exist at different
+  // stale indices (targets synced across swipes) and collapse to one wording.
+  const uniqueEndParts = [...new Set(endParts)];
+  if (uniqueEndParts.length > 0) annotated += `\n[${uniqueEndParts.join("; ")}]`;
+  return annotated;
 }
 
 /**
@@ -1428,14 +1488,29 @@ function addMessageReactor(
   emoji: string,
   reactor: string,
   imageUrl: string | null,
+  target?: { segment: number; speaker: string | null } | null,
 ): MessageReaction[] {
   const current = Array.isArray(reactions) ? (reactions as MessageReaction[]) : [];
-  // Character reactions target the whole message — only merge into a
-  // whole-message entry, never a segment-targeted one (issue #3210).
-  const index = current.findIndex((r) => r.emoji === emoji && r.segment == null);
+  // Entry identity is (emoji, segment target) — the same rule as the client's
+  // toggleReaction (issue #3210): an untargeted character reaction only merges
+  // into a whole-message entry, a targeted one only into its own segment's.
+  const targetSegment = target?.segment ?? null;
+  const targetSpeakerNorm = target?.speaker != null ? normalizeTextForMatch(target.speaker) : null;
+  const index = current.findIndex((r) => {
+    if (r.emoji !== emoji) return false;
+    if ((r.segment ?? null) !== targetSegment) return false;
+    if (targetSegment === null) return true;
+    // Same-index leftovers from a different segmentation (other speaker) stay distinct.
+    if (r.segmentSpeaker === undefined) return true;
+    return (r.segmentSpeaker != null ? normalizeTextForMatch(r.segmentSpeaker) : null) === targetSpeakerNorm;
+  });
   if (index === -1) {
     const entry: MessageReaction = { emoji, by: [reactor] };
     if (imageUrl) entry.imageUrl = imageUrl;
+    if (target) {
+      entry.segment = target.segment;
+      entry.segmentSpeaker = target.speaker ?? null;
+    }
     return [...current, entry];
   }
   const entry = current[index]!;
@@ -2954,17 +3029,17 @@ export async function generateRoutes(app: FastifyInstance) {
             for (let i = 0; i < finalMessages.length; i++) {
               const raw = chatMessages[i];
               if (!raw) continue;
-              // Segment the stored message content (timestamp-stripped) — the
-              // closest server-side shape to what the client indexed against —
-              // NOT finalMessages content, which already carries prompt-only
-              // additions (photo markers, unstripped command text).
-              const note = buildReactionAnnotation(
-                parseExtra(raw.extra).reactions,
+              // Segment indexes resolve against the stored message content
+              // (timestamp-stripped) — the closest server-side shape to what
+              // the client indexed against — then map into the prompt-shaped
+              // content for the inline injection.
+              finalMessages[i]!.content = annotateContentWithReactions(
+                finalMessages[i]!.content,
                 stripLeakedTimestamps(typeof raw.content === "string" ? raw.content : String(raw.content ?? "")),
+                parseExtra(raw.extra).reactions,
                 reactionSpeakersByNorm,
                 reactorDisplayName,
               );
-              if (note) finalMessages[i]!.content += note;
             }
           }
 
@@ -3503,7 +3578,7 @@ export async function generateRoutes(app: FastifyInstance) {
           // is off leaves the raw tag in the visible message with no badge (#2877).
           if (conversationCommandsEnabled) {
             conversationSystemPrompt +=
-              '\n\nYou can react to the user\'s most recent message with a single emoji by writing [react: emoji="😂"] on its own line — any standard emoji, or a custom one you have access to as [react: emoji=":name:"]. It posts as a small badge on their message, the way you\'d react in a chat app. Use it only when it genuinely fits how your character feels in the moment; it is optional, may stand alone or sit alongside your reply, and choosing a flat reaction or none at all is itself a valid choice.';
+              '\n\nYou can react to the user\'s most recent message with a single emoji by writing [react: emoji="😂"] on its own line — any standard emoji, or a custom one you have access to as [react: emoji=":name:"]. It posts as a small badge on their message, the way you\'d react in a chat app. You can also react to another character instead by adding their name: [react: emoji="🙄" to "Character Name"] puts the badge on that character\'s most recent message. Use it only when it genuinely fits how your character feels in the moment; it is optional, may stand alone or sit alongside your reply, and choosing a flat reaction or none at all is itself a valid choice.';
           }
           // ── Home Professor Mari: inject assistant knowledge & commands ──
           if (isHomeProfessorMariAssistantChat) {
@@ -10222,40 +10297,133 @@ export async function generateRoutes(app: FastifyInstance) {
                     continue;
                   }
                   if (characterId && reactCmd.emoji) {
-                    // React to the user's most recent message — the turn being answered.
-                    const targetId = [...chatMessages].reverse().find((m: any) => m.role === "user")?.id as
+                    // Resolve a custom-emoji (:name:) image so the chip renders without
+                    // re-resolving the gallery on the client (same URL form the picker uses).
+                    let imageUrl: string | null = null;
+                    const customName = reactCmd.emoji.match(/^:([a-zA-Z0-9_]+):$/)?.[1];
+                    if (customName) {
+                      const emojiLookupKeys = [
+                        characterId ? buildConversationCustomEmojiKey("character", characterId, customName) : null,
+                        personaId ? buildConversationCustomEmojiKey("persona", personaId, customName) : null,
+                        buildConversationCustomEmojiKey("global", null, customName),
+                      ].filter((key): key is string => Boolean(key));
+                      for (const key of emojiLookupKeys) {
+                        imageUrl = conversationCustomEmojiUrlByName.get(key) ?? null;
+                        if (imageUrl) break;
+                      }
+                      if (!imageUrl) {
+                        const row = await customEmojisStore.getByName(customName);
+                        if (row?.filePath) imageUrl = buildGlobalCustomEmojiUrl(String(row.filePath));
+                      }
+                    }
+
+                    // Resolve the target. Default: the user's most recent message —
+                    // the turn being answered — as a whole-message reaction.
+                    // `[react: E to "Name"]`: that character's most recent part —
+                    // looked for in the reply this command came from first, then
+                    // backwards through recent history — as a segment reaction
+                    // (issue #3210). An unresolvable name falls back to the default.
+                    let targetId = [...chatMessages].reverse().find((m: any) => m.role === "user")?.id as
                       | string
                       | undefined;
-                    if (targetId) {
-                      // Resolve a custom-emoji (:name:) image so the chip renders without
-                      // re-resolving the gallery on the client (same URL form the picker uses).
-                      let imageUrl: string | null = null;
-                      const customName = reactCmd.emoji.match(/^:([a-zA-Z0-9_]+):$/)?.[1];
-                      if (customName) {
-                        const emojiLookupKeys = [
-                          characterId ? buildConversationCustomEmojiKey("character", characterId, customName) : null,
-                          personaId ? buildConversationCustomEmojiKey("persona", personaId, customName) : null,
-                          buildConversationCustomEmojiKey("global", null, customName),
-                        ].filter((key): key is string => Boolean(key));
-                        for (const key of emojiLookupKeys) {
-                          imageUrl = conversationCustomEmojiUrlByName.get(key) ?? null;
-                          if (imageUrl) break;
+                    let segmentTarget: { segment: number; speaker: string | null } | null = null;
+                    const targetChar = reactCmd.targetCharacter
+                      ? charInfo.find(
+                          (c) => normalizeTextForMatch(c.name) === normalizeTextForMatch(reactCmd.targetCharacter!),
+                        )
+                      : undefined;
+                    if (reactCmd.targetCharacter && !targetChar) {
+                      logger.debug(
+                        '[react/conversation] Unknown react target "%s" — falling back to the user message',
+                        reactCmd.targetCharacter,
+                      );
+                    }
+                    if (targetChar) {
+                      const knownNames = new Set(charInfo.map((c) => normalizeTextForMatch(c.name)));
+                      const wanted = normalizeTextForMatch(targetChar.name);
+                      // Last part by the target speaker in a message's content, or null.
+                      const lastPartBy = (content: unknown): { segment: number; speaker: string | null } | null => {
+                        const text = stripConversationPromptTimestamps(
+                          typeof content === "string" ? content : String(content ?? ""),
+                        );
+                        if (!text || text.length > REACTION_ANNOTATION_CONTENT_CAP) return null;
+                        const groups = parseGroupedSpeakerSegments(text, knownNames);
+                        if (!groups) return null;
+                        for (let gi = groups.length - 1; gi >= 0; gi--) {
+                          const g = groups[gi]!;
+                          if (
+                            g.speaker != null &&
+                            normalizeTextForMatch(g.speaker) === wanted &&
+                            g.lines.some((line) => line.trim().length > 0)
+                          ) {
+                            return { segment: gi, speaker: g.speaker };
+                          }
                         }
-                        if (!imageUrl) {
-                          const row = await customEmojisStore.getByName(customName);
-                          if (row?.filePath) imageUrl = buildGlobalCustomEmojiUrl(String(row.filePath));
+                        return null;
+                      };
+                      let resolved: { id: string; target: { segment: number; speaker: string | null } | null } | null =
+                        null;
+                      // The reply this command came from (already saved) — same-turn
+                      // reactions like reacting to another speaker's part above yours.
+                      if (messageId) {
+                        const ownMsg = await chats.getMessage(messageId);
+                        if (ownMsg) {
+                          const part = lastPartBy(ownMsg.content);
+                          if (part) resolved = { id: messageId, target: part };
                         }
                       }
+                      if (!resolved) {
+                        // Recent history, newest first: a merged part by the target,
+                        // or a message they authored outright (whole-message react).
+                        const recent = [...chatMessages].slice(-30).reverse() as Array<{
+                          id?: unknown;
+                          role?: unknown;
+                          content?: unknown;
+                          characterId?: unknown;
+                        }>;
+                        for (const m of recent) {
+                          if (typeof m.id !== "string" || m.role === "user") continue;
+                          if (m.characterId === targetChar.id) {
+                            resolved = { id: m.id, target: lastPartBy(m.content) };
+                            break;
+                          }
+                          const part = lastPartBy(m.content);
+                          if (part) {
+                            resolved = { id: m.id, target: part };
+                            break;
+                          }
+                        }
+                      }
+                      if (resolved) {
+                        targetId = resolved.id;
+                        segmentTarget = resolved.target;
+                      } else {
+                        logger.debug(
+                          '[react/conversation] No recent part by "%s" to react to — skipping targeted react',
+                          targetChar.name,
+                        );
+                        continue;
+                      }
+                    }
+
+                    if (targetId) {
                       const targetMsg = await chats.getMessage(targetId);
                       if (targetMsg) {
                         const ex = parseExtra(targetMsg.extra);
-                        const reactions = addMessageReactor(ex.reactions, reactCmd.emoji, characterId, imageUrl);
+                        const reactions = addMessageReactor(
+                          ex.reactions,
+                          reactCmd.emoji,
+                          characterId,
+                          imageUrl,
+                          segmentTarget,
+                        );
                         await chats.updateMessageExtra(targetId, { reactions });
                         logger.info(
-                          "[react/conversation] %s reacted with %s on message %s",
+                          "[react/conversation] %s reacted with %s on message %s%s",
                           characterId,
                           reactCmd.emoji,
                           targetId,
+                          segmentTarget ? ` (segment ${segmentTarget.segment})` : "",
                         );
                       }
                     }

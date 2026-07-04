@@ -16,6 +16,7 @@
 // - [spotify: title="Song title", artist="Artist"] (play a song on the user's active Spotify player)
 // - [youtube: query="Song title Artist"] (play a song on the user's active YouTube player)
 // - [react: emoji="😂"] or [react: emoji=":custom_name:"] (react to the user's latest message; Conversation mode)
+//   with optional `to "Character Name"` suffix to react to that character's most recent part instead
 // - [haptic: action="vibrate", intensity=0.5, duration=3] (haptic device feedback)
 // - <influence>text</influence> (OOC influence for connected roleplay, one-shot)
 // - <note>text</note> (durable note for connected roleplay, persists until cleared)
@@ -137,6 +138,13 @@ export interface ReactCommand {
   type: "react";
   /** The reaction token: a unicode emoji (e.g. "😂") or a custom-emoji ref `:name:`. */
   emoji: string;
+  /**
+   * Optional target character name (`[react: 😂 to "Name"]`): react to that
+   * character's most recent part instead of the user's latest message. Resolved
+   * against chat characters at execution time; unresolvable names fall back to
+   * the default user-message target.
+   */
+  targetCharacter?: string;
 }
 
 // ── Assistant commands (Professor Mari) ──
@@ -364,9 +372,12 @@ const CHESS_RE = /\[chess(?::[^\]\r\n]*)?\]/gi;
 const HAPTIC_RE = new RegExp(`\\[haptic:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
 const SPOTIFY_RE = new RegExp(`\\[spotify:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
 const YOUTUBE_RE = new RegExp(`\\[youtube:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
-// React to the user's latest message. Accepts [react: emoji="😂"], [react: "😂"], or
-// [react: 😂] — and likewise for a custom emoji ref :name:.
-const REACT_RE = /\[react:\s*(?:emoji="([^"\]]+)"|"([^"\]]+)"|([^\]\r\n"]+))\]/gi;
+// React with an emoji. Accepts [react: emoji="😂"], [react: "😂"], or [react: 😂]
+// — and likewise for a custom emoji ref :name:. An optional trailing
+// `to "Character Name"` (quotes optional) aims the reaction at that character's
+// most recent part instead of the user's latest message.
+const REACT_RE =
+  /\[react:\s*(?:emoji="([^"\]]+)"|"([^"\]]+)"|([^\]\r\n"]+?))(?:\s+to\s+(?:"([^"\]\r\n]+)"|([^\]\r\n"]+)))?\s*\]/gi;
 const DIRECT_MESSAGE_RE = new RegExp(`\\[dm:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
 const INFLUENCE_RE = /<influence>([\s\S]*?)<\/influence>/gi;
 const NOTE_RE = /<note>([\s\S]*?)<\/note>/gi;
@@ -941,10 +952,12 @@ export function parseCharacterCommands(content: string): {
     }
   }
 
-  // Parse reaction commands — react to the user's latest message with an emoji
+  // Parse reaction commands — react with an emoji to the user's latest message,
+  // or to a specific character's most recent part via the `to "Name"` suffix.
   for (const match of content.matchAll(REACT_RE)) {
     const emoji = (match[1] ?? match[2] ?? match[3])?.trim();
-    if (emoji) commands.push({ type: "react", emoji });
+    const targetCharacter = (match[4] ?? match[5])?.trim();
+    if (emoji) commands.push({ type: "react", emoji, ...(targetCharacter ? { targetCharacter } : {}) });
   }
 
   // Parse assistant commands (Professor Mari)

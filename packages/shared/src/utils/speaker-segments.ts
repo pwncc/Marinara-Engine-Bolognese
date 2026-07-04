@@ -12,12 +12,20 @@ import { normalizeTextForMatch } from "./text-matching.js";
 export interface SpeakerSegment {
   speaker: string | null;
   text: string;
+  /** Character offset in the source content where this segment's raw span starts. */
+  start: number;
+  /** Character offset just past this segment's content (its last non-blank line / closing tag). */
+  end: number;
 }
 
 /** Consecutive same-speaker segments merged into one display group. */
 export interface GroupedSegment {
   speaker: string | null;
   lines: string[];
+  /** Raw source span the group covers: start of its first part... */
+  start: number;
+  /** ...to the end of its last part. Lets callers inject text directly under a group. */
+  end: number;
 }
 
 /**
@@ -38,14 +46,19 @@ export function parseSpeakerTags(content: string, knownNames: Set<string>): Spea
     const knownSpeaker = knownNames.has(normalizeTextForMatch(speakerName));
     if (match.index > lastIndex) {
       const before = content.slice(lastIndex, match.index).trim();
-      if (before) segments.push({ speaker: null, text: before });
+      if (before) segments.push({ speaker: null, text: before, start: lastIndex, end: match.index });
     }
-    segments.push({ speaker: knownSpeaker ? speakerName : null, text: match[2]!.trim() });
+    segments.push({
+      speaker: knownSpeaker ? speakerName : null,
+      text: match[2]!.trim(),
+      start: match.index,
+      end: regex.lastIndex,
+    });
     lastIndex = regex.lastIndex;
   }
   if (lastIndex < content.length) {
     const after = content.slice(lastIndex).trim();
-    if (after) segments.push({ speaker: null, text: after });
+    if (after) segments.push({ speaker: null, text: after, start: lastIndex, end: content.length });
   }
   return foundTag ? segments : null;
 }
@@ -58,25 +71,51 @@ export function parseSpeakerTags(content: string, knownNames: Set<string>): Spea
 export function parseNamePrefixFormat(content: string, knownNames: Set<string>): SpeakerSegment[] | null {
   if (!knownNames.size) return null;
   const lines = content.split("\n");
+  // Start offset of each line in `content` (lines are separated by exactly "\n").
+  const lineStarts: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    lineStarts.push(offset);
+    offset += line.length + 1;
+  }
   const segments: SpeakerSegment[] = [];
   let currentSpeaker: string | null = null;
   let currentLines: string[] = [];
+  let currentStartLine = 0;
+  // Last line of the current segment with visible text — the segment's `end`
+  // stops there, so injections land under the text, not after trailing blanks.
+  let currentLastContentLine = -1;
+  const flush = () => {
+    if (currentLines.length === 0) return;
+    const endLine = currentLastContentLine >= 0 ? currentLastContentLine : currentStartLine + currentLines.length - 1;
+    segments.push({
+      speaker: currentSpeaker,
+      text: currentLines.join("\n"),
+      start: lineStarts[currentStartLine]!,
+      end: lineStarts[endLine]! + lines[endLine]!.length,
+    });
+  };
   let found = false;
-  for (const line of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li]!;
     const colonIdx = line.indexOf(": ");
     if (colonIdx > 0) {
       const potentialName = line.slice(0, colonIdx).trim();
       if (knownNames.has(normalizeTextForMatch(potentialName))) {
-        if (currentLines.length > 0) segments.push({ speaker: currentSpeaker, text: currentLines.join("\n") });
+        flush();
         currentSpeaker = potentialName;
         currentLines = [line.slice(colonIdx + 2)];
+        currentStartLine = li;
+        currentLastContentLine = line.slice(colonIdx + 2).trim() ? li : -1;
         found = true;
         continue;
       }
     }
+    if (currentLines.length === 0) currentStartLine = li;
     currentLines.push(line);
+    if (line.trim()) currentLastContentLine = li;
   }
-  if (currentLines.length > 0) segments.push({ speaker: currentSpeaker, text: currentLines.join("\n") });
+  flush();
   if (!found) return null;
   return segments.filter((s) => s.text.trim());
 }
@@ -94,8 +133,9 @@ export function groupConsecutiveSegments(segments: SpeakerSegment[]): GroupedSeg
       normalizeTextForMatch(last.speaker) === normalizeTextForMatch(seg.speaker)
     ) {
       last.lines.push(trimmed);
+      last.end = seg.end;
     } else {
-      groups.push({ speaker: seg.speaker, lines: [trimmed] });
+      groups.push({ speaker: seg.speaker, lines: [trimmed], start: seg.start, end: seg.end });
     }
   }
   return groups;
