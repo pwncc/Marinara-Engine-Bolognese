@@ -186,6 +186,7 @@ type JournalReadable = ReadableTag & {
 };
 
 type GameStoryboardSourceSection = NonNullable<GenerateGameTurnStoryboardInput["sections"]>[number];
+type StoryboardViewerSize = "small" | "medium" | "large";
 
 type GameAssetGenerationPayload = {
   chatId: string;
@@ -230,6 +231,19 @@ const GAME_MOBILE_FLOATING_PANEL =
 const GAME_MOBILE_FLOATING_MENU = "fixed z-[9999] max-h-[min(32rem,calc(100dvh-4.75rem))] overflow-y-auto";
 const GAME_ACTION_MENU_ITEM =
   "marinara-chat-popover__item flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-[var(--marinara-chat-chrome-panel-text)] transition-colors hover:bg-[var(--marinara-chat-chrome-highlight-bg-hover)] hover:text-[var(--marinara-chat-chrome-highlight-text)] disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent";
+const STORYBOARD_VIEWER_SIZE_CLASS: Record<StoryboardViewerSize, string> = {
+  small: "max-w-[18rem] sm:w-[18rem]",
+  medium: "max-w-[24rem] sm:w-[min(23rem,calc(100vw-2rem))]",
+  large: "max-w-[min(34rem,calc(100vw-1.5rem))] sm:w-[min(34rem,calc(100vw-2rem))]",
+};
+const STORYBOARD_VIEWER_CONTROL_BUTTON =
+  "flex h-7 w-7 items-center justify-center rounded-md border border-white/10 bg-white/10 text-white/70 transition-colors hover:bg-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-white/10";
+
+function nextStoryboardViewerSize(size: StoryboardViewerSize): StoryboardViewerSize {
+  if (size === "small") return "medium";
+  if (size === "medium") return "large";
+  return "small";
+}
 
 function getGameMobileFloatingPanelStyle(anchor: ChatToolbarFloatingPanelAnchor): CSSProperties {
   if (!anchor) {
@@ -1724,8 +1738,10 @@ import {
   Image,
   ImagePlus,
   Loader2,
+  Maximize2,
   MoreHorizontal,
   PanelsTopLeft,
+  Pause,
   Play,
   Plug,
   RefreshCw,
@@ -2609,6 +2625,9 @@ function GameSurfaceComponent({
   const [sceneVideoGenerating, setSceneVideoGenerating] = useState(false);
   const [sceneVideoFailed, setSceneVideoFailed] = useState(false);
   const [activeStoryboardSegmentIndex, setActiveStoryboardSegmentIndex] = useState<number | null>(null);
+  const [storyboardViewerSize, setStoryboardViewerSize] = useState<StoryboardViewerSize>("medium");
+  const [storyboardViewerMuted, setStoryboardViewerMuted] = useState(true);
+  const [storyboardViewerPlaying, setStoryboardViewerPlaying] = useState(true);
   const [failedNpcAvatarNames, setFailedNpcAvatarNames] = useState<Set<string>>(() => new Set());
   const [imagePromptReviewItems, setImagePromptReviewItems] = useState<GameImagePromptReviewItem[]>([]);
   const [imagePromptReviewSubmitting, setImagePromptReviewSubmitting] = useState(false);
@@ -2643,6 +2662,7 @@ function GameSurfaceComponent({
   const sceneAnalysisTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoAssetGenerationKeyRef = useRef<string | null>(null);
   const autoStoryboardGenerationKeyRef = useRef<string | null>(null);
+  const storyboardViewerVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const closeGameFloatingPanels = useCallback(() => {
     setSessionPanelOpen(false);
@@ -3342,6 +3362,16 @@ function GameSurfaceComponent({
     () => findStoryboardKeyframeForSegment(latestTurnStoryboard?.keyframes ?? [], activeStoryboardSegmentIndex),
     [activeStoryboardSegmentIndex, latestTurnStoryboard?.keyframes],
   );
+  useEffect(() => {
+    const video = storyboardViewerVideoRef.current;
+    if (!video) return;
+    video.muted = storyboardViewerMuted;
+    if (storyboardViewerPlaying) {
+      void video.play().catch(() => setStoryboardViewerPlaying(false));
+    } else {
+      video.pause();
+    }
+  }, [activeStoryboardKeyframe?.video?.id, storyboardViewerMuted, storyboardViewerPlaying]);
 
   const combatLogEntries = useMemo(
     () =>
@@ -9201,9 +9231,17 @@ function GameSurfaceComponent({
       latestTurnStoryboard && frame
         ? Math.max(0, latestTurnStoryboard.keyframes.findIndex((item) => item.id === frame.id))
         : 0;
+    const hasVideo = !!frame?.video;
 
     return (
-      <div className="pointer-events-auto absolute left-3 right-3 top-[4.75rem] z-30 mx-auto w-auto max-w-[24rem] overflow-hidden rounded-xl border border-white/15 bg-black/75 shadow-2xl backdrop-blur-md sm:left-auto sm:right-4 sm:top-[4.5rem] sm:w-[min(23rem,calc(100vw-2rem))]">
+      <div
+        className={cn(
+          "pointer-events-auto absolute left-3 right-3 top-[4.75rem] z-30 mx-auto w-auto overflow-hidden rounded-xl border border-white/15 bg-black/75 shadow-2xl backdrop-blur-md sm:left-auto sm:right-4 sm:top-[4.5rem]",
+          STORYBOARD_VIEWER_SIZE_CLASS[storyboardViewerSize],
+        )}
+        onClick={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
         <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
           <div className="flex min-w-0 items-center gap-2 text-[0.6875rem] font-semibold uppercase tracking-wide text-white/75">
             <PanelsTopLeft size={13} className="shrink-0 text-[var(--primary)]" />
@@ -9216,12 +9254,15 @@ function GameSurfaceComponent({
 
         {frame?.video ? (
           <video
+            ref={storyboardViewerVideoRef}
             key={frame.video.id}
             src={frame.video.url}
-            autoPlay
+            autoPlay={storyboardViewerPlaying}
             loop
-            muted
+            muted={storyboardViewerMuted}
             playsInline
+            onPlay={() => setStoryboardViewerPlaying(true)}
+            onPause={() => setStoryboardViewerPlaying(false)}
             className="aspect-video w-full bg-black object-cover"
           />
         ) : frame?.image ? (
@@ -9242,11 +9283,44 @@ function GameSurfaceComponent({
             <p className="min-w-0 truncate text-xs font-semibold text-white/90">
               {frame?.title || latestTurnStoryboard?.title || "Storyboard turn"}
             </p>
-            {latestTurnStoryboard?.keyframes.length ? (
-              <span className="shrink-0 text-[0.625rem] text-white/45">
-                {framePosition + 1}/{latestTurnStoryboard.keyframes.length}
-              </span>
-            ) : null}
+            <div className="flex shrink-0 items-center gap-1">
+              {hasVideo ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setStoryboardViewerPlaying((playing) => !playing)}
+                    className={STORYBOARD_VIEWER_CONTROL_BUTTON}
+                    title={storyboardViewerPlaying ? "Pause storyboard video" : "Play storyboard video"}
+                    aria-label={storyboardViewerPlaying ? "Pause storyboard video" : "Play storyboard video"}
+                  >
+                    {storyboardViewerPlaying ? <Pause size={13} /> : <Play size={13} />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStoryboardViewerMuted((muted) => !muted)}
+                    className={STORYBOARD_VIEWER_CONTROL_BUTTON}
+                    title={storyboardViewerMuted ? "Unmute storyboard video" : "Mute storyboard video"}
+                    aria-label={storyboardViewerMuted ? "Unmute storyboard video" : "Mute storyboard video"}
+                  >
+                    {storyboardViewerMuted ? <VolumeX size={13} /> : <Volume2 size={13} />}
+                  </button>
+                </>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setStoryboardViewerSize((size) => nextStoryboardViewerSize(size))}
+                className={STORYBOARD_VIEWER_CONTROL_BUTTON}
+                title={`Change storyboard viewer size. Current: ${storyboardViewerSize}`}
+                aria-label={`Change storyboard viewer size. Current: ${storyboardViewerSize}`}
+              >
+                <Maximize2 size={13} />
+              </button>
+              {latestTurnStoryboard?.keyframes.length ? (
+                <span className="ml-1 text-[0.625rem] text-white/45">
+                  {framePosition + 1}/{latestTurnStoryboard.keyframes.length}
+                </span>
+              ) : null}
+            </div>
           </div>
           <p className="line-clamp-2 text-[0.6875rem] leading-4 text-white/58">
             {frame?.anchorQuote || frame?.narrationBeat || latestTurnStoryboard?.error || "Generating keyframes..."}
