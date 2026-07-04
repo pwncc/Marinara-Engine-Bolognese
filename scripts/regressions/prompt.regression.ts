@@ -57,7 +57,7 @@ import {
   GAME_STORYBOARD_ILLUSTRATION_DIRECTOR,
 } from "../../packages/server/src/services/prompt-overrides/index.js";
 import type { LLMToolCall } from "../../packages/server/src/services/llm/base-provider.js";
-import { resolveTTSVoiceForSpeaker } from "../../packages/client/src/lib/tts-dialogue.js";
+import { cleanTTSInputText, resolveTTSVoiceForSpeaker } from "../../packages/client/src/lib/tts-dialogue.js";
 
 type RegressionCase = {
   name: string;
@@ -285,6 +285,27 @@ const cases: RegressionCase[] = [
         },
       );
       assert.equal(emptyElevenLabsVoice, "");
+    },
+  },
+  {
+    name: "TTS cleanup strips VN speaker and sprite metadata",
+    run() {
+      const cleaned = cleanTTSInputText(`\
+[Pippa Quill] [main] [neutral]: "Reserved. Tomorrow afternoon."
+[2B-] [whisper:Matt] [thinking]: "Your ribs require rest."
+[Morgana-] [side] [smirk]: "A bold strategy."
+[bg: backgrounds:generated:guild-hall]
+[state: dialogue]`);
+
+      assert.equal(cleaned.includes("Pippa Quill"), false);
+      assert.equal(cleaned.includes("neutral"), false);
+      assert.equal(cleaned.includes("whisper:Matt"), false);
+      assert.equal(cleaned.includes("thinking"), false);
+      assert.equal(cleaned.includes("smirk"), false);
+      assert.equal(cleaned.includes("backgrounds:generated"), false);
+      assert.match(cleaned, /Reserved\. Tomorrow afternoon\./);
+      assert.match(cleaned, /Your ribs require rest\./);
+      assert.match(cleaned, /A bold strategy\./);
     },
   },
   {

@@ -239,8 +239,15 @@ export function resolveTTSNarratorVoice(
   return config.narratorVoiceEnabled ? config.narratorVoice || fallbackVoice : fallbackVoice;
 }
 
+const VN_TTS_LINE_PREFIX_RE =
+  /^\s*(?:Dialogue\s*)?\[[^\]\r\n]+\]\s*(?:\[(?:main|side|extra|action|thought|whisper(?::[^\]\r\n]+)?)\])?\s*(?:\[[^\]\r\n]+\])?\s*:\s*/gim;
+
+const VN_TTS_METADATA_TAG_RE =
+  /\[(?:main|side|extra|action|thought|whisper(?::[^\]\r\n]+)?|neutral|happy|sad|angry|surprised|scared|disgusted|thinking|laughing|crying|blushing|smirk|embarrassed|determined|confused|sleepy|custom)\]/gi;
+
 export function cleanTTSInputText(value: string): string {
   return value
+    .replace(VN_TTS_LINE_PREFIX_RE, "")
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/~~~[\s\S]*?~~~/g, " ")
     .replace(/`[^`\n]*`/g, " ")
@@ -257,6 +264,7 @@ export function cleanTTSInputText(value: string): string {
     .replace(/[*~`]/g, "")
     .replace(/\{(shake|shout|whisper|glow|pulse|wave|flicker|drip|bounce|tremble|glitch|expand):([^}]+)\}/gi, "$2")
     .replace(/\[[a-z_]+:[^\]]*\]/gi, "")
+    .replace(VN_TTS_METADATA_TAG_RE, " ")
     .replace(/<[^>]+>/g, "")
     .replace(/\s+/g, " ")
     .trim();
