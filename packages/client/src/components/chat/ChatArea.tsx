@@ -273,6 +273,7 @@ function suppressBuiltInProfessorMariForMode(mode: string | undefined): boolean 
 
 const INTUITIVE_SWIPE_MIN_DISTANCE = 56;
 const INTUITIVE_SWIPE_MAX_VERTICAL_DRIFT = 44;
+const SCENE_VIDEO_GENERATION_TIMEOUT_MS = 1_800_000;
 
 const shouldIgnoreIntuitiveSwipeTarget = (target: EventTarget | null): boolean => {
   if (!(target instanceof Element)) return false;
@@ -1017,6 +1018,7 @@ export function ChatArea() {
   const summaryContextSize: number = (chatMeta.summaryContextSize as number) ?? 50;
   const [roleplayBackgroundReviewItems, setRoleplayBackgroundReviewItems] = useState<ImagePromptReviewItem[]>([]);
   const [roleplayBackgroundReviewSubmitting, setRoleplayBackgroundReviewSubmitting] = useState(false);
+  const roleplaySceneVideoGeneratingRef = useRef(false);
   const roleplayBackgroundReviewResolveRef = useRef<((overrides: ImagePromptOverride[] | null) => void) | null>(null);
 
   const openRoleplayBackgroundPromptReview = useCallback((items: ImagePromptReviewItem[]) => {
@@ -1102,6 +1104,7 @@ export function ChatArea() {
   const handleGenerateRoleplaySceneVideo = useCallback(
     async (source?: { galleryImageId?: string }) => {
       if (!activeChatId || !chat || (chatMode !== "roleplay" && chatMode !== "visual_novel")) return;
+      if (roleplaySceneVideoGeneratingRef.current) return;
       const sceneVideoConnectionId =
         typeof chatMeta.sceneVideoConnectionId === "string" ? chatMeta.sceneVideoConnectionId.trim() : "";
       if (!sceneVideoConnectionId) {
@@ -1110,12 +1113,17 @@ export function ChatArea() {
       }
 
       const galleryImageId = source?.galleryImageId?.trim();
+      roleplaySceneVideoGeneratingRef.current = true;
       try {
-        const result = await api.post<{ video: GeneratedSceneVideo }>("/gallery/generate-scene-video", {
-          chatId: activeChatId,
-          ...(galleryImageId ? { galleryImageId } : {}),
-          debugMode: useUIStore.getState().debugMode,
-        });
+        const result = await api.post<{ video: GeneratedSceneVideo }>(
+          "/gallery/generate-scene-video",
+          {
+            chatId: activeChatId,
+            ...(galleryImageId ? { galleryImageId } : {}),
+            debugMode: useUIStore.getState().debugMode,
+          },
+          { signal: AbortSignal.timeout(SCENE_VIDEO_GENERATION_TIMEOUT_MS) },
+        );
         const galleryStore = useGalleryStore.getState();
         galleryStore.pinVideo(result.video);
         galleryStore.syncLatestViewer({ ...result.video, kind: "video" as const });
@@ -1123,6 +1131,8 @@ export function ChatArea() {
         toast.success("Scene video generated.", { duration: 1800 });
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Scene video generation failed.");
+      } finally {
+        roleplaySceneVideoGeneratingRef.current = false;
       }
     },
     [activeChatId, chat, chatMeta.sceneVideoConnectionId, chatMode, queryClient],

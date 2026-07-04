@@ -329,6 +329,7 @@ function getConfiguredGameAssetImageSizes(): NonNullable<GameAssetGenerationPayl
 const GAME_ASSET_GENERATION_TIMEOUT_MS = 240_000;
 const GAME_ASSET_PREVIEW_TIMEOUT_MS = 180_000;
 const GAME_ASSET_PROMPT_REVIEW_TIMEOUT_MS = 180_000;
+const SCENE_VIDEO_GENERATION_TIMEOUT_MS = 1_800_000;
 const IMAGE_PROMPT_REVIEW_TIMED_OUT = Symbol("IMAGE_PROMPT_REVIEW_TIMED_OUT");
 
 class TimeoutError extends Error {
@@ -5013,11 +5014,19 @@ function GameSurfaceComponent({
     setSceneVideoGenerating(true);
     setSceneVideoFailed(false);
     try {
-      const result = await api.post<{ video: GeneratedSceneVideo }>("/game/generate-scene-video", {
-        chatId: activeChatId,
-        ...(galleryImageId ? { galleryImageId } : { illustrationTag }),
-        debugMode: useUIStore.getState().debugMode,
-      });
+      const result = await withTimeout(
+        (signal) =>
+          api.post<{ video: GeneratedSceneVideo }>(
+            "/game/generate-scene-video",
+            {
+              chatId: activeChatId,
+              ...(galleryImageId ? { galleryImageId } : { illustrationTag }),
+              debugMode: useUIStore.getState().debugMode,
+            },
+            { signal },
+          ),
+        SCENE_VIDEO_GENERATION_TIMEOUT_MS,
+      );
       const galleryStore = useGalleryStore.getState();
       galleryStore.pinVideo(result.video);
       galleryStore.syncLatestViewer({ ...result.video, kind: "video" as const });

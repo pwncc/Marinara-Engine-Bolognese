@@ -5385,14 +5385,12 @@ export function ChatSettingsDrawer({
                       className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-1.5 text-xs text-[var(--foreground)]"
                     >
                       {import.meta.env.VITE_MARINARA_LITE !== "true" && <option value="">Local sidecar (Gemma)</option>}
-                      {((connections ?? []) as Array<{ id: string; name: string; model?: string }>)
-                        .filter((c) => (c as { provider?: string }).provider !== "image_generation")
-                        .map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                            {c.model ? ` — ${c.model}` : ""}
-                          </option>
-                        ))}
+                      {(textConnectionsList as Array<{ id: string; name: string; model?: string }>).map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                          {c.model ? ` — ${c.model}` : ""}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 )}

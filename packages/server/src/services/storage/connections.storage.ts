@@ -74,31 +74,7 @@ export function createConnectionsStorage(db: DB) {
     async create(input: CreateConnectionInput) {
       const id = newId();
       const timestamp = now();
-      // If this is set as default, unset others
-      if (input.isDefault) {
-        await db.update(apiConnections).set({ isDefault: "false" });
-      }
-      // If this is set as default for agents, unset others in the same provider category
-      if (input.defaultForAgents) {
-        const category = defaultCategoryForProvider(input.provider);
-        if (category === "image_generation" || category === "video_generation") {
-          await db
-            .update(apiConnections)
-            .set({ defaultForAgents: "false" })
-            .where(and(eq(apiConnections.defaultForAgents, "true"), eq(apiConnections.provider, category)));
-        } else {
-          const existingDefaults = await db
-            .select()
-            .from(apiConnections)
-            .where(eq(apiConnections.defaultForAgents, "true"));
-          for (const row of existingDefaults) {
-            if (defaultCategoryForProvider(row.provider) === "language") {
-              await db.update(apiConnections).set({ defaultForAgents: "false" }).where(eq(apiConnections.id, row.id));
-            }
-          }
-        }
-      }
-      await db.insert(apiConnections).values({
+      const values = {
         id,
         name: input.name,
         provider: input.provider,
@@ -130,6 +106,33 @@ export function createConnectionsStorage(db: DB) {
         treatAsLocalEndpoint: String(input.treatAsLocalEndpoint ?? false),
         createdAt: timestamp,
         updatedAt: timestamp,
+      };
+      await db.transaction(async (tx) => {
+        // If this is set as default, unset others.
+        if (input.isDefault) {
+          await tx.update(apiConnections).set({ isDefault: "false" });
+        }
+        // If this is set as default for agents, unset others in the same provider category.
+        if (input.defaultForAgents) {
+          const category = defaultCategoryForProvider(input.provider);
+          if (category === "image_generation" || category === "video_generation") {
+            await tx
+              .update(apiConnections)
+              .set({ defaultForAgents: "false" })
+              .where(and(eq(apiConnections.defaultForAgents, "true"), eq(apiConnections.provider, category)));
+          } else {
+            const existingDefaults = await tx
+              .select()
+              .from(apiConnections)
+              .where(eq(apiConnections.defaultForAgents, "true"));
+            for (const row of existingDefaults) {
+              if (defaultCategoryForProvider(row.provider) === "language") {
+                await tx.update(apiConnections).set({ defaultForAgents: "false" }).where(eq(apiConnections.id, row.id));
+              }
+            }
+          }
+        }
+        await tx.insert(apiConnections).values(values);
       });
       return this.getById(id);
     },
