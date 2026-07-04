@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Grouped multi-speaker message layout (merged group chat / Name: text format)
 // ──────────────────────────────────────────────
-import { type RefObject } from "react";
+import { Fragment, type RefObject } from "react";
 import { normalizeTextForMatch } from "@marinara-engine/shared";
 import { cn, getAvatarCropStyle } from "../../lib/utils";
 import {
@@ -96,6 +96,16 @@ export function ConversationMessageGrouped({
       : "pointer-events-none opacity-0 focus:pointer-events-auto focus:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100",
   );
 
+  // Card CSS (character bubble themes) is scoped to [data-card-css] subtrees. The
+  // root deliberately does NOT carry the attribute: each segment's themable
+  // content gets its own [data-card-css] wrapper below, so the per-segment
+  // reaction chip rows can render as siblings OUTSIDE card-CSS reach — the same
+  // invariant the shell keeps for the whole-message reaction row.
+  const cardCssProps = {
+    "data-card-css": message.characterId ?? undefined,
+    "data-grouped": isGrouped || undefined,
+  };
+
   return (
     <div
       ref={msgRef}
@@ -107,8 +117,6 @@ export function ConversationMessageGrouped({
         isStreaming && "bg-[var(--secondary)]/20",
         multiSelectMode && isSelected && "bg-[var(--destructive)]/10",
       )}
-      data-card-css={message.characterId ?? undefined}
-      data-grouped={isGrouped || undefined}
       onClick={handleMobileTap}
     >
       {/* Multi-select checkbox */}
@@ -156,12 +164,16 @@ export function ConversationMessageGrouped({
           const isFirst = i === 0;
           const combinedText = grp.lines.join("\n");
           // Reactions aimed at this segment (issue #3210). The add affordance sits
-          // in the speaker's name row; the chip row renders under the segment text.
-          // The target key is the parsed speaker (not the resolved character name)
-          // so it stays derivable from content alone.
+          // in the speaker's name row; the chip row renders under the segment text,
+          // outside the segment's [data-card-css] wrapper. The target key is the
+          // parsed speaker (not the resolved character name) so it stays derivable
+          // from content alone. Empty-text segments are not targetable — the
+          // classic layout doesn't render them, so a reaction there would vanish
+          // (splitReactionsBySegment applies the same rule).
+          const segHasText = combinedText.trim().length > 0;
           const segReactions = segmentReactions?.[i] ?? [];
           const segAddButton =
-            !hideActions && onPickSegmentReaction && grp.speaker ? (
+            !hideActions && onPickSegmentReaction && grp.speaker && segHasText ? (
               <ReactionAddButton
                 onPick={(emoji, imageUrl) => onPickSegmentReaction({ segment: i, speaker: grp.speaker }, emoji, imageUrl)}
                 tabIndex={segAddTabIdx}
@@ -181,6 +193,7 @@ export function ConversationMessageGrouped({
             return (
               <div
                 key={i}
+                {...cardCssProps}
                 className="pl-14 py-0.5 text-[0.875rem] leading-relaxed break-words whitespace-pre-wrap text-[var(--muted-foreground)] italic animate-[fadeSlideIn_0.4s_ease-out]"
                 style={messageTextStyle}
               >
@@ -197,10 +210,11 @@ export function ConversationMessageGrouped({
 
           if (isBubbleStyle) {
             return (
-              <div
-                key={i}
-                className={["animate-[fadeSlideIn_0.4s_ease-out]", i > 0 && "mt-2"].filter(Boolean).join(" ")}
-              >
+              <Fragment key={i}>
+                <div
+                  {...cardCssProps}
+                  className={["animate-[fadeSlideIn_0.4s_ease-out]", i > 0 && "mt-2"].filter(Boolean).join(" ")}
+                >
                 <div className="flex items-end gap-2">
                   <div className="h-8 w-8 shrink-0 overflow-hidden rounded-full bg-[var(--accent)]">
                     {segAvatar ? (
@@ -241,15 +255,20 @@ export function ConversationMessageGrouped({
                         onImageOpen={(url) => onImageOpen(url)}
                       />
                     </div>
-                    {segReactionRow && <div className="mari-message-reactions-row mt-1">{segReactionRow}</div>}
+                  </div>
                   </div>
                 </div>
-              </div>
+                {segReactionRow && <div className="mari-message-reactions-row ml-10 mt-1">{segReactionRow}</div>}
+              </Fragment>
             );
           }
 
           return (
-            <div key={i} className={["animate-[fadeSlideIn_0.4s_ease-out]", i > 0 && "mt-3"].filter(Boolean).join(" ")}>
+            <Fragment key={i}>
+              <div
+                {...cardCssProps}
+                className={["animate-[fadeSlideIn_0.4s_ease-out]", i > 0 && "mt-3"].filter(Boolean).join(" ")}
+              >
               {(() => {
                 const paragraphs = combinedText
                   .split(/\n{2,}/)
@@ -325,15 +344,20 @@ export function ConversationMessageGrouped({
                         />
                       </div>
                     ))}
-                    {segReactionRow && <div className="mari-message-reactions-row pl-14 mt-1">{segReactionRow}</div>}
                   </>
                 );
               })()}
-            </div>
+              </div>
+              {segReactionRow && <div className="mari-message-reactions-row pl-14 mt-1">{segReactionRow}</div>}
+            </Fragment>
           );
         })
       )}
 
+      {/* Trailing chrome (cursor, translation, attachments, swipes, action bar):
+          kept inside a [data-card-css] wrapper so themes retain the reach they
+          had when the attribute lived on the block root. */}
+      <div {...cardCssProps}>
       {/* Streaming cursor */}
       {isStreaming && (
         <span className="ml-14 inline-block h-4 w-[0.125rem] animate-pulse rounded-full bg-[var(--foreground)]/50" />
@@ -402,6 +426,7 @@ export function ConversationMessageGrouped({
           onPickReaction={onPickReaction}
         />
       )}
+      </div>
     </div>
   );
 }

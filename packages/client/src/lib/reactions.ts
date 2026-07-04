@@ -102,7 +102,7 @@ export function toggleReaction(
  */
 export function splitReactionsBySegment(
   reactions: MessageReaction[],
-  segments: Array<{ speaker: string | null }> | null,
+  segments: Array<{ speaker: string | null; lines: string[] }> | null,
 ): { segmentReactions: MessageReaction[][] | null; messageReactions: MessageReaction[] } {
   if (!segments || segments.length === 0) {
     return { segmentReactions: null, messageReactions: reactions };
@@ -116,10 +116,36 @@ export function splitReactionsBySegment(
       seg !== undefined &&
       // Narration segments render no chip row — never route a reaction there.
       seg.speaker != null &&
+      // Empty-text segments render no chip row either (the classic layout skips
+      // them entirely) — fall back so the reaction stays visible and removable.
+      seg.lines.some((line) => line.trim().length > 0) &&
       // Legacy entries without a stored speaker can only be checked by index.
       (reaction.segmentSpeaker === undefined || sameSpeaker(reaction.segmentSpeaker, seg.speaker));
     if (aligned) segmentReactions[idx as number]!.push(reaction);
     else messageReactions.push(reaction);
   }
   return { segmentReactions, messageReactions };
+}
+
+/**
+ * Find the user's stale segment entry that a new pick should replace: same emoji,
+ * same speaker, but stranded in the whole-message (orphan) list because the
+ * segmentation moved under it (another swipe's layout, or an edit). Moving it —
+ * instead of adding a second entry — keeps one chip and one prompt annotation per
+ * (emoji, speaker) intent. Entries whose segment target is still valid are not in
+ * `messageReactions`, so genuine same-emoji reactions on two of a speaker's
+ * segments are never collapsed.
+ */
+export function findRetargetableUserReaction(
+  messageReactions: MessageReaction[],
+  emoji: string,
+  target: ReactionSegmentTarget,
+): MessageReaction | undefined {
+  return messageReactions.find(
+    (reaction) =>
+      reaction.segment != null &&
+      reaction.emoji === emoji &&
+      reaction.by.includes(USER_REACTOR) &&
+      sameSpeaker(reaction.segmentSpeaker ?? null, target.speaker),
+  );
 }

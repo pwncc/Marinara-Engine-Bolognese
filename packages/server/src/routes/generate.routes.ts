@@ -1319,7 +1319,34 @@ function buildCustomStickerAdvertisement(
  * leaves it intact. `resolveReactorName` maps a reactor id ("user" or a character
  * id) to a display name. Returns "" when there is nothing to annotate.
  */
-function buildReactionAnnotation(reactions: unknown, resolveReactorName: (reactorId: string) => string): string {
+/**
+ * Whether `content` contains a part spoken by `speaker`, in either of the two
+ * formats the client's segment parser recognizes: `<speaker="Name">` tags or
+ * `Name: text` line prefixes. Used to gate reaction-annotation attribution so
+ * the prompt never claims a speaker part the annotated text doesn't have (a
+ * segment reaction synced onto a swipe with different segmentation) — the same
+ * fallback the client applies when rendering orphaned segment reactions.
+ */
+function contentHasSpeakerPart(content: string, speaker: string): boolean {
+  const wanted = normalizeTextForMatch(speaker);
+  if (!wanted) return false;
+  const tagRe = /<speaker="([^"]*)">/g;
+  let match: RegExpExecArray | null;
+  while ((match = tagRe.exec(content)) !== null) {
+    if (normalizeTextForMatch(match[1]!.trim()) === wanted) return true;
+  }
+  for (const line of content.split("\n")) {
+    const colonIdx = line.indexOf(": ");
+    if (colonIdx > 0 && normalizeTextForMatch(line.slice(0, colonIdx).trim()) === wanted) return true;
+  }
+  return false;
+}
+
+function buildReactionAnnotation(
+  reactions: unknown,
+  content: string,
+  resolveReactorName: (reactorId: string) => string,
+): string {
   if (!Array.isArray(reactions) || reactions.length === 0) return "";
   const parts: string[] = [];
   for (const entry of reactions as Array<{ emoji?: unknown; by?: unknown; segmentSpeaker?: unknown }>) {
@@ -1334,12 +1361,17 @@ function buildReactionAnnotation(reactions: unknown, resolveReactorName: (reacto
           ? `${names[0]} and ${names[1]}`
           : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
     // A segment-targeted reaction (grouped multi-speaker message) names whose
-    // line it was aimed at, so that character can respond to it specifically.
+    // part it was aimed at, so that character can respond to it specifically —
+    // but only when the annotated content actually has a part by that speaker.
     const targetSpeaker =
       typeof entry.segmentSpeaker === "string" && entry.segmentSpeaker.trim() ? entry.segmentSpeaker.trim() : null;
-    parts.push(`${who} reacted with ${emoji}${targetSpeaker ? ` to ${targetSpeaker}'s part` : ""}`);
+    const attributed = targetSpeaker !== null && contentHasSpeakerPart(content, targetSpeaker);
+    parts.push(`${who} reacted with ${emoji}${attributed ? ` to ${targetSpeaker}'s part` : ""}`);
   }
-  return parts.length === 0 ? "" : `\n[${parts.join("; ")}]`;
+  // Dedupe: entries for the same emoji+speaker can exist at different segment
+  // indices (stale targets synced across swipes) and collapse to one wording.
+  const uniqueParts = [...new Set(parts)];
+  return uniqueParts.length === 0 ? "" : `\n[${uniqueParts.join("; ")}]`;
 }
 
 /**
@@ -2846,7 +2878,11 @@ export async function generateRoutes(app: FastifyInstance) {
           for (let i = 0; i < finalMessages.length; i++) {
             const raw = chatMessages[i];
             if (!raw) continue;
-            const note = buildReactionAnnotation(parseExtra(raw.extra).reactions, reactorDisplayName);
+            const note = buildReactionAnnotation(
+              parseExtra(raw.extra).reactions,
+              finalMessages[i]!.content,
+              reactorDisplayName,
+            );
             if (note) finalMessages[i]!.content += note;
           }
 
