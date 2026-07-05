@@ -36,9 +36,17 @@ const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video-1.5";
 const DEFAULT_OPENROUTER_VIDEO_MODEL = "google/veo-3.1";
 const DEFAULT_GOOGLE_VEO_RESOLUTION = "720p";
 const DEFAULT_XAI_VIDEO_RESOLUTION = "720p";
-const GOOGLE_VEO_POLL_INTERVAL_MS = Number(process.env.GOOGLE_VEO_VIDEO_POLL_INTERVAL_MS ?? 10_000);
-const XAI_POLL_INTERVAL_MS = Number(process.env.XAI_VIDEO_POLL_INTERVAL_MS ?? 5_000);
-const OPENROUTER_POLL_INTERVAL_MS = Number(process.env.OPENROUTER_VIDEO_POLL_INTERVAL_MS ?? 10_000);
+
+function readPositiveIntervalEnv(name: string, fallbackMs: number) {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallbackMs;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : fallbackMs;
+}
+
+const GOOGLE_VEO_POLL_INTERVAL_MS = readPositiveIntervalEnv("GOOGLE_VEO_VIDEO_POLL_INTERVAL_MS", 10_000);
+const XAI_POLL_INTERVAL_MS = readPositiveIntervalEnv("XAI_VIDEO_POLL_INTERVAL_MS", 5_000);
+const OPENROUTER_POLL_INTERVAL_MS = readPositiveIntervalEnv("OPENROUTER_VIDEO_POLL_INTERVAL_MS", 10_000);
 
 class VideoGenerationDeadlineError extends Error {
   constructor(timeoutMs: number) {

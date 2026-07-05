@@ -773,14 +773,14 @@ function ConversationQuickSetup({ chat, onFinish }: ChatSetupWizardProps) {
     setCallsEnabled(metadata.conversationCallsEnabled === true);
   }, [metadata.conversationCallsEnabled]);
 
-  const chatCharIds: string[] = useMemo(() => {
+  const persistedChatCharIds: string[] = useMemo(() => {
     return typeof chat.characterIds === "string" ? JSON.parse(chat.characterIds) : (chat.characterIds ?? []);
   }, [chat.characterIds]);
-  const selectedCharacterIdsRef = useRef<string[]>(chatCharIds);
+  const [chatCharIds, setChatCharIds] = useState<string[]>(persistedChatCharIds);
 
   useEffect(() => {
-    selectedCharacterIdsRef.current = chatCharIds;
-  }, [chatCharIds]);
+    setChatCharIds(persistedChatCharIds);
+  }, [persistedChatCharIds]);
 
   const [search, setSearch] = useState("");
 
@@ -822,11 +822,11 @@ function ConversationQuickSetup({ chat, onFinish }: ChatSetupWizardProps) {
 
   const toggleCharacter = useCallback(
     (charId: string) => {
-      const current = [...selectedCharacterIdsRef.current];
+      const current = [...chatCharIds];
       const idx = current.indexOf(charId);
       if (idx >= 0) current.splice(idx, 1);
       else current.push(charId);
-      selectedCharacterIdsRef.current = current;
+      setChatCharIds(current);
 
       // Auto-rename the chat if the user hasn't manually edited the name
       if (!userEditedName) {
@@ -836,11 +836,11 @@ function ConversationQuickSetup({ chat, onFinish }: ChatSetupWizardProps) {
         updateChat.mutate({ id: chat.id, characterIds: current });
       }
     },
-    [chat.id, updateChat, userEditedName, buildAutoName],
+    [buildAutoName, chat.id, chatCharIds, updateChat, userEditedName],
   );
 
   const addRandomCharacter = useCallback(() => {
-    const selected = new Set(selectedCharacterIdsRef.current);
+    const selected = new Set(chatCharIds);
     const query = search.trim().toLowerCase();
     const pool = characters.filter((character) => {
       if (selected.has(character.id)) return false;
@@ -851,7 +851,7 @@ function ConversationQuickSetup({ chat, onFinish }: ChatSetupWizardProps) {
     });
     const character = pool[Math.floor(Math.random() * pool.length)];
     if (character) toggleCharacter(character.id);
-  }, [characters, getCharacterInfo, search, toggleCharacter]);
+  }, [characters, chatCharIds, getCharacterInfo, search, toggleCharacter]);
 
   const setConnection = useCallback(
     (connectionId: string | null) => {
@@ -1602,14 +1602,14 @@ function RoleplaySetupWizard({ chat, onFinish }: ChatSetupWizardProps) {
     setCustomizeParameters(!!parseEditableGenerationParameters(metadata.chatParameters));
   }, [metadata.chatParameters]);
 
-  const chatCharIds: string[] = useMemo(() => {
+  const persistedChatCharIds: string[] = useMemo(() => {
     return typeof chat.characterIds === "string" ? JSON.parse(chat.characterIds) : (chat.characterIds ?? []);
   }, [chat.characterIds]);
-  const selectedCharacterIdsRef = useRef<string[]>(chatCharIds);
+  const [chatCharIds, setChatCharIds] = useState<string[]>(persistedChatCharIds);
 
   useEffect(() => {
-    selectedCharacterIdsRef.current = chatCharIds;
-  }, [chatCharIds]);
+    setChatCharIds(persistedChatCharIds);
+  }, [persistedChatCharIds]);
 
   const activeLorebookIds: string[] = useMemo(
     () =>
@@ -1784,11 +1784,11 @@ function RoleplaySetupWizard({ chat, onFinish }: ChatSetupWizardProps) {
 
   const toggleCharacter = useCallback(
     (charId: string) => {
-      const current = [...selectedCharacterIdsRef.current];
+      const current = [...chatCharIds];
       const idx = current.indexOf(charId);
       if (idx >= 0) {
         current.splice(idx, 1);
-        selectedCharacterIdsRef.current = current;
+        setChatCharIds(current);
         // Auto-rename the chat if the user hasn't manually edited the name
         const updateData: { id: string; characterIds: string[]; name?: string } = {
           id: chat.id,
@@ -1798,7 +1798,7 @@ function RoleplaySetupWizard({ chat, onFinish }: ChatSetupWizardProps) {
         updateChat.mutate(updateData);
       } else {
         current.push(charId);
-        selectedCharacterIdsRef.current = current;
+        setChatCharIds(current);
         const updateData: { id: string; characterIds: string[]; name?: string } = {
           id: chat.id,
           characterIds: current,
@@ -1830,7 +1830,7 @@ function RoleplaySetupWizard({ chat, onFinish }: ChatSetupWizardProps) {
         });
       }
     },
-    [chat.id, characters, createMessage, updateChat, queryClient, userEditedName, buildAutoName],
+    [buildAutoName, chat.id, chatCharIds, characters, createMessage, queryClient, updateChat, userEditedName],
   );
 
   const toggleLorebook = useCallback(
@@ -2111,7 +2111,7 @@ function RoleplaySetupWizard({ chat, onFinish }: ChatSetupWizardProps) {
       return charName(c).toLowerCase().includes(query) || title.includes(query);
     });
     const addRandomCharacter = () => {
-      const selected = new Set(selectedCharacterIdsRef.current);
+      const selected = new Set(chatCharIds);
       const query = charSearch.trim().toLowerCase();
       const pool = characters.filter((character) => {
         if (selected.has(character.id)) return false;
