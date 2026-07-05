@@ -32,12 +32,14 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Added Game Mode turn storyboards: a `game.storyboardDirector` Prompt Director splits completed GM narration into manga keyframes with image/video prompts, renders keyframe media concurrently, follows the current story section in a draggable/resizable viewer, can be reopened from Game Assets, and supports an off-by-default **Automatic Storyboard Animations** chat setting.
 - Added Gallery **Images** and **Videos** tabs so generated clips are reachable without scrolling through every still image first.
 - Added an optional Game Illustrator toggle for Dynamic LLM Prompt Generation, letting the selected prompt model rewrite Game Mode NPC portrait, location background, and key-moment illustration prompts before image generation (#3225).
+- Added `/illustrate` in Conversation, Roleplay, and Game chats to trigger the same illustration action as the Gallery **Illustrate** button without opening the Gallery first.
 
 ### Changed
 
 - Bumped release metadata to v2.1.0 across packages, the PWA manifest, README release pointer, Windows installer sources, Android APK metadata, and the home-page-visible app version.
 - Documented Conversation audio-call setup, Local Whisper download, audio input modes, character-initiated call behavior, and Professor Mari's built-in guidance for the feature.
 - Made Android/Termux update builds use low-memory build wrappers: server builds transpile runtime JS with esbuild, client builds skip memory-heavy typechecking/PWA generation on Android, and the updater builds shared, server, and client sequentially on Android devices (#3156).
+- Removed the Gallery **View latest** button because galleries already show newest images and videos first.
 
 ### Fixed
 
