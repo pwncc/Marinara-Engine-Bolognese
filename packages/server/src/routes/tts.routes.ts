@@ -18,6 +18,7 @@ import { safeFetch } from "../utils/security.js";
 
 // OpenAI built-in voices used as fallback when the provider has no /audio/voices endpoint
 const OPENAI_FALLBACK_VOICES = ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"];
+const XAI_FALLBACK_VOICES = ["eve", "ara", "rex", "sal", "leo"];
 
 const TTS_SOURCE_DEFAULTS: Record<TTSSource, { baseUrl: string; model: string }> = {
   openai: {
@@ -31,6 +32,10 @@ const TTS_SOURCE_DEFAULTS: Record<TTSSource, { baseUrl: string; model: string }>
   pockettts: {
     baseUrl: "http://localhost:8000",
     model: "pocket-tts",
+  },
+  xai: {
+    baseUrl: "https://api.x.ai/v1",
+    model: "grok-tts",
   },
 };
 
@@ -178,6 +183,14 @@ function fallbackVoices(source: TTSSource): TTSVoicesResponse {
     );
   }
 
+  if (source === "xai") {
+    return responseFromVoiceOptions(
+      source,
+      XAI_FALLBACK_VOICES.map((voice) => ({ id: voice, name: voice, category: "xAI built-in" })),
+      false,
+    );
+  }
+
   return responseFromVoiceOptions(
     source,
     OPENAI_FALLBACK_VOICES.map((voice) => ({ id: voice, name: voice })),
@@ -228,6 +241,10 @@ function normalizeNanoGptTtsModelId(model: string) {
 
 function clampElevenLabsSpeed(speed: number) {
   return Math.min(1.2, Math.max(0.7, Number.isFinite(speed) ? speed : 1));
+}
+
+function clampXaiSpeed(speed: number) {
+  return Math.min(1.5, Math.max(0.7, Number.isFinite(speed) ? speed : 1));
 }
 
 function elevenLabsModelSupportsSpeed(model: string) {
@@ -485,6 +502,23 @@ async function fetchProviderVoices(cfg: TTSConfig): Promise<TTSVoicesResponse> {
     return voices.length > 0 ? responseFromVoiceOptions(cfg.source, voices, true) : fallbackVoices(cfg.source);
   }
 
+  if (cfg.source === "xai") {
+    if (!cfg.apiKey) return fallbackVoices(cfg.source);
+    const res = await safeFetch(`${base}/tts/voices`, {
+      headers: openAiHeaders(cfg.apiKey),
+      signal: AbortSignal.timeout(10_000),
+      policy: {
+        allowLocal: false,
+        allowedProtocols: ["https:"],
+        flagName: "TTS_LOCAL_URLS_ENABLED",
+      },
+      maxResponseBytes: 2 * 1024 * 1024,
+    });
+    if (!res.ok) return fallbackVoices(cfg.source);
+    const voices = parseVoiceOptions(await res.json());
+    return voices.length > 0 ? responseFromVoiceOptions(cfg.source, voices, true) : fallbackVoices(cfg.source);
+  }
+
   const res = await safeFetch(`${base}/audio/voices`, {
     headers: openAiHeaders(cfg.apiKey),
     signal: AbortSignal.timeout(10_000),
@@ -570,6 +604,10 @@ export async function ttsRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "ElevenLabs API key is not configured" });
     }
 
+    if (cfg.source === "xai" && !cfg.apiKey) {
+      return reply.status(400).send({ error: "xAI API key is not configured" });
+    }
+
     const requestVoice = resolveTTSRequestVoice(cfg.voice, voice);
 
     if (cfg.source === "elevenlabs" && !requestVoice) {
@@ -579,6 +617,7 @@ export async function ttsRoutes(app: FastifyInstance) {
     const base = configuredBaseUrl(cfg);
     const useNanoGptSpeech = isNanoGptBaseUrl(base);
     const usePocketTtsSpeech = cfg.source === "pockettts";
+    const useXaiSpeech = cfg.source === "xai";
     const configuredModel = (cfg.model || TTS_SOURCE_DEFAULTS[cfg.source].model).trim();
     const model = useNanoGptSpeech
       ? normalizeNanoGptTtsModelId(configuredModel)
@@ -593,22 +632,26 @@ export async function ttsRoutes(app: FastifyInstance) {
       });
     }
 
-    const audioFormat = cfg.source === "elevenlabs" ? "mp3" : (cfg.audioFormat ?? "mp3");
+    const audioFormat = cfg.source === "elevenlabs" || useXaiSpeech ? "mp3" : (cfg.audioFormat ?? "mp3");
     const nanoGptElevenLabsModel = useNanoGptSpeech && isNanoGptElevenLabsModel(model);
-    const includeSpeed =
-      useNanoGptSpeech
+    const includeSpeed = useXaiSpeech
+      ? true
+      : useNanoGptSpeech
         ? !nanoGptElevenLabsModel
         : cfg.source === "elevenlabs"
           ? elevenLabsModelSupportsSpeed(model)
           : true;
     const elevenLabsSpeed = clampElevenLabsSpeed(cfg.speed);
+    const xaiSpeed = clampXaiSpeed(cfg.speed);
     const url = useNanoGptSpeech
       ? `${nanoGptV1BaseUrl(base)}/audio/speech`
       : usePocketTtsSpeech
         ? `${base}/tts`
-        : cfg.source === "elevenlabs"
-          ? `${elevenLabsApiRoot(base)}/v1/text-to-speech/${encodeURIComponent(requestVoice)}?output_format=mp3_44100_128`
-          : `${base}/audio/speech`;
+        : useXaiSpeech
+          ? `${base}/tts`
+          : cfg.source === "elevenlabs"
+            ? `${elevenLabsApiRoot(base)}/v1/text-to-speech/${encodeURIComponent(requestVoice)}?output_format=mp3_44100_128`
+            : `${base}/audio/speech`;
     const providerText = cfg.source === "elevenlabs" ? buildElevenLabsTextInput(text, tone) : text;
     const elevenLabsLanguageCode = cfg.elevenLabsLanguageCode?.trim();
     const includeSpeakerInstructions = cfg.source !== "elevenlabs";
@@ -635,9 +678,11 @@ export async function ttsRoutes(app: FastifyInstance) {
           ? nanoGptHeaders(cfg.apiKey)
           : usePocketTtsSpeech
             ? optionalBearerHeaders(cfg.apiKey)
-            : cfg.source === "elevenlabs"
-              ? elevenLabsHeaders(cfg.apiKey)
-              : openAiHeaders(cfg.apiKey),
+            : useXaiSpeech
+              ? openAiHeaders(cfg.apiKey)
+              : cfg.source === "elevenlabs"
+                ? elevenLabsHeaders(cfg.apiKey)
+                : openAiHeaders(cfg.apiKey),
         body: pocketTtsForm
           ? pocketTtsForm
           : useNanoGptSpeech
@@ -649,24 +694,36 @@ export async function ttsRoutes(app: FastifyInstance) {
                 response_format: audioFormat,
                 ...(speechInstructions ? { instructions: speechInstructions } : {}),
               })
-            : cfg.source === "elevenlabs"
+            : useXaiSpeech
               ? JSON.stringify({
                   text: providerText,
-                  model_id: model,
-                  ...(elevenLabsLanguageCode ? { language_code: elevenLabsLanguageCode } : {}),
-                  voice_settings: {
-                    stability: cfg.elevenLabsStability,
-                    ...(includeSpeed ? { speed: elevenLabsSpeed } : {}),
+                  voice_id: requestVoice || "eve",
+                  language: "auto",
+                  output_format: {
+                    codec: audioFormat,
+                    sample_rate: audioFormat === "mp3" ? 44_100 : 24_000,
+                    ...(audioFormat === "mp3" ? { bit_rate: 128_000 } : {}),
                   },
+                  ...(includeSpeed ? { speed: xaiSpeed } : {}),
                 })
-              : JSON.stringify({
-                  model,
-                  input: providerText,
-                  voice: requestVoice,
-                  ...(includeSpeed ? { speed: cfg.speed } : {}),
-                  response_format: audioFormat,
-                  ...(speechInstructions ? { instructions: speechInstructions } : {}),
-                }),
+              : cfg.source === "elevenlabs"
+                ? JSON.stringify({
+                    text: providerText,
+                    model_id: model,
+                    ...(elevenLabsLanguageCode ? { language_code: elevenLabsLanguageCode } : {}),
+                    voice_settings: {
+                      stability: cfg.elevenLabsStability,
+                      ...(includeSpeed ? { speed: elevenLabsSpeed } : {}),
+                    },
+                  })
+                : JSON.stringify({
+                    model,
+                    input: providerText,
+                    voice: requestVoice,
+                    ...(includeSpeed ? { speed: cfg.speed } : {}),
+                    response_format: audioFormat,
+                    ...(speechInstructions ? { instructions: speechInstructions } : {}),
+                  }),
         signal: AbortSignal.timeout(60_000),
         policy: {
           allowLocal: allowLocalTtsUrl(cfg),
