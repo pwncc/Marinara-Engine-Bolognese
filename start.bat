@@ -257,6 +257,13 @@ if errorlevel 1 echo  [ERROR] Failed to install dependencies. & pause & exit /b 
 
 :skip_install
 
+:: Load .env if present (respects user overrides)
+if not exist .env goto :skip_env
+for /f "usebackq eol=# tokens=1,* delims==" %%A in (".env") do (
+    if not "%%A"=="" if not "%%B"=="" set "%%A=%%B"
+)
+
+:skip_env
 :: Optional AI sprite background remover
 if defined BACKGROUNDREMOVER_AUTO_INSTALL (
     if /I "%BACKGROUNDREMOVER_AUTO_INSTALL%"=="1" goto install_bgremover
@@ -290,13 +297,6 @@ if not exist "packages\client\dist" (
 
 :: Database migrations are handled automatically at server startup by runMigrations()
 
-:: Load .env if present (respects user overrides)
-if not exist .env goto :skip_env
-for /f "usebackq eol=# tokens=1,* delims==" %%A in (".env") do (
-    if not "%%A"=="" if not "%%B"=="" set "%%A=%%B"
-)
-
-:skip_env
 :: Set defaults only if not already set
 set NODE_ENV=production
 if not defined PORT set PORT=7860

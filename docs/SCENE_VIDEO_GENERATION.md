@@ -45,7 +45,7 @@ The Gallery separates still images and generated videos into **Images** and **Vi
 - **Video** animates the latest generated scene illustration.
 - **Background** generates or applies a scene background.
 
-Each illustration tile and lightbox has actions ordered as Pin, Download, Animate, and Copy prompt. Use **Animate** when you want to animate that exact illustration instead of the newest gallery item. Copy prompt copies the prompt that created the gallery item. 
+Each illustration tile has actions ordered as Pin, Download, Animate, and Copy prompt. The fullscreen preview offers Pin, Download, and Copy prompt in the prompt panel below the image; use the tile's **Animate** button when you want to animate that exact illustration instead of the newest gallery item. Copy prompt copies the prompt that created the gallery item.
 
 Generated videos:
 
@@ -124,10 +124,6 @@ Use **Illustrate** first, or upload a gallery image, or click **Animate** on an 
 ### Gemini Omni rejects `duration_seconds`
 
 This is expected provider behavior. Marinara does not send `duration_seconds` to Gemini Omni's `video_config`; duration is rendered into the prompt instead.
-
-### Copy Prompt closes the preview
-
-Click on copy prompt from the gallery view instead of the full screen preview. 
 
 ### Storyboards do not generate automatically
 
