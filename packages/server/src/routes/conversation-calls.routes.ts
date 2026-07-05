@@ -76,8 +76,10 @@ import {
 } from "../services/spotify/conversation-spotify-command.service.js";
 import {
   getConversationCallCharacterVideoFile,
+  getConversationCallCustomVideoClipFile,
   getConversationCallCharacterVideoManifest,
   startConversationCallCharacterVideoGeneration,
+  startConversationCallCustomVideoClipGeneration,
 } from "../services/conversation/call-character-videos.service.js";
 import { resolveBaseUrl } from "./generate/generate-route-utils.js";
 import { DATA_DIR } from "../utils/data-dir.js";
@@ -365,6 +367,9 @@ const CALL_COMMAND_ALIASES = new Map<string, string>([
   ["sound", "soundboard"],
   ["sound_board", "soundboard"],
   ["soundboard", "soundboard"],
+  ["custom_clip", "custom_clip"],
+  ["custom_video", "custom_clip"],
+  ["video_clip", "custom_clip"],
 ]);
 
 function normalizeCommandName(value: string) {
@@ -388,6 +393,17 @@ function getBracketCommandName(value: string | null | undefined) {
   const trimmed = value?.trim() ?? "";
   const bracket = trimmed.match(/^\[([a-z0-9_-]+)/i);
   return normalizeCommandName(bracket?.[1] ?? trimmed);
+}
+
+function getCommandStringParam(value: string | null | undefined, name: string) {
+  const trimmed = value?.trim() ?? "";
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const quoted = new RegExp(`${escapedName}\\s*=\\s*"([^"]+)"`, "i").exec(trimmed);
+  if (quoted?.[1]) return quoted[1].trim();
+  const singleQuoted = new RegExp(`${escapedName}\\s*=\\s*'([^']+)'`, "i").exec(trimmed);
+  if (singleQuoted?.[1]) return singleQuoted[1].trim();
+  const bare = new RegExp(`${escapedName}\\s*=\\s*([^\\]\\s,]+)`, "i").exec(trimmed);
+  return bare?.[1]?.trim() ?? "";
 }
 
 function getCallConversationCommandKey(command: CharacterCommand): ConversationCommandKey | null {
@@ -520,6 +536,11 @@ function formatCallCommandPromptLines(
     case "soundboard":
       return [
         `- [soundboard: sound=${soundTargets}] - play a soundboard sound in the call. Use it for small live-call reactions or atmosphere, not as dialogue.`,
+      ];
+    case "custom_clip":
+      return [
+        '- [custom_clip: label="short title", prompt="visual action or look"] - generate one custom video-call clip for the speaking character and save it to their call-video clip gallery. Use only when the user explicitly asks to see a special visual action, outfit, reveal, or look that standard idle/talking/laughing/angry/crying/sighing clips cannot show.',
+        "   Use this sparsely: do not create custom clips for ordinary moods, normal dialogue, or every response. Emit at most one [custom_clip] for a direct user request, and do not repeat it unless the user asks for another distinct clip.",
       ];
     case "end_call":
       return [
@@ -738,6 +759,12 @@ async function buildCallPrompt(input: {
   const crossPostTargetNames: string[] = [];
   const memoryTargetNames = new Set(characters.map((character) => character.name));
   const hapticDeviceNames: string[] = [];
+  const customVideoClipConnection =
+    ttsSettings.callCharacterVideoEnabled === true && ttsSettings.callCustomVideoClipsEnabled === true
+      ? await createConnectionsStorage(input.app.db)
+          .getDefaultForVideoGeneration()
+          .catch(() => null)
+      : null;
   if (metadata.characterCommands !== false) {
     const schedules = getEnabledConversationSchedules(metadata) as Record<string, WeekSchedule>;
     const allChatsForCrossPost = await chats.list();
@@ -803,6 +830,7 @@ async function buildCallPrompt(input: {
       }
     }
     if (hapticAvailable) allowedCommands.push("haptic");
+    if (customVideoClipConnection) allowedCommands.push("custom_clip");
     if (commandToggles.influence !== false && input.chat.connectedChatId) allowedCommands.push("influence");
     if (commandToggles.note !== false && input.chat.connectedChatId) allowedCommands.push("note");
   }
@@ -1492,6 +1520,77 @@ async function applyCallSelfieCommand(input: {
   return message ? [message] : [];
 }
 
+function readCustomClipPrompt(commandText: string) {
+  return (
+    getCommandStringParam(commandText, "prompt") ||
+    getCommandStringParam(commandText, "description") ||
+    getCommandStringParam(commandText, "context")
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function readCustomClipLabel(commandText: string, prompt: string) {
+  const explicit = getCommandStringParam(commandText, "label") || getCommandStringParam(commandText, "title");
+  const label = (explicit || prompt).replace(/\s+/g, " ").trim();
+  return (label || "Custom clip").slice(0, 80);
+}
+
+async function applyCallCustomClipCommand(input: {
+  app: FastifyInstance;
+  session: ConversationCallSession;
+  calls: CallsStorage;
+  chars: ReturnType<typeof createCharactersStorage>;
+  characterId: string | null;
+  commandText: string;
+}): Promise<ConversationCallMessage[]> {
+  if (!input.characterId) return [];
+  const ttsSettings = await readTTSSettings(input.app);
+  if (ttsSettings.callCharacterVideoEnabled !== true || ttsSettings.callCustomVideoClipsEnabled !== true) return [];
+  const prompt = readCustomClipPrompt(input.commandText);
+  if (prompt.length < 8) return [];
+  const label = readCustomClipLabel(input.commandText, prompt);
+  const [character, connection] = await Promise.all([
+    input.chars.getById(input.characterId),
+    createConnectionsStorage(input.app.db).getDefaultForVideoGeneration(),
+  ]);
+  if (!character || !connection) return [];
+  const characterData = parseCharacterData(character);
+  const videoSettings = normalizeVideoGenerationUserSettings(
+    await createAppSettingsStorage(input.app.db).get(VIDEO_GENERATION_SETTINGS_KEY),
+  );
+  const manifest = await startConversationCallCustomVideoClipGeneration({
+    characterId: character.id,
+    characterName: readName(characterData, "Character"),
+    avatarPath: character.avatarPath ?? null,
+    connection,
+    promptOverridesStorage: createPromptOverridesStorage(input.app.db),
+    videoSettings,
+    label,
+    prompt,
+  });
+  const customClip = manifest.customClips.find((clip) => clip.label === label && clip.prompt === prompt) ?? null;
+  const message = await input.calls.createMessage({
+    callId: input.session.id,
+    chatId: input.session.chatId,
+    role: "system",
+    characterId: character.id,
+    participantKind: "character",
+    kind: "system",
+    content: `${readName(characterData, "Character")} is preparing a custom clip: ${label}.`,
+    extra: {
+      conversationCallCustomClip: {
+        characterId: character.id,
+        clipId: customClip?.id ?? null,
+        label,
+        prompt,
+      },
+    },
+  });
+  logger.info("[conversation-call] Custom video clip queued for %s during call %s", character.id, input.session.id);
+  return message ? [message] : [];
+}
+
 async function executeCallConversationCommand(input: {
   app: FastifyInstance;
   chat: NonNullable<ChatRow>;
@@ -1504,6 +1603,21 @@ async function executeCallConversationCommand(input: {
 }): Promise<ConversationCallMessage[]> {
   const commandName = getBracketCommandName(input.commandText);
   if (commandName === "end_call" || commandName === "leave_call" || commandName === "soundboard") return [];
+  if (commandName === "custom_clip") {
+    const chats = createChatsStorage(input.app.db);
+    const chars = createCharactersStorage(input.app.db);
+    const freshChat = (await chats.getById(input.chat.id)) ?? input.chat;
+    const metadata = parseJsonRecord(freshChat.metadata);
+    if (metadata.characterCommands === false) return [];
+    return applyCallCustomClipCommand({
+      app: input.app,
+      session: input.session,
+      calls: input.calls,
+      chars,
+      characterId: input.characterId,
+      commandText: input.commandText,
+    });
+  }
 
   const parsed = parseCharacterCommands(input.commandText);
   if (parsed.commands.length === 0) {
@@ -1830,6 +1944,18 @@ export async function conversationCallsRoutes(app: FastifyInstance) {
       }
       const file = getConversationCallCharacterVideoFile(req.params.characterId, kind);
       if (!file) return reply.status(404).send({ error: "Call video clip not found" });
+      return reply
+        .header("Content-Type", "video/mp4")
+        .header("Cache-Control", "public, max-age=31536000, immutable")
+        .send(createReadStream(file));
+    },
+  );
+
+  app.get<{ Params: { characterId: string; clipId: string } }>(
+    "/character-videos/:characterId/custom/:clipId/file",
+    async (req, reply) => {
+      const file = getConversationCallCustomVideoClipFile(req.params.characterId, req.params.clipId);
+      if (!file) return reply.status(404).send({ error: "Custom call video clip not found" });
       return reply
         .header("Content-Type", "video/mp4")
         .header("Cache-Control", "public, max-age=31536000, immutable")

@@ -7,4 +7,6 @@ export interface VideoGenerationUserSettings {
   sceneVideoDurationSeconds: number;
   /** Conversation Call character-presence clip durations, in seconds. */
   callClipDurations: ConversationCallVideoClipDurations;
+  /** One-off custom Conversation Call clip duration, in seconds. */
+  callCustomClipDurationSeconds: number;
 }

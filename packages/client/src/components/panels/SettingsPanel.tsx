@@ -444,6 +444,7 @@ const VIDEO_PROMPT_TEMPLATE_KEYS = [
   "conversation.callVideo.angry",
   "conversation.callVideo.crying",
   "conversation.callVideo.sighing",
+  "conversation.callVideo.custom",
 ] as const;
 
 const CONVERSATION_CALL_VIDEO_CLIP_LABELS: Record<ConversationCallCharacterVideoClipKind, string> = {
@@ -1723,6 +1724,10 @@ function VideoGenerationSettings() {
     });
   };
 
+  const handleCustomClipDurationChange = (duration: number) => {
+    commitSettings({ ...draft, callCustomClipDurationSeconds: duration });
+  };
+
   return (
     <SettingsSection
       title="Video Generation"
@@ -1792,6 +1797,25 @@ function VideoGenerationSettings() {
                 </label>
               ))}
             </div>
+            <label className="mt-2 flex min-w-0 items-center justify-between gap-3 rounded-md bg-[var(--secondary)]/60 px-2.5 py-2 ring-1 ring-[var(--border)]/80">
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span className="truncate text-xs text-[var(--foreground)]">Custom request</span>
+                <span className="text-[0.55rem] leading-snug text-[var(--muted-foreground)]">
+                  Used for one-off clips characters generate from explicit call requests.
+                </span>
+              </span>
+              <span className="grid w-20 shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5">
+                <DraftNumberInput
+                  value={draft.callCustomClipDurationSeconds}
+                  min={VIDEO_CALL_CLIP_DURATION_MIN}
+                  max={VIDEO_CALL_CLIP_DURATION_MAX}
+                  onCommit={handleCustomClipDurationChange}
+                  className="min-w-0 rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs"
+                  ariaLabel="Custom call clip length in seconds"
+                />
+                <span className="text-[0.625rem] text-[var(--muted-foreground)]">s</span>
+              </span>
+            </label>
             <div className="mt-2 text-[0.625rem] text-[var(--muted-foreground)]">
               Call clips are clamped from {VIDEO_CALL_CLIP_DURATION_MIN} to {VIDEO_CALL_CLIP_DURATION_MAX} seconds.
               {saveVideoSettings.isPending ? " Saving…" : ""}

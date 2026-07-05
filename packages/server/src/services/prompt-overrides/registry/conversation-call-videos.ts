@@ -9,6 +9,14 @@ export interface ConversationCallVideoClipCtx extends Record<string, string | nu
   aspectRatio: string;
 }
 
+export interface ConversationCallCustomVideoClipCtx extends Record<string, string | number | undefined> {
+  characterName: string;
+  clipLabel: string;
+  customPrompt: string;
+  durationSeconds: number;
+  aspectRatio: string;
+}
+
 type ClipPromptSeed = {
   kind: ConversationCallCharacterVideoClipKind;
   label: string;
@@ -65,6 +73,19 @@ function buildDefaultPrompt(ctx: ConversationCallVideoClipCtx) {
   ].join("\n");
 }
 
+function buildDefaultCustomClipPrompt(ctx: ConversationCallCustomVideoClipCtx) {
+  return [
+    `Create a ${ctx.durationSeconds}-second ${ctx.aspectRatio} custom video-call clip for an AI character.`,
+    `Character name: ${ctx.characterName}.`,
+    `Clip label: ${ctx.clipLabel}.`,
+    `Requested custom action or look: ${ctx.customPrompt}.`,
+    "Use the supplied avatar as the exact identity and art style reference.",
+    "Begin from the character's neutral video-call idle pose, perform the requested visual action or reveal clearly, then settle into a stable natural pose by the final frame.",
+    "Keep camera framing stable like a private video-call participant tile. Preserve the avatar's face, hair, outfit cues, and art style.",
+    "Single character only. No extra people. No UI, captions, subtitles, speech bubbles, text, logos, or watermarks.",
+  ].join("\n");
+}
+
 function makeConversationCallVideoPrompt(seed: ClipPromptSeed): PromptOverrideKeyDef<ConversationCallVideoClipCtx> {
   return {
     key: `conversation.callVideo.${seed.kind}`,
@@ -92,6 +113,30 @@ function makeConversationCallVideoPrompt(seed: ClipPromptSeed): PromptOverrideKe
 }
 
 export const CONVERSATION_CALL_VIDEO_PROMPTS = CLIP_PROMPT_SEEDS.map(makeConversationCallVideoPrompt);
+
+export const CONVERSATION_CALL_CUSTOM_VIDEO_PROMPT: PromptOverrideKeyDef<ConversationCallCustomVideoClipCtx> = {
+  key: "conversation.callVideo.custom",
+  description: "Conversation Call custom character video prompt for sparse user-requested clips.",
+  variables: [
+    { name: "characterName", description: "Character display name.", example: "Dottore" },
+    { name: "clipLabel", description: "Short saved clip label.", example: "Mask off" },
+    {
+      name: "customPrompt",
+      description: "The requested custom visual action or look.",
+      example: "Dottore takes off his mask and reveals red eyes while looking into the phone camera.",
+    },
+    { name: "durationSeconds", description: "Requested clip duration in seconds.", example: "5" },
+    { name: "aspectRatio", description: "Requested video aspect ratio.", example: "16:9" },
+  ],
+  defaultBuilder: buildDefaultCustomClipPrompt,
+  exampleContext: {
+    characterName: "Dottore",
+    clipLabel: "Mask off",
+    customPrompt: "Dottore takes off his mask and reveals red eyes while looking into the phone camera.",
+    durationSeconds: 5,
+    aspectRatio: "16:9",
+  },
+};
 
 export const CONVERSATION_CALL_VIDEO_PROMPT_BY_KIND = new Map(
   CLIP_PROMPT_SEEDS.map((seed, index) => [seed.kind, CONVERSATION_CALL_VIDEO_PROMPTS[index]!]),

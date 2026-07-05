@@ -30,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import type {
   ConversationCallCharacterVideoClipKind,
   ConversationCallCharacterVideoManifest,
@@ -42,6 +43,7 @@ import type {
 import { cn, generateClientId, getAvatarCropStyle, type AvatarCropValue } from "../../lib/utils";
 import type { CharacterMap, PersonaInfo } from "./chat-area.types";
 import {
+  conversationCallKeys,
   useConversationCallMessages,
   useConversationCallSoundboard,
   useConversationCallCharacterVideos,
@@ -378,6 +380,25 @@ function readCallMessageAttachments(message: ConversationCallMessage): MessageAt
   });
 }
 
+type ConversationCallCustomClipExtra = {
+  characterId: string;
+  clipId: string | null;
+  label: string;
+  prompt: string;
+};
+
+function readCallCustomClipExtra(message: ConversationCallMessage): ConversationCallCustomClipExtra | null {
+  const raw = message.extra?.conversationCallCustomClip;
+  if (!raw || typeof raw !== "object") return null;
+  const record = raw as Record<string, unknown>;
+  const characterId = typeof record.characterId === "string" ? record.characterId : message.characterId;
+  const label = typeof record.label === "string" ? record.label : "Custom clip";
+  const prompt = typeof record.prompt === "string" ? record.prompt : "";
+  const clipId = typeof record.clipId === "string" ? record.clipId : null;
+  if (!characterId) return null;
+  return { characterId, clipId, label, prompt };
+}
+
 function messageLabel(message: ConversationCallMessage, participants: Participant[]) {
   if (message.participantKind === "user") return participants.find((p) => p.kind === "user")?.name ?? "You";
   return participants.find((p) => p.characterId === message.characterId)?.name ?? "Character";
@@ -538,6 +559,46 @@ async function convertRecordedAudioToWavFile(blob: Blob): Promise<File> {
   } finally {
     void audioContext.close();
   }
+}
+
+function CallCustomClipPreview({ clip }: { clip: ConversationCallCustomClipExtra }) {
+  const { data: manifest } = useConversationCallCharacterVideos(clip.characterId, Boolean(clip.characterId && clip.clipId));
+  const customClip = clip.clipId ? manifest?.customClips.find((item) => item.id === clip.clipId) : null;
+  const status = customClip?.status ?? "generating";
+  const title = customClip?.label ?? clip.label;
+  const description = customClip?.prompt ?? clip.prompt;
+
+  if (customClip?.status === "ready" && customClip.url) {
+    return (
+      <div className="mt-2 max-w-xl overflow-hidden rounded-lg border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--marinara-chat-chrome-panel-bg)]">
+        <video src={customClip.url} controls playsInline className="max-h-80 w-full bg-black object-contain" />
+        <div className="border-t border-[var(--marinara-chat-chrome-panel-border)] px-2.5 py-2">
+          <div className="text-xs font-semibold text-[var(--marinara-chat-chrome-panel-title)]">{title}</div>
+          {description ? (
+            <div className="mt-0.5 text-[0.6875rem] leading-snug text-[var(--marinara-chat-chrome-panel-muted)]">
+              {description}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 max-w-xl rounded-lg border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--marinara-chat-chrome-panel-bg)] px-2.5 py-2 text-xs text-[var(--marinara-chat-chrome-panel-muted)]">
+      <div className="flex items-center gap-2 font-medium text-[var(--marinara-chat-chrome-panel-title)]">
+        {status === "error" ? (
+          <X className="h-3.5 w-3.5 text-[var(--destructive)]" />
+        ) : (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--marinara-chat-chrome-accent)]" />
+        )}
+        <span>{title}</span>
+      </div>
+      <div className="mt-1">
+        {status === "error" ? (customClip?.error ?? "Custom clip generation failed.") : "Preparing custom clip..."}
+      </div>
+    </div>
+  );
 }
 
 function CallAvatar({
@@ -707,6 +768,7 @@ export function ConversationCallSurface({
   onEnded,
   embedded = false,
 }: ConversationCallSurfaceProps) {
+  const queryClient = useQueryClient();
   const { data: persistedMessages = [] } = useConversationCallMessages(session.id);
   const { data: ttsConfig } = useTTSConfig();
   const sendMessage = useSendConversationCallMessage(session.id);
@@ -1282,6 +1344,12 @@ export function ConversationCallSurface({
               toast(title ? `Playing ${title}${artist ? ` - ${artist}` : ""}` : "Playing Spotify track");
             } else if (commandName === "selfie") {
               toast("Selfie generated.");
+            } else if (commandName === "custom_clip") {
+              const label = getCommandStringParam(turn.content, "label") || "Custom clip";
+              toast(`Generating custom clip: ${label}`);
+              if (turn.characterId) {
+                queryClient.invalidateQueries({ queryKey: conversationCallKeys.characterVideos(turn.characterId) });
+              }
             } else if (commandName === "leave_call") {
               handleCharacterLeftCall(turn);
             } else if (commandName === "end_call") {
@@ -1390,6 +1458,7 @@ export function ConversationCallSurface({
       handleCharacterLeftCall,
       participants,
       playSoundByName,
+      queryClient,
       session.id,
       setParticipantVideoTalking,
       setYoutubePlay,
@@ -1935,6 +2004,7 @@ export function ConversationCallSurface({
               ? participants.find((p) => p.kind === "user")
               : participants.find((p) => p.characterId === message.characterId);
           const attachments = readCallMessageAttachments(message);
+          const customClip = readCallCustomClipExtra(message);
           return (
             <div key={message.id} className="flex gap-2">
               {participant ? (
@@ -1959,6 +2029,7 @@ export function ConversationCallSurface({
                 >
                   {messageContent(message, participants)}
                 </p>
+                {customClip ? <CallCustomClipPreview clip={customClip} /> : null}
                 {attachments.length > 0 ? (
                   <div className="mt-2 flex flex-col items-start gap-2">
                     {attachments.map((attachment, index) =>

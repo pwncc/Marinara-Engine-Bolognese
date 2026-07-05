@@ -93,6 +93,17 @@ export interface ConversationCallCharacterVideoClip {
   updatedAt: string | null;
 }
 
+export interface ConversationCallCharacterVideoCustomClip {
+  id: string;
+  label: string;
+  prompt: string;
+  status: ConversationCallCharacterVideoClipStatus;
+  url: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
 export interface ConversationCallCharacterVideoManifest {
   characterId: string;
   characterName: string;
@@ -100,6 +111,7 @@ export interface ConversationCallCharacterVideoManifest {
   generating: boolean;
   updatedAt: string | null;
   clips: ConversationCallCharacterVideoClip[];
+  customClips: ConversationCallCharacterVideoCustomClip[];
 }
 
 export interface ConversationCallMessageResponse {

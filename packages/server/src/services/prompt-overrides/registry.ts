@@ -26,6 +26,7 @@ import { CONVERSATION_SELFIE } from "./registry/conversation.js";
 import {
   CONVERSATION_CALL_VIDEO_CLIP_INSTRUCTION_BY_KIND,
   CONVERSATION_CALL_VIDEO_CLIP_LABEL_BY_KIND,
+  CONVERSATION_CALL_CUSTOM_VIDEO_PROMPT,
   CONVERSATION_CALL_VIDEO_PROMPT_BY_KIND,
   CONVERSATION_CALL_VIDEO_PROMPTS,
 } from "./registry/conversation-call-videos.js";
@@ -44,6 +45,7 @@ export const PROMPT_OVERRIDE_REGISTRY = [
   GAME_STORYBOARD_DIRECTOR,
   GAME_VIDEO,
   ...CONVERSATION_CALL_VIDEO_PROMPTS,
+  CONVERSATION_CALL_CUSTOM_VIDEO_PROMPT,
   CONVERSATION_SELFIE,
 ] as const;
 
@@ -84,6 +86,7 @@ export {
   GAME_STORYBOARD_DIRECTOR,
   GAME_VIDEO,
   CONVERSATION_CALL_VIDEO_PROMPTS,
+  CONVERSATION_CALL_CUSTOM_VIDEO_PROMPT,
   CONVERSATION_CALL_VIDEO_PROMPT_BY_KIND,
   CONVERSATION_CALL_VIDEO_CLIP_INSTRUCTION_BY_KIND,
   CONVERSATION_CALL_VIDEO_CLIP_LABEL_BY_KIND,
@@ -104,6 +107,9 @@ export type {
   GameStoryboardDirectorCtx,
   GameVideoCtx,
 } from "./registry/game-assets.js";
-export type { ConversationCallVideoClipCtx } from "./registry/conversation-call-videos.js";
+export type {
+  ConversationCallCustomVideoClipCtx,
+  ConversationCallVideoClipCtx,
+} from "./registry/conversation-call-videos.js";
 export type { ConversationSelfieCtx } from "./registry/conversation.js";
 export type { PromptOverrideKeyDef, PromptVariable } from "./types.js";

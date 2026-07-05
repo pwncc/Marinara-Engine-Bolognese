@@ -22,6 +22,7 @@ export const DEFAULT_CONVERSATION_CALL_VIDEO_CLIP_DURATIONS: ConversationCallVid
 export const DEFAULT_VIDEO_GENERATION_USER_SETTINGS: VideoGenerationUserSettings = {
   sceneVideoDurationSeconds: 10,
   callClipDurations: DEFAULT_CONVERSATION_CALL_VIDEO_CLIP_DURATIONS,
+  callCustomClipDurationSeconds: 5,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -65,6 +66,12 @@ export function normalizeVideoGenerationUserSettings(raw: unknown): VideoGenerat
       VIDEO_SCENE_DURATION_MAX,
     ),
     callClipDurations: readCallClipDurations(source.callClipDurations),
+    callCustomClipDurationSeconds: clampVideoDuration(
+      source.callCustomClipDurationSeconds,
+      DEFAULT_VIDEO_GENERATION_USER_SETTINGS.callCustomClipDurationSeconds,
+      VIDEO_CALL_CLIP_DURATION_MIN,
+      VIDEO_CALL_CLIP_DURATION_MAX,
+    ),
   };
 }
 
