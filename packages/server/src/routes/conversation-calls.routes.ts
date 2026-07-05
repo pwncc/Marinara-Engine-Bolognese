@@ -192,19 +192,7 @@ function readCharacterContext(data: Record<string, unknown>) {
 }
 
 function characterCanSpeak(settings: Record<string, unknown>, character: { id: string; name: string }) {
-  if (settings.enabled !== true) return false;
-  const voiceMode = typeof settings.voiceMode === "string" ? settings.voiceMode : "single";
-  if (voiceMode !== "per-character") {
-    return typeof settings.voice === "string" && settings.voice.trim().length > 0;
-  }
-  const assignments = Array.isArray(settings.voiceAssignments) ? settings.voiceAssignments : [];
-  return assignments.some((assignment) => {
-    if (!assignment || typeof assignment !== "object" || Array.isArray(assignment)) return false;
-    const record = assignment as Record<string, unknown>;
-    const voice = typeof record.voice === "string" ? record.voice.trim() : "";
-    if (!voice) return false;
-    return record.characterId === character.id || record.characterName === character.name;
-  });
+  return resolveCallTTSVoice(settings, character).length > 0;
 }
 
 function formatDuration(ms: number) {
@@ -447,6 +435,23 @@ function normalizeSpeakerName(value: string) {
   return value.trim().toLowerCase();
 }
 
+function normalizeTTSCharacterName(value?: string | null): string {
+  return (value ?? "").toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function normalizeTTSCharacterBaseName(value?: string | null): string {
+  let normalized = normalizeTTSCharacterName(value);
+  let previous = "";
+  while (normalized && normalized !== previous) {
+    previous = normalized;
+    normalized = normalized.replace(/\s*(?:\([^()]*\)|\[[^\]]*\]|\{[^{}]*})\s*$/g, "").trim();
+  }
+
+  const separatedVariant = normalized.match(/^(.+?)\s+(?:[-–—:|])\s+[^-–—:|]+$/);
+  const base = separatedVariant?.[1]?.trim();
+  return base && base.length > 0 ? base : normalized;
+}
+
 function resolveTurnCharacterId(
   turn: ConversationCallTurn,
   characters: ReadonlyArray<{ id: string; name: string }>,
@@ -476,6 +481,51 @@ function coalesceAdjacentChatMessages(messages: ChatMessage[]): ChatMessage[] {
     merged.push(message);
     return merged;
   }, []);
+}
+
+function readTTSVoiceAssignmentVoice(assignment: unknown): string {
+  if (!assignment || typeof assignment !== "object" || Array.isArray(assignment)) return "";
+  const voice = (assignment as Record<string, unknown>).voice;
+  return typeof voice === "string" ? voice.trim() : "";
+}
+
+function resolveCallTTSVoice(settings: Record<string, unknown>, character: { id: string; name: string }) {
+  if (settings.enabled !== true) return "";
+  const fallbackVoice = typeof settings.voice === "string" ? settings.voice.trim() : "";
+  const voiceMode = typeof settings.voiceMode === "string" ? settings.voiceMode : "single";
+  if (voiceMode !== "per-character") return fallbackVoice;
+
+  const assignments = Array.isArray(settings.voiceAssignments) ? settings.voiceAssignments : [];
+  const normalizedSpeaker = normalizeTTSCharacterName(character.name);
+  const exactAssignment = assignments.find((assignment) => {
+    const voice = readTTSVoiceAssignmentVoice(assignment);
+    if (!voice || !assignment || typeof assignment !== "object" || Array.isArray(assignment)) return false;
+    const record = assignment as Record<string, unknown>;
+    if (record.characterId === character.id) return true;
+    return (
+      normalizedSpeaker.length > 0 &&
+      typeof record.characterName === "string" &&
+      normalizeTTSCharacterName(record.characterName) === normalizedSpeaker
+    );
+  });
+  const exactVoice = readTTSVoiceAssignmentVoice(exactAssignment);
+  if (exactVoice) return exactVoice;
+
+  const normalizedSpeakerBase = normalizeTTSCharacterBaseName(character.name);
+  if (normalizedSpeakerBase) {
+    const baseMatchedVoices = new Set<string>();
+    for (const assignment of assignments) {
+      const voice = readTTSVoiceAssignmentVoice(assignment);
+      if (!voice || !assignment || typeof assignment !== "object" || Array.isArray(assignment)) continue;
+      const characterName = (assignment as Record<string, unknown>).characterName;
+      if (typeof characterName === "string" && normalizeTTSCharacterBaseName(characterName) === normalizedSpeakerBase) {
+        baseMatchedVoices.add(voice);
+      }
+    }
+    if (baseMatchedVoices.size === 1) return [...baseMatchedVoices][0] ?? "";
+  }
+
+  return fallbackVoice;
 }
 
 function formatCallCommandPromptLines(
@@ -895,6 +945,7 @@ async function buildCallPrompt(input: {
     'Use mode "voice" for characters who can speak, "text" when a character should type, and "command" for hidden actions.',
     "One response may include several ordered turns from multiple characters. Use that when a natural live-call exchange should happen before the user speaks again.",
     "If multiple characters respond, order the turns exactly as they should be heard or displayed.",
+    "In group calls, every speaking character must get their own turn so their assigned voice and video clips play on the correct participant.",
     "Do not put speaker prefixes like \"Dottore (speech):\" inside content. Put the speaker in speakerName and only the spoken/typed/command text in content.",
     "For voice turns, include natural TTS cues inside content or tone when useful, such as [soft], [sighs], [brief pause], or [laughing quietly], etc.",
     "</output_format>",
@@ -1712,13 +1763,17 @@ async function persistCallAssistantTurns(input: {
   const characters = await resolveCallCharacters(createCharactersStorage(input.app.db), availableCharacterIds, {
     metadata,
   });
+  const ttsSettings = await readTTSSettings(input.app);
   let lastVisibleAssistantContent: string | null = null;
   for (const turn of input.turns) {
     const characterId = resolveTurnCharacterId(turn, characters);
     if (!characterId) continue;
-    const turnWithResolvedCharacter = { ...turn, characterId };
+    const character = characters.find((candidate) => candidate.id === characterId);
+    const effectiveMode =
+      turn.mode === "voice" && character && !characterCanSpeak(ttsSettings, character) ? "text" : turn.mode;
+    const turnWithResolvedCharacter = { ...turn, mode: effectiveMode, characterId };
     resolvedTurns.push(turnWithResolvedCharacter);
-    if (turn.mode === "command") {
+    if (effectiveMode === "command") {
       const command = normalizeBracketCommand(turn.content) ?? "[command]";
       const commandTurn = { ...turnWithResolvedCharacter, content: command, command };
       const commandMessage = await input.calls.createMessage({
@@ -1756,7 +1811,7 @@ async function persistCallAssistantTurns(input: {
       role: "assistant",
       characterId,
       participantKind: "character",
-      kind: turn.mode === "voice" ? "speech" : "text",
+      kind: effectiveMode === "voice" ? "speech" : "text",
       content: turn.content,
       extra: { turn: turnWithResolvedCharacter },
     });
