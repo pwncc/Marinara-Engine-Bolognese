@@ -398,17 +398,19 @@ export function ConversationView({
   const showTypingIndicator =
     hasLiveStream && !delayedCharacterInfo && !streamBuffer && !thinkingBuffer && conversationMessageStyle !== "bubble";
 
-  // Per-scheme conversation gradient from settings.
-  // When a scheme's values are still the defaults (user hasn't customized), use
-  // a CSS variable so custom themes can override the conversation background.
+  // Per-scheme conversation gradient from settings. When a scheme's values are
+  // still the defaults, use CSS variables so visual themes can override the
+  // default stops without collapsing Marinara's two-color background.
   const convoGradient = useUIStore((s) => s.convoGradient);
   const theme = useUIStore((s) => s.theme);
   const gradientStyle = useMemo(() => {
     const g = convoGradient[theme];
-    const isDefaultDark = convoGradient.dark.from === "#0a0a0e" && convoGradient.dark.to === "#1c2133";
-    const isDefaultLight = convoGradient.light.from === "#f2eff7" && convoGradient.light.to === "#eae6f0";
-    if ((theme === "dark" && isDefaultDark) || (theme === "light" && isDefaultLight)) {
-      return { background: "var(--secondary)" };
+    const defaults =
+      theme === "dark" ? { from: "#0a0a0e", to: "#1c2133" } : { from: "#f2eff7", to: "#eae6f0" };
+    if (g.from === defaults.from && g.to === defaults.to) {
+      return {
+        background: `linear-gradient(135deg, var(--marinara-conversation-gradient-from, ${g.from}), var(--marinara-conversation-gradient-to, ${g.to}))`,
+      };
     }
     return { background: `linear-gradient(135deg, ${g.from}, ${g.to})` };
   }, [convoGradient, theme]);
