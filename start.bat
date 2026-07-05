@@ -264,6 +264,13 @@ if not exist "packages\shared\dist\constants\defaults.js" set "BUILD_REQUIRED=1"
 if not exist "packages\server\dist\index.js" set "BUILD_REQUIRED=1"
 if not exist "packages\client\dist\index.html" set "BUILD_REQUIRED=1"
 if "!BUILD_REQUIRED!"=="1" (
+    echo  [..] Cleaning stale build artifacts...
+    call :run_pnpm --filter @marinara-engine/shared clean
+    if errorlevel 1 echo  [ERROR] Failed to clean shared build artifacts. & pause & exit /b 1
+    call :run_pnpm --filter @marinara-engine/server clean
+    if errorlevel 1 echo  [ERROR] Failed to clean server build artifacts. & pause & exit /b 1
+    call :run_pnpm --filter @marinara-engine/client clean
+    if errorlevel 1 echo  [ERROR] Failed to clean client build artifacts. & pause & exit /b 1
     echo  [..] Building Marinara Engine...
     call :run_pnpm build
     if errorlevel 1 echo  [ERROR] Failed to build Marinara Engine. & pause & exit /b 1

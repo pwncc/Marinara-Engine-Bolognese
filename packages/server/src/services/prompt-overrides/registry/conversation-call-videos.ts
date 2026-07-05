@@ -62,6 +62,12 @@ const CLIP_PROMPT_SEEDS: ClipPromptSeed[] = [
   },
 ];
 
+const LOCKED_CAMERA_REFERENCE_LINES = [
+  "Use a still camera: the camera must be completely locked off for the entire clip. Do not animate the camera.",
+  "No zoom in, zoom out, push-in, pull-out, dolly, pan, tilt, roll, crop change, reframing, phone movement, handheld drift, or perspective change.",
+  "Keep the character's face at the same screen position and the same apparent size from first frame to final frame. Only the character may move.",
+];
+
 function buildDefaultPrompt(ctx: ConversationCallVideoClipCtx) {
   return [
     `Create a ${ctx.durationSeconds}-second ${ctx.aspectRatio} ${ctx.clipLabel} for an AI character in a private video call.`,
@@ -71,9 +77,7 @@ function buildDefaultPrompt(ctx: ConversationCallVideoClipCtx) {
     "The first frame must match the supplied reference image as closely as the provider allows.",
     "The final frame must return to that same reference-matching pose, expression, framing, lighting, outfit, and background so the clip loops seamlessly.",
     "This must be a clean loop with no jump cut, sudden pose reset, snap in expression, or identity drift at the loop point.",
-    "Use a still camera: the camera must be completely locked off for the entire clip. Do not animate the camera.",
-    "No zoom in, zoom out, push-in, pull-out, dolly, pan, tilt, roll, crop change, reframing, phone movement, handheld drift, or perspective change.",
-    "Keep the character's face at the same screen position and the same apparent size from first frame to final frame. Only the character may move.",
+    ...LOCKED_CAMERA_REFERENCE_LINES,
     "Preserve the reference image's face, hair, outfit, mask/accessories, colors, proportions, and art style for the entire clip.",
     "No sudden outfit changes, hairstyle changes, identity drift, lighting shifts, new accessories, or altered facial features.",
     "Single character only. No extra people. No UI, captions, subtitles, speech bubbles, text, logos, or watermarks.",
@@ -90,9 +94,7 @@ function buildDefaultCustomClipPrompt(ctx: ConversationCallCustomVideoClipCtx) {
     `Requested custom action or look: ${ctx.customPrompt}.`,
     "Use only the supplied avatar/reference image as the character identity, appearance, outfit, art style, camera framing, and background reference.",
     "Begin from the reference-matching neutral video-call pose, perform only the requested visual action or reveal, then settle back into a reference-matching stable pose by the final frame.",
-    "Use a still camera: the camera must be completely locked off for the entire clip. Do not animate the camera.",
-    "No zoom in, zoom out, push-in, pull-out, dolly, pan, tilt, roll, crop change, reframing, phone movement, handheld drift, or perspective change.",
-    "Keep the character's face at the same screen position and the same apparent size from first frame to final frame. Only the character may move.",
+    ...LOCKED_CAMERA_REFERENCE_LINES,
     "Preserve the reference image's face, hair, outfit, mask/accessories, colors, proportions, and art style unless the custom request explicitly changes one of those details.",
     "Only change appearance details that the custom request explicitly asks to change; avoid sudden outfit changes, hairstyle changes, identity drift, lighting shifts, or unrelated new accessories.",
     "Single character only. No extra people. No UI, captions, subtitles, speech bubbles, text, logos, or watermarks.",

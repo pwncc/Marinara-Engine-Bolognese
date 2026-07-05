@@ -79,6 +79,13 @@ const CUSTOM_GENERATION_LOCKS = new Map<string, Promise<void>>();
 const MANIFEST_LOCKS = new Map<string, Promise<void>>();
 const CUSTOM_CLIP_LIMIT = 24;
 
+export class ConversationCallVideoGenerationInProgressError extends Error {
+  constructor(message = "This call video clip is still generating") {
+    super(message);
+    this.name = "ConversationCallVideoGenerationInProgressError";
+  }
+}
+
 type SharpFn = (input: Buffer, options?: Record<string, unknown>) => {
   png: () => { toBuffer: () => Promise<Buffer> };
 };
@@ -799,6 +806,9 @@ export async function deleteConversationCallCharacterVideoClip(input: {
   if (!CONVERSATION_CALL_CHARACTER_VIDEO_CLIP_KINDS.includes(input.kind)) {
     throw new Error("Invalid call video clip kind");
   }
+  if (GENERATION_LOCKS.has(input.characterId)) {
+    throw new ConversationCallVideoGenerationInProgressError("Call video clips are still generating for this character");
+  }
 
   const file = clipPath(input.characterId, input.kind);
   const fileExisted = existsSync(file);
@@ -827,7 +837,15 @@ export async function deleteConversationCallCharacterVideoClip(input: {
     },
   });
 
-  return fileExisted || hadManifestEntry;
+  const deleted = fileExisted || hadManifestEntry;
+  if (deleted) {
+    logger.info(
+      "[conversation-call/videos] Deleted %s call video clip for %s",
+      getClipLabel(input.kind),
+      input.characterId,
+    );
+  }
+  return deleted;
 }
 
 export async function deleteConversationCallCustomVideoClip(input: {
@@ -838,6 +856,9 @@ export async function deleteConversationCallCustomVideoClip(input: {
 }): Promise<boolean> {
   assertSafeCharacterId(input.characterId);
   const clipId = assertSafeCustomClipId(input.clipId);
+  if (CUSTOM_GENERATION_LOCKS.has(`${input.characterId}:${clipId}`)) {
+    throw new ConversationCallVideoGenerationInProgressError("This custom call video clip is still generating");
+  }
   const file = customClipPath(input.characterId, clipId);
   const fileExisted = existsSync(file);
   await unlink(file).catch((error: NodeJS.ErrnoException) => {
@@ -864,7 +885,11 @@ export async function deleteConversationCallCustomVideoClip(input: {
     },
   });
 
-  return fileExisted || hadManifestEntry;
+  const deleted = fileExisted || hadManifestEntry;
+  if (deleted) {
+    logger.info("[conversation-call/videos] Deleted custom call video clip %s for %s", clipId, input.characterId);
+  }
+  return deleted;
 }
 
 export function getConversationCallCharacterVideoFile(characterId: string, kind: ConversationCallCharacterVideoClipKind) {

@@ -602,6 +602,7 @@ function CallCustomClipPreview({ clip }: { clip: ConversationCallCustomClipExtra
         <video
           src={customClip.url}
           controls
+          controlsList="novolume"
           muted
           playsInline
           className="max-h-80 w-full bg-black object-contain"

@@ -24,6 +24,7 @@ import { resolveConnectionImageDefaults } from "../services/image/image-generati
 import { loadImageGenerationUserSettings } from "../services/image/image-generation-settings.js";
 import { compileImagePrompt } from "../services/image/image-prompt-compiler.js";
 import {
+  ConversationCallVideoGenerationInProgressError,
   deleteConversationCallCharacterVideoClip,
   deleteConversationCallCustomVideoClip,
   getConversationCallCharacterVideoManifest,
@@ -678,12 +679,19 @@ export async function charactersRoutes(app: FastifyInstance) {
       const kind = parseConversationCallClipKind(clipId.slice("call:".length));
       if (!kind) return reply.status(400).send({ error: "Invalid call clip kind" });
 
-      await deleteConversationCallCharacterVideoClip({
-        characterId: id,
-        characterName,
-        avatarPath: char.avatarPath ?? null,
-        kind,
-      });
+      try {
+        await deleteConversationCallCharacterVideoClip({
+          characterId: id,
+          characterName,
+          avatarPath: char.avatarPath ?? null,
+          kind,
+        });
+      } catch (error) {
+        if (error instanceof ConversationCallVideoGenerationInProgressError) {
+          return reply.status(409).send({ error: error.message });
+        }
+        throw error;
+      }
       return { success: true };
     }
 
@@ -692,12 +700,20 @@ export async function charactersRoutes(app: FastifyInstance) {
       if (!/^[A-Za-z0-9_-]{6,80}$/.test(customClipId)) {
         return reply.status(400).send({ error: "Invalid custom clip id" });
       }
-      const deleted = await deleteConversationCallCustomVideoClip({
-        characterId: id,
-        characterName,
-        avatarPath: char.avatarPath ?? null,
-        clipId: customClipId,
-      });
+      let deleted = false;
+      try {
+        deleted = await deleteConversationCallCustomVideoClip({
+          characterId: id,
+          characterName,
+          avatarPath: char.avatarPath ?? null,
+          clipId: customClipId,
+        });
+      } catch (error) {
+        if (error instanceof ConversationCallVideoGenerationInProgressError) {
+          return reply.status(409).send({ error: error.message });
+        }
+        throw error;
+      }
       if (!deleted) return reply.status(404).send({ error: "Clip not found" });
       return { success: true };
     }
