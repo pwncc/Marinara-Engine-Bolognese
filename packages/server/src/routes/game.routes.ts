@@ -2588,7 +2588,7 @@ const GAME_SETUP_MIN_OUTPUT_TOKENS = 16_384;
 const SESSION_CONCLUSION_MIN_OUTPUT_TOKENS = 8192;
 const CAMPAIGN_PROGRESSION_MIN_OUTPUT_TOKENS = SESSION_CONCLUSION_MIN_OUTPUT_TOKENS;
 const GAME_GENERATION_TIMEOUT_MS = 5 * 60 * 1000;
-const GAME_ASSET_GENERATION_TIMEOUT_MS = 220 * 1000;
+const GAME_ASSET_GENERATION_TIMEOUT_MS = 45 * 60 * 1000;
 const GAME_SCENE_VIDEO_GENERATION_TIMEOUT_MS = 31 * 60 * 1000;
 const GAME_ILLUSTRATION_SUMMARY_TIMEOUT_MS = 60 * 1000;
 const GAME_DYNAMIC_IMAGE_PROMPT_TIMEOUT_MS = 45 * 1000;
@@ -10349,49 +10349,65 @@ export async function gameRoutes(app: FastifyInstance) {
         }
       }
 
-      for (const npc of input.npcsNeedingAvatars) {
-        const normalizedNpcName = normalizeJournalMatch(npc.name);
-        const forceNpcAvatar = forceNpcAvatarNames.has(normalizedNpcName);
-        if (!forceNpcAvatar && existingNpcAvatarByName.get(normalizedNpcName)) continue;
-        if (!forceNpcAvatar && findCharAvatarFuzzy(npc.name, charAvatarByName)) continue;
-        const metadataNpc = findNpcRecordByName(currentNpcs, npc.name);
-        const presentCharacter = findRecordByName(presentCharacters, npc.name);
-        const appearance = resolveNpcPortraitAppearance(npc, metadataNpc, presentCharacter);
-        const promptOverride = promptOverrideById.get(gameImagePromptReviewId("portrait", npc.name));
+      type PreviewAssetItem = (typeof items)[number];
+      const portraitPreviewItems: Array<PreviewAssetItem | null> = new Array(input.npcsNeedingAvatars.length).fill(
+        null,
+      );
+      let nextNpcIndex = 0;
+      const runPortraitPreviewWorker = async () => {
+        while (true) {
+          const index = nextNpcIndex++;
+          const npc = input.npcsNeedingAvatars?.[index];
+          if (!npc) return;
 
-        const compiledReviewPrompt = await buildNpcPortraitProviderPrompt({
-          chatId: input.chatId,
-          npcName: npc.name,
-          appearance,
-          gender: npc.gender ?? metadataNpc?.gender ?? optionalTrimmedString(presentCharacter?.gender),
-          pronouns: npc.pronouns ?? metadataNpc?.pronouns ?? optionalTrimmedString(presentCharacter?.pronouns),
-          artStyle,
-          imgSource,
-          imgModel,
-          imgBaseUrl,
-          imgApiKey,
-          imgService: imgServiceHint,
-          imgEndpointId,
-          imgComfyWorkflow,
-          imgDefaults,
-          styleProfiles,
-          styleProfileId,
-          promptOverridesStorage,
-          dynamicPromptGenerator,
-          size: portraitSize,
-          promptOverride: promptOverride?.prompt,
-          negativePromptOverride: promptOverride?.negativePrompt,
-        });
-        items.push({
-          id: gameImagePromptReviewId("portrait", npc.name),
-          kind: "portrait",
-          title: `Portrait: ${npc.name}`,
-          prompt: compiledReviewPrompt.prompt,
-          negativePrompt: compiledReviewPrompt.negativePrompt,
-          width: portraitSize.width,
-          height: portraitSize.height,
-        });
-      }
+          const normalizedNpcName = normalizeJournalMatch(npc.name);
+          const forceNpcAvatar = forceNpcAvatarNames.has(normalizedNpcName);
+          if (!forceNpcAvatar && existingNpcAvatarByName.get(normalizedNpcName)) continue;
+          if (!forceNpcAvatar && findCharAvatarFuzzy(npc.name, charAvatarByName)) continue;
+          const metadataNpc = findNpcRecordByName(currentNpcs, npc.name);
+          const presentCharacter = findRecordByName(presentCharacters, npc.name);
+          const appearance = resolveNpcPortraitAppearance(npc, metadataNpc, presentCharacter);
+          const promptOverride = promptOverrideById.get(gameImagePromptReviewId("portrait", npc.name));
+
+          const compiledReviewPrompt = await buildNpcPortraitProviderPrompt({
+            chatId: input.chatId,
+            npcName: npc.name,
+            appearance,
+            gender: npc.gender ?? metadataNpc?.gender ?? optionalTrimmedString(presentCharacter?.gender),
+            pronouns: npc.pronouns ?? metadataNpc?.pronouns ?? optionalTrimmedString(presentCharacter?.pronouns),
+            artStyle,
+            imgSource,
+            imgModel,
+            imgBaseUrl,
+            imgApiKey,
+            imgService: imgServiceHint,
+            imgEndpointId,
+            imgComfyWorkflow,
+            imgDefaults,
+            styleProfiles,
+            styleProfileId,
+            promptOverridesStorage,
+            dynamicPromptGenerator,
+            size: portraitSize,
+            promptOverride: promptOverride?.prompt,
+            negativePromptOverride: promptOverride?.negativePrompt,
+          });
+          portraitPreviewItems[index] = {
+            id: gameImagePromptReviewId("portrait", npc.name),
+            kind: "portrait",
+            title: `Portrait: ${npc.name}`,
+            prompt: compiledReviewPrompt.prompt,
+            negativePrompt: compiledReviewPrompt.negativePrompt,
+            width: portraitSize.width,
+            height: portraitSize.height,
+          };
+        }
+      };
+      const portraitPreviewWorkerCount = input.queueImageGenerationRequests
+        ? 1
+        : Math.min(GAME_ASSET_PORTRAIT_CONCURRENCY, input.npcsNeedingAvatars.length);
+      await Promise.all(Array.from({ length: portraitPreviewWorkerCount }, () => runPortraitPreviewWorker()));
+      items.push(...portraitPreviewItems.filter((item): item is PreviewAssetItem => item !== null));
     }
 
     return { items };
