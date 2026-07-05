@@ -1021,8 +1021,8 @@ export function ConnectionEditor() {
 
   if (!conn) {
     return (
-      <div className="flex flex-1 items-center justify-center">
-        <p className="text-sm text-[var(--muted-foreground)]">Connection not found</p>
+      <div className="mari-editor-shell flex flex-1 items-center justify-center">
+        <p className="mari-editor-empty px-4 py-3 text-sm">Connection not found</p>
       </div>
     );
   }
@@ -1508,8 +1508,10 @@ export function ConnectionEditor() {
                         const previousDefaultModel = defaultVideoModelForService(selectedVideoService);
                         const nextDefaultModel = defaultVideoModelForService(src.id);
                         const shouldSeedModel = !localModel || localModel === previousDefaultModel;
+                        const nextDefaultsService = videoSourceToDefaultsService(src.id);
                         setLocalVideoGenerationSource(src.id);
                         setLocalVideoService(src.id);
+                        setLocalVideoDefaults(createDefaultVideoGenerationProfile(nextDefaultsService));
                         if (shouldSeedBaseUrl) {
                           setLocalBaseUrl(src.defaultBaseUrl);
                         }
