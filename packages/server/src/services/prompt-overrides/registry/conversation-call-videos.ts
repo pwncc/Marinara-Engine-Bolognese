@@ -30,37 +30,37 @@ const CLIP_PROMPT_SEEDS: ClipPromptSeed[] = [
     kind: "idle",
     label: "idle loop",
     instruction:
-      "Begin from neutral idle, keep the character facing the phone/camera, add subtle breathing, blinking, and tiny natural head movement, then settle fully back into the same neutral idle pose by the final frame.",
+      "Create a seamless neutral video-call idle loop. The first frame and final frame must match: same pose, expression, gaze, camera framing, hair, outfit, lighting, and background. Add only subtle breathing, blinking, and tiny natural head movement between those matching endpoints.",
   },
   {
     kind: "talking",
     label: "talking loop",
     instruction:
-      "Begin from neutral idle, make the character speak naturally with subtle mouth and face movement, then settle fully back into neutral idle by the final frame so Marinara can return to idle cleanly when audio stops.",
+      "Start on the exact same neutral video-call pose used by the idle loop, animate natural speaking with subtle mouth and face movement, then return to that identical neutral pose by the final frame. The clip must loop cleanly without a visible jump.",
   },
   {
     kind: "laughing",
     label: "laughing reaction",
     instruction:
-      "Begin from neutral idle, laugh softly with natural face and shoulder movement, then settle fully back into neutral idle by the final frame.",
+      "Start on the exact same neutral video-call pose used by the idle loop, laugh softly with natural face and shoulder movement, then return to that identical neutral pose by the final frame. The first and final frames must match for a clean loop.",
   },
   {
     kind: "angry",
     label: "angry reaction",
     instruction:
-      "Begin from neutral idle, show anger or irritation in the face and posture, then settle fully back into neutral idle by the final frame.",
+      "Start on the exact same neutral video-call pose used by the idle loop, show anger or irritation in the face and posture, then return to that identical neutral pose by the final frame. The first and final frames must match for a clean loop.",
   },
   {
     kind: "crying",
     label: "crying reaction",
     instruction:
-      "Begin from neutral idle, show a restrained tearful or crying reaction, then settle fully back into neutral idle by the final frame.",
+      "Start on the exact same neutral video-call pose used by the idle loop, show a restrained tearful or crying reaction, then return to that identical neutral pose by the final frame. The first and final frames must match for a clean loop.",
   },
   {
     kind: "sighing",
     label: "sighing reaction",
     instruction:
-      "Begin from neutral idle, sigh with a small breath and head movement, then settle fully back into neutral idle by the final frame.",
+      "Start on the exact same neutral video-call pose used by the idle loop, sigh with a small breath and head movement, then return to that identical neutral pose by the final frame. The first and final frames must match for a clean loop.",
   },
 ];
 
@@ -71,7 +71,10 @@ function buildDefaultPrompt(ctx: ConversationCallVideoClipCtx) {
     ctx.characterDescription ? `Character visual/personality notes:\n${ctx.characterDescription}` : "",
     ctx.clipInstruction,
     "Use the supplied avatar as the exact identity and art style reference.",
-    "Keep camera framing stable like a video-call participant tile. Preserve the avatar's face, hair, outfit cues, and art style.",
+    "This must be a clean loop: first frame and final frame should be visually interchangeable, with no jump cut, sudden pose reset, or snap in expression.",
+    "Keep camera framing locked and stable like a video-call participant tile. No cuts, zooms, pans, scene changes, or background swaps.",
+    "Preserve the avatar's face, hair, outfit cues, mask/accessories, colors, proportions, and art style for the entire clip.",
+    "No sudden outfit changes, hairstyle changes, identity drift, lighting shifts, new accessories, or altered facial features.",
     "Single character only. No extra people. No UI, captions, subtitles, speech bubbles, text, logos, or watermarks.",
   ]
     .filter(Boolean)
@@ -86,8 +89,10 @@ function buildDefaultCustomClipPrompt(ctx: ConversationCallCustomVideoClipCtx) {
     `Clip label: ${ctx.clipLabel}.`,
     `Requested custom action or look: ${ctx.customPrompt}.`,
     "Use the supplied avatar as the exact identity and art style reference.",
-    "Begin from the character's neutral video-call idle pose, perform the requested visual action or reveal clearly, then settle into a stable natural pose by the final frame.",
-    "Keep camera framing stable like a private video-call participant tile. Preserve the avatar's face, hair, outfit cues, and art style.",
+    "Begin from the character's neutral video-call idle pose, perform the requested visual action or reveal clearly, then settle into a stable natural video-call pose by the final frame.",
+    "Keep camera framing locked and stable like a private video-call participant tile. No cuts, zooms, pans, scene changes, or background swaps.",
+    "Preserve the avatar's face, hair, outfit cues, mask/accessories, colors, proportions, and art style for the entire clip.",
+    "Only change appearance details that the custom request explicitly asks to change; avoid sudden outfit changes, hairstyle changes, identity drift, lighting shifts, or unrelated new accessories.",
     "Single character only. No extra people. No UI, captions, subtitles, speech bubbles, text, logos, or watermarks.",
   ]
     .filter(Boolean)
@@ -111,7 +116,7 @@ function makeConversationCallVideoPrompt(seed: ClipPromptSeed): PromptOverrideKe
         description: "Clip-specific animation direction.",
         example: seed.instruction,
       },
-      { name: "durationSeconds", description: "Requested clip duration in seconds.", example: "4" },
+      { name: "durationSeconds", description: "Requested clip duration in seconds.", example: "5" },
       { name: "aspectRatio", description: "Requested video aspect ratio.", example: "16:9" },
     ],
     defaultBuilder: buildDefaultPrompt,
@@ -120,7 +125,7 @@ function makeConversationCallVideoPrompt(seed: ClipPromptSeed): PromptOverrideKe
       characterDescription: "Description: A masked doctor. Appearance: Wears a mask that covers his eyes.",
       clipLabel: seed.label,
       clipInstruction: seed.instruction,
-      durationSeconds: seed.kind === "idle" || seed.kind === "talking" ? 5 : 4,
+      durationSeconds: 5,
       aspectRatio: "16:9",
     },
   };

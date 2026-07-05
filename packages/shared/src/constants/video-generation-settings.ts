@@ -15,10 +15,10 @@ export const VIDEO_ANIMATED_EXPRESSION_CLIP_DURATION_MAX = 8;
 export const DEFAULT_CONVERSATION_CALL_VIDEO_CLIP_DURATIONS: ConversationCallVideoClipDurations = {
   idle: 5,
   talking: 5,
-  laughing: 4,
-  angry: 4,
-  crying: 4,
-  sighing: 4,
+  laughing: 5,
+  angry: 5,
+  crying: 5,
+  sighing: 5,
 };
 
 export const DEFAULT_VIDEO_GENERATION_USER_SETTINGS: VideoGenerationUserSettings = {

@@ -279,7 +279,7 @@ function getClipLabel(kind: ConversationCallCharacterVideoClipKind) {
 function getClipInstruction(kind: ConversationCallCharacterVideoClipKind) {
   return (
     CONVERSATION_CALL_VIDEO_CLIP_INSTRUCTION_BY_KIND.get(kind) ??
-    "Begin from neutral idle, animate naturally for the clip type, then settle fully back into neutral idle by the final frame."
+    "Start from the neutral video-call idle pose, animate naturally for the clip type, then return to the identical neutral pose by the final frame so the clip loops cleanly."
   );
 }
 
@@ -303,7 +303,10 @@ async function buildClipPrompt(input: {
       characterDescription ? `Character visual/personality notes:\n${characterDescription}` : "",
       getClipInstruction(input.kind),
       "Use the supplied avatar as the exact identity and art style reference.",
-      "Keep camera framing stable like a video-call participant tile. Preserve the avatar's face, hair, outfit cues, and art style.",
+      "This must be a clean loop: first frame and final frame should be visually interchangeable, with no jump cut, sudden pose reset, or snap in expression.",
+      "Keep camera framing locked and stable like a video-call participant tile. No cuts, zooms, pans, scene changes, or background swaps.",
+      "Preserve the avatar's face, hair, outfit cues, mask/accessories, colors, proportions, and art style for the entire clip.",
+      "No sudden outfit changes, hairstyle changes, identity drift, lighting shifts, new accessories, or altered facial features.",
       "Single character only. No extra people. No UI, captions, subtitles, speech bubbles, text, logos, or watermarks.",
     ]
       .filter(Boolean)
