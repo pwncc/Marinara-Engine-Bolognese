@@ -364,21 +364,21 @@ export function ConnectionEditor() {
     const storedImageDefaults = defaultsService
       ? getStoredImageGenerationDefaults(c.defaultParameters, defaultsService)
       : null;
+    const explicitVideoService = ((c.videoService as string | null) ?? null) || null;
     const videoGenerationSource =
       (c.provider as APIProvider) === "video_generation"
         ? ((c.videoGenerationSource as string) ??
-          (c.videoService as string) ??
+          explicitVideoService ??
           inferVideoSource((c.model as string) ?? "", (c.baseUrl as string) ?? ""))
         : "";
-    const videoService = ((c.videoService as string | null) ?? (c.videoGenerationSource as string | null)) || null;
     const storedVideoDefaults =
       (c.provider as APIProvider) === "video_generation" ? getStoredVideoGenerationDefaults(c.defaultParameters) : null;
     const videoDefaultsService = videoSelectionToDefaultsService(
-      videoService || videoGenerationSource || storedVideoDefaults?.service,
+      explicitVideoService || storedVideoDefaults?.service || videoGenerationSource,
       (c.model as string) ?? "",
       (c.baseUrl as string) ?? "",
     );
-    const videoProviderSource = videoSourceToProviderOption(videoGenerationSource || videoService || videoDefaultsService);
+    const videoProviderSource = videoSourceToProviderOption(videoGenerationSource || explicitVideoService || videoDefaultsService);
     setLocalImageGenerationSource(imageGenerationSource);
     setLocalComfyuiWorkflow((c.comfyuiWorkflow as string) ?? "");
     setLocalImageService(imageService);

@@ -513,7 +513,7 @@ async function buildCallVideoReferenceImage(
 ): Promise<VideoReferenceImage> {
   try {
     const sharp = await getSharp();
-    const framed = await sharp(buffer, { limitInputPixels: false })
+    const framed = await sharp(buffer)
       .resize({
         width: CALL_VIDEO_REFERENCE_WIDTH,
         height: CALL_VIDEO_REFERENCE_HEIGHT,

@@ -290,6 +290,20 @@ class TTSService {
       const audio = new Audio(objectUrl);
       this.applyPlaybackOptions(audio, options);
       this.audio = audio;
+      const runChunkStart = () => {
+        try {
+          options.onChunkStart?.(request, index);
+        } catch (err) {
+          console.warn("[TTS] Chunk start callback failed:", err);
+        }
+      };
+      const runChunkEnd = () => {
+        try {
+          options.onChunkEnd?.(request, index);
+        } catch (err) {
+          console.warn("[TTS] Chunk end callback failed:", err);
+        }
+      };
 
       await new Promise<void>((resolve, reject) => {
         let settled = false;
@@ -321,17 +335,23 @@ class TTSService {
         audio.onended = () => {
           if (!this.isCurrentSequence(sequence) || this.audio !== audio) return;
           finish(() => {
-            options.onChunkEnd?.(request, index);
-            this.cleanup();
-            resolve();
+            try {
+              runChunkEnd();
+            } finally {
+              this.cleanup();
+              resolve();
+            }
           });
         };
         audio.onerror = () => {
-          options.onChunkEnd?.(request, index);
-          fail(new Error("Audio playback failed"));
+          try {
+            runChunkEnd();
+          } finally {
+            fail(new Error("Audio playback failed"));
+          }
         };
 
-        options.onChunkStart?.(request, index);
+        runChunkStart();
         this.setState("playing", id ?? null);
         void audio.play().catch((err) => fail(toError(err, "Browser blocked audio playback")));
       });

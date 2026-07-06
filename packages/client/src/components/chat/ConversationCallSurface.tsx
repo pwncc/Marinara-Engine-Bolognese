@@ -321,9 +321,9 @@ function buildCallTtsVideoChunks(lines: string[], tone: string): CallTtsVideoChu
       const beforeCue = line.slice(cursor, cueStart);
       if (hasNonCueSpeech(beforeCue)) {
         pushCallTtsVideoChunk(chunks, beforeCue, "talking");
-        pushCallTtsVideoChunk(chunks, cue, reactionKind);
+        pushCallTtsVideoChunk(chunks, cue, reactionKind, "talking");
       } else {
-        pushCallTtsVideoChunk(chunks, `${beforeCue.trim()} ${cue}`.trim(), reactionKind);
+        pushCallTtsVideoChunk(chunks, `${beforeCue.trim()} ${cue}`.trim(), reactionKind, "talking");
       }
       recognizedCueCount += 1;
       cursor = cueStart + cue.length;

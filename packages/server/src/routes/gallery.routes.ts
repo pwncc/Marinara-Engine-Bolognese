@@ -748,9 +748,11 @@ export async function galleryRoutes(app: FastifyInstance) {
       (videoDefaults.service !== "gemini_omni"
         ? videoDefaults.service
         : inferVideoSource(videoConn.model || "", videoConn.baseUrl || ""));
+    const rawServiceHint = videoConn.videoService || source;
     const serviceHint =
-      videoConn.videoService ||
-      (source === "google_ai_studio" ? inferVideoSource(videoConn.model || "", videoConn.baseUrl || "") : source);
+      rawServiceHint === "google_ai_studio"
+        ? inferVideoSource(videoConn.model || "", videoConn.baseUrl || "")
+        : rawServiceHint;
     const isXaiVideo = source === "xai" || serviceHint === "xai";
     const isGoogleVeoVideo = source === "google_veo" || serviceHint === "google_veo";
     const isOpenRouterVideo = source === "openrouter" || serviceHint === "openrouter";
@@ -1067,8 +1069,10 @@ export async function galleryRoutes(app: FastifyInstance) {
         : imageSettings.styleProfiles.defaultProfileId;
     const selfieResolution = readTrimmedString(meta.selfieResolution) ?? "";
     const [selfieWidth, selfieHeight] = selfieResolution.split("x").map(Number) as [number, number];
-    const width = selfieWidth || imageSettings.selfie.width;
-    const height = selfieHeight || imageSettings.selfie.height;
+    const width =
+      Number.isSafeInteger(selfieWidth) && selfieWidth > 0 ? selfieWidth : imageSettings.selfie.width;
+    const height =
+      Number.isSafeInteger(selfieHeight) && selfieHeight > 0 ? selfieHeight : imageSettings.selfie.height;
     const compiledPrompt = compileImagePrompt({
       kind: "selfie",
       prompt: finalPrompt,
@@ -1090,7 +1094,7 @@ export async function galleryRoutes(app: FastifyInstance) {
     }
 
     try {
-      const imageResult = await generateImage(imageModel, imageBaseUrl, imageConn.apiKey || "", imageServiceHint, {
+      const imageResult = await generateImage(imageSource, imageBaseUrl, imageConn.apiKey || "", imageServiceHint, {
         prompt: compiledPrompt.prompt,
         negativePrompt: compiledPrompt.negativePrompt || undefined,
         model: imageModel,

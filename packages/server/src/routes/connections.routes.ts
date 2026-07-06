@@ -921,9 +921,11 @@ export async function connectionsRoutes(app: FastifyInstance) {
     const explicitVideoSource = conn.videoGenerationSource || conn.videoService || "";
     const videoSource =
       explicitVideoSource || (inferredVideoSource !== "gemini_omni" ? inferredVideoSource : defaults.service);
+    const rawVideoServiceHint = conn.videoService || videoSource;
     const videoServiceHint =
-      conn.videoService ||
-      (videoSource === "google_ai_studio" ? inferVideoSource(conn.model || "", conn.baseUrl || "") : videoSource);
+      rawVideoServiceHint === "google_ai_studio"
+        ? inferVideoSource(conn.model || "", conn.baseUrl || "")
+        : rawVideoServiceHint;
     const isXaiVideo = videoSource === "xai" || videoServiceHint === "xai";
     const isGoogleVeoVideo = videoSource === "google_veo" || videoServiceHint === "google_veo";
     const isOpenRouterVideo = videoSource === "openrouter" || videoServiceHint === "openrouter";

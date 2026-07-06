@@ -806,7 +806,8 @@ function buildOpenRouterContentUrl(baseUrl: string, jobId: string): string {
 
 function buildSeedanceUrl(baseUrl: string, path: string): string {
   const fallback = "https://api.seedance2.ai";
-  const raw = (baseUrl || fallback).trim().replace(/\/+$/, "") || fallback;
+  const configured = baseUrl.trim();
+  const raw = (configured || fallback).replace(/\/+$/, "");
   try {
     const url = new URL(raw);
     const root = url.pathname.replace(/\/+$/, "").replace(/\/v1(?:\/.*)?$/i, "");
@@ -815,7 +816,16 @@ function buildSeedanceUrl(baseUrl: string, path: string): string {
     url.hash = "";
     return url.toString();
   } catch {
-    return `${fallback}/${path.replace(/^\/+/, "")}`;
+    throw new Error(`Invalid Seedance base URL: ${baseUrl}`);
+  }
+}
+
+function isTrustedSeedanceDownloadOrigin(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.origin === "https://api.seedance2.ai";
+  } catch {
+    return false;
   }
 }
 
@@ -907,12 +917,13 @@ async function downloadSeedanceVideo(
   apiKey: string,
   signal: AbortSignal | undefined,
 ): Promise<VideoGenerationResult> {
+  const headers: Record<string, string> = { Accept: "video/mp4,video/*;q=0.9,*/*;q=0.1" };
+  if (isTrustedSeedanceDownloadOrigin(url)) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
   const res = await safeFetch(url, {
     method: "GET",
-    headers: {
-      Accept: "video/mp4,video/*;q=0.9,*/*;q=0.1",
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers,
     signal,
     policy: {
       allowLocal: false,
@@ -1000,8 +1011,6 @@ async function seedanceReferenceImageUrl(
       }
       throw new Error(message);
     }
-    const uploaded = await maybeUploadSeedanceReferenceImage(image, label, publicUpload, signal);
-    if (uploaded) return uploaded;
     const publicBaseUrl = process.env.VIDEO_REFERENCE_PUBLIC_BASE_URL?.trim();
     if (publicBaseUrl) {
       try {
@@ -1011,6 +1020,8 @@ async function seedanceReferenceImageUrl(
         // Fall through to the setup error below.
       }
     }
+    const uploaded = await maybeUploadSeedanceReferenceImage(image, label, publicUpload, signal);
+    if (uploaded) return uploaded;
   }
 
   const uploaded = await maybeUploadSeedanceReferenceImage(image, label, publicUpload, signal);

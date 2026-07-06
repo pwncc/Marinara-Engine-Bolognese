@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Routes: Characters, Personas & Groups
 // ──────────────────────────────────────────────
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import {
   createCharacterSchema,
   updateCharacterSchema,
@@ -70,6 +70,33 @@ const CALL_VIDEO_CLIP_LABELS = {
 } as const;
 const CALL_VIDEO_CLIP_UPLOAD_MAX_BYTES = 250 * 1024 * 1024;
 const ALLOWED_CALL_VIDEO_CLIP_UPLOAD_EXTS = new Set([".mp4"]);
+type UploadedMultipartFile = NonNullable<Awaited<ReturnType<FastifyRequest["file"]>>>;
+
+class CallVideoClipUploadTooLargeError extends Error {
+  constructor() {
+    super("Video call clip uploads must be 250 MB or smaller.");
+  }
+}
+
+function isMultipartFileTruncated(data: UploadedMultipartFile) {
+  return (data.file as typeof data.file & { truncated?: boolean }).truncated === true;
+}
+
+async function readCallVideoClipUploadBuffer(data: UploadedMultipartFile) {
+  try {
+    const buffer = await data.toBuffer();
+    if (buffer.length > CALL_VIDEO_CLIP_UPLOAD_MAX_BYTES || isMultipartFileTruncated(data)) {
+      throw new CallVideoClipUploadTooLargeError();
+    }
+    return buffer;
+  } catch (error) {
+    if (error instanceof CallVideoClipUploadTooLargeError) throw error;
+    if (isMultipartFileTruncated(data) || (error as { code?: string }).code === "FST_REQ_FILE_TOO_LARGE") {
+      throw new CallVideoClipUploadTooLargeError();
+    }
+    throw error;
+  }
+}
 
 async function ensureCharacterGalleryDir(characterId: string) {
   const dir = join(CHARACTER_GALLERY_ROOT, characterId);
@@ -722,7 +749,7 @@ export async function charactersRoutes(app: FastifyInstance) {
     const char = await storage.getById(id);
     if (!char) return reply.status(404).send({ error: "Character not found" });
 
-    const data = await req.file();
+    const data = await req.file({ limits: { fileSize: CALL_VIDEO_CLIP_UPLOAD_MAX_BYTES } });
     if (!data) {
       return reply.status(400).send({ error: "No file uploaded" });
     }
@@ -732,7 +759,15 @@ export async function charactersRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "Video call clips must be MP4 files." });
     }
 
-    const buffer = await data.toBuffer();
+    let buffer: Buffer;
+    try {
+      buffer = await readCallVideoClipUploadBuffer(data);
+    } catch (error) {
+      if (error instanceof CallVideoClipUploadTooLargeError) {
+        return reply.status(413).send({ error: error.message });
+      }
+      throw error;
+    }
     if (buffer.length > CALL_VIDEO_CLIP_UPLOAD_MAX_BYTES) {
       return reply.status(413).send({ error: "Video call clip uploads must be 250 MB or smaller." });
     }
@@ -902,7 +937,7 @@ export async function charactersRoutes(app: FastifyInstance) {
     const char = await storage.getById(id);
     if (!char) return reply.status(404).send({ error: "Character not found" });
 
-    const data = await req.file();
+    const data = await req.file({ limits: { fileSize: CALL_VIDEO_CLIP_UPLOAD_MAX_BYTES } });
     if (!data) {
       return reply.status(400).send({ error: "No file uploaded" });
     }
@@ -1555,7 +1590,15 @@ export async function charactersRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "Video call clips must be MP4 files." });
     }
 
-    const buffer = await data.toBuffer();
+    let buffer: Buffer;
+    try {
+      buffer = await readCallVideoClipUploadBuffer(data);
+    } catch (error) {
+      if (error instanceof CallVideoClipUploadTooLargeError) {
+        return reply.status(413).send({ error: error.message });
+      }
+      throw error;
+    }
     if (buffer.length > CALL_VIDEO_CLIP_UPLOAD_MAX_BYTES) {
       return reply.status(413).send({ error: "Video call clip uploads must be 250 MB or smaller." });
     }
@@ -1574,6 +1617,9 @@ export async function charactersRoutes(app: FastifyInstance) {
     } catch (error) {
       if (error instanceof ConversationCallVideoClipUploadError) {
         return reply.status(400).send({ error: error.message });
+      }
+      if (error instanceof ConversationCallVideoGenerationInProgressError) {
+        return reply.status(409).send({ error: error.message });
       }
       throw error;
     }

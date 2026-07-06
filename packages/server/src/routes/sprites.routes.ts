@@ -382,9 +382,11 @@ function resolveVideoConnection(connection: VideoGenerationConnection) {
     (videoDefaults.service !== "gemini_omni"
       ? videoDefaults.service
       : inferVideoSource(connection.model || "", connection.baseUrl || ""));
+  const rawServiceHint = connection.videoService || source;
   const serviceHint =
-    connection.videoService ||
-    (source === "google_ai_studio" ? inferVideoSource(connection.model || "", connection.baseUrl || "") : source);
+    rawServiceHint === "google_ai_studio"
+      ? inferVideoSource(connection.model || "", connection.baseUrl || "")
+      : rawServiceHint;
   const isXaiVideo = source === "xai" || serviceHint === "xai";
   const isGoogleVeoVideo = source === "google_veo" || serviceHint === "google_veo";
   const isOpenRouterVideo = source === "openrouter" || serviceHint === "openrouter";
@@ -1302,9 +1304,12 @@ async function resolveVideoReferenceImage(input?: string): Promise<VideoReferenc
   const base64 = resolveReferenceImageBase64(input);
   if (!base64) return null;
   const trimmedInput = input?.trim() ?? "";
+  const normalizedInputPath = normalizeLocalImagePath(trimmedInput);
   const referenceUrl =
-    /^https?:\/\//i.test(trimmedInput) || normalizeLocalImagePath(trimmedInput).startsWith("/")
-      ? normalizeLocalImagePath(trimmedInput)
+    /^https?:\/\//i.test(trimmedInput)
+      ? trimmedInput
+      : normalizedInputPath.startsWith("/api/") || normalizedInputPath.startsWith("/sprites/")
+        ? normalizedInputPath
       : null;
   const buffer = Buffer.from(extractBase64ImageData(base64), "base64");
   const info = isAllowedImageBuffer(buffer);

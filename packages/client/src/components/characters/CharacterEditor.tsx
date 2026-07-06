@@ -2229,16 +2229,20 @@ function CharacterClipsGallery({ characterId, characterName }: { characterId: st
     [uploadClip],
   );
 
-  const handleUploadCallClip = useCallback((clip?: CharacterGalleryClip) => {
-    const kind = clip?.source === "conversation-call" ? clip.clipKind : null;
-    if (clip && !kind) return;
-    pendingClipUploadRef.current = {
-      kind,
-      label: kind ? clip?.label ?? null : null,
-      clipId: clip?.id ?? "custom-call:upload",
-    };
-    clipUploadInputRef.current?.click();
-  }, []);
+  const handleUploadCallClip = useCallback(
+    (clip?: CharacterGalleryClip) => {
+      if (uploadClip.isPending) return;
+      const kind = clip?.source === "conversation-call" ? clip.clipKind : null;
+      if (clip && !kind) return;
+      pendingClipUploadRef.current = {
+        kind,
+        label: kind ? clip?.label ?? null : null,
+        clipId: clip?.id ?? "custom-call:upload",
+      };
+      clipUploadInputRef.current?.click();
+    },
+    [uploadClip.isPending],
+  );
 
   const handleDeleteClip = useCallback(
     async (clip: CharacterGalleryClip) => {
@@ -2347,6 +2351,7 @@ function CharacterClipsGallery({ characterId, characterName }: { characterId: st
               deleting={deletingClipId === clip.id}
               generating={generatingClipId === clip.id}
               uploading={uploadingClipId === clip.id}
+              uploadDisabled={uploadClip.isPending}
               generationDisabled={generationLockActive}
               onGenerate={handleGenerateCallClips}
               onUpload={handleUploadCallClip}
@@ -2578,6 +2583,7 @@ function CharacterClipCard({
   deleting,
   generating,
   uploading,
+  uploadDisabled,
   generationDisabled,
   onGenerate,
   onUpload,
@@ -2589,6 +2595,7 @@ function CharacterClipCard({
   deleting: boolean;
   generating: boolean;
   uploading: boolean;
+  uploadDisabled: boolean;
   generationDisabled: boolean;
   onGenerate: (clip: CharacterGalleryClip) => void | Promise<void>;
   onUpload: (clip: CharacterGalleryClip) => void;
@@ -2642,7 +2649,7 @@ function CharacterClipCard({
               <button
                 type="button"
                 onClick={() => onUpload(clip)}
-                disabled={uploading || generationDisabled}
+                disabled={uploading || uploadDisabled || generationDisabled}
                 className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-2.5 py-1 text-[0.7rem] font-semibold text-[var(--foreground)] opacity-0 shadow-sm transition-all hover:border-[var(--primary)]/50 hover:text-[var(--primary)] focus-visible:opacity-100 disabled:cursor-not-allowed disabled:text-[var(--muted-foreground)] group-hover:opacity-100 max-md:opacity-100"
                 title={`Upload ${clip.label || "call clip"}`}
               >
@@ -2685,7 +2692,7 @@ function CharacterClipCard({
               <button
                 type="button"
                 onClick={() => onUpload(clip)}
-                disabled={uploading || generationDisabled}
+                disabled={uploading || uploadDisabled || generationDisabled}
                 className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] p-1.5 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
                 title="Upload replacement"
                 aria-label={`Upload replacement for ${clip.label || "clip"}`}

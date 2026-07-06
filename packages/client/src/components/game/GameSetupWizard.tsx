@@ -522,6 +522,7 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
       })),
     [characterGroupsList],
   );
+  const validCharacterIds = useMemo(() => new Set(characters.map((character) => character.id)), [characters]);
 
   const lorebooks = useMemo(
     () => (lorebooksList as Array<{ id: string; name: string; enabled?: boolean }>) ?? [],
@@ -609,7 +610,6 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
     (folderId: string) => {
       const folder = characterFolders.find((entry) => entry.id === folderId);
       if (!folder) return;
-      const validCharacterIds = new Set(characters.map((character) => character.id));
       const folderCharacterIds = folder.characterIds.filter((id) => validCharacterIds.has(id) && id !== gmCharacterId);
       setPartyCharacterIds((prev) => {
         const next = [...prev];
@@ -620,7 +620,7 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
       });
       setPartyFolderId("");
     },
-    [characterFolders, characters, gmCharacterId],
+    [characterFolders, gmCharacterId, validCharacterIds],
   );
 
   const filteredGmCharacters = useMemo(
@@ -1354,7 +1354,7 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
                       <option value="">Add from Folder</option>
                       {characterFolders.map((folder) => {
                         const newCount = folder.characterIds.filter(
-                          (id) => id !== gmCharacterId && !partyCharacterIds.includes(id),
+                          (id) => validCharacterIds.has(id) && id !== gmCharacterId && !partyCharacterIds.includes(id),
                         ).length;
                         return (
                           <option key={folder.id} value={folder.id}>
