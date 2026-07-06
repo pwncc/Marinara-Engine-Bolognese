@@ -6,6 +6,8 @@
 // ──────────────────────────────────────────────
 import type { PromptOverrideKeyDef } from "../types.js";
 import {
+  GAME_VIDEO_PROMPT_TEMPLATE,
+  GAME_VIDEO_PROMPT_TEMPLATE_VARIABLES,
   GAME_STORYBOARD_PROMPT_TEMPLATE_VARIABLES,
   GAME_STORYBOARD_STILL_PROMPT_TEMPLATE,
 } from "@marinara-engine/shared";
@@ -426,26 +428,7 @@ export const GAME_VIDEO: PromptOverrideKeyDef<GameVideoCtx> = {
       example: "Use the provided scene illustration as the first frame/reference image.",
     },
   ],
-  defaultBuilder: (ctx) => {
-    const charactersLine = labelVideoPromptLine("Characters", ctx.charactersLine);
-    const settingLine = labelVideoPromptLine("Setting", ctx.settingLine);
-    const artStyleLine = labelVideoPromptLine("Art style", ctx.artStyleLine);
-    return [
-      `Create a ${ctx.durationSeconds}-second ${ctx.aspectRatio} animated game scene from the provided first-frame illustration.`,
-      ctx.sourceIllustrationLine,
-      ctx.sceneTitle ? `Scene: ${ctx.sceneTitle}.` : "",
-      ctx.narrationSummary ? `Story beat: ${ctx.narrationSummary}` : "",
-      charactersLine,
-      settingLine,
-      artStyleLine,
-      ctx.illustrationPrompt ? `Reference prompt excerpt: ${ctx.illustrationPrompt}` : "",
-      "Use the reference image as the visual anchor. Keep recognizable characters, setting, and mood while adding motion that feels natural for this moment.",
-      "You may choose the most cinematic camera drift, focus shift, gestures, atmospheric movement, and ending pose that fit the scene.",
-      "Avoid subtitles, captions, UI, logos, watermarks, unrelated new characters, distorted anatomy, and abrupt cuts.",
-    ]
-      .filter(Boolean)
-      .join("\n");
-  },
+  defaultBuilder: (ctx) => renderTemplate(GAME_VIDEO_PROMPT_TEMPLATE, ctx, GAME_VIDEO_PROMPT_TEMPLATE_VARIABLES),
   exampleContext: {
     sceneTitle: "Moonlit duel aftermath",
     narrationSummary: "Korr kneels in the rain as Lyra steadies herself over the fallen blade.",
@@ -458,10 +441,3 @@ export const GAME_VIDEO: PromptOverrideKeyDef<GameVideoCtx> = {
     sourceIllustrationLine: "Use the provided scene illustration as the first frame/reference image.",
   },
 };
-
-function labelVideoPromptLine(label: string, value: string | number | undefined): string {
-  const clean = typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
-  if (!clean) return "";
-  if (/^[A-Z][A-Za-z ]{1,30}:\s/.test(clean)) return clean;
-  return `${label}: ${clean.replace(/[.]?$/, ".")}`;
-}

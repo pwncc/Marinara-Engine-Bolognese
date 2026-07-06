@@ -18,6 +18,7 @@ import {
 } from "../../packages/shared/src/index.js";
 import { renderAgentPromptTemplate } from "../../packages/server/src/services/agents/agent-executor.js";
 import type { ResolvedAgent } from "../../packages/server/src/services/agents/agent-pipeline.js";
+import { loadGameVideoPrompt } from "../../packages/server/src/services/video/game-video-prompt.js";
 import { countUserMessagesAfterSummaryAnchor } from "../../packages/server/src/services/conversation/auto-summary.service.js";
 import { buildLegacyDefaultAgentConfigUpdate } from "../../packages/server/src/services/agents/default-prompt-migration.js";
 import { buildMemoryRecallBlock } from "../../packages/server/src/services/generation/memory-recall-context.js";
@@ -52,6 +53,7 @@ import { fitMessagesForModelAccess } from "../../packages/server/src/services/ge
 import { assemblePrompt, type AssemblerInput } from "../../packages/server/src/services/prompt/index.js";
 import { executeToolCalls } from "../../packages/server/src/services/tools/tool-executor.js";
 import { parseRouterResponse } from "../../packages/server/src/services/agents/knowledge-router.js";
+import type { PromptOverridesStorage } from "../../packages/server/src/services/storage/prompt-overrides.storage.js";
 import {
   GAME_STORYBOARD_ILLUSTRATION_DIRECTOR,
   listPromptOverrideKeys,
@@ -579,6 +581,58 @@ const cases: RegressionCase[] = [
       assert.doesNotMatch(illustrationPrompt, /"transitionHint"/);
       assert.equal(promptKeys.includes("game.storyboardIllustrationDirector"), true);
       assert.equal(promptKeys.includes("game.storyboardDirector"), false);
+    },
+  },
+  {
+    name: "game video prompt selection wins over global prompt override",
+    async run() {
+      const promptOverridesStorage = {
+        async get(key: string) {
+          if (key !== "game.video") return null;
+          return {
+            key,
+            template: "GLOBAL VIDEO OVERRIDE ${sceneTitle}",
+            enabled: true,
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          };
+        },
+        async list() {
+          return [];
+        },
+        async upsert(input) {
+          return { key: input.key, template: input.template, enabled: input.enabled, updatedAt: "2026-01-01T00:00:00.000Z" };
+        },
+        async remove() {},
+      } satisfies PromptOverridesStorage;
+
+      const prompt = await loadGameVideoPrompt({
+        promptOverridesStorage,
+        meta: {
+          gameVideoPromptTemplateId: "custom-video-motion",
+          gameVideoPromptTemplates: [
+            {
+              id: "custom-video-motion",
+              name: "Custom Video Motion",
+              description: "Regression template",
+              promptTemplate: "CHAT VIDEO ${sceneTitle} ${sourceIllustrationLine}",
+            },
+          ],
+        },
+        ctx: {
+          sceneTitle: "Arrival",
+          narrationSummary: "The party reaches the gate.",
+          illustrationPrompt: "A wide gate at sunset.",
+          charactersLine: "Mira, Sol",
+          settingLine: "sunset city gate",
+          artStyleLine: "painterly fantasy",
+          durationSeconds: 6,
+          aspectRatio: "16:9",
+          sourceIllustrationLine: "Use image-123 as the first frame/reference image.",
+        },
+      });
+
+      assert.equal(prompt, "CHAT VIDEO Arrival Use image-123 as the first frame/reference image.");
+      assert.doesNotMatch(prompt, /GLOBAL VIDEO OVERRIDE/);
     },
   },
   {

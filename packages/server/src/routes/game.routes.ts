@@ -182,7 +182,6 @@ import {
   GAME_NARRATION_SUMMARIZER,
   GAME_IMAGE_PROMPT_DIRECTOR,
   GAME_STORYBOARD_ILLUSTRATION_DIRECTOR,
-  GAME_VIDEO,
   loadPrompt,
   renderTemplate,
   type GameStoryboardIllustratorCtx,
@@ -195,6 +194,7 @@ import {
   summarizeVideoNarration,
   type SceneVideoPromptLimits,
 } from "../services/video/prompt-context.js";
+import { loadGameVideoPrompt } from "../services/video/game-video-prompt.js";
 import { now } from "../utils/id-generator.js";
 import { DATA_DIR } from "../utils/data-dir.js";
 import { assertInsideDir } from "../utils/security.js";
@@ -1252,23 +1252,28 @@ async function buildStoryboardGalleryAnimatePrompt(args: {
       ? args.plannedFrame.characters
       : collectOmniCharacterNames(args.meta, args.latestState);
 
-  const promptDraft = await loadPrompt(args.promptOverridesStorage, GAME_VIDEO, {
-    sceneTitle: compactVideoPromptText(
-      args.plannedFrame.title || sceneTitleFromGalleryImage(args.galleryImage),
-      args.promptLimits.title,
-    ),
-    narrationSummary,
-    illustrationPrompt:
-      excerptIllustrationPromptForVideo(args.galleryImage.prompt, args.promptLimits.illustrationPrompt) ||
-      `Use the supplied first-frame storyboard illustration for ${sourceDescription}.`,
-    charactersLine: characterNames.length
-      ? characterNames.join(", ")
-      : "preserve any visible characters from the reference image",
-    settingLine: buildOmniSettingLine(args.setupConfig, args.latestState, args.meta, args.promptLimits.artStyle),
-    artStyleLine: compactVideoPromptText(args.artStyle, args.promptLimits.artStyle) || "match the supplied illustration",
-    durationSeconds: args.plannedFrame.durationSeconds,
-    aspectRatio: args.plannedFrame.aspectRatio,
-    sourceIllustrationLine: `Use ${sourceDescription} as the first frame/reference image.`,
+  const promptDraft = await loadGameVideoPrompt({
+    promptOverridesStorage: args.promptOverridesStorage,
+    meta: args.meta,
+    ctx: {
+      sceneTitle: compactVideoPromptText(
+        args.plannedFrame.title || sceneTitleFromGalleryImage(args.galleryImage),
+        args.promptLimits.title,
+      ),
+      narrationSummary,
+      illustrationPrompt:
+        excerptIllustrationPromptForVideo(args.galleryImage.prompt, args.promptLimits.illustrationPrompt) ||
+        `Use the supplied first-frame storyboard illustration for ${sourceDescription}.`,
+      charactersLine: characterNames.length
+        ? characterNames.join(", ")
+        : "preserve any visible characters from the reference image",
+      settingLine: buildOmniSettingLine(args.setupConfig, args.latestState, args.meta, args.promptLimits.artStyle),
+      artStyleLine:
+        compactVideoPromptText(args.artStyle, args.promptLimits.artStyle) || "match the supplied illustration",
+      durationSeconds: args.plannedFrame.durationSeconds,
+      aspectRatio: args.plannedFrame.aspectRatio,
+      sourceIllustrationLine: `Use ${sourceDescription} as the first frame/reference image.`,
+    },
   });
   return limitSceneVideoPromptForProvider(promptDraft, args.promptLimits.finalPrompt);
 }
@@ -10274,21 +10279,26 @@ export async function gameRoutes(app: FastifyInstance) {
         : "") ||
       "";
     const characterNames = collectOmniCharacterNames(meta, latestState);
-    const promptDraft = await loadPrompt(promptOverridesStorage, GAME_VIDEO, {
-      sceneTitle: compactVideoPromptText(sourceTitle, promptLimits.title),
-      narrationSummary: latestNarrationSummary(messages, promptLimits.narrationSummary),
-      illustrationPrompt:
-        excerptIllustrationPromptForVideo(latestIllustrationPrompt, promptLimits.illustrationPrompt) ||
-        `Use the supplied first-frame illustration for ${sourceDescription}.`,
-      charactersLine: characterNames.length
-        ? characterNames.join(", ")
-        : "preserve any visible characters from the reference image",
-      settingLine: buildOmniSettingLine(setupConfig, latestState, meta, promptLimits.artStyle),
-      artStyleLine:
-        compactVideoPromptText(setupConfig?.artStylePrompt, promptLimits.artStyle) || "match the supplied illustration",
-      durationSeconds,
-      aspectRatio,
-      sourceIllustrationLine: `Use ${sourceDescription} as the first frame/reference image.`,
+    const promptDraft = await loadGameVideoPrompt({
+      promptOverridesStorage,
+      meta,
+      ctx: {
+        sceneTitle: compactVideoPromptText(sourceTitle, promptLimits.title),
+        narrationSummary: latestNarrationSummary(messages, promptLimits.narrationSummary),
+        illustrationPrompt:
+          excerptIllustrationPromptForVideo(latestIllustrationPrompt, promptLimits.illustrationPrompt) ||
+          `Use the supplied first-frame illustration for ${sourceDescription}.`,
+        charactersLine: characterNames.length
+          ? characterNames.join(", ")
+          : "preserve any visible characters from the reference image",
+        settingLine: buildOmniSettingLine(setupConfig, latestState, meta, promptLimits.artStyle),
+        artStyleLine:
+          compactVideoPromptText(setupConfig?.artStylePrompt, promptLimits.artStyle) ||
+          "match the supplied illustration",
+        durationSeconds,
+        aspectRatio,
+        sourceIllustrationLine: `Use ${sourceDescription} as the first frame/reference image.`,
+      },
     });
     const prompt = limitSceneVideoPromptForProvider(promptDraft, promptLimits.finalPrompt);
 
