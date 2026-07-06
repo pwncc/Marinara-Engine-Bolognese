@@ -378,10 +378,13 @@ function resolveVideoConnection(connection: VideoGenerationConnection) {
     (videoDefaults.service !== "gemini_omni"
       ? videoDefaults.service
       : inferVideoSource(connection.model || "", connection.baseUrl || ""));
-  const serviceHint = connection.videoService || source;
+  const serviceHint =
+    connection.videoService ||
+    (source === "google_ai_studio" ? inferVideoSource(connection.model || "", connection.baseUrl || "") : source);
   const isXaiVideo = source === "xai" || serviceHint === "xai";
   const isGoogleVeoVideo = source === "google_veo" || serviceHint === "google_veo";
   const isOpenRouterVideo = source === "openrouter" || serviceHint === "openrouter";
+  const isSeedanceVideo = source === "seedance" || serviceHint === "seedance";
   return {
     source,
     serviceHint,
@@ -393,6 +396,8 @@ function resolveVideoConnection(connection: VideoGenerationConnection) {
           ? "https://generativelanguage.googleapis.com/v1beta"
         : isOpenRouterVideo
           ? "https://openrouter.ai/api/v1"
+        : isSeedanceVideo
+          ? "https://api.seedance2.ai"
           : "https://generativelanguage.googleapis.com/v1beta"),
     model:
       connection.model ||
@@ -402,6 +407,8 @@ function resolveVideoConnection(connection: VideoGenerationConnection) {
           ? "veo-3.1-generate-preview"
           : isOpenRouterVideo
             ? "google/veo-3.1"
+          : isSeedanceVideo
+            ? "seedance-2-0"
             : "gemini-omni-flash-preview"),
     resolution: isXaiVideo
       ? videoDefaults.xai.resolution
@@ -409,6 +416,8 @@ function resolveVideoConnection(connection: VideoGenerationConnection) {
         ? videoDefaults.googleVeo.resolution
       : isOpenRouterVideo
         ? videoDefaults.openrouter.resolution
+      : isSeedanceVideo
+        ? videoDefaults.seedance.resolution
         : undefined,
   };
 }
@@ -1287,15 +1296,20 @@ function resolveReferenceImageBase64(input?: string): string | undefined {
 async function resolveVideoReferenceImage(input?: string): Promise<VideoReferenceImage | null> {
   const base64 = resolveReferenceImageBase64(input);
   if (!base64) return null;
+  const trimmedInput = input?.trim() ?? "";
+  const referenceUrl =
+    /^https?:\/\//i.test(trimmedInput) || normalizeLocalImagePath(trimmedInput).startsWith("/")
+      ? normalizeLocalImagePath(trimmedInput)
+      : null;
   const buffer = Buffer.from(extractBase64ImageData(base64), "base64");
   const info = isAllowedImageBuffer(buffer);
   if (info?.mimeType === "image/png" || info?.mimeType === "image/jpeg") {
-    return { base64: buffer.toString("base64"), mimeType: info.mimeType };
+    return { base64: buffer.toString("base64"), mimeType: info.mimeType, url: referenceUrl };
   }
   if (info) {
     const sharp = await getSharp();
     const png = await sharp(buffer, { limitInputPixels: false }).png().toBuffer();
-    return { base64: png.toString("base64"), mimeType: "image/png" };
+    return { base64: png.toString("base64"), mimeType: "image/png", url: referenceUrl };
   }
   return null;
 }

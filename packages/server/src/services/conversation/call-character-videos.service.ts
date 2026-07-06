@@ -95,6 +95,8 @@ const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video-1.5";
 const DEFAULT_XAI_VIDEO_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_OPENROUTER_VIDEO_MODEL = "google/veo-3.1";
 const DEFAULT_OPENROUTER_VIDEO_BASE_URL = "https://openrouter.ai/api/v1";
+const DEFAULT_SEEDANCE_VIDEO_MODEL = "seedance-2-0";
+const DEFAULT_SEEDANCE_VIDEO_BASE_URL = "https://api.seedance2.ai";
 const CALL_CHARACTER_VIDEO_VERSION = 1;
 type GenerationLock = {
   job: Promise<void>;
@@ -478,12 +480,13 @@ async function readAvatarIdentity(avatarPath: string | null): Promise<AvatarIden
 async function readAvatarReferenceImage(avatarPath: string | null): Promise<AvatarReference> {
   const { buffer, imageInfo } = await readAvatarFile(avatarPath);
   const identity = { path: avatarPath, digest: avatarDigest(buffer) };
+  const url = avatarPath?.split("?")[0] ?? null;
   if (imageInfo.mimeType === "image/png" || imageInfo.mimeType === "image/jpeg") {
-    return { image: { base64: buffer.toString("base64"), mimeType: imageInfo.mimeType }, identity };
+    return { image: { base64: buffer.toString("base64"), mimeType: imageInfo.mimeType, url }, identity };
   }
   const sharp = await getSharp();
   const png = await sharp(buffer, { limitInputPixels: false }).png().toBuffer();
-  return { image: { base64: png.toString("base64"), mimeType: "image/png" }, identity };
+  return { image: { base64: png.toString("base64"), mimeType: "image/png", url }, identity };
 }
 
 function getClipLabel(kind: ConversationCallCharacterVideoClipKind) {
@@ -558,10 +561,13 @@ function resolveVideoConnection(connection: VideoGenerationConnection) {
     (videoDefaults.service !== "gemini_omni"
       ? videoDefaults.service
       : inferVideoSource(connection.model || "", connection.baseUrl || ""));
-  const serviceHint = connection.videoService || source;
+  const serviceHint =
+    connection.videoService ||
+    (source === "google_ai_studio" ? inferVideoSource(connection.model || "", connection.baseUrl || "") : source);
   const isXaiVideo = source === "xai" || serviceHint === "xai";
   const isGoogleVeoVideo = source === "google_veo" || serviceHint === "google_veo";
   const isOpenRouterVideo = source === "openrouter" || serviceHint === "openrouter";
+  const isSeedanceVideo = source === "seedance" || serviceHint === "seedance";
   return {
     source,
     serviceHint,
@@ -573,6 +579,8 @@ function resolveVideoConnection(connection: VideoGenerationConnection) {
           ? DEFAULT_GOOGLE_VEO_BASE_URL
         : isOpenRouterVideo
           ? DEFAULT_OPENROUTER_VIDEO_BASE_URL
+        : isSeedanceVideo
+          ? DEFAULT_SEEDANCE_VIDEO_BASE_URL
           : DEFAULT_GEMINI_OMNI_BASE_URL),
     model:
       connection.model ||
@@ -582,6 +590,8 @@ function resolveVideoConnection(connection: VideoGenerationConnection) {
           ? DEFAULT_GOOGLE_VEO_MODEL
         : isOpenRouterVideo
           ? DEFAULT_OPENROUTER_VIDEO_MODEL
+        : isSeedanceVideo
+          ? DEFAULT_SEEDANCE_VIDEO_MODEL
           : DEFAULT_GEMINI_OMNI_MODEL),
     resolution: isXaiVideo
       ? videoDefaults.xai.resolution
@@ -589,6 +599,8 @@ function resolveVideoConnection(connection: VideoGenerationConnection) {
         ? videoDefaults.googleVeo.resolution
       : isOpenRouterVideo
         ? videoDefaults.openrouter.resolution
+      : isSeedanceVideo
+        ? videoDefaults.seedance.resolution
         : undefined,
   };
 }
@@ -693,6 +705,7 @@ async function runGenerationJob(input: {
           aspectRatio: "16:9",
           resolution: resolved.resolution,
           referenceImage: reference.image,
+          lastFrameImage: reference.image,
         },
       );
       const file = clipPath(input.characterId, kind);
@@ -813,6 +826,7 @@ async function runCustomClipGenerationJob(input: {
         aspectRatio: "16:9",
         resolution: resolved.resolution,
         referenceImage: reference.image,
+        lastFrameImage: reference.image,
       },
     );
     const file = customClipPath(input.characterId, input.clipId);

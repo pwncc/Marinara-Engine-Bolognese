@@ -1061,6 +1061,8 @@ const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video-1.5";
 const DEFAULT_XAI_VIDEO_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_OPENROUTER_VIDEO_MODEL = "google/veo-3.1";
 const DEFAULT_OPENROUTER_VIDEO_BASE_URL = "https://openrouter.ai/api/v1";
+const DEFAULT_SEEDANCE_VIDEO_MODEL = "seedance-2-0";
+const DEFAULT_SEEDANCE_VIDEO_BASE_URL = "https://api.seedance2.ai";
 
 type GameSceneVideoRow = NonNullable<Awaited<ReturnType<ReturnType<typeof createGameSceneVideosStorage>["getById"]>>>;
 type ChatGalleryImageRow = NonNullable<Awaited<ReturnType<ReturnType<typeof createGalleryStorage>["getById"]>>>;
@@ -1122,10 +1124,10 @@ function imageMimeTypeForPath(path: string): VideoReferenceImage["mimeType"] | n
   return null;
 }
 
-function readOmniReferenceImage(path: string): VideoReferenceImage {
+function readOmniReferenceImage(path: string, url?: string | null): VideoReferenceImage {
   const mimeType = imageMimeTypeForPath(path);
   if (!mimeType) throw new Error("Scene videos require a PNG or JPEG scene illustration");
-  return { base64: readFileSync(path).toString("base64"), mimeType };
+  return { base64: readFileSync(path).toString("base64"), mimeType, url };
 }
 
 function titleCaseSlug(value: string): string {
@@ -9725,10 +9727,13 @@ export async function gameRoutes(app: FastifyInstance) {
             (videoDefaults.service !== "gemini_omni"
               ? videoDefaults.service
               : inferVideoSource(videoConn.model || "", videoConn.baseUrl || ""));
-          const serviceHint = videoConn.videoService || source;
+          const serviceHint =
+            videoConn.videoService ||
+            (source === "google_ai_studio" ? inferVideoSource(videoConn.model || "", videoConn.baseUrl || "") : source);
           const isXaiVideo = source === "xai" || serviceHint === "xai";
           const isGoogleVeoVideo = source === "google_veo" || serviceHint === "google_veo";
           const isOpenRouterVideo = source === "openrouter" || serviceHint === "openrouter";
+          const isSeedanceVideo = source === "seedance" || serviceHint === "seedance";
           const promptLimits = getSceneVideoPromptLimits(isXaiVideo);
           videoRuntime = {
             source,
@@ -9741,6 +9746,8 @@ export async function gameRoutes(app: FastifyInstance) {
                   ? DEFAULT_GOOGLE_VEO_BASE_URL
                   : isOpenRouterVideo
                     ? DEFAULT_OPENROUTER_VIDEO_BASE_URL
+                  : isSeedanceVideo
+                    ? DEFAULT_SEEDANCE_VIDEO_BASE_URL
                     : DEFAULT_GEMINI_OMNI_BASE_URL),
             apiKey: videoConn.apiKey || "",
             model:
@@ -9751,6 +9758,8 @@ export async function gameRoutes(app: FastifyInstance) {
                   ? DEFAULT_GOOGLE_VEO_MODEL
                   : isOpenRouterVideo
                     ? DEFAULT_OPENROUTER_VIDEO_MODEL
+                  : isSeedanceVideo
+                    ? DEFAULT_SEEDANCE_VIDEO_MODEL
                     : DEFAULT_GEMINI_OMNI_MODEL),
             resolution: isXaiVideo
               ? videoDefaults.xai.resolution
@@ -9758,8 +9767,10 @@ export async function gameRoutes(app: FastifyInstance) {
                 ? videoDefaults.googleVeo.resolution
                 : isOpenRouterVideo
                 ? videoDefaults.openrouter.resolution
+                : isSeedanceVideo
+                ? videoDefaults.seedance.resolution
                 : undefined,
-            maxDurationSeconds: isXaiVideo ? 15 : isGoogleVeoVideo ? 8 : 60,
+            maxDurationSeconds: isXaiVideo || isSeedanceVideo ? 15 : isGoogleVeoVideo ? 8 : 60,
             promptLimits,
           };
         }
@@ -9858,7 +9869,10 @@ export async function gameRoutes(app: FastifyInstance) {
             try {
               const galleryImagePath = resolveGalleryImagePath(galleryImage);
               if (!galleryImagePath) throw new Error("Storyboard keyframe image file could not be found.");
-              const referenceImage = readOmniReferenceImage(galleryImagePath);
+              const referenceImage = readOmniReferenceImage(
+                galleryImagePath,
+                sourceGalleryImagePathForMetadata(galleryImage),
+              );
               const prompt = await buildStoryboardGalleryAnimatePrompt({
                 promptOverridesStorage,
                 galleryImage,
@@ -10100,13 +10114,13 @@ export async function gameRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: "The selected gallery illustration file could not be found." });
       }
       try {
-        referenceImage = readOmniReferenceImage(galleryImagePath);
+        sourceIllustrationPath = sourceGalleryImagePathForMetadata(galleryImage);
+        referenceImage = readOmniReferenceImage(galleryImagePath, sourceIllustrationPath);
       } catch (err) {
         const message = err instanceof Error ? err.message : "The selected gallery illustration cannot be used.";
         return reply.status(400).send({ error: message });
       }
       illustrationTag = illustrationTag || `gallery:${galleryImage.id}`;
-      sourceIllustrationPath = sourceGalleryImagePathForMetadata(galleryImage);
       sourceIllustrationPrompt = galleryImage.prompt ?? "";
       sourceTitle = sceneTitleFromGalleryImage(galleryImage);
       sourceDescription = `the selected gallery illustration (${galleryImage.id})`;
@@ -10121,12 +10135,12 @@ export async function gameRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: "The current scene illustration file could not be found." });
       }
       try {
-        referenceImage = readOmniReferenceImage(sourceIllustrationAssetPath);
+        sourceIllustrationPath = sourceIllustrationPathForMetadata(sourceIllustrationAssetPath);
+        referenceImage = readOmniReferenceImage(sourceIllustrationAssetPath, sourceIllustrationPath);
       } catch (err) {
         const message = err instanceof Error ? err.message : "The current scene illustration cannot be used.";
         return reply.status(400).send({ error: message });
       }
-      sourceIllustrationPath = sourceIllustrationPathForMetadata(sourceIllustrationAssetPath);
       sourceTitle = sceneTitleFromIllustrationTag(illustrationTag);
       sourceDescription = `the current scene illustration (${illustrationTag})`;
     }
@@ -10142,16 +10156,21 @@ export async function gameRoutes(app: FastifyInstance) {
       (videoDefaults.service !== "gemini_omni"
         ? videoDefaults.service
         : inferVideoSource(videoConn.model || "", videoConn.baseUrl || ""));
-    const serviceHint = videoConn.videoService || source;
+    const serviceHint =
+      videoConn.videoService ||
+      (source === "google_ai_studio" ? inferVideoSource(videoConn.model || "", videoConn.baseUrl || "") : source);
     const isXaiVideo = source === "xai" || serviceHint === "xai";
     const isGoogleVeoVideo = source === "google_veo" || serviceHint === "google_veo";
     const isOpenRouterVideo = source === "openrouter" || serviceHint === "openrouter";
+    const isSeedanceVideo = source === "seedance" || serviceHint === "seedance";
     const activeVideoDefaults = isXaiVideo
       ? videoDefaults.xai
       : isGoogleVeoVideo
         ? videoDefaults.googleVeo
         : isOpenRouterVideo
           ? videoDefaults.openrouter
+        : isSeedanceVideo
+          ? videoDefaults.seedance
           : videoDefaults.geminiOmni;
     const videoSettings = normalizeVideoGenerationUserSettings(
       await createAppSettingsStorage(app.db).get(VIDEO_GENERATION_SETTINGS_KEY),
@@ -10159,10 +10178,11 @@ export async function gameRoutes(app: FastifyInstance) {
     const fallbackDurationSeconds = storedVideoDefaults
       ? activeVideoDefaults.durationSeconds
       : videoSettings.sceneVideoDurationSeconds;
-    const maxDurationSeconds = isXaiVideo ? 15 : isGoogleVeoVideo ? 8 : 60;
+    const maxDurationSeconds = isXaiVideo || isSeedanceVideo ? 15 : isGoogleVeoVideo ? 8 : 60;
+    const minDurationSeconds = isGoogleVeoVideo || isSeedanceVideo ? 4 : 1;
     const durationSeconds = Math.min(
       maxDurationSeconds,
-      Math.max(1, Math.trunc(input.durationSeconds ?? fallbackDurationSeconds)),
+      Math.max(minDurationSeconds, Math.trunc(input.durationSeconds ?? fallbackDurationSeconds)),
     );
     const aspectRatio = input.aspectRatio ?? activeVideoDefaults.aspectRatio;
     const baseUrl =
@@ -10173,6 +10193,8 @@ export async function gameRoutes(app: FastifyInstance) {
           ? DEFAULT_GOOGLE_VEO_BASE_URL
           : isOpenRouterVideo
             ? DEFAULT_OPENROUTER_VIDEO_BASE_URL
+          : isSeedanceVideo
+            ? DEFAULT_SEEDANCE_VIDEO_BASE_URL
             : DEFAULT_GEMINI_OMNI_BASE_URL);
     const model =
       videoConn.model ||
@@ -10182,6 +10204,8 @@ export async function gameRoutes(app: FastifyInstance) {
           ? DEFAULT_GOOGLE_VEO_MODEL
           : isOpenRouterVideo
             ? DEFAULT_OPENROUTER_VIDEO_MODEL
+          : isSeedanceVideo
+            ? DEFAULT_SEEDANCE_VIDEO_MODEL
             : DEFAULT_GEMINI_OMNI_MODEL);
     const resolution = isXaiVideo
       ? videoDefaults.xai.resolution
@@ -10189,6 +10213,8 @@ export async function gameRoutes(app: FastifyInstance) {
         ? videoDefaults.googleVeo.resolution
         : isOpenRouterVideo
           ? videoDefaults.openrouter.resolution
+        : isSeedanceVideo
+          ? videoDefaults.seedance.resolution
           : undefined;
     const promptLimits = getSceneVideoPromptLimits(isXaiVideo);
 

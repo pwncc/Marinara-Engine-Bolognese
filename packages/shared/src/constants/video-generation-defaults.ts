@@ -2,6 +2,7 @@ import type {
   GeminiOmniVideoDefaults,
   GoogleVeoVideoDefaults,
   OpenRouterVideoDefaults,
+  SeedanceVideoDefaults,
   VideoAspectRatio,
   VideoDefaultsService,
   VideoGenerationDefaultsProfile,
@@ -12,7 +13,13 @@ import type {
 export const VIDEO_DEFAULTS_STORAGE_KEY = "videoGeneration";
 export const VIDEO_GENERATION_DEFAULTS_VERSION = 1 as const;
 
-export const VIDEO_DEFAULTS_SERVICES: VideoDefaultsService[] = ["gemini_omni", "google_veo", "xai", "openrouter"];
+export const VIDEO_DEFAULTS_SERVICES: VideoDefaultsService[] = [
+  "gemini_omni",
+  "google_veo",
+  "xai",
+  "openrouter",
+  "seedance",
+];
 
 export const DEFAULT_GEMINI_OMNI_VIDEO_DEFAULTS: GeminiOmniVideoDefaults = {
   durationSeconds: 10,
@@ -37,6 +44,12 @@ export const DEFAULT_OPENROUTER_VIDEO_DEFAULTS: OpenRouterVideoDefaults = {
   resolution: "720p",
 };
 
+export const DEFAULT_SEEDANCE_VIDEO_DEFAULTS: SeedanceVideoDefaults = {
+  durationSeconds: 5,
+  aspectRatio: "16:9",
+  resolution: "720p",
+};
+
 export function createDefaultVideoGenerationProfile(
   service: VideoDefaultsService = "gemini_omni",
 ): VideoGenerationDefaultsProfile {
@@ -47,6 +60,7 @@ export function createDefaultVideoGenerationProfile(
     googleVeo: { ...DEFAULT_GOOGLE_VEO_VIDEO_DEFAULTS },
     xai: { ...DEFAULT_XAI_VIDEO_DEFAULTS },
     openrouter: { ...DEFAULT_OPENROUTER_VIDEO_DEFAULTS },
+    seedance: { ...DEFAULT_SEEDANCE_VIDEO_DEFAULTS },
   };
 }
 
@@ -94,6 +108,12 @@ export function normalizeVideoGenerationProfile(rawProfile: unknown): {
     aspectRatio: readAspectRatio(rawOpenRouter.aspectRatio, DEFAULT_OPENROUTER_VIDEO_DEFAULTS.aspectRatio),
     resolution: readResolution(rawOpenRouter.resolution, DEFAULT_OPENROUTER_VIDEO_DEFAULTS.resolution),
   };
+  const rawSeedance = isRecord(raw.seedance) ? raw.seedance : rawService === "seedance" ? raw : {};
+  profile.seedance = {
+    durationSeconds: readInteger(rawSeedance.durationSeconds, DEFAULT_SEEDANCE_VIDEO_DEFAULTS.durationSeconds, 4, 15),
+    aspectRatio: readAspectRatio(rawSeedance.aspectRatio, DEFAULT_SEEDANCE_VIDEO_DEFAULTS.aspectRatio),
+    resolution: readResolution(rawSeedance.resolution, DEFAULT_SEEDANCE_VIDEO_DEFAULTS.resolution),
+  };
   const changed = JSON.stringify(profile) !== JSON.stringify(rawProfile);
   return { profile, changed };
 }
@@ -121,7 +141,11 @@ function readVeoDuration(value: unknown, fallback: number): 4 | 6 | 8 {
 }
 
 function readService(value: unknown): VideoDefaultsService {
-  return value === "xai" || value === "openrouter" || value === "google_veo" || value === "gemini_omni"
+  return value === "xai" ||
+    value === "openrouter" ||
+    value === "seedance" ||
+    value === "google_veo" ||
+    value === "gemini_omni"
     ? value
     : "gemini_omni";
 }

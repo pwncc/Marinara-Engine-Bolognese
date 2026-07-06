@@ -1,4 +1,4 @@
-export type VideoDefaultsService = "gemini_omni" | "google_veo" | "xai" | "openrouter";
+export type VideoDefaultsService = "gemini_omni" | "google_veo" | "xai" | "openrouter" | "seedance";
 
 export type VideoAspectRatio = "16:9" | "9:16";
 export type VideoResolution = "480p" | "720p" | "1080p";
@@ -30,6 +30,13 @@ export interface OpenRouterVideoDefaults {
   resolution: VideoResolution;
 }
 
+export interface SeedanceVideoDefaults {
+  /** Seedance 2.0 accepts 4-15 seconds for video generations. */
+  durationSeconds: number;
+  aspectRatio: VideoAspectRatio;
+  resolution: VideoResolution;
+}
+
 export interface VideoGenerationDefaultsProfile {
   version: 1;
   service: VideoDefaultsService;
@@ -37,4 +44,5 @@ export interface VideoGenerationDefaultsProfile {
   googleVeo: GoogleVeoVideoDefaults;
   xai: XaiVideoDefaults;
   openrouter: OpenRouterVideoDefaults;
+  seedance: SeedanceVideoDefaults;
 }

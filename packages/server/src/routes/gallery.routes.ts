@@ -71,6 +71,8 @@ const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video-1.5";
 const DEFAULT_XAI_VIDEO_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_OPENROUTER_VIDEO_MODEL = "google/veo-3.1";
 const DEFAULT_OPENROUTER_VIDEO_BASE_URL = "https://openrouter.ai/api/v1";
+const DEFAULT_SEEDANCE_VIDEO_MODEL = "seedance-2-0";
+const DEFAULT_SEEDANCE_VIDEO_BASE_URL = "https://api.seedance2.ai";
 
 type SceneVideoRow = NonNullable<Awaited<ReturnType<ReturnType<typeof createGameSceneVideosStorage>["getById"]>>>;
 type ChatGalleryImageRow = NonNullable<Awaited<ReturnType<ReturnType<typeof createGalleryStorage>["getById"]>>>;
@@ -290,10 +292,10 @@ function imageMimeTypeForPath(path: string): VideoReferenceImage["mimeType"] | n
   return null;
 }
 
-function readSceneVideoReferenceImage(path: string): VideoReferenceImage {
+function readSceneVideoReferenceImage(path: string, url?: string | null): VideoReferenceImage {
   const mimeType = imageMimeTypeForPath(path);
   if (!mimeType) throw new Error("Scene videos require a PNG or JPEG gallery image");
-  return { base64: readFileSync(path).toString("base64"), mimeType };
+  return { base64: readFileSync(path).toString("base64"), mimeType, url };
 }
 
 function latestNarrationSummary(
@@ -725,7 +727,10 @@ export async function galleryRoutes(app: FastifyInstance) {
 
     let referenceImage: VideoReferenceImage;
     try {
-      referenceImage = readSceneVideoReferenceImage(galleryImagePath);
+      referenceImage = readSceneVideoReferenceImage(
+        galleryImagePath,
+        sourceGalleryImagePathForMetadata(galleryImage),
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : "The selected gallery image cannot be used.";
       return reply.status(400).send({ error: message });
@@ -742,16 +747,21 @@ export async function galleryRoutes(app: FastifyInstance) {
       (videoDefaults.service !== "gemini_omni"
         ? videoDefaults.service
         : inferVideoSource(videoConn.model || "", videoConn.baseUrl || ""));
-    const serviceHint = videoConn.videoService || source;
+    const serviceHint =
+      videoConn.videoService ||
+      (source === "google_ai_studio" ? inferVideoSource(videoConn.model || "", videoConn.baseUrl || "") : source);
     const isXaiVideo = source === "xai" || serviceHint === "xai";
     const isGoogleVeoVideo = source === "google_veo" || serviceHint === "google_veo";
     const isOpenRouterVideo = source === "openrouter" || serviceHint === "openrouter";
+    const isSeedanceVideo = source === "seedance" || serviceHint === "seedance";
     const activeVideoDefaults = isXaiVideo
       ? videoDefaults.xai
       : isGoogleVeoVideo
         ? videoDefaults.googleVeo
       : isOpenRouterVideo
         ? videoDefaults.openrouter
+      : isSeedanceVideo
+        ? videoDefaults.seedance
         : videoDefaults.geminiOmni;
     const videoSettings = normalizeVideoGenerationUserSettings(
       await createAppSettingsStorage(app.db).get(VIDEO_GENERATION_SETTINGS_KEY),
@@ -759,10 +769,11 @@ export async function galleryRoutes(app: FastifyInstance) {
     const fallbackDurationSeconds = storedVideoDefaults
       ? activeVideoDefaults.durationSeconds
       : videoSettings.sceneVideoDurationSeconds;
-    const maxDurationSeconds = isXaiVideo ? 15 : isGoogleVeoVideo ? 8 : 60;
+    const maxDurationSeconds = isXaiVideo || isSeedanceVideo ? 15 : isGoogleVeoVideo ? 8 : 60;
+    const minDurationSeconds = isGoogleVeoVideo || isSeedanceVideo ? 4 : 1;
     const durationSeconds = Math.min(
       maxDurationSeconds,
-      Math.max(1, Math.trunc(input.durationSeconds ?? fallbackDurationSeconds)),
+      Math.max(minDurationSeconds, Math.trunc(input.durationSeconds ?? fallbackDurationSeconds)),
     );
     const aspectRatio = input.aspectRatio ?? activeVideoDefaults.aspectRatio;
     const baseUrl =
@@ -773,6 +784,8 @@ export async function galleryRoutes(app: FastifyInstance) {
           ? DEFAULT_GOOGLE_VEO_BASE_URL
         : isOpenRouterVideo
           ? DEFAULT_OPENROUTER_VIDEO_BASE_URL
+        : isSeedanceVideo
+          ? DEFAULT_SEEDANCE_VIDEO_BASE_URL
           : DEFAULT_GEMINI_OMNI_BASE_URL);
     const model =
       videoConn.model ||
@@ -782,6 +795,8 @@ export async function galleryRoutes(app: FastifyInstance) {
           ? DEFAULT_GOOGLE_VEO_MODEL
         : isOpenRouterVideo
           ? DEFAULT_OPENROUTER_VIDEO_MODEL
+        : isSeedanceVideo
+          ? DEFAULT_SEEDANCE_VIDEO_MODEL
           : DEFAULT_GEMINI_OMNI_MODEL);
     const resolution = isXaiVideo
       ? videoDefaults.xai.resolution
@@ -789,6 +804,8 @@ export async function galleryRoutes(app: FastifyInstance) {
         ? videoDefaults.googleVeo.resolution
       : isOpenRouterVideo
         ? videoDefaults.openrouter.resolution
+      : isSeedanceVideo
+        ? videoDefaults.seedance.resolution
         : undefined;
     const promptLimits = getSceneVideoPromptLimits(isXaiVideo);
 

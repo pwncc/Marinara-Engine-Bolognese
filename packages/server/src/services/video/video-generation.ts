@@ -8,6 +8,7 @@ import { assertInsideDir, safeFetch } from "../../utils/security.js";
 export interface VideoReferenceImage {
   base64: string;
   mimeType: "image/png" | "image/jpeg";
+  url?: string | null;
 }
 
 export interface VideoGenerationRequest {
@@ -18,6 +19,7 @@ export interface VideoGenerationRequest {
   aspectRatio: "16:9" | "9:16";
   resolution?: "480p" | "720p" | "1080p";
   referenceImage?: VideoReferenceImage | null;
+  lastFrameImage?: VideoReferenceImage | null;
   signal?: AbortSignal;
 }
 
@@ -34,8 +36,10 @@ const DEFAULT_GEMINI_OMNI_MODEL = "gemini-omni-flash-preview";
 const DEFAULT_GOOGLE_VEO_MODEL = "veo-3.1-generate-preview";
 const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video-1.5";
 const DEFAULT_OPENROUTER_VIDEO_MODEL = "google/veo-3.1";
+const DEFAULT_SEEDANCE_VIDEO_MODEL = "seedance-2-0";
 const DEFAULT_GOOGLE_VEO_RESOLUTION = "720p";
 const DEFAULT_XAI_VIDEO_RESOLUTION = "720p";
+const DEFAULT_SEEDANCE_VIDEO_RESOLUTION = "720p";
 
 function readPositiveIntervalEnv(name: string, fallbackMs: number) {
   const raw = process.env[name]?.trim();
@@ -47,6 +51,7 @@ function readPositiveIntervalEnv(name: string, fallbackMs: number) {
 const GOOGLE_VEO_POLL_INTERVAL_MS = readPositiveIntervalEnv("GOOGLE_VEO_VIDEO_POLL_INTERVAL_MS", 10_000);
 const XAI_POLL_INTERVAL_MS = readPositiveIntervalEnv("XAI_VIDEO_POLL_INTERVAL_MS", 5_000);
 const OPENROUTER_POLL_INTERVAL_MS = readPositiveIntervalEnv("OPENROUTER_VIDEO_POLL_INTERVAL_MS", 10_000);
+const SEEDANCE_POLL_INTERVAL_MS = readPositiveIntervalEnv("SEEDANCE_VIDEO_POLL_INTERVAL_MS", 10_000);
 
 type GoogleVeoImageEncoding = "inlineData" | "bytesBase64Encoded";
 type GoogleVeoResolution = "720p" | "1080p";
@@ -87,6 +92,11 @@ export async function generateVideo(
       generateOpenRouterVideo(baseUrl, apiKey, { ...request, signal }),
     );
   }
+  if (resolvedService === "seedance") {
+    return withVideoGenerationDeadline(request.signal, VIDEO_GEN_TIMEOUT, (signal) =>
+      generateSeedanceVideo(baseUrl, apiKey, { ...request, signal }),
+    );
+  }
   throw new Error(`Unsupported video generation service: ${resolvedService || serviceHint || source}`);
 }
 
@@ -106,6 +116,9 @@ export function resolveVideoRequestDuration(
   }
   if (resolvedService === "xai") {
     return Math.min(15, durationSeconds);
+  }
+  if (resolvedService === "seedance") {
+    return Math.min(15, Math.max(4, durationSeconds));
   }
   return durationSeconds;
 }
@@ -137,7 +150,14 @@ export async function removeSavedVideoFromDisk(filePath: string): Promise<void> 
 
 function normalizeVideoService(value: string): string {
   const normalized = value.trim().toLowerCase();
-  if (!normalized || normalized === "omni" || normalized === "gemini" || normalized === "gemini-omni") {
+  if (
+    !normalized ||
+    normalized === "google_ai_studio" ||
+    normalized === "google-ai-studio" ||
+    normalized === "omni" ||
+    normalized === "gemini" ||
+    normalized === "gemini-omni"
+  ) {
     return "gemini_omni";
   }
   if (normalized === "google_veo" || normalized === "google-veo" || normalized === "veo") {
@@ -148,6 +168,9 @@ function normalizeVideoService(value: string): string {
   }
   if (normalized === "openrouter" || normalized === "open-router") {
     return "openrouter";
+  }
+  if (normalized === "seedance" || normalized === "seedance2" || normalized === "seedance-2") {
+    return "seedance";
   }
   return normalized;
 }
@@ -444,13 +467,21 @@ async function generateOpenRouterVideo(
   };
   if (request.resolution) body.resolution = request.resolution;
   if (request.referenceImage) {
-    body.frame_images = [
+    const frameImages = [
       {
         type: "image_url",
         image_url: { url: referenceImageToDataUri(request.referenceImage) },
         frame_type: "first_frame",
       },
     ];
+    if (request.lastFrameImage) {
+      frameImages.push({
+        type: "image_url",
+        image_url: { url: referenceImageToDataUri(request.lastFrameImage) },
+        frame_type: "last_frame",
+      });
+    }
+    body.frame_images = frameImages;
   }
 
   const started = await safeFetch(startUrl, {
@@ -522,6 +553,107 @@ async function generateOpenRouterVideo(
     }
     if (status && status !== "pending" && status !== "in_progress") {
       logger.debug("[video-gen/openrouter] continuing after unknown status: %s", status);
+    }
+  }
+}
+
+async function generateSeedanceVideo(
+  baseUrl: string,
+  apiKey: string,
+  request: VideoGenerationRequest,
+): Promise<VideoGenerationResult> {
+  if (!apiKey.trim()) throw new Error("Seedance video generation requires a Seedance API key");
+  const model = request.model?.trim() || DEFAULT_SEEDANCE_VIDEO_MODEL;
+  const startUrl = buildSeedanceUrl(baseUrl, "v1/videos/generations");
+  const imageUrls = seedanceReferenceImageUrls(request);
+  const duration = Math.min(15, Math.max(4, Math.trunc(request.durationSeconds)));
+  const body: Record<string, unknown> = {
+    model,
+    input: {
+      prompt: request.prompt,
+      generation_type: imageUrls.length > 0 ? "image-to-video" : "text-to-video",
+      duration,
+      aspect_ratio: request.aspectRatio,
+      resolution: request.resolution || DEFAULT_SEEDANCE_VIDEO_RESOLUTION,
+      generate_audio: false,
+      watermark: false,
+      web_search: false,
+      return_last_frame: false,
+      seed: -1,
+      ...(imageUrls.length > 0 ? { image_urls: imageUrls } : {}),
+    },
+  };
+
+  const started = await safeFetch(startUrl, {
+    method: "POST",
+    headers: seedanceHeaders(apiKey),
+    body: JSON.stringify(body),
+    signal: request.signal,
+    policy: {
+      allowLocal: false,
+      allowLoopback: false,
+      allowMdns: false,
+      allowedProtocols: ["https:"],
+    },
+    maxResponseBytes: 2 * 1024 * 1024,
+    decodeCompressedResponse: true,
+  });
+
+  const startText = await started.text();
+  if (!started.ok) {
+    throw new Error(`Seedance video generation returned ${started.status}: ${formatProviderError(startText)}`);
+  }
+  let startJson: unknown;
+  try {
+    startJson = JSON.parse(startText) as unknown;
+  } catch {
+    throw new Error(`Seedance video generation returned non-JSON response: ${startText.slice(0, 300)}`);
+  }
+  const taskId = readSeedanceTaskId(startJson);
+  if (!taskId) {
+    throw new Error("Seedance video generation response did not include a taskId");
+  }
+
+  const pollUrl = buildSeedanceUrl(baseUrl, `v1/tasks/${encodeURIComponent(taskId)}`);
+  while (true) {
+    await delayWithSignal(SEEDANCE_POLL_INTERVAL_MS, request.signal);
+    const polled = await safeFetch(pollUrl, {
+      method: "GET",
+      headers: seedanceHeaders(apiKey),
+      signal: request.signal,
+      policy: {
+        allowLocal: false,
+        allowLoopback: false,
+        allowMdns: false,
+        allowedProtocols: ["https:"],
+      },
+      maxResponseBytes: 2 * 1024 * 1024,
+      decodeCompressedResponse: true,
+    });
+    const pollText = await polled.text();
+    if (!polled.ok) {
+      throw new Error(`Seedance video polling returned ${polled.status}: ${formatProviderError(pollText)}`);
+    }
+    let pollJson: unknown;
+    try {
+      pollJson = JSON.parse(pollText) as unknown;
+    } catch {
+      throw new Error(`Seedance video polling returned non-JSON response: ${pollText.slice(0, 300)}`);
+    }
+    const status = readSeedanceStatus(pollJson);
+    if (status && ["completed", "succeeded", "success", "done"].includes(status)) {
+      const url = findVideoUri(asRecord(pollJson).data ?? pollJson);
+      if (!url) {
+        logger.warn("[video-gen/seedance] completed response without video URL: %s", pollText.slice(0, 2000));
+        throw new Error("Seedance response did not include a downloadable video");
+      }
+      return downloadSeedanceVideo(url, apiKey, request.signal);
+    }
+    if (status && ["failed", "error", "cancelled", "canceled", "expired"].includes(status)) {
+      throw new Error(`Seedance video generation ${status}: ${formatOperationError(asRecord(pollJson).error)}`);
+    }
+    if (status && !["pending", "queued", "processing", "running", "in_progress"].includes(status)) {
+      logger.debug("[video-gen/seedance] continuing after unknown status: %s", status);
     }
   }
 }
@@ -624,6 +756,21 @@ function buildOpenRouterContentUrl(baseUrl: string, jobId: string): string {
   return url.toString();
 }
 
+function buildSeedanceUrl(baseUrl: string, path: string): string {
+  const fallback = "https://api.seedance2.ai";
+  const raw = (baseUrl || fallback).trim().replace(/\/+$/, "") || fallback;
+  try {
+    const url = new URL(raw);
+    const root = url.pathname.replace(/\/+$/, "").replace(/\/v1(?:\/.*)?$/i, "");
+    url.pathname = `${root}/${path.replace(/^\/+/, "")}`;
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return `${fallback}/${path.replace(/^\/+/, "")}`;
+  }
+}
+
 async function downloadXaiVideo(url: string, signal: AbortSignal | undefined): Promise<VideoGenerationResult> {
   const res = await safeFetch(url, {
     method: "GET",
@@ -707,7 +854,45 @@ async function downloadOpenRouterVideo(
   return { base64: buffer.toString("base64"), mimeType: "video/mp4", ext: "mp4" };
 }
 
+async function downloadSeedanceVideo(
+  url: string,
+  apiKey: string,
+  signal: AbortSignal | undefined,
+): Promise<VideoGenerationResult> {
+  const res = await safeFetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "video/mp4,video/*;q=0.9,*/*;q=0.1",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    signal,
+    policy: {
+      allowLocal: false,
+      allowLoopback: false,
+      allowMdns: false,
+      allowedProtocols: ["https:"],
+    },
+    maxResponseBytes: MAX_VIDEO_RESPONSE_BYTES,
+    decodeCompressedResponse: true,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Failed to download Seedance video (${res.status}): ${formatProviderError(text)}`);
+  }
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (!isMp4Buffer(buffer)) throw new Error("Seedance returned a non-MP4 video payload");
+  return { base64: buffer.toString("base64"), mimeType: "video/mp4", ext: "mp4" };
+}
+
 function openRouterHeaders(apiKey: string): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
+}
+
+function seedanceHeaders(apiKey: string): Record<string, string> {
   return {
     "Content-Type": "application/json",
     Accept: "application/json",
@@ -727,6 +912,37 @@ function referenceImageToDataUri(image: VideoReferenceImage): string {
   return `data:${image.mimeType};base64,${stripDataUrl(image.base64)}`;
 }
 
+function seedanceReferenceImageUrls(request: VideoGenerationRequest): string[] {
+  if (!request.referenceImage) return [];
+  const firstFrame = seedanceReferenceImageUrl(request.referenceImage, "first frame");
+  const lastFrame = seedanceReferenceImageUrl(request.lastFrameImage ?? request.referenceImage, "last frame");
+  return firstFrame === lastFrame ? [firstFrame] : [firstFrame, lastFrame];
+}
+
+function seedanceReferenceImageUrl(image: VideoReferenceImage, label: string): string {
+  const raw = image.url?.trim();
+  if (raw) {
+    if (/^https:\/\//i.test(raw)) return raw;
+    if (/^http:\/\//i.test(raw)) {
+      throw new Error(`Seedance ${label} reference URL must be HTTPS so the provider can fetch it safely.`);
+    }
+    const publicBaseUrl = process.env.VIDEO_REFERENCE_PUBLIC_BASE_URL?.trim();
+    if (publicBaseUrl) {
+      try {
+        const resolved = new URL(raw, publicBaseUrl);
+        if (resolved.protocol === "https:") return resolved.toString();
+      } catch {
+        // Fall through to the explicit setup error below.
+      }
+    }
+  }
+
+  throw new Error(
+    `Seedance image-to-video references require a publicly reachable HTTPS image URL for the ${label}. ` +
+      "Set VIDEO_REFERENCE_PUBLIC_BASE_URL to the public URL of this Marinara server, or use Seedance text-to-video without references.",
+  );
+}
+
 function buildGoogleVeoStartBody(
   request: VideoGenerationRequest,
   durationSeconds: GoogleVeoDuration,
@@ -742,9 +958,8 @@ function buildGoogleVeoStartBody(
 } {
   const instance: Record<string, unknown> = { prompt: request.prompt };
   if (request.referenceImage) {
-    const referenceImage = googleVeoImage(request.referenceImage, imageEncoding);
-    instance.image = referenceImage;
-    instance.lastFrame = referenceImage;
+    instance.image = googleVeoImage(request.referenceImage, imageEncoding);
+    instance.lastFrame = googleVeoImage(request.lastFrameImage ?? request.referenceImage, imageEncoding);
   }
   return {
     instances: [instance],
@@ -1004,6 +1219,31 @@ function readFirstString(value: unknown): string | null {
     if (text) return text;
   }
   return null;
+}
+
+function readSeedanceTaskId(value: unknown): string | null {
+  const root = asRecord(value);
+  const data = asRecord(root.data);
+  return (
+    readString(root.taskId) ??
+    readString(root.task_id) ??
+    readString(root.id) ??
+    readString(data.taskId) ??
+    readString(data.task_id) ??
+    readString(data.id)
+  );
+}
+
+function readSeedanceStatus(value: unknown): string | null {
+  const root = asRecord(value);
+  const data = asRecord(root.data);
+  return (
+    readString(root.status) ??
+    readString(root.state) ??
+    readString(data.status) ??
+    readString(data.state) ??
+    readString(data.task_status)
+  )?.toLowerCase() ?? null;
 }
 
 function formatProviderError(text: string): string {
