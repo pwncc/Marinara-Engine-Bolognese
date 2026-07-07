@@ -2903,6 +2903,7 @@ export const ChatMessage = memo(function ChatMessage({
                   }
                   disabled={!hasTTSContent || (ttsBusy && !isSpeakingThis)}
                 />
+                <TTSLineVolumeControl volume={ttsLineVolume} onVolumeChange={handleTTSLineVolumeChange} />
               </>
             )}
           </div>
@@ -2979,6 +2980,7 @@ function TTSLineVolumeControl({
 }) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const muted = volume <= 0;
   const label = `Line volume: ${volume}%`;
 
@@ -3001,8 +3003,27 @@ function TTSLineVolumeControl({
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [open]);
+
   return (
     <div ref={wrapperRef} className="relative inline-flex">
+      <ActionBtn
+        icon={muted ? <VolumeX size={MESSAGE_ACTION_ICON_SIZE} /> : <Volume2 size={MESSAGE_ACTION_ICON_SIZE} />}
+        onClick={() => setOpen((value) => !value)}
+        title={label}
+        dark={dark}
+        ariaPressed={open}
+        className={
+          open
+            ? dark
+              ? MESSAGE_CHROME_ACTIVE_ICON_CLASS
+              : "bg-[var(--accent)] text-[var(--foreground)]"
+            : undefined
+        }
+      />
       {open && (
         <div
           role="dialog"
@@ -3028,6 +3049,7 @@ function TTSLineVolumeControl({
             </span>
           </div>
           <input
+            ref={inputRef}
             type="range"
             min={0}
             max={100}
@@ -3041,20 +3063,6 @@ function TTSLineVolumeControl({
           />
         </div>
       )}
-      <ActionBtn
-        icon={muted ? <VolumeX size={MESSAGE_ACTION_ICON_SIZE} /> : <Volume2 size={MESSAGE_ACTION_ICON_SIZE} />}
-        onClick={() => setOpen((value) => !value)}
-        title={label}
-        dark={dark}
-        ariaPressed={open}
-        className={
-          open
-            ? dark
-              ? MESSAGE_CHROME_ACTIVE_ICON_CLASS
-              : "bg-[var(--accent)] text-[var(--foreground)]"
-            : undefined
-        }
-      />
     </div>
   );
 }
