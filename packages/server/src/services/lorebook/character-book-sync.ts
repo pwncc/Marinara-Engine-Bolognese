@@ -116,8 +116,14 @@ export function toCharacterBook(lorebook: LorebookRow, entries: LoreEntryRow[]):
 }
 
 function parseCharacterData(data: unknown): Record<string, unknown> {
-  if (typeof data === "string") return JSON.parse(data) as Record<string, unknown>;
-  return data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  try {
+    if (typeof data === "string") return JSON.parse(data) as Record<string, unknown>;
+    return data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  } catch {
+    // A corrupt character row must not abort a lorebook mutation or delete —
+    // treat it as having no embedded pointer.
+    return {};
+  }
 }
 
 export function getEmbeddedLorebookId(characterData: Record<string, unknown>): string | null {
@@ -167,6 +173,14 @@ export async function resolveEmbeddedCharacterId(
     }
   }
 
+  // Only a lorebook linked to MORE THAN ONE character can be embedded in a
+  // character other than its derived (first-linked) one; for 0/1 links the fast
+  // path above is authoritative, so skip the table scan. This keeps the common
+  // path (world lorebooks, single-linked character lorebooks) scan-free —
+  // identical cost to the pre-fix behaviour.
+  const linkCount = Array.isArray(lorebook?.characterIds) ? (lorebook.characterIds as unknown[]).length : 0;
+  if (linkCount <= 1) return null;
+
   const rows = await db.select().from(characters).where(like(characters.data, `%"${lorebookId}"%`));
   for (const row of rows) {
     if (getEmbeddedLorebookId(parseCharacterData(row.data)) === lorebookId) return row.id;
@@ -189,7 +203,7 @@ export async function embedLorebookIntoCharacter(
   db: DB,
   characterId: string,
   lorebookId: string,
-): Promise<{ entriesEmbedded: number; refreshed: boolean }> {
+): Promise<{ entriesEmbedded: number; refreshed: boolean; characterBook: CharacterBook }> {
   const lorebookStorage = createLorebooksStorage(db);
   const lorebook = (await lorebookStorage.getById(lorebookId)) as LorebookRow | null;
   if (!lorebook) throw new Error("Lorebook not found");
@@ -228,7 +242,7 @@ export async function embedLorebookIntoCharacter(
     { skipVersionSnapshot: true },
   );
 
-  return { entriesEmbedded: nextBook.entries.length, refreshed };
+  return { entriesEmbedded: nextBook.entries.length, refreshed, characterBook: nextBook };
 }
 
 /**

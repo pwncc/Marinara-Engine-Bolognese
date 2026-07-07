@@ -157,7 +157,7 @@ export function useEmbedLorebook() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ characterId, lorebookId }: { characterId: string; lorebookId: string }) =>
-      api.post<{ success: boolean; lorebookId: string; entriesEmbedded: number; refreshed: boolean }>(
+      api.post<{ success: boolean; lorebookId: string; entriesEmbedded: number; refreshed: boolean; characterBook: unknown }>(
         `/characters/${characterId}/embedded-lorebook/embed`,
         { lorebookId },
       ),

@@ -1403,14 +1403,17 @@ export async function charactersRoutes(app: FastifyInstance) {
       const char = await storage.getById(req.params.id);
       if (!char) return reply.status(404).send({ error: "Character not found" });
 
-      const lorebooksStorage = createLorebooksStorage(app.db);
       const lorebook = (await lorebooksStorage.getById(lorebookId)) as Record<string, unknown> | null;
       if (!lorebook) return reply.status(404).send({ error: "Lorebook not found" });
 
       // A character card only carries a character-scoped book. Persona
       // lorebooks are identified by persona links and have no card slot.
       const personaIds = Array.isArray(lorebook.personaIds) ? (lorebook.personaIds as unknown[]) : [];
-      if (personaIds.length > 0 || typeof lorebook.personaId === "string") {
+      if (
+        personaIds.length > 0 ||
+        typeof lorebook.personaId === "string" ||
+        (typeof lorebook.category === "string" && lorebook.category !== "character")
+      ) {
         return reply.status(400).send({ error: "Only character lorebooks can be embedded into a character card." });
       }
 
@@ -1444,6 +1447,7 @@ export async function charactersRoutes(app: FastifyInstance) {
         lorebookId,
         entriesEmbedded: result.entriesEmbedded,
         refreshed: result.refreshed,
+        characterBook: result.characterBook,
       };
     },
   );

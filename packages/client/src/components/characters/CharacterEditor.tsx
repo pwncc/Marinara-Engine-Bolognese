@@ -339,6 +339,28 @@ export function CharacterEditor() {
     });
   }, []);
 
+  // Embedding a lorebook into the card mutates the character server-side
+  // (data.character_book + the embeddedLorebook pointer). When the editor is
+  // clean, the detail-query refetch re-syncs formData for us; when it is dirty
+  // the parse effect skips that re-sync, so patch formData directly — otherwise
+  // a later Save would send the stale pre-embed data and silently revert it.
+  const handleLorebookEmbedded = useCallback((lorebookId: string, characterBook: unknown) => {
+    if (!dirtyRef.current) return;
+    setFormData((prev) => {
+      if (!prev) return prev;
+      const extensions = { ...(prev.extensions ?? {}) } as Record<string, unknown>;
+      const importMetadata = { ...((extensions.importMetadata as Record<string, unknown>) ?? {}) };
+      const embeddedLorebook = { ...((importMetadata.embeddedLorebook as Record<string, unknown>) ?? {}) };
+      importMetadata.embeddedLorebook = { ...embeddedLorebook, hasEmbeddedLorebook: true, lorebookId };
+      extensions.importMetadata = importMetadata;
+      return {
+        ...prev,
+        character_book: characterBook as CharacterData["character_book"],
+        extensions: extensions as CharacterData["extensions"],
+      };
+    });
+  }, []);
+
   const updateExtension = useCallback(
     (key: string, value: unknown) => {
       setExtensionValue(key, formatCharacterExtensionValue(key, value, formatQuotes));
@@ -991,7 +1013,9 @@ export function CharacterEditor() {
               <ColorsTab formData={formData} updateExtension={updateExtension} avatarUrl={avatarPreview} />
             )}
             {activeTab === "stats" && <StatsTab formData={formData} updateExtension={updateExtension} />}
-            {activeTab === "lorebook" && <LorebookTab characterId={characterId} formData={formData} />}
+            {activeTab === "lorebook" && (
+              <LorebookTab characterId={characterId} formData={formData} onEmbedded={handleLorebookEmbedded} />
+            )}
           </div>
         </div>
       </div>
@@ -4017,7 +4041,15 @@ function ColorsTab({
   );
 }
 
-function LorebookTab({ characterId, formData }: { characterId: string | null; formData: CharacterData }) {
+function LorebookTab({
+  characterId,
+  formData,
+  onEmbedded,
+}: {
+  characterId: string | null;
+  formData: CharacterData;
+  onEmbedded?: (lorebookId: string, characterBook: unknown) => void;
+}) {
   const book = formData.character_book;
   const entries = book?.entries ?? [];
   const qc = useQueryClient();
@@ -4084,6 +4116,8 @@ function LorebookTab({ characterId, formData }: { characterId: string | null; fo
         ownerId={characterId}
         ownerName={formData.name}
         embeddedLorebookId={linkedLorebookId}
+        slotOccupied={hasEmbeddedLorebook}
+        onEmbedded={(result) => onEmbedded?.(result.lorebookId, result.characterBook)}
       />
 
       {hasEmbeddedLorebook && (

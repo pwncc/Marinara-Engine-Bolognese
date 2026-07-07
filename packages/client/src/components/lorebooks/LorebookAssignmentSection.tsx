@@ -24,6 +24,10 @@ interface LorebookAssignmentSectionProps {
   ownerName: string;
   /** The lorebook currently embedded in the character card (character owners only). */
   embeddedLorebookId?: string | null;
+  /** True when the card's single character_book slot is already occupied (may be an unpointered baked book). */
+  slotOccupied?: boolean;
+  /** Called after a successful embed so the parent editor can patch its local state. */
+  onEmbedded?: (result: { lorebookId: string; characterBook: unknown }) => void;
 }
 
 interface AssignmentDraft {
@@ -76,6 +80,8 @@ export function LorebookAssignmentSection({
   ownerId,
   ownerName,
   embeddedLorebookId,
+  slotOccupied,
+  onEmbedded,
 }: LorebookAssignmentSectionProps) {
   const openModal = useUIStore((state) => state.openModal);
   const openLorebookDetail = useUIStore((state) => state.openLorebookDetail);
@@ -88,6 +94,7 @@ export function LorebookAssignmentSection({
     if (!ownerId) return;
     try {
       const res = await embedLorebook.mutateAsync({ characterId: ownerId, lorebookId: lorebook.id });
+      onEmbedded?.({ lorebookId: lorebook.id, characterBook: res.characterBook });
       toast.success(res.refreshed ? `Refreshed embedded ${lorebook.name}.` : `Embedded ${lorebook.name} into the card.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to embed lorebook.");
@@ -256,7 +263,7 @@ export function LorebookAssignmentSection({
                         Refresh
                       </button>
                     </>
-                  ) : embeddedLorebookId ? (
+                  ) : embeddedLorebookId || slotOccupied ? (
                     <button
                       type="button"
                       disabled
