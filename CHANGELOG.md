@@ -43,6 +43,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Added Lorebook entry-status sorting, fixed continued assistant messages so appended text starts after a blank line, and removed the obsolete tracked `pr-evidence/` artifacts while ignoring future evidence folders (#3336).
 - Fixed Conversation-created scene chats so their Prompt Preset selector remains visible while still defaulting to None, and native Character/Persona exports now include attached lorebooks that re-import linked to the new owner.
 - Made the Connections panel's unfiled/root drop area more forgiving so desktop users, including Windows users, can reliably drag connections out of folders without hitting a tiny target.
+- Fixed native lorebook import so nested folders keep their parent/child hierarchy instead of being flattened to the top level (#3347).
 
 ## [2.1.0]
 
