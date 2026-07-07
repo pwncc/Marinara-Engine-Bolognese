@@ -4079,7 +4079,12 @@ function LorebookTab({ characterId, formData }: { characterId: string | null; fo
         helpText={CHARACTER_LOREBOOK_HELP}
       />
 
-      <LorebookAssignmentSection ownerType="character" ownerId={characterId} ownerName={formData.name} />
+      <LorebookAssignmentSection
+        ownerType="character"
+        ownerId={characterId}
+        ownerName={formData.name}
+        embeddedLorebookId={linkedLorebookId}
+      />
 
       {hasEmbeddedLorebook && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--secondary)] px-3 py-2.5">

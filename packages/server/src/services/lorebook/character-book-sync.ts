@@ -18,8 +18,10 @@
 // These helpers mirror standalone-lorebook mutations back into the
 // character's `data.character_book` so the two stores stay coherent.
 
+import { like } from "drizzle-orm";
 import type { DB } from "../../db/connection.js";
 import type { CharacterBook, CharacterBookEntry } from "@marinara-engine/shared";
+import { characters } from "../../db/schema/index.js";
 import { createLorebooksStorage } from "../storage/lorebooks.storage.js";
 import { createCharactersStorage } from "../storage/characters.storage.js";
 import { logger } from "../../lib/logger.js";
@@ -101,7 +103,7 @@ function toCharacterBookEntry(entry: LoreEntryRow, index: number): CharacterBook
   };
 }
 
-function toCharacterBook(lorebook: LorebookRow, entries: LoreEntryRow[]): CharacterBook {
+export function toCharacterBook(lorebook: LorebookRow, entries: LoreEntryRow[]): CharacterBook {
   return {
     name: asString(lorebook.name, "Character Lorebook"),
     description: asString(lorebook.description),
@@ -118,7 +120,7 @@ function parseCharacterData(data: unknown): Record<string, unknown> {
   return data && typeof data === "object" ? (data as Record<string, unknown>) : {};
 }
 
-function getEmbeddedLorebookId(characterData: Record<string, unknown>): string | null {
+export function getEmbeddedLorebookId(characterData: Record<string, unknown>): string | null {
   const extensions =
     characterData.extensions && typeof characterData.extensions === "object"
       ? (characterData.extensions as Record<string, unknown>)
@@ -135,12 +137,108 @@ function getEmbeddedLorebookId(characterData: Record<string, unknown>): string |
 }
 
 /**
+ * Resolve which character actually embeds this lorebook — the one whose
+ * `extensions.importMetadata.embeddedLorebook.lorebookId` names it (the
+ * authoritative forward pointer).
+ *
+ * The lorebook's hydrated `characterId` is only the alphabetically-first
+ * *linked* character (lorebooks.storage `parseLorebookRow`), which is not
+ * necessarily the embedding one for a lorebook linked to several characters.
+ * So it is used only as a fast path — confirmed against the forward pointer
+ * (identical to the previous behaviour, and the only case for the single-link
+ * import path) — before falling back to a prefiltered scan. The `LIKE` is a
+ * cheap prefilter on a unique lorebook id; `getEmbeddedLorebookId` is the
+ * authority.
+ */
+export async function resolveEmbeddedCharacterId(
+  db: DB,
+  lorebookId: string,
+  lorebookHint?: LorebookRow | null,
+): Promise<string | null> {
+  const charactersStorage = createCharactersStorage(db);
+
+  const lorebook =
+    lorebookHint ?? ((await createLorebooksStorage(db).getById(lorebookId)) as LorebookRow | null);
+  const derived = typeof lorebook?.characterId === "string" ? lorebook.characterId : null;
+  if (derived) {
+    const character = await charactersStorage.getById(derived);
+    if (character && getEmbeddedLorebookId(parseCharacterData(character.data)) === lorebookId) {
+      return derived;
+    }
+  }
+
+  const rows = await db.select().from(characters).where(like(characters.data, `%"${lorebookId}"%`));
+  for (const row of rows) {
+    if (getEmbeddedLorebookId(parseCharacterData(row.data)) === lorebookId) return row.id;
+  }
+  return null;
+}
+
+/**
+ * Embed a standalone/linked character lorebook INTO a character's card: write
+ * its current entries to `data.character_book` and set the
+ * `extensions.importMetadata.embeddedLorebook` forward pointer, so the lorebook
+ * travels with the card on export and future edits keep syncing. The inverse of
+ * the embedded-lorebook import (card → standalone). Eligibility (category,
+ * already-occupied slot) is gated by the caller; this is a pure writer.
+ *
+ * `refreshed` is true when the character already embedded this same lorebook —
+ * the write regenerates `character_book` from the lorebook's *current* entries.
+ */
+export async function embedLorebookIntoCharacter(
+  db: DB,
+  characterId: string,
+  lorebookId: string,
+): Promise<{ entriesEmbedded: number; refreshed: boolean }> {
+  const lorebookStorage = createLorebooksStorage(db);
+  const lorebook = (await lorebookStorage.getById(lorebookId)) as LorebookRow | null;
+  if (!lorebook) throw new Error("Lorebook not found");
+
+  const charactersStorage = createCharactersStorage(db);
+  const character = await charactersStorage.getById(characterId);
+  if (!character) throw new Error("Character not found");
+
+  const currentData = parseCharacterData(character.data);
+  const refreshed = getEmbeddedLorebookId(currentData) === lorebookId;
+
+  const entries = (await lorebookStorage.listEntries(lorebookId)) as LoreEntryRow[];
+  const nextBook = toCharacterBook(lorebook, entries);
+
+  // Read-modify-write the extensions subtree (the storage layer only shallow-
+  // merges CharacterData), preserving sibling importMetadata/extension keys.
+  const extensions =
+    currentData.extensions && typeof currentData.extensions === "object"
+      ? ({ ...(currentData.extensions as Record<string, unknown>) } as Record<string, unknown>)
+      : {};
+  const importMetadata =
+    extensions.importMetadata && typeof extensions.importMetadata === "object"
+      ? ({ ...(extensions.importMetadata as Record<string, unknown>) } as Record<string, unknown>)
+      : {};
+  const existingEmbedded =
+    importMetadata.embeddedLorebook && typeof importMetadata.embeddedLorebook === "object"
+      ? (importMetadata.embeddedLorebook as Record<string, unknown>)
+      : {};
+  importMetadata.embeddedLorebook = { ...existingEmbedded, hasEmbeddedLorebook: true, lorebookId };
+  extensions.importMetadata = importMetadata;
+
+  await charactersStorage.update(
+    characterId,
+    { character_book: nextBook, extensions: extensions as never },
+    undefined,
+    { skipVersionSnapshot: true },
+  );
+
+  return { entriesEmbedded: nextBook.entries.length, refreshed };
+}
+
+/**
  * Mirror the current state of a standalone lorebook into its source
- * character's `data.character_book`. No-op when the lorebook has no
- * `characterId`, or when the character's embedded-lorebook metadata does
- * not point at this lorebook. Ordinary character-scoped lorebooks also use
- * `characterId` for auto-activation, but they must not overwrite the V2
- * embedded `character_book`.
+ * character's `data.character_book`. No-op when no character embeds this
+ * lorebook (via the authoritative forward pointer), or when the resolved
+ * character's embedded-lorebook metadata does not point at this lorebook.
+ * Ordinary character-scoped lorebooks also use `characterId` for
+ * auto-activation, but they must not overwrite the V2 embedded
+ * `character_book`.
  *
  * Sync errors are logged but never thrown — the user's primary mutation
  * (entry create/update/delete) has already succeeded by the time this is
@@ -151,7 +249,7 @@ export async function syncCharacterBookFromLorebook(db: DB, lorebookId: string):
     const lorebookStorage = createLorebooksStorage(db);
     const lorebook = (await lorebookStorage.getById(lorebookId)) as LorebookRow | null;
     if (!lorebook) return;
-    const characterId = typeof lorebook.characterId === "string" ? lorebook.characterId : null;
+    const characterId = await resolveEmbeddedCharacterId(db, lorebookId, lorebook);
     if (!characterId) return;
 
     const charactersStorage = createCharactersStorage(db);
