@@ -168,10 +168,10 @@ type CustomFontFace = {
 
 const TABS = [
   { id: "general", label: "General", icon: Settings2, description: "App behavior, responses, input, and playback." },
-  { id: "appearance", label: "Look & Feel", icon: Palette, description: "Theme, chat display, art, motion, and backgrounds." },
-  { id: "generations", label: "AI Generation", icon: WandSparkles, description: "Image/video defaults and prompt templates." },
-  { id: "addons", label: "Extensions", icon: Puzzle, description: "Themes, extensions, and custom behavior." },
-  { id: "import", label: "Data", icon: Download, description: "Imports, asset folders, and data transfer." },
+  { id: "appearance", label: "Appearance", icon: Palette, description: "Theme, chat display, art, motion, and backgrounds." },
+  { id: "generations", label: "Generations", icon: WandSparkles, description: "Image/video defaults and prompt templates." },
+  { id: "addons", label: "Addons", icon: Puzzle, description: "Themes, extensions, and custom behavior." },
+  { id: "import", label: "Imports", icon: Download, description: "Imports, asset folders, and data transfer." },
   { id: "advanced", label: "Advanced", icon: Terminal, description: "Admin access, updates, tools, backups, and danger zone." },
 ] as const;
 
