@@ -205,11 +205,6 @@ const VALID_MATCHING_SOURCES = new Set<LorebookMatchingSource>([
   "persona_tags",
 ]);
 
-type BundledLorebookOwner = {
-  characterId?: string;
-  personaId?: string;
-};
-
 function readMatchingSources(value: unknown): LorebookMatchingSource[] {
   if (!Array.isArray(value)) return [];
   return value.filter((source): source is LorebookMatchingSource =>
@@ -286,7 +281,6 @@ async function importCharacter(data: unknown, db: DB) {
     avatar?: unknown;
     sprites?: unknown;
     gallery?: unknown;
-    lorebooks?: unknown;
   };
   const charData = d?.data ? { ...(d.data as Record<string, unknown>) } : undefined;
   const metadata = d?.metadata && typeof d.metadata === "object" ? (d.metadata as Record<string, unknown>) : null;
@@ -348,7 +342,6 @@ async function importCharacter(data: unknown, db: DB) {
     }
     await restoreSprites(d.sprites, result.id);
     await restoreCharacterGallery(d.gallery, result.id, galleryStorage);
-    await importBundledLorebooks(d.lorebooks, db, { characterId: result.id });
   }
   return {
     success: true,
@@ -419,7 +412,6 @@ async function importPersona(data: unknown, db: DB) {
       await storage.updatePersona(result.id, { avatarPath });
     }
     await restoreSprites(d.sprites, result.id);
-    await importBundledLorebooks(d.lorebooks, db, { personaId: result.id });
   }
   return {
     success: true,
@@ -435,14 +427,7 @@ async function importLorebook(data: unknown, db: DB) {
   return importLorebookPayload(data, db);
 }
 
-async function importBundledLorebooks(lorebooks: unknown, db: DB, owner: BundledLorebookOwner): Promise<void> {
-  if (!Array.isArray(lorebooks) || lorebooks.length === 0) return;
-  for (const lorebook of lorebooks) {
-    await importLorebookPayload(lorebook, db, owner);
-  }
-}
-
-async function importLorebookPayload(data: unknown, db: DB, owner?: BundledLorebookOwner) {
+async function importLorebookPayload(data: unknown, db: DB) {
   const storage = createLorebooksStorage(db);
   const d = data as {
     lorebook?: Record<string, unknown>;
@@ -453,8 +438,6 @@ async function importLorebookPayload(data: unknown, db: DB, owner?: BundledLoreb
     return { success: false, type: "marinara_lorebook" as const, error: "Invalid lorebook data" };
   }
   const lb = d.lorebook;
-  const ownerCharacterIds = owner?.characterId ? [owner.characterId] : null;
-  const ownerPersonaIds = owner?.personaId ? [owner.personaId] : null;
   const newLb = (await storage.create(
     {
       name: String(lb.name ?? "Imported Lorebook"),
@@ -469,24 +452,20 @@ async function importLorebookPayload(data: unknown, db: DB, owner?: BundledLoreb
       vectorQueryDepth: Number(lb.vectorQueryDepth ?? 10),
       vectorScoreThreshold: Number(lb.vectorScoreThreshold ?? 0.3),
       vectorMaxResults: Number(lb.vectorMaxResults ?? 10),
-      characterId: owner ? null : typeof lb.characterId === "string" ? lb.characterId : null,
-      characterIds: owner
-        ? (ownerCharacterIds ?? [])
-        : Array.isArray(lb.characterIds)
-          ? lb.characterIds.filter((value): value is string => typeof value === "string")
-          : typeof lb.characterId === "string"
-            ? [lb.characterId]
-            : [],
-      personaId: owner ? null : typeof lb.personaId === "string" ? lb.personaId : null,
-      personaIds: owner
-        ? (ownerPersonaIds ?? [])
-        : Array.isArray(lb.personaIds)
-          ? lb.personaIds.filter((value): value is string => typeof value === "string")
-          : typeof lb.personaId === "string"
-            ? [lb.personaId]
-            : [],
-      chatId: owner ? null : typeof lb.chatId === "string" ? lb.chatId : null,
-      isGlobal: owner ? false : lb.isGlobal === true || lb.isGlobal === "true",
+      characterId: typeof lb.characterId === "string" ? lb.characterId : null,
+      characterIds: Array.isArray(lb.characterIds)
+        ? lb.characterIds.filter((value): value is string => typeof value === "string")
+        : typeof lb.characterId === "string"
+          ? [lb.characterId]
+          : [],
+      personaId: typeof lb.personaId === "string" ? lb.personaId : null,
+      personaIds: Array.isArray(lb.personaIds)
+        ? lb.personaIds.filter((value): value is string => typeof value === "string")
+        : typeof lb.personaId === "string"
+          ? [lb.personaId]
+          : [],
+      chatId: typeof lb.chatId === "string" ? lb.chatId : null,
+      isGlobal: lb.isGlobal === true || lb.isGlobal === "true",
       enabled: lb.enabled !== false,
       scope: readLorebookScope(lb.scope),
       tags: Array.isArray(lb.tags) ? lb.tags.map(String) : [],
