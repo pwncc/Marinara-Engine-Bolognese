@@ -185,6 +185,7 @@ export const GAME_SCENE_ILLUSTRATION: PromptOverrideKeyDef<GameSceneIllustration
       ctx.charactersLine,
       ctx.referenceHandlingLine,
       ctx.appearanceNotesBlock,
+      ctx.artDirectionLine,
       ctx.imagePromptInstructionsLine,
     ]
       .filter(Boolean)
