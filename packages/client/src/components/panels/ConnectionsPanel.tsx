@@ -87,42 +87,30 @@ import { SelectionActionBar } from "../ui/SelectionActionBar";
 import { SmoothFolderContent } from "../ui/SmoothFolderContent";
 import { TouchDragHandle } from "../ui/TouchDragHandle";
 
-const TEXT_CONNECTION_ICON_COLORS = {
+const CONNECTION_ICON_COLORS = {
   from: "from-sky-400",
   to: "to-blue-500",
   ring: "ring-sky-400/40",
   badge: "bg-sky-400",
 };
-const IMAGE_CONNECTION_ICON_COLORS = {
-  from: "from-emerald-400",
-  to: "to-teal-500",
-  ring: "ring-emerald-400/40",
-  badge: "bg-emerald-400",
-};
-const VIDEO_CONNECTION_ICON_COLORS = {
-  from: "from-rose-400",
-  to: "to-orange-500",
-  ring: "ring-rose-400/40",
-  badge: "bg-rose-400",
-};
 const PROVIDER_COLORS: Record<string, { from: string; to: string; ring: string; badge: string }> = {
-  openai: TEXT_CONNECTION_ICON_COLORS,
-  openai_chatgpt: TEXT_CONNECTION_ICON_COLORS,
-  anthropic: TEXT_CONNECTION_ICON_COLORS,
-  claude_subscription: TEXT_CONNECTION_ICON_COLORS,
-  grok_subscription: TEXT_CONNECTION_ICON_COLORS,
-  google: TEXT_CONNECTION_ICON_COLORS,
-  google_vertex: TEXT_CONNECTION_ICON_COLORS,
-  mistral: TEXT_CONNECTION_ICON_COLORS,
-  cohere: TEXT_CONNECTION_ICON_COLORS,
-  openrouter: TEXT_CONNECTION_ICON_COLORS,
-  nanogpt: TEXT_CONNECTION_ICON_COLORS,
-  xai: TEXT_CONNECTION_ICON_COLORS,
-  custom: TEXT_CONNECTION_ICON_COLORS,
-  image_generation: IMAGE_CONNECTION_ICON_COLORS,
-  video_generation: VIDEO_CONNECTION_ICON_COLORS,
+  openai: CONNECTION_ICON_COLORS,
+  openai_chatgpt: CONNECTION_ICON_COLORS,
+  anthropic: CONNECTION_ICON_COLORS,
+  claude_subscription: CONNECTION_ICON_COLORS,
+  grok_subscription: CONNECTION_ICON_COLORS,
+  google: CONNECTION_ICON_COLORS,
+  google_vertex: CONNECTION_ICON_COLORS,
+  mistral: CONNECTION_ICON_COLORS,
+  cohere: CONNECTION_ICON_COLORS,
+  openrouter: CONNECTION_ICON_COLORS,
+  nanogpt: CONNECTION_ICON_COLORS,
+  xai: CONNECTION_ICON_COLORS,
+  custom: CONNECTION_ICON_COLORS,
+  image_generation: CONNECTION_ICON_COLORS,
+  video_generation: CONNECTION_ICON_COLORS,
 };
-const DEFAULT_COLOR = TEXT_CONNECTION_ICON_COLORS;
+const DEFAULT_COLOR = CONNECTION_ICON_COLORS;
 
 function getConnectionFallbackIcon(provider: string) {
   if (provider === "image_generation") return <ImageIcon size="1rem" />;
@@ -709,9 +697,9 @@ function DefaultAgentConnectionCard({ connectionsList }: { connectionsList: Conn
   };
 
   return (
-    <div className="rounded-xl border border-violet-400/20 bg-gradient-to-br from-violet-400/5 to-purple-500/5 p-3">
+    <div className="rounded-xl border border-sky-400/20 bg-gradient-to-br from-sky-400/5 to-blue-500/5 p-3">
       <div className="flex items-center gap-2.5 max-sm:items-start">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-400 to-purple-500 text-white shadow-sm">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-blue-500 text-white shadow-sm">
           <Sparkles size="1rem" />
         </div>
         <div className="min-w-0 flex-1">
@@ -778,9 +766,9 @@ function DefaultIllustratorConnectionCard({ connectionsList }: { connectionsList
   };
 
   return (
-    <div className="rounded-xl border border-emerald-400/20 bg-gradient-to-br from-emerald-400/5 to-teal-500/5 p-3">
+    <div className="rounded-xl border border-sky-400/20 bg-gradient-to-br from-sky-400/5 to-blue-500/5 p-3">
       <div className="flex items-center gap-2.5 max-sm:items-start">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-400 to-teal-500 text-white shadow-sm">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-blue-500 text-white shadow-sm">
           <ImageIcon size="1rem" />
         </div>
         <div className="min-w-0 flex-1">
@@ -849,9 +837,9 @@ function DefaultVideoConnectionCard({ connectionsList }: { connectionsList: Conn
   };
 
   return (
-    <div className="rounded-xl border border-rose-400/20 bg-gradient-to-br from-rose-400/5 to-orange-500/5 p-3">
+    <div className="rounded-xl border border-sky-400/20 bg-gradient-to-br from-sky-400/5 to-blue-500/5 p-3">
       <div className="flex items-center gap-2.5 max-sm:items-start">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-rose-400 to-orange-500 text-white shadow-sm">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-blue-500 text-white shadow-sm">
           <Film size="1rem" />
         </div>
         <div className="min-w-0 flex-1">
