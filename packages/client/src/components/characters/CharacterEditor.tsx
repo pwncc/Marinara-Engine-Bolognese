@@ -367,6 +367,34 @@ export function CharacterEditor() {
     });
   }, []);
 
+  // Remove the embedded lorebook from the card: drop `data.character_book` and
+  // the `embeddedLorebook` pointer. Staged in formData so a later Save persists
+  // it (clearing character_book is a plain card-field edit). Clearing the
+  // pointer also stops the standalone -> character_book sync from re-baking it
+  // (syncCharacterBookFromLorebook bails when the pointer no longer matches).
+  // Any linked standalone lorebook is left untouched — this only unbakes the
+  // copy embedded in the card.
+  const handleLorebookUnembedded = useCallback(() => {
+    setFormData((prev) => {
+      if (!prev) return prev;
+      const extensions = { ...(prev.extensions ?? {}) } as Record<string, unknown>;
+      const importMetadata =
+        extensions.importMetadata && typeof extensions.importMetadata === "object"
+          ? { ...(extensions.importMetadata as Record<string, unknown>) }
+          : null;
+      if (importMetadata) {
+        delete importMetadata.embeddedLorebook;
+        extensions.importMetadata = importMetadata;
+      }
+      return {
+        ...prev,
+        character_book: null,
+        extensions: extensions as CharacterData["extensions"],
+      };
+    });
+    markDirty();
+  }, [markDirty]);
+
   const updateExtension = useCallback(
     (key: string, value: unknown) => {
       setExtensionValue(key, formatCharacterExtensionValue(key, value, formatQuotes));
@@ -1037,6 +1065,7 @@ export function CharacterEditor() {
                 formData={formData}
                 onEmbedded={handleLorebookEmbedded}
                 onEmbeddingChange={setLorebookEmbedInFlight}
+                onUnembed={handleLorebookUnembedded}
               />
             )}
           </div>
@@ -4069,11 +4098,13 @@ function LorebookTab({
   formData,
   onEmbedded,
   onEmbeddingChange,
+  onUnembed,
 }: {
   characterId: string | null;
   formData: CharacterData;
   onEmbedded?: (lorebookId: string, characterBook: unknown) => void;
   onEmbeddingChange?: (embedding: boolean) => void;
+  onUnembed?: () => void;
 }) {
   const book = formData.character_book;
   const entries = book?.entries ?? [];
@@ -4094,7 +4125,7 @@ function LorebookTab({
   // another Marinara instance can carry a stale `lorebookId` in their
   // extensions, and an auto-import that errored silently can leave the
   // pointer set without a real DB row. If we trust the raw pointer the
-  // "Edit Linked Lorebook" button opens an editor that can never resolve
+  // "Edit Embedded Lorebook" button opens an editor that can never resolve
   // (its loading state is `isLoading || !lorebook`, and a 404'd query
   // satisfies the second clause forever), so verify before showing it.
   const linkedLorebookQuery = useLorebook(rawLinkedLorebookId);
@@ -4169,13 +4200,30 @@ function LorebookTab({
               className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)]/15 px-3 py-1.5 text-xs font-medium text-[var(--primary)] transition-all hover:bg-[var(--primary)]/25"
             >
               <Library size="0.75rem" />
-              Edit Linked Lorebook
+              Edit Embedded Lorebook
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => {
+              if (
+                !window.confirm(
+                  "Remove the embedded lorebook from this character's card? Its entries will no longer be baked into the card (Save to apply). Any linked standalone lorebook is kept.",
+                )
+              )
+                return;
+              onUnembed?.();
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--destructive)]/10 px-3 py-1.5 text-xs font-medium text-[var(--destructive)] transition-all hover:bg-[var(--destructive)]/20"
+            title="Drop data.character_book from the card (the embedded copy)"
+          >
+            <Trash2 size="0.75rem" />
+            Remove from card
+          </button>
           <span className="text-[0.6875rem] text-[var(--muted-foreground)]">
             {linkedLorebookId
-              ? "Opens the lorebook editor where you can add, edit, or delete entries."
-              : "Imports this embedded lorebook into Marinara as a linked lorebook."}
+              ? "Edit opens the lorebook editor; changes sync back into the card's embedded copy."
+              : "Import bakes this embedded lorebook into Marinara as an editable linked lorebook."}
           </span>
         </div>
       )}

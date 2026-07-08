@@ -288,7 +288,7 @@ export async function syncCharacterBookFromLorebook(db: DB, lorebookId: string):
  * `extensions.importMetadata.embeddedLorebook` pointer. Called when the
  * standalone lorebook is being deleted, so the V2 `character_book` cannot
  * resurrect on the next character open and the dangling
- * `lorebookId` pointer cannot leave a broken "Edit Linked Lorebook"
+ * `lorebookId` pointer cannot leave a broken "Edit Embedded Lorebook"
  * button behind.
  *
  * The character storage layer's `update` does a shallow merge of
