@@ -3,14 +3,15 @@
 // and behavior directive. Shared by the character and persona editors.
 // These fields only affect Conversation mode; they are never read in RP/VN/Game.
 // ──────────────────────────────────────────────
-import { useMemo, useState } from "react";
-import { Loader2, Wand2 } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Loader2, Smile, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import type { ConvoBehaviorConfig, ConvoBehaviorInsertionStrategy } from "@marinara-engine/shared";
 import { useConnections } from "../../hooks/use-connections";
 import { useGenerateAboutMe } from "../../hooks/use-characters";
 import { filterLanguageGenerationConnections } from "../../lib/connection-filters";
 import { MacroTextarea } from "../ui/MacroTextarea";
+import { EmojiPicker } from "../ui/EmojiPicker";
 import { HelpTooltip } from "../ui/HelpTooltip";
 
 const STRATEGY_OPTIONS: Array<{ value: ConvoBehaviorInsertionStrategy; label: string }> = [
@@ -57,6 +58,31 @@ export function ConvoProfileFields({
   const { data: connectionsList } = useConnections();
   const generateAboutMe = useGenerateAboutMe();
   const [connectionId, setConnectionId] = useState("");
+  const aboutMeRef = useRef<HTMLTextAreaElement>(null);
+  const emojiBtnRef = useRef<HTMLButtonElement>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+
+  // Insert an emoji at the caret (or replace the selection), like the chat picker.
+  const insertEmoji = (token: string) => {
+    const el = aboutMeRef.current;
+    if (!el) {
+      onAboutMeChange(aboutMe + token);
+      return;
+    }
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const next = el.value.slice(0, start) + token + el.value.slice(end);
+    onAboutMeChange(next);
+    const caret = start + token.length;
+    requestAnimationFrame(() => {
+      el.focus();
+      try {
+        el.selectionStart = el.selectionEnd = caret;
+      } catch {
+        /* ignore */
+      }
+    });
+  };
 
   const connectionOptions = useMemo(
     () => filterLanguageGenerationConnections((connectionsList ?? []) as Array<{ id: string; name: string; model?: string | null }>),
@@ -112,11 +138,25 @@ export function ConvoProfileFields({
         <MacroTextarea
           value={aboutMe}
           onChange={onAboutMeChange}
+          textareaRef={aboutMeRef}
           placeholder="A line or two, an emoji, a joke, or nothing at all — whatever fits them…"
           rows={5}
           title="About Me"
           className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-3 text-sm leading-relaxed outline-none transition-colors placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
+          toolbarExtra={
+            <button
+              ref={emojiBtnRef}
+              type="button"
+              onClick={() => setEmojiOpen((v) => !v)}
+              aria-label="Insert emoji"
+              title="Insert emoji"
+              className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+            >
+              <Smile className="h-3 w-3" />
+            </button>
+          }
         />
+        <EmojiPicker open={emojiOpen} onClose={() => setEmojiOpen(false)} onSelect={insertEmoji} anchorRef={emojiBtnRef} />
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={effectiveConnectionId}
