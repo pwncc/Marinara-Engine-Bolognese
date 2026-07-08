@@ -3641,7 +3641,7 @@ export function ChatSettingsDrawer({
           </div>
 
           {/* Roleplay prompt preset */}
-          {modeCapabilities.supportsPromptPresets && isRoleplayMode && !metadata.sceneSystemPrompt && (
+          {modeCapabilities.supportsPromptPresets && isRoleplayMode && (
             <div style={{ order: CHAT_SETTINGS_ORDER.promptPreset }}>
               <PromptPresetSection
                 promptPresetId={chat.promptPresetId ?? null}
@@ -4768,6 +4768,7 @@ export function ChatSettingsDrawer({
                     value={groupScenarioDraft}
                     onChange={setGroupScenarioDraft}
                     placeholder="Replace individual character scenarios with a shared scenario for this group chat or leave empty to keep them…"
+                    surface="chat"
                   />
                 </div>
               )}
