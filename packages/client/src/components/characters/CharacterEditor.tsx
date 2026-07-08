@@ -367,14 +367,15 @@ export function CharacterEditor() {
     });
   }, []);
 
-  // Remove the embedded lorebook from the card: drop `data.character_book` and
-  // the `embeddedLorebook` pointer. Staged in formData so a later Save persists
-  // it (clearing character_book is a plain card-field edit). Clearing the
-  // pointer also stops the standalone -> character_book sync from re-baking it
-  // (syncCharacterBookFromLorebook bails when the pointer no longer matches).
-  // Any linked standalone lorebook is left untouched — this only unbakes the
-  // copy embedded in the card.
+  // "Remove from card" clears the embedded lorebook server-side
+  // (data.character_book + the embeddedLorebook pointer) immediately. Mirror
+  // handleLorebookEmbedded's reconciliation: when the editor is clean the
+  // detail-query refetch re-syncs formData for us; when it is dirty the parse
+  // effect skips that re-sync, so patch formData directly — otherwise a later
+  // Save would resend the stale pre-remove data and silently re-embed it. The
+  // linked standalone lorebook, if any, is left untouched.
   const handleLorebookUnembedded = useCallback(() => {
+    if (!dirtyRef.current) return;
     setFormData((prev) => {
       if (!prev) return prev;
       const extensions = { ...(prev.extensions ?? {}) } as Record<string, unknown>;
@@ -392,8 +393,7 @@ export function CharacterEditor() {
         extensions: extensions as CharacterData["extensions"],
       };
     });
-    markDirty();
-  }, [markDirty]);
+  }, []);
 
   const updateExtension = useCallback(
     (key: string, value: unknown) => {
@@ -4111,6 +4111,7 @@ function LorebookTab({
   const qc = useQueryClient();
   const openLorebookDetail = useUIStore((s) => s.openLorebookDetail);
   const [importing, setImporting] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const importMetadata =
     formData.extensions.importMetadata && typeof formData.extensions.importMetadata === "object"
       ? (formData.extensions.importMetadata as Record<string, unknown>)
@@ -4156,6 +4157,30 @@ function LorebookTab({
       toast.error(error instanceof Error ? error.message : "Failed to import embedded lorebook");
     } finally {
       setImporting(false);
+    }
+  };
+
+  const handleRemoveFromCard = async () => {
+    if (!characterId) return;
+    if (
+      !window.confirm(
+        "Remove the embedded lorebook from this character's card? Its entries will no longer be baked into the card. Any linked standalone lorebook is kept.",
+      )
+    )
+      return;
+    setRemoving(true);
+    try {
+      await api.delete(`/characters/${characterId}/embedded-lorebook`);
+      // Reconcile the editor (patches formData when dirty) then refresh caches so
+      // the tab, entries list, and Embedded badge update from server state.
+      onUnembed?.();
+      qc.invalidateQueries({ queryKey: ["characters", "detail", characterId] });
+      qc.invalidateQueries({ queryKey: lorebookKeys.all });
+      toast.success("Removed the embedded lorebook from the card.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to remove embedded lorebook.");
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -4205,19 +4230,12 @@ function LorebookTab({
           )}
           <button
             type="button"
-            onClick={() => {
-              if (
-                !window.confirm(
-                  "Remove the embedded lorebook from this character's card? Its entries will no longer be baked into the card (Save to apply). Any linked standalone lorebook is kept.",
-                )
-              )
-                return;
-              onUnembed?.();
-            }}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--destructive)]/10 px-3 py-1.5 text-xs font-medium text-[var(--destructive)] transition-all hover:bg-[var(--destructive)]/20"
-            title="Drop data.character_book from the card (the embedded copy)"
+            onClick={handleRemoveFromCard}
+            disabled={!characterId || removing}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--destructive)]/10 px-3 py-1.5 text-xs font-medium text-[var(--destructive)] transition-all hover:bg-[var(--destructive)]/20 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Remove the embedded lorebook (data.character_book) from the card"
           >
-            <Trash2 size="0.75rem" />
+            {removing ? <Loader2 size="0.75rem" className="animate-spin" /> : <Trash2 size="0.75rem" />}
             Remove from card
           </button>
           <span className="text-[0.6875rem] text-[var(--muted-foreground)]">

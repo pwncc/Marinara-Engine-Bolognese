@@ -331,3 +331,41 @@ export async function clearCharacterEmbeddedLorebook(db: DB, characterId: string
     logger.error(err, "Failed to clear embedded lorebook for character %s", characterId);
   }
 }
+
+/**
+ * Unconditionally clear a character's embedded-lorebook footprint — drop
+ * `data.character_book` and the `extensions.importMetadata.embeddedLorebook`
+ * pointer — regardless of whether a standalone still exists or the pointer still
+ * matches. Backs the user-initiated "Remove from card" action; the linked
+ * standalone lorebook, if any, is left untouched. Returns false when the
+ * character does not exist. Unlike `clearCharacterEmbeddedLorebook` (a
+ * fire-and-forget side effect of deleting a standalone), this is user-driven, so
+ * DB errors propagate to the route instead of being swallowed.
+ */
+export async function clearEmbeddedLorebookFromCharacter(db: DB, characterId: string): Promise<boolean> {
+  const charactersStorage = createCharactersStorage(db);
+  const character = await charactersStorage.getById(characterId);
+  if (!character) return false;
+
+  const currentData = parseCharacterData(character.data);
+  const extensions =
+    currentData.extensions && typeof currentData.extensions === "object"
+      ? ({ ...(currentData.extensions as Record<string, unknown>) } as Record<string, unknown>)
+      : {};
+  const importMetadata =
+    extensions.importMetadata && typeof extensions.importMetadata === "object"
+      ? ({ ...(extensions.importMetadata as Record<string, unknown>) } as Record<string, unknown>)
+      : null;
+  if (importMetadata && "embeddedLorebook" in importMetadata) {
+    delete importMetadata.embeddedLorebook;
+    extensions.importMetadata = importMetadata;
+  }
+
+  await charactersStorage.update(
+    characterId,
+    { character_book: null, extensions: extensions as never },
+    undefined,
+    { skipVersionSnapshot: true },
+  );
+  return true;
+}
