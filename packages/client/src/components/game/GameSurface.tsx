@@ -9740,7 +9740,7 @@ function GameSurfaceComponent({
     return (
       <div
         data-game-skip-bg-nav="true"
-        className="pointer-events-none absolute inset-0 z-[1] overflow-hidden"
+        className="pointer-events-none absolute inset-0 z-[1] overflow-hidden bg-black"
         aria-hidden="true"
       >
         {frame.video ? (
@@ -9751,13 +9751,13 @@ function GameSurfaceComponent({
             loop
             muted
             playsInline
-            className="h-full w-full bg-black object-cover transition-opacity duration-500"
+            className="h-full w-full bg-black object-contain transition-opacity duration-500"
           />
         ) : frame.image ? (
           <img
             src={frame.image.url}
             alt=""
-            className="h-full w-full bg-black object-cover transition-opacity duration-500"
+            className="h-full w-full bg-black object-contain transition-opacity duration-500"
             draggable={false}
           />
         ) : null}
