@@ -53,6 +53,7 @@ export const characterExtensionsSchema = z
     appearance: z.string().default(""),
     // Conversation-mode-only fields (optional — absent on non-convo cards).
     convoDisplayName: z.string().optional(),
+    convoDisplayNameInCard: z.boolean().optional(),
     aboutMe: z.string().optional(),
     convoBehavior: convoBehaviorConfigSchema.optional(),
   })

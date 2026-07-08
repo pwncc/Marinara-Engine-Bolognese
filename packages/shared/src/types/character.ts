@@ -53,6 +53,10 @@ export interface CharacterExtensions {
   /** Marinara Engine (Conversation mode ONLY): display name shown as the sender label
    *  in Convo and used for attribution in the convo prompt. Never read in RP/VN/Game. */
   convoDisplayName?: string;
+  /** Marinara Engine (Conversation mode ONLY): when true, prepend a line declaring the
+   *  convo display name to this character's card so the model can map the display name
+   *  to this specific card. No effect without a convoDisplayName. Never read in RP/VN/Game. */
+  convoDisplayNameInCard?: boolean;
   /** Marinara Engine (Conversation mode ONLY): public "about me" profile. The
    *  cross-chat default; a per-chat override can supersede it. Never read in RP/VN/Game. */
   aboutMe?: string;

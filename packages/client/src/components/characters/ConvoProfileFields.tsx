@@ -29,6 +29,9 @@ interface ConvoProfileFieldsProps {
   baseName: string;
   displayName: string;
   onDisplayNameChange: (value: string) => void;
+  /** When true, the display name is declared on the card in the convo prompt. */
+  displayNameInCard?: boolean;
+  onDisplayNameInCardChange?: (value: boolean) => void;
   aboutMe: string;
   onAboutMeChange: (value: string) => void;
   behavior: ConvoBehaviorConfig | null | undefined;
@@ -49,6 +52,8 @@ export function ConvoProfileFields({
   baseName,
   displayName,
   onDisplayNameChange,
+  displayNameInCard,
+  onDisplayNameInCardChange,
   aboutMe,
   onAboutMeChange,
   behavior,
@@ -126,6 +131,20 @@ export function ConvoProfileFields({
           placeholder={baseName || "Display name"}
           className="w-full rounded-xl border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm outline-none transition-colors placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
         />
+        {kind === "character" && onDisplayNameInCardChange && (
+          <label className="flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
+            <input
+              type="checkbox"
+              checked={!!displayNameInCard}
+              onChange={(e) => onDisplayNameInCardChange(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--primary)]"
+            />
+            <span className="inline-flex items-center gap-1">
+              Declare this name on the card in the prompt
+              <HelpTooltip text="Prepends a line like “Conversation display name: X” to this character's card so the model knows which card presents under which Convo name. Needs a display name set. Convo mode only." />
+            </span>
+          </label>
+        )}
       </div>
 
       <div className="mari-editor-panel space-y-3 p-3">

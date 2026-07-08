@@ -27,6 +27,9 @@ export type CharacterPromptInfo = {
   talkativeness: number;
   avatarPath: string | null;
   avatarCrop: unknown | null;
+  /** Conversation-only: cosmetic display name + whether to declare it on the card. */
+  convoDisplayName?: string;
+  convoDisplayNameInCard?: boolean;
 };
 
 type CharactersStore = {
@@ -125,6 +128,9 @@ export async function loadCharacterPromptInfo({
       talkativeness: Math.max(0, Math.min(1, Number(charData.extensions?.talkativeness ?? 0.5))),
       avatarPath: (charRow.avatarPath as string) ?? null,
       avatarCrop: charData.extensions?.avatarCrop ?? null,
+      convoDisplayName:
+        typeof charData.extensions?.convoDisplayName === "string" ? charData.extensions.convoDisplayName : undefined,
+      convoDisplayNameInCard: charData.extensions?.convoDisplayNameInCard === true,
     });
   }
   return charInfo;
@@ -192,6 +198,9 @@ export function injectIdentityFallbackMessages(args: {
   persona?: { personaStats?: unknown } | null;
   promptTemplateSources?: readonly string[];
   resolvePromptMacros(value: string): string;
+  /** Conversation mode only: enables the opt-in per-card convo display-name line.
+   *  Gated so the field never reaches RP/VN/Game prompts. */
+  isConversation?: boolean;
 }): void {
   const allContent = args.messages.map((message) => message.content).join("\n");
   const promptTemplateSources = args.promptTemplateSources ?? [];
@@ -237,7 +246,15 @@ export function injectIdentityFallbackMessages(args: {
     const fieldParts = wrapFieldEntries(fieldsToInject, args.wrapFormat);
     if (fieldParts.length === 0) continue;
 
-    const block = wrapContent(fieldParts.join("\n"), character.name, args.wrapFormat, 1);
+    // Conversation mode only: when opted in, prefix the card with the character's
+    // convo display name so the model can map the display name to this specific
+    // card. Gated on convo mode so the field never reaches RP/VN/Game prompts.
+    const convoName = character.convoDisplayName?.trim();
+    const convoNameLine =
+      args.isConversation && character.convoDisplayNameInCard && convoName
+        ? `Conversation display name: ${sanitizePromptLeaf(convoName, args.wrapFormat)}\n`
+        : "";
+    const block = wrapContent(convoNameLine + fieldParts.join("\n"), character.name, args.wrapFormat, 1);
     const firstSysIdx = args.messages.findIndex((message) => message.role === "system");
     const insertAt = firstSysIdx >= 0 ? firstSysIdx + 1 : 0;
     args.messages.splice(insertAt, 0, { role: "system", content: block });

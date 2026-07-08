@@ -1266,6 +1266,8 @@ function ConvoTab({
       baseName={formData.name}
       displayName={(ext.convoDisplayName as string) ?? ""}
       onDisplayNameChange={(v) => updateExtension("convoDisplayName", v)}
+      displayNameInCard={ext.convoDisplayNameInCard === true}
+      onDisplayNameInCardChange={(v) => updateExtension("convoDisplayNameInCard", v)}
       aboutMe={(ext.aboutMe as string) ?? ""}
       onAboutMeChange={(v) => updateExtension("aboutMe", v)}
       behavior={ext.convoBehavior as ConvoBehaviorConfig | undefined}

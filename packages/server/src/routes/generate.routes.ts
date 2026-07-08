@@ -2346,6 +2346,7 @@ export async function generateRoutes(app: FastifyInstance) {
             persona,
             promptTemplateSources: identityFallbackPromptTemplateSources,
             resolvePromptMacros,
+            isConversation: chatMode === "conversation",
           });
         }
 
