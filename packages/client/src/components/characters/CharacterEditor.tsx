@@ -4155,6 +4155,10 @@ function LorebookTab({
 
   const handleImportEmbeddedLorebook = async () => {
     if (!characterId) return;
+    if (removing) {
+      toast.error("Wait for the embedded lorebook removal to finish before importing.");
+      return;
+    }
     setImporting(true);
     try {
       const result = await api.post<{
@@ -4181,6 +4185,10 @@ function LorebookTab({
 
   const handleRemoveFromCard = async () => {
     if (!characterId || removing) return;
+    if (importing) {
+      toast.error("Wait for the embedded lorebook import to finish before removing it from the card.");
+      return;
+    }
     if (isRemoveBlockedByEmbedding()) return;
     if (
       !(await showConfirmDialog({
@@ -4232,10 +4240,10 @@ function LorebookTab({
           <button
             type="button"
             onClick={handleImportEmbeddedLorebook}
-            disabled={!characterId || importing}
+            disabled={!characterId || importing || removing}
             className={cn(
               "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all",
-              importing || !characterId
+              importing || removing || !characterId
                 ? "cursor-not-allowed bg-[var(--accent)] text-[var(--muted-foreground)]"
                 : "bg-[var(--primary)]/15 text-[var(--primary)] hover:bg-[var(--primary)]/25",
             )}
@@ -4256,7 +4264,7 @@ function LorebookTab({
           <button
             type="button"
             onClick={handleRemoveFromCard}
-            disabled={!characterId || removing || embedding}
+            disabled={!characterId || removing || importing || embedding}
             className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--destructive)]/10 px-3 py-1.5 text-xs font-medium text-[var(--destructive)] transition-all hover:bg-[var(--destructive)]/20 disabled:cursor-not-allowed disabled:opacity-50"
             title={
               embedding
