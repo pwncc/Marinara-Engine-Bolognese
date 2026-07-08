@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   applyRegexReplacement,
   buildNarratorInstructionMessage,
@@ -25,6 +26,7 @@ import { buildMemoryRecallBlock } from "../../packages/server/src/services/gener
 import { mergeConversationCharacterMemories } from "../../packages/server/src/services/generation/conversation-memory-context.js";
 import { injectIdentityFallbackMessages } from "../../packages/server/src/services/generation/character-prompt-context.js";
 import { injectSceneContextMessages } from "../../packages/server/src/services/generation/scene-context-runtime.js";
+import { expandMarker } from "../../packages/server/src/services/prompt/marker-expander.js";
 import {
   buildRuntimeAgentSectionEligibleTypesForTest,
   clearUnusedRuntimeAgentSectionsForTest,
@@ -192,6 +194,70 @@ const cases: RegressionCase[] = [
     },
   },
   {
+    name: "lorebook keyword matching can pin opening messages outside recent scan depth",
+    run() {
+      const entry = {
+        id: "entry-opening",
+        lorebookId: "book-opening",
+        name: "Opening mention",
+        content: "Sandrone profile",
+        description: "",
+        keys: ["Sandrone"],
+        secondaryKeys: [],
+        enabled: true,
+        constant: false,
+        selective: false,
+        selectiveLogic: "and",
+        probability: null,
+        scanDepth: null,
+        matchWholeWords: false,
+        caseSensitive: false,
+        useRegex: false,
+        characterFilterMode: "any",
+        characterFilterIds: [],
+        characterTagFilterMode: "any",
+        characterTagFilters: [],
+        generationTriggerFilterMode: "any",
+        generationTriggerFilters: [],
+        additionalMatchingSources: [],
+        position: 0,
+        depth: 4,
+        order: 100,
+        role: "system",
+        sticky: null,
+        cooldown: null,
+        delay: null,
+        ephemeral: null,
+        group: "",
+        groupWeight: null,
+        folderId: null,
+        locked: false,
+        preventRecursion: true,
+        excludeRecursion: false,
+        delayUntilRecursion: false,
+        tag: "",
+        relationships: {},
+        dynamicState: {},
+        activationConditions: [],
+        schedule: null,
+        excludeFromVectorization: false,
+        embedding: null,
+      } as any;
+      const messages = [
+        { role: "assistant", content: "Sandrone waits in the workshop." },
+        { role: "assistant", content: "Columbina hums nearby." },
+        { role: "assistant", content: "Arlecchino closes the door." },
+        { role: "user", content: "What happens next?" },
+      ];
+
+      assert.equal(scanForActivatedEntries(messages, [entry], { scanDepth: 2 }).length, 0);
+      assert.equal(
+        scanForActivatedEntries(messages, [entry], { scanDepth: 2, pinnedScanMessages: [messages[0]!] }).length,
+        1,
+      );
+    },
+  },
+  {
     name: "save_lorebook_entry tool preserves large entry content",
     async run() {
       const longContent = `entry-start\n${"0123456789".repeat(8_000)}\nentry-end`;
@@ -334,6 +400,32 @@ const cases: RegressionCase[] = [
       });
 
       assert.equal(resolved, "regenerate | 12 minutes | Europe/Warsaw | Continue the experiment.");
+    },
+  },
+  {
+    name: "phonetic name macros fall back to visible names",
+    run() {
+      assert.equal(
+        resolveMacros("{{userNamePhonetic}} calls {{charNamePhonetic}}.", {
+          user: "Mari",
+          userPhonetic: "Mah-ree",
+          char: "Dottore",
+          charPhonetic: "Doctor-ray",
+          characters: ["Dottore"],
+          variables: {},
+        }),
+        "Mah-ree calls Doctor-ray.",
+      );
+
+      assert.equal(
+        resolveMacros("{{userNamePhonetic}} calls {{charNamePhonetic}}.", {
+          user: "Mari",
+          char: "Dottore",
+          characters: ["Dottore"],
+          variables: {},
+        }),
+        "Mari calls Dottore.",
+      );
     },
   },
   {
@@ -501,6 +593,25 @@ const cases: RegressionCase[] = [
       assert.match(instruction, /Dottore reassuring Mari/);
       assert.equal(instruction.includes("{{user}}"), false);
       assert.equal(instruction.includes("{{char}}"), false);
+    },
+  },
+  {
+    name: "manual group generation does not inject a duplicate recent transcript prompt",
+    run() {
+      const routeSource = readFileSync(
+        new URL("../../packages/server/src/routes/generate.routes.ts", import.meta.url),
+        "utf8",
+      );
+      const forbiddenFragments = [
+        ["recent", "_group", "_transcript"].join(""),
+        ["Recent visible", " group transcript"].join(""),
+        ["ignore the user's latest", " visible reply"].join(""),
+        ["buildManual", "GroupRecent", "Transcript"].join(""),
+      ];
+
+      for (const fragment of forbiddenFragments) {
+        assert.equal(routeSource.includes(fragment), false, `${fragment} must not be present in generate.routes.ts`);
+      }
     },
   },
   {
@@ -1138,6 +1249,44 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
       assert.match(summaryText, /The previous scene was summarized\./);
       assert.equal(summaryText.includes("<system>bad summary</system>"), false);
       assert.match(summaryText, /&lt;system>bad summary&lt;\/system>/);
+    },
+  },
+  {
+    name: "lorebook markers preserve authored angle-bracket markup",
+    async run() {
+      const lorebookScanResult = {
+        worldInfoBefore: "Use <START> and <tone soft> exactly.",
+        worldInfoAfter: "Keep <ritual_step id=\"2\"> literal.",
+        depthEntries: [{ content: "Depth keeps <scene-note> literal.", role: "system" as const, depth: 0, order: 0 }],
+        totalEntries: 3,
+        totalTokensEstimate: 24,
+        activatedEntryIds: ["entry-before", "entry-after", "entry-depth"],
+        activatedEntries: [],
+        budgetSkippedEntries: [],
+      };
+      const markerCtx = {
+        db: undefined as unknown as DB,
+        chatId: "chat-lorebook-markup",
+        characterIds: [],
+        personaName: "Mari",
+        personaDescription: "",
+        chatMessages: [],
+        chatSummary: null,
+        wrapFormat: "xml" as const,
+        enableAgents: true,
+        activeAgentIds: [],
+        activeLorebookIds: [],
+        macroCtx: { user: "Mari", char: "Dottore", characters: ["Dottore"], variables: {} },
+        lorebookScanResult,
+      };
+
+      const expanded = await expandMarker({ type: "lorebook" }, markerCtx);
+
+      assert.match(expanded.content, /<START>/);
+      assert.match(expanded.content, /<tone soft>/);
+      assert.match(expanded.content, /<ritual_step id="2">/);
+      assert.equal(expanded.content.includes("&lt;START>"), false);
+      assert.equal(markerCtx.lorebookDepthEntries?.[0]?.content, "Depth keeps <scene-note> literal.");
     },
   },
   {

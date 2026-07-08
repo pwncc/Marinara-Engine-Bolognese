@@ -6,6 +6,7 @@ import type { MariWorkspaceTraceItem } from "./professor-mari-workspace.js";
 import type { GenerationGuideSource } from "../utils/generation-guide.js";
 import type { HapticFeedbackSensitivity } from "./haptic.js";
 import type { CustomEmojiSelectionPrefs } from "../schemas/custom-emoji.schema.js";
+import type { DiceRollResult } from "./game.js";
 
 /** The four primary chat modes the engine supports. */
 export type ChatMode = "conversation" | "roleplay" | "visual_novel" | "game";
@@ -189,6 +190,8 @@ export interface ChatMemoryChunk {
  * value is unset; an explicit `MIN` (0) means "hide the whole batch".
  */
 export const SUMMARY_TAIL_MESSAGES = { MIN: 0, MAX: 50, DEFAULT: 10 } as const;
+
+export type GameStoryboardViewerDisplayMode = "floating" | "background";
 
 /** Extra metadata stored on a chat. */
 export interface ChatMetadata {
@@ -398,6 +401,8 @@ export interface ChatMetadata {
   conversationCallsEnabled?: boolean;
   /** Allow characters to ring the user through the call command. Default: true when calls are enabled. */
   conversationCharactersCanCall?: boolean;
+  /** Ask call models to include TTS/video voice cues in bracket tags. Default: true. */
+  conversationCallVoiceCues?: boolean;
   /** Chat-scoped generated schedules for conversation characters. */
   characterSchedules?: Record<string, unknown>;
   /** Chat-scoped manual status overrides for conversation characters. */
@@ -478,6 +483,8 @@ export interface ChatMetadata {
   gameStoryboardAutoIllustrationsEnabled?: boolean;
   /** When true, completed Game Mode GM turns automatically create storyboard keyframe videos. */
   gameStoryboardAutoGenerationEnabled?: boolean;
+  /** How the Game Mode storyboard viewer is displayed in the game surface. */
+  gameStoryboardViewerDisplayMode?: GameStoryboardViewerDisplayMode;
   /** Selected Game Mode storyboard prompt template for image-only auto storyboards. */
   gameStoryboardIllustrationPromptTemplateId?: string | null;
   /** Selected Game Mode storyboard prompt template for animation-ready auto storyboards. */
@@ -662,6 +669,8 @@ export interface MessageExtra {
   hiddenFromAI?: boolean;
   /** When true, Roleplay renders this generated assistant turn as a fresh bubble instead of grouping with the previous assistant turn. */
   startsNewAssistantBubble?: boolean;
+  /** Structured dice roll payload rendered by the chat UI. */
+  diceRollResult?: DiceRollResult | null;
   /**
    * Cached pipeline injections (prose-guardian, director, knowledge-retrieval, etc.)
    * saved with this assistant message — reused when regenerating that swipe unless refreshed.

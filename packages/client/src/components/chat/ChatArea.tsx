@@ -345,6 +345,7 @@ function toCharacterMapValue(char: CharacterRow): CharacterMapValue {
     const extensions = data.extensions && typeof data.extensions === "object" ? data.extensions : {};
     return {
       name: data.name ?? "Unknown",
+      phoneticName: extensions.phoneticName || undefined,
       description: data.description ?? "",
       personality: data.personality ?? "",
       backstory: extensions.backstory ?? "",
@@ -373,6 +374,7 @@ function toCharacterMapValue(char: CharacterRow): CharacterMapValue {
 function areCharacterMapValuesEqual(a: CharacterMapValue, b: CharacterMapValue): boolean {
   return (
     a.name === b.name &&
+    a.phoneticName === b.phoneticName &&
     a.description === b.description &&
     a.personality === b.personality &&
     a.backstory === b.backstory &&
@@ -514,6 +516,7 @@ export function ChatArea() {
   const intuitiveSwipeNavigation = useUIStore((s) => s.intuitiveSwipeNavigation);
   const intuitiveSwipeRerollLatest = useUIStore((s) => s.intuitiveSwipeRerollLatest);
   const editLastMessageOnArrowUp = useUIStore((s) => s.editLastMessageOnArrowUp);
+  const ttsLineVolume = useUIStore((s) => s.ttsLineVolume);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevScrollHeightRef = useRef(0);
@@ -923,6 +926,7 @@ export function ChatArea() {
     return {
       id: persona.id,
       name: persona.name,
+      phoneticName: persona.phoneticName || undefined,
       description: persona.description ?? "",
       personality: persona.personality || undefined,
       scenario: persona.scenario || undefined,
@@ -2275,8 +2279,9 @@ export function ChatArea() {
 
     void ttsService.speakSequence(withTTSVoiceRequestCacheKeys(ttsRequests, cfg, lastMsg.id), lastMsg.id, {
       progressive: cfg.progressivePlayback,
+      volume: ttsLineVolume / 100,
     });
-  }, [characterMap, isStreaming, resolveTTSCharacterId]);
+  }, [characterMap, isStreaming, resolveTTSCharacterId, ttsLineVolume]);
 
   const newestMsgId = msgData?.pages[0]?.[msgData.pages[0].length - 1]?.id;
   const newestMsgSwipeIndex = msgData?.pages[0]?.[msgData.pages[0].length - 1]?.activeSwipeIndex;

@@ -264,10 +264,17 @@ export function CharacterEditor() {
   const dirtyRef = useRef(false);
   const editRevisionRef = useRef(0);
   const setEditorDirty = useUIStore((s) => s.setEditorDirty);
+  const lorebookEmbedInFlightRef = useRef(false);
+  const [lorebookEmbedding, setLorebookEmbedding] = useState(false);
   const setDirtyState = useCallback((nextDirty: boolean) => {
     dirtyRef.current = nextDirty;
     setDirty(nextDirty);
   }, []);
+  const setLorebookEmbedInFlight = useCallback((inFlight: boolean) => {
+    lorebookEmbedInFlightRef.current = inFlight;
+    setLorebookEmbedding(inFlight);
+  }, []);
+  const isLorebookEmbeddingInFlight = useCallback(() => lorebookEmbedInFlightRef.current, []);
   const markDirty = useCallback(() => {
     editRevisionRef.current += 1;
     setDirtyState(true);
@@ -339,6 +346,60 @@ export function CharacterEditor() {
     });
   }, []);
 
+  // Embedding a lorebook into the card mutates the character server-side
+  // (data.character_book + the embeddedLorebook pointer). When the editor is
+  // clean, the detail-query refetch re-syncs formData for us; when it is dirty
+  // the parse effect skips that re-sync, so patch formData directly — otherwise
+  // a later Save would send the stale pre-embed data and silently revert it.
+  const handleLorebookEmbedded = useCallback((lorebookId: string, characterBook: unknown) => {
+    if (!dirtyRef.current) return;
+    setFormData((prev) => {
+      if (!prev) return prev;
+      const extensions = { ...(prev.extensions ?? {}) } as Record<string, unknown>;
+      const importMetadata = { ...((extensions.importMetadata as Record<string, unknown>) ?? {}) };
+      const embeddedLorebook = { ...((importMetadata.embeddedLorebook as Record<string, unknown>) ?? {}) };
+      importMetadata.embeddedLorebook = { ...embeddedLorebook, hasEmbeddedLorebook: true, lorebookId };
+      extensions.importMetadata = importMetadata;
+      return {
+        ...prev,
+        character_book: characterBook as CharacterData["character_book"],
+        extensions: extensions as CharacterData["extensions"],
+      };
+    });
+  }, []);
+
+  // "Remove from card" clears the embedded lorebook server-side
+  // (data.character_book + the embeddedLorebook pointer) immediately. Mirror
+  // handleLorebookEmbedded's reconciliation: when the editor is clean the
+  // detail-query refetch re-syncs formData for us; when it is dirty the parse
+  // effect skips that re-sync, so patch formData directly — otherwise a later
+  // Save would resend the stale pre-remove data and silently re-embed it. The
+  // linked standalone lorebook, if any, is left untouched.
+  const handleLorebookUnembedded = useCallback(() => {
+    if (lorebookEmbedInFlightRef.current) {
+      toast.error("Wait for the embedded lorebook update to finish before removing it from the card.");
+      return;
+    }
+    if (!dirtyRef.current) return;
+    setFormData((prev) => {
+      if (!prev) return prev;
+      const extensions = { ...(prev.extensions ?? {}) } as Record<string, unknown>;
+      const importMetadata =
+        extensions.importMetadata && typeof extensions.importMetadata === "object"
+          ? { ...(extensions.importMetadata as Record<string, unknown>) }
+          : null;
+      if (importMetadata) {
+        delete importMetadata.embeddedLorebook;
+        extensions.importMetadata = importMetadata;
+      }
+      return {
+        ...prev,
+        character_book: null,
+        extensions: extensions as CharacterData["extensions"],
+      };
+    });
+  }, []);
+
   const updateExtension = useCallback(
     (key: string, value: unknown) => {
       setExtensionValue(key, formatCharacterExtensionValue(key, value, formatQuotes));
@@ -375,6 +436,10 @@ export function CharacterEditor() {
     if (!characterId || !formData) return false;
     if (avatarUploadInFlightRef.current) {
       toast.error("Wait for the current avatar upload to finish before saving.");
+      return false;
+    }
+    if (lorebookEmbedInFlightRef.current) {
+      toast.error("Wait for the embedded lorebook update to finish before saving.");
       return false;
     }
     setSaving(true);
@@ -670,22 +735,30 @@ export function CharacterEditor() {
       toast.error("Wait for the current avatar upload to finish.");
       return;
     }
+    if (lorebookEmbedding) {
+      toast.error("Wait for the embedded lorebook update to finish.");
+      return;
+    }
     if (dirty) {
       setShowUnsavedWarning(true);
       return;
     }
     closeDetail();
-  }, [avatarUploading, dirty, closeDetail]);
+  }, [avatarUploading, dirty, closeDetail, lorebookEmbedding]);
 
   const forceClose = useCallback(() => {
     if (avatarUploading) {
       toast.error("Wait for the current avatar upload to finish.");
       return;
     }
+    if (lorebookEmbedding) {
+      toast.error("Wait for the embedded lorebook update to finish.");
+      return;
+    }
     setShowUnsavedWarning(false);
     setDirtyState(false);
     closeDetail();
-  }, [avatarUploading, closeDetail, setDirtyState]);
+  }, [avatarUploading, closeDetail, lorebookEmbedding, setDirtyState]);
 
   const addTag = () => {
     if (!formData) return;
@@ -720,8 +793,8 @@ export function CharacterEditor() {
   }
 
   const headerActionButtonClass = "mari-editor-action inline-flex";
-  const saveDisabled = !dirty || saving || avatarUploading;
-  const saveLabel = avatarUploading ? "Uploading…" : saving ? "Saving…" : "Save";
+  const saveDisabled = !dirty || saving || avatarUploading || lorebookEmbedding;
+  const saveLabel = avatarUploading ? "Uploading…" : lorebookEmbedding ? "Embedding…" : saving ? "Saving…" : "Save";
   const saveButtonClass = cn(
     "mari-editor-action mari-editor-action--primary mari-editor-action--save inline-flex",
     saveDisabled && "cursor-not-allowed opacity-50",
@@ -805,7 +878,7 @@ export function CharacterEditor() {
       <ExportFormatDialog
         open={exportDialogOpen}
         title="Export Character"
-        description="Native keeps Marinara metadata. Compatible exports direct Chara Card V2 JSON for other platforms."
+        description="Native keeps Marinara metadata, sprites, gallery images, and attached lorebooks. Compatible exports direct Chara Card V2 JSON for other platforms."
         compatibleDescription="Exports direct Chara Card V2 JSON without the Marinara wrapper."
         showPngOption
         onClose={() => setExportDialogOpen(false)}
@@ -991,7 +1064,17 @@ export function CharacterEditor() {
               <ColorsTab formData={formData} updateExtension={updateExtension} avatarUrl={avatarPreview} />
             )}
             {activeTab === "stats" && <StatsTab formData={formData} updateExtension={updateExtension} />}
-            {activeTab === "lorebook" && <LorebookTab characterId={characterId} formData={formData} />}
+            {activeTab === "lorebook" && (
+              <LorebookTab
+                characterId={characterId}
+                formData={formData}
+                embedding={lorebookEmbedding}
+                isEmbeddingInFlight={isLorebookEmbeddingInFlight}
+                onEmbedded={handleLorebookEmbedded}
+                onEmbeddingChange={setLorebookEmbedInFlight}
+                onUnembed={handleLorebookUnembedded}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -1246,6 +1329,18 @@ function MetadataTab({
             value={formData.name}
             onChange={(e) => updateField("name", e.target.value)}
             className="w-full rounded-xl border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm outline-none focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
+          />
+        </label>
+        <label className="space-y-1.5">
+          <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)]">
+            Phonetic name{" "}
+            <HelpTooltip text="Optional pronunciation override used only when this character's name is sent to text-to-speech." />
+          </span>
+          <input
+            value={typeof formData.extensions?.phoneticName === "string" ? formData.extensions.phoneticName : ""}
+            onChange={(e) => updateExtension("phoneticName", e.target.value)}
+            className="w-full rounded-xl border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm outline-none focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
+            placeholder={formData.name}
           />
         </label>
         <label className="space-y-1.5">
@@ -4005,12 +4100,29 @@ function ColorsTab({
   );
 }
 
-function LorebookTab({ characterId, formData }: { characterId: string | null; formData: CharacterData }) {
+function LorebookTab({
+  characterId,
+  formData,
+  embedding,
+  isEmbeddingInFlight,
+  onEmbedded,
+  onEmbeddingChange,
+  onUnembed,
+}: {
+  characterId: string | null;
+  formData: CharacterData;
+  embedding?: boolean;
+  isEmbeddingInFlight?: () => boolean;
+  onEmbedded?: (lorebookId: string, characterBook: unknown) => void;
+  onEmbeddingChange?: (embedding: boolean) => void;
+  onUnembed?: () => void;
+}) {
   const book = formData.character_book;
   const entries = book?.entries ?? [];
   const qc = useQueryClient();
   const openLorebookDetail = useUIStore((s) => s.openLorebookDetail);
   const [importing, setImporting] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const importMetadata =
     formData.extensions.importMetadata && typeof formData.extensions.importMetadata === "object"
       ? (formData.extensions.importMetadata as Record<string, unknown>)
@@ -4025,7 +4137,7 @@ function LorebookTab({ characterId, formData }: { characterId: string | null; fo
   // another Marinara instance can carry a stale `lorebookId` in their
   // extensions, and an auto-import that errored silently can leave the
   // pointer set without a real DB row. If we trust the raw pointer the
-  // "Edit Linked Lorebook" button opens an editor that can never resolve
+  // "Edit Embedded Lorebook" button opens an editor that can never resolve
   // (its loading state is `isLoading || !lorebook`, and a 404'd query
   // satisfies the second clause forever), so verify before showing it.
   const linkedLorebookQuery = useLorebook(rawLinkedLorebookId);
@@ -4033,8 +4145,20 @@ function LorebookTab({ characterId, formData }: { characterId: string | null; fo
     rawLinkedLorebookId && (linkedLorebookQuery.isLoading || linkedLorebookQuery.data) ? rawLinkedLorebookId : null;
   const hasEmbeddedLorebook = entries.length > 0 || embeddedLorebookMetadata.hasEmbeddedLorebook === true;
 
+  const isRemoveBlockedByEmbedding = () => {
+    if (embedding || isEmbeddingInFlight?.()) {
+      toast.error("Wait for the embedded lorebook update to finish before removing it from the card.");
+      return true;
+    }
+    return false;
+  };
+
   const handleImportEmbeddedLorebook = async () => {
     if (!characterId) return;
+    if (removing) {
+      toast.error("Wait for the embedded lorebook removal to finish before importing.");
+      return;
+    }
     setImporting(true);
     try {
       const result = await api.post<{
@@ -4059,6 +4183,40 @@ function LorebookTab({ characterId, formData }: { characterId: string | null; fo
     }
   };
 
+  const handleRemoveFromCard = async () => {
+    if (!characterId || removing) return;
+    if (importing) {
+      toast.error("Wait for the embedded lorebook import to finish before removing it from the card.");
+      return;
+    }
+    if (isRemoveBlockedByEmbedding()) return;
+    if (
+      !(await showConfirmDialog({
+        title: "Remove Embedded Lorebook",
+        message:
+          "Remove the embedded lorebook from this character's card? Its entries will no longer be baked into the card. Any linked standalone lorebook is kept.",
+        confirmLabel: "Remove from card",
+        tone: "destructive",
+      }))
+    )
+      return;
+    if (isRemoveBlockedByEmbedding()) return;
+    setRemoving(true);
+    try {
+      await api.delete(`/characters/${characterId}/embedded-lorebook`);
+      // Reconcile the editor (patches formData when dirty) then refresh caches so
+      // the tab, entries list, and Embedded badge update from server state.
+      onUnembed?.();
+      qc.invalidateQueries({ queryKey: ["characters", "detail", characterId] });
+      qc.invalidateQueries({ queryKey: lorebookKeys.all });
+      toast.success("Removed the embedded lorebook from the card.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to remove embedded lorebook.");
+    } finally {
+      setRemoving(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <SectionHeader
@@ -4067,17 +4225,25 @@ function LorebookTab({ characterId, formData }: { characterId: string | null; fo
         helpText={CHARACTER_LOREBOOK_HELP}
       />
 
-      <LorebookAssignmentSection ownerType="character" ownerId={characterId} ownerName={formData.name} />
+      <LorebookAssignmentSection
+        ownerType="character"
+        ownerId={characterId}
+        ownerName={formData.name}
+        embeddedLorebookId={linkedLorebookId}
+        slotOccupied={hasEmbeddedLorebook}
+        onEmbedded={(result) => onEmbedded?.(result.lorebookId, result.characterBook)}
+        onEmbeddingChange={onEmbeddingChange}
+      />
 
       {hasEmbeddedLorebook && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--secondary)] px-3 py-2.5">
           <button
             type="button"
             onClick={handleImportEmbeddedLorebook}
-            disabled={!characterId || importing}
+            disabled={!characterId || importing || removing}
             className={cn(
               "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all",
-              importing || !characterId
+              importing || removing || !characterId
                 ? "cursor-not-allowed bg-[var(--accent)] text-[var(--muted-foreground)]"
                 : "bg-[var(--primary)]/15 text-[var(--primary)] hover:bg-[var(--primary)]/25",
             )}
@@ -4092,13 +4258,27 @@ function LorebookTab({ characterId, formData }: { characterId: string | null; fo
               className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)]/15 px-3 py-1.5 text-xs font-medium text-[var(--primary)] transition-all hover:bg-[var(--primary)]/25"
             >
               <Library size="0.75rem" />
-              Edit Linked Lorebook
+              Edit Embedded Lorebook
             </button>
           )}
+          <button
+            type="button"
+            onClick={handleRemoveFromCard}
+            disabled={!characterId || removing || importing || embedding}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--destructive)]/10 px-3 py-1.5 text-xs font-medium text-[var(--destructive)] transition-all hover:bg-[var(--destructive)]/20 disabled:cursor-not-allowed disabled:opacity-50"
+            title={
+              embedding
+                ? "Wait for the embedded lorebook update to finish."
+                : "Remove the embedded lorebook (data.character_book) from the card"
+            }
+          >
+            {removing || embedding ? <Loader2 size="0.75rem" className="animate-spin" /> : <Trash2 size="0.75rem" />}
+            Remove from card
+          </button>
           <span className="text-[0.6875rem] text-[var(--muted-foreground)]">
             {linkedLorebookId
-              ? "Opens the lorebook editor where you can add, edit, or delete entries."
-              : "Imports this embedded lorebook into Marinara as a linked lorebook."}
+              ? "Edit opens the lorebook editor; changes sync back into the card's embedded copy."
+              : "Import bakes this embedded lorebook into Marinara as an editable linked lorebook."}
           </span>
         </div>
       )}

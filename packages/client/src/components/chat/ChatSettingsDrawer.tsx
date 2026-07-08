@@ -157,6 +157,7 @@ import type {
   ConversationCommandKey,
   ConversationNote,
   ExportEnvelope,
+  GameStoryboardViewerDisplayMode,
   HapticFeedbackSensitivity,
   HudWidget,
   KnowledgeAgentSourceSettings,
@@ -1519,6 +1520,8 @@ export function ChatSettingsDrawer({
   const gameImageDynamicPromptEnabled = metadata.gameImageDynamicPromptEnabled === true;
   const gameStoryboardAutoIllustrationsEnabled = metadata.gameStoryboardAutoIllustrationsEnabled === true;
   const gameStoryboardAutoAnimationsEnabled = metadata.gameStoryboardAutoGenerationEnabled === true;
+  const gameStoryboardViewerDisplayMode: GameStoryboardViewerDisplayMode =
+    metadata.gameStoryboardViewerDisplayMode === "background" ? "background" : "floating";
   const gameStoryboardPromptTemplates = useMemo(
     () => normalizeGameStoryboardPromptTemplates(metadata.gameStoryboardPromptTemplates),
     [metadata.gameStoryboardPromptTemplates],
@@ -3638,7 +3641,7 @@ export function ChatSettingsDrawer({
           </div>
 
           {/* Roleplay prompt preset */}
-          {modeCapabilities.supportsPromptPresets && isRoleplayMode && !metadata.sceneSystemPrompt && (
+          {modeCapabilities.supportsPromptPresets && isRoleplayMode && (
             <div style={{ order: CHAT_SETTINGS_ORDER.promptPreset }}>
               <PromptPresetSection
                 promptPresetId={chat.promptPresetId ?? null}
@@ -4765,6 +4768,7 @@ export function ChatSettingsDrawer({
                     value={groupScenarioDraft}
                     onChange={setGroupScenarioDraft}
                     placeholder="Replace individual character scenarios with a shared scenario for this group chat or leave empty to keep them…"
+                    surface="chat"
                   />
                 </div>
               )}
@@ -5161,6 +5165,39 @@ export function ChatSettingsDrawer({
                           className={cn(
                             "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
                             metadata.conversationCallsEnabled === true && "translate-x-3.5",
+                          )}
+                        />
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateMeta.mutate({
+                          id: chat.id,
+                          conversationCallVoiceCues: metadata.conversationCallVoiceCues === false ? true : false,
+                        });
+                      }}
+                      className="flex w-full items-center justify-between gap-3 rounded-lg bg-[var(--background)]/35 px-2.5 py-2 text-left transition-colors hover:bg-[var(--secondary)]/50"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <span className="block text-[0.6875rem] font-medium text-[var(--foreground)]">
+                          Generate voice cues in [tags]
+                        </span>
+                        <p className="mt-0.5 text-[0.59375rem] leading-snug text-[var(--muted-foreground)]">
+                          Ask call models for cues like [whispering], [laughing], and [sighs] for TTS/video timing.
+                        </p>
+                      </div>
+                      <div
+                        className={cn(
+                          "mari-chat-option-switch h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
+                          metadata.conversationCallVoiceCues !== false && "mari-chat-option-switch--active",
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                            metadata.conversationCallVoiceCues !== false && "translate-x-3.5",
                           )}
                         />
                       </div>
@@ -7307,7 +7344,11 @@ export function ChatSettingsDrawer({
                       <div className="space-y-2">
                         <AgentSettingsToggle
                           label="Automatic Visuals"
-                          description="Let Game Mode automatically request backgrounds, NPC portraits, and scene illustrations. Manual buttons stay available when this is off."
+                          description={
+                            gameStoryboardViewerDisplayMode === "background"
+                              ? "Automatically request NPC portraits and scene illustrations. Location background generation is disabled while storyboard visuals are used as the background."
+                              : "Let Game Mode automatically request backgrounds, NPC portraits, and scene illustrations. Manual buttons stay available when this is off."
+                          }
                           enabled={gameImageAutoGenerationEnabled}
                           onToggle={() =>
                             updateMeta.mutate({
@@ -7495,6 +7536,33 @@ export function ChatSettingsDrawer({
                         });
                       }}
                     />
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-1 text-[0.625rem] font-medium text-[var(--foreground)]">
+                        Viewer Display
+                        <HelpTooltip text="Floating keeps the draggable storyboard panel. Background places the active storyboard frame behind the game UI and disables generated location backgrounds." />
+                      </div>
+                      <AgentSettingsSegmentedControl<GameStoryboardViewerDisplayMode>
+                        value={gameStoryboardViewerDisplayMode}
+                        options={[
+                          {
+                            id: "floating",
+                            label: "Floating",
+                            description: "Draggable panel above the game.",
+                          },
+                          {
+                            id: "background",
+                            label: "Background",
+                            description: "Visual layer behind controls.",
+                          },
+                        ]}
+                        onChange={(mode) =>
+                          updateMeta.mutate({
+                            id: chat.id,
+                            gameStoryboardViewerDisplayMode: mode === "floating" ? null : mode,
+                          })
+                        }
+                      />
+                    </div>
                     <div className="grid gap-2 md:grid-cols-2">
                       <GamePromptTemplateSelect
                         label="Illustration Prompt"

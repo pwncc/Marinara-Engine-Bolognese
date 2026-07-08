@@ -107,6 +107,7 @@ import {
   normalizeVideoGenerationProfile,
   normalizeAgentPromptTemplateOptions,
   isClaudeAdaptiveOnlyNoSamplingModel,
+  localAuthProviderBaseUrl,
   supportsXhighReasoningEffort,
   scoreMusic,
   scoreAmbient,
@@ -2406,10 +2407,8 @@ async function resolveConnection(
     const providerDef = PROVIDERS[conn.provider as keyof typeof PROVIDERS];
     baseUrl = providerDef?.defaultBaseUrl ?? "";
   }
-  // Claude (Subscription) uses the local Claude Agent SDK and has no HTTP
-  // endpoint — return a sentinel so the gate passes. The provider ignores it.
-  if (!baseUrl && conn.provider === "claude_subscription") baseUrl = "claude-agent-sdk://local";
-  if (!baseUrl && conn.provider === "openai_chatgpt") baseUrl = "openai-chatgpt://codex-auth";
+  const localAuthBaseUrl = localAuthProviderBaseUrl(conn.provider);
+  if (!baseUrl && localAuthBaseUrl) baseUrl = localAuthBaseUrl;
   if (!baseUrl) throw new Error("No base URL configured for this connection");
 
   return { conn, baseUrl, defaultGenerationParameters: parseStoredGenerationParameters(conn.defaultParameters) };
@@ -8898,6 +8897,8 @@ export async function gameRoutes(app: FastifyInstance) {
     const gameGenerationParameters = resolveStoredGameGenerationParameters(meta, defaultGenerationParameters);
     const enableGen = !!meta.enableSpriteGeneration;
     const enableAutoGen = enableGen && meta.gameImageAutoGenerationEnabled !== false;
+    const storyboardBackgroundVisualEnabled = meta.gameStoryboardViewerDisplayMode === "background";
+    const enableAutoBackgroundGen = enableAutoGen && !storyboardBackgroundVisualEnabled;
     const imgConnId = await resolveGameImageConnectionId(meta, agents);
     const setupCfgForScene = meta.gameSetupConfig as Record<string, unknown> | null;
     const artStyleForScene = (setupCfgForScene?.artStylePrompt as string) || "";
@@ -8916,7 +8917,7 @@ export async function gameRoutes(app: FastifyInstance) {
     const sceneCtx = {
       ...(input.context as unknown as SceneAnalyzerContext),
       turnNumber: approxTurnNumber,
-      canGenerateBackgrounds: enableAutoGen && !!imgConnId,
+      canGenerateBackgrounds: enableAutoBackgroundGen && !!imgConnId,
       canGenerateIllustrations:
         enableAutoGen && !!imgConnId && isIllustrationAllowed(meta, approxTurnNumber, sessionNumber),
       artStylePrompt: artStyleForScene || null,
@@ -9101,6 +9102,8 @@ export async function gameRoutes(app: FastifyInstance) {
         logger.debug("[game/scene-wrap] asset-gen skipped: enableSpriteGeneration=false");
       } else if (!enableAutoGen) {
         logger.debug("[game/scene-wrap] automatic visual generation skipped: gameImageAutoGenerationEnabled=false");
+      } else if (storyboardBackgroundVisualEnabled) {
+        logger.debug("[game/scene-wrap] background generation skipped: storyboard background display mode active");
       } else if (!imgConnId) {
         logger.debug("[game/scene-wrap] asset-gen skipped: no Illustrator image connection configured");
       }
@@ -10414,6 +10417,7 @@ export async function gameRoutes(app: FastifyInstance) {
 
     const meta = parseMeta(chat.metadata);
     const enableGen = !!meta.enableSpriteGeneration;
+    const backgroundGenerationEnabled = meta.gameStoryboardViewerDisplayMode !== "background";
     const imgConnId = await resolveGameImageConnectionId(meta, agents);
     if (!enableGen || !imgConnId) return { items: [] };
 
@@ -10477,7 +10481,7 @@ export async function gameRoutes(app: FastifyInstance) {
       height: number;
     }> = [];
 
-    if (input.backgroundTag) {
+    if (backgroundGenerationEnabled && input.backgroundTag) {
       const slug = generatedBackgroundSlug(input.backgroundTag);
       const backgroundDescription =
         input.backgroundDescription?.trim() || input.backgroundTag.replace(/:/g, " ").replace(/-/g, " ");
@@ -10768,6 +10772,7 @@ export async function gameRoutes(app: FastifyInstance) {
 
       const meta = parseMeta(chat.metadata);
       const enableGen = !!meta.enableSpriteGeneration;
+      const backgroundGenerationEnabled = meta.gameStoryboardViewerDisplayMode !== "background";
       const imgConnId = await resolveGameImageConnectionId(meta, agents);
 
       if (!enableGen || !imgConnId) {
@@ -10849,7 +10854,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const generatedNpcAvatars: Array<{ name: string; avatarUrl: string }> = [];
 
       // ── Generate background ──
-      if (!assetAbortSignal.aborted && input.backgroundTag) {
+      if (!assetAbortSignal.aborted && backgroundGenerationEnabled && input.backgroundTag) {
         const slug = generatedBackgroundSlug(input.backgroundTag);
         const backgroundDescription =
           input.backgroundDescription?.trim() || input.backgroundTag.replace(/:/g, " ").replace(/-/g, " ");
