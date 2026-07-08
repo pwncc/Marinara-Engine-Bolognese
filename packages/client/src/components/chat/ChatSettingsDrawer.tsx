@@ -157,6 +157,7 @@ import type {
   ConversationCommandKey,
   ConversationNote,
   ExportEnvelope,
+  GameStoryboardViewerDisplayMode,
   HapticFeedbackSensitivity,
   HudWidget,
   KnowledgeAgentSourceSettings,
@@ -1519,6 +1520,8 @@ export function ChatSettingsDrawer({
   const gameImageDynamicPromptEnabled = metadata.gameImageDynamicPromptEnabled === true;
   const gameStoryboardAutoIllustrationsEnabled = metadata.gameStoryboardAutoIllustrationsEnabled === true;
   const gameStoryboardAutoAnimationsEnabled = metadata.gameStoryboardAutoGenerationEnabled === true;
+  const gameStoryboardViewerDisplayMode: GameStoryboardViewerDisplayMode =
+    metadata.gameStoryboardViewerDisplayMode === "background" ? "background" : "floating";
   const gameStoryboardPromptTemplates = useMemo(
     () => normalizeGameStoryboardPromptTemplates(metadata.gameStoryboardPromptTemplates),
     [metadata.gameStoryboardPromptTemplates],
@@ -7528,6 +7531,33 @@ export function ChatSettingsDrawer({
                         });
                       }}
                     />
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-1 text-[0.625rem] font-medium text-[var(--foreground)]">
+                        Viewer Display
+                        <HelpTooltip text="Floating keeps the draggable storyboard panel. Background places the active storyboard frame behind the game UI, above the normal scene background." />
+                      </div>
+                      <AgentSettingsSegmentedControl<GameStoryboardViewerDisplayMode>
+                        value={gameStoryboardViewerDisplayMode}
+                        options={[
+                          {
+                            id: "floating",
+                            label: "Floating",
+                            description: "Draggable panel above the game.",
+                          },
+                          {
+                            id: "background",
+                            label: "Background",
+                            description: "Visual layer behind controls.",
+                          },
+                        ]}
+                        onChange={(mode) =>
+                          updateMeta.mutate({
+                            id: chat.id,
+                            gameStoryboardViewerDisplayMode: mode === "floating" ? null : mode,
+                          })
+                        }
+                      />
+                    </div>
                     <div className="grid gap-2 md:grid-cols-2">
                       <GamePromptTemplateSelect
                         label="Illustration Prompt"

@@ -181,7 +181,7 @@ import {
   ROLEPLAY_POPOVER_TITLE,
 } from "../chat/roleplay-popover-styles";
 import type { ReadableTag } from "../../lib/game-tag-parser";
-import type { DirectionCommand, GameNpc } from "@marinara-engine/shared";
+import type { DirectionCommand, GameNpc, GameStoryboardViewerDisplayMode } from "@marinara-engine/shared";
 
 type JournalReadable = ReadableTag & {
   sourceMessageId?: string | null;
@@ -3506,6 +3506,8 @@ function GameSurfaceComponent({
     () => findStoryboardKeyframeForSegment(latestTurnStoryboard?.keyframes ?? [], activeStoryboardSegmentIndex),
     [activeStoryboardSegmentIndex, latestTurnStoryboard?.keyframes],
   );
+  const gameStoryboardViewerDisplayMode: GameStoryboardViewerDisplayMode =
+    chatMeta.gameStoryboardViewerDisplayMode === "background" ? "background" : "floating";
   const latestStoryboardViewerTurnKey = useMemo(() => {
     if (!latestAssistantMsg?.id) return null;
     return activeChatId ? `${activeChatId}:${latestAssistantMsg.id}:${latestAssistantSwipeIndex}` : latestAssistantMsg.id;
@@ -9502,6 +9504,7 @@ function GameSurfaceComponent({
   };
 
   const renderStoryboardInlineViewer = () => {
+    if (gameStoryboardViewerDisplayMode !== "floating") return null;
     if (!latestAssistantMsg?.id) return null;
     if (!latestTurnStoryboard && !storyboardGenerating) return null;
     if (storyboardViewerDismissed) return null;
@@ -9680,6 +9683,43 @@ function GameSurfaceComponent({
     );
   };
 
+  const renderStoryboardBackgroundVisual = () => {
+    if (gameStoryboardViewerDisplayMode !== "background") return null;
+    if (!latestAssistantMsg?.id) return null;
+    if (!latestTurnStoryboard && !storyboardGenerating) return null;
+    if (storyboardViewerDismissed) return null;
+
+    const frame = activeStoryboardKeyframe;
+    if (!frame?.video && !frame?.image) return null;
+
+    return (
+      <div
+        data-game-skip-bg-nav="true"
+        className="pointer-events-none absolute inset-0 z-[1] overflow-hidden"
+        aria-hidden="true"
+      >
+        {frame.video ? (
+          <video
+            key={frame.video.id}
+            src={frame.video.url}
+            autoPlay
+            loop
+            muted
+            playsInline
+            className="h-full w-full bg-black object-cover transition-opacity duration-500"
+          />
+        ) : frame.image ? (
+          <img
+            src={frame.image.url}
+            alt=""
+            className="h-full w-full bg-black object-cover transition-opacity duration-500"
+            draggable={false}
+          />
+        ) : null}
+      </div>
+    );
+  };
+
   const renderGameAssetsPanel = (mobile = false) => {
     const panel = (
       <div
@@ -9760,7 +9800,11 @@ function GameSurfaceComponent({
                       type="button"
                       onClick={handleReopenStoryboardViewer}
                       className="marinara-chat-popover__item flex items-center gap-1.5 rounded-md border border-[var(--marinara-chat-chrome-panel-divider)] px-2 py-1 text-[0.6875rem] font-medium text-[var(--marinara-chat-chrome-panel-text)] transition-colors hover:bg-[var(--marinara-chat-chrome-highlight-bg-hover)] hover:text-[var(--marinara-chat-chrome-highlight-text)]"
-                      title="Show the floating storyboard viewer"
+                      title={
+                        gameStoryboardViewerDisplayMode === "background"
+                          ? "Show storyboard background"
+                          : "Show the floating storyboard viewer"
+                      }
                     >
                       <PanelsTopLeft size={12} />
                       Show viewer
@@ -9825,6 +9869,8 @@ function GameSurfaceComponent({
             if (!playing && introCinematicActive) setIntroCinematicActive(false);
           }}
         >
+          {renderStoryboardBackgroundVisual()}
+
           {/* Full-body VN sprite — active speaker only */}
           <div
             className="transition-opacity duration-700 ease-in-out"
