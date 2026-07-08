@@ -42,6 +42,22 @@ interface AboutMeViewerModalProps {
 
 const CARD_WIDTH = 320;
 
+/** Matches the app's composer breakpoint — below it, the popout becomes a full sheet. */
+function useIsMobileViewport() {
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window === "undefined" ? false : window.matchMedia("(max-width: 767px)").matches,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const media = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobile(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  return isMobile;
+}
+
 function statusDotClass(status?: string | null) {
   return status === "offline"
     ? "bg-gray-400"
@@ -100,6 +116,7 @@ export function AboutMeViewerModal({
   const { data: character } = useCharacter(kind === "character" ? id : null);
   const { data: personas } = usePersonas(kind === "persona");
   const updateMeta = useUpdateChatMetadata();
+  const isMobile = useIsMobileViewport();
 
   const profile =
     kind === "character"
@@ -151,9 +168,12 @@ export function AboutMeViewerModal({
     const end = el.selectionEnd;
     const next = el.value.slice(0, start) + token + el.value.slice(end);
     setDraft(next);
+    const caret = start + token.length;
     requestAnimationFrame(() => {
-      el.focus();
-      const caret = start + token.length;
+      // Desktop: refocus so typing continues. Mobile: keep focus off the field so
+      // the on-screen keyboard stays retracted and the docked picker stays visible;
+      // the textarea keeps its caret on blur, so the next insert still lands right.
+      if (!isMobile) el.focus();
       try {
         el.selectionStart = el.selectionEnd = caret;
       } catch {
@@ -188,8 +208,9 @@ export function AboutMeViewerModal({
   }, [open, onClose, editing, emojiOpen]);
 
   // Anchor the card next to the avatar; flip/clamp to stay on screen.
+  // Skipped on mobile, where the card is a full-height sheet (no anchoring).
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!open || isMobile) return;
     const rect = anchorRect;
     const card = cardRef.current;
     const cw = card?.offsetWidth ?? CARD_WIDTH;
@@ -208,7 +229,7 @@ export function AboutMeViewerModal({
     if (top + ch > vh - 8) top = vh - ch - 8;
     if (top < 8) top = 8;
     setPos({ top, left });
-  }, [open, anchorRect, editing, effective]);
+  }, [open, anchorRect, editing, effective, isMobile]);
 
   if (!open) return null;
 
@@ -247,16 +268,32 @@ export function AboutMeViewerModal({
     }
   };
 
+  const emojiPickerNode = (
+    <EmojiPicker
+      embedded
+      open
+      onClose={() => setEmojiOpen(false)}
+      onSelect={insertEmoji}
+      customTab={{
+        icon: "⭐",
+        label: "Custom emojis",
+        render: (query) => <CustomEmojiTab onInsert={insertEmoji} query={query} />,
+      }}
+    />
+  );
+
   return createPortal(
     <div
       // Inline z-index (Tailwind didn't emit an arbitrary z-[9990]); far above chat UI.
       // `mari-card-css` recreates the card-CSS scope root here (the popout portals to
       // body, outside the chat area), so a card's/persona's custom CSS can theme it.
-      className="mari-card-css fixed inset-0"
+      // Desktop: transparent (Discord-style, no dim). Mobile: dim behind the sheet.
+      className={cn("mari-card-css fixed inset-0", isMobile && "bg-black/60")}
       style={{ zIndex: 9990 }}
       data-component="AboutMeProfilePopout"
-      // Transparent — no dimming, Discord-style. Click outside closes, but NOT
-      // while editing (protects the draft; use Cancel / Save / Escape / ✕).
+      // Click outside closes, but NOT while editing (protects the draft; use
+      // Cancel / Save / Escape / ✕). On mobile only the strip above the sheet is
+      // outside the card.
       onMouseDown={(e) => {
         if (e.target !== e.currentTarget) return;
         if (editing || emojiOpen) return;
@@ -268,17 +305,31 @@ export function AboutMeViewerModal({
         // `data-card-css` + the mari-about-me-* classes are the stable hooks a
         // character's/persona's custom CSS targets (see the Card CSS Theming Guide).
         data-card-css={id}
-        // No overflow-hidden — the emoji panel opens upward past the card top and
-        // must not be clipped. The banner rounds its own top corners instead.
-        className="mari-about-me-popout mari-modal-panel absolute w-80 max-w-[calc(100vw-1rem)] rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-2xl"
-        style={{
-          top: pos?.top ?? (anchorRect?.top ?? 80),
-          left: pos?.left ?? (anchorRect ? anchorRect.right + 12 : 80),
-          visibility: pos ? "visible" : "hidden",
-        }}
+        // Desktop: an anchored bubble, NO overflow-hidden so the emoji panel can
+        // open upward past the card top. Mobile: a near-full-height bottom sheet
+        // (top strip left for the toolbar), a flex column that keeps the docked
+        // emoji picker in normal flow so it can never cover the bio field.
+        className={cn(
+          "mari-about-me-popout mari-modal-panel border border-[var(--border)] bg-[var(--card)] shadow-2xl",
+          isMobile
+            ? "absolute inset-x-0 bottom-0 top-16 flex flex-col overflow-hidden rounded-t-2xl pb-[env(safe-area-inset-bottom)]"
+            : "absolute w-80 max-w-[calc(100vw-1rem)] rounded-2xl",
+        )}
+        style={
+          isMobile
+            ? undefined
+            : {
+                top: pos?.top ?? anchorRect?.top ?? 80,
+                left: pos?.left ?? (anchorRect ? anchorRect.right + 12 : 80),
+                visibility: pos ? "visible" : "hidden",
+              }
+        }
       >
         {/* Banner */}
-        <div className="mari-about-me-banner h-14 w-full rounded-t-2xl" style={{ background: nameColor || "var(--accent)" }} />
+        <div
+          className="mari-about-me-banner h-14 w-full shrink-0 rounded-t-2xl"
+          style={{ background: nameColor || "var(--accent)" }}
+        />
 
         <button
           type="button"
@@ -289,9 +340,9 @@ export function AboutMeViewerModal({
           <X size="0.875rem" />
         </button>
 
-        <div className="px-4 pb-4">
+        <div className={cn("px-4 pb-4", isMobile && "flex min-h-0 flex-1 flex-col")}>
           {/* Blown-up avatar overlapping the banner */}
-          <div className="-mt-9 mb-2 flex items-end justify-between">
+          <div className="-mt-9 mb-2 flex shrink-0 items-end justify-between">
             <div className="mari-about-me-avatar relative">
               <div className="h-[4.5rem] w-[4.5rem] overflow-hidden rounded-full border-4 border-[var(--card)] bg-[var(--accent)]">
                 {avatarUrl ? (
@@ -315,7 +366,7 @@ export function AboutMeViewerModal({
           </div>
 
           {/* Identity */}
-          <div className="mb-3">
+          <div className="mb-3 shrink-0">
             <h2 className="mari-about-me-name text-lg font-bold leading-tight text-[var(--foreground)]" style={nameStyle(nameColor)}>
               {displayName}
             </h2>
@@ -329,8 +380,13 @@ export function AboutMeViewerModal({
           </div>
 
           {/* About Me */}
-          <div className="mari-about-me-box rounded-xl bg-[var(--secondary)]/50 p-3">
-            <div className="mb-1.5 flex items-center justify-between gap-2">
+          <div
+            className={cn(
+              "mari-about-me-box rounded-xl bg-[var(--secondary)]/50 p-3",
+              isMobile && "flex min-h-0 flex-1 flex-col",
+            )}
+          >
+            <div className="mb-1.5 flex shrink-0 items-center justify-between gap-2">
               <span className="mari-about-me-label text-[0.6875rem] font-bold uppercase tracking-wide text-[var(--muted-foreground)]">
                 About Me
               </span>
@@ -347,7 +403,12 @@ export function AboutMeViewerModal({
             </div>
 
             {!editing ? (
-              <div className="mari-about-me-text min-h-[2.5rem] whitespace-pre-wrap text-[0.8125rem] leading-relaxed text-[var(--foreground)]">
+              <div
+                className={cn(
+                  "mari-about-me-text min-h-[2.5rem] whitespace-pre-wrap text-[0.8125rem] leading-relaxed text-[var(--foreground)]",
+                  isMobile && "min-h-0 flex-1 overflow-y-auto",
+                )}
+              >
                 {effective.trim() ? (
                   renderAbout(effective)
                 ) : (
@@ -355,26 +416,16 @@ export function AboutMeViewerModal({
                 )}
               </div>
             ) : (
-              <div className="relative">
-                {/* Embedded picker inside the card's own stacking context, so it
-                    reliably layers above the popout (portaled pickers fought the
-                    popout's z-index). */}
-                {emojiOpen && (
+              <div className={cn("relative", isMobile && "min-h-0 flex-1")}>
+                {/* Desktop: embedded picker inside the card's own stacking context,
+                    opening upward above the field (portaled pickers fought the
+                    popout's z-index). Mobile uses the docked panel below instead. */}
+                {!isMobile && emojiOpen && (
                   <div
                     ref={emojiPanelRef}
                     className="absolute bottom-full right-0 z-30 mb-2 flex h-[22rem] w-[21rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-xl"
                   >
-                    <EmojiPicker
-                      embedded
-                      open
-                      onClose={() => setEmojiOpen(false)}
-                      onSelect={insertEmoji}
-                      customTab={{
-                        icon: "⭐",
-                        label: "Custom emojis",
-                        render: (query) => <CustomEmojiTab onInsert={insertEmoji} query={query} />,
-                      }}
-                    />
+                    {emojiPickerNode}
                   </div>
                 )}
                 <textarea
@@ -384,12 +435,23 @@ export function AboutMeViewerModal({
                   rows={5}
                   autoFocus
                   placeholder="What this person shows in this conversation… :emoji: works too"
-                  className="w-full resize-y rounded-lg border border-[var(--border)] bg-[var(--background)] p-2 pr-9 text-[0.8125rem] leading-relaxed outline-none transition-colors placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
+                  className={cn(
+                    "w-full rounded-lg border border-[var(--border)] bg-[var(--background)] p-2 pr-9 text-[0.8125rem] leading-relaxed outline-none transition-colors placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20",
+                    isMobile ? "h-full resize-none" : "resize-y",
+                  )}
                 />
                 <button
                   ref={emojiBtnRef}
                   type="button"
-                  onClick={() => setEmojiOpen((v) => !v)}
+                  onClick={() => {
+                    if (isMobile) {
+                      // Retract / restore the OS keyboard so it doesn't fight the
+                      // docked picker for the bottom of the screen.
+                      if (!emojiOpen) textareaRef.current?.blur();
+                      else textareaRef.current?.focus();
+                    }
+                    setEmojiOpen((v) => !v);
+                  }}
                   aria-label="Emoji"
                   className="absolute bottom-2 right-2 rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
                 >
@@ -400,7 +462,7 @@ export function AboutMeViewerModal({
           </div>
 
           {/* Controls */}
-          <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+          <div className="mt-3 flex shrink-0 flex-wrap items-center justify-end gap-2">
             {!editing ? (
               <>
                 {hasOverride && (
@@ -448,11 +510,22 @@ export function AboutMeViewerModal({
               </>
             )}
           </div>
-          <p className="mt-2 text-[0.625rem] text-[var(--muted-foreground)]">
+          <p className="mt-2 shrink-0 text-[0.625rem] text-[var(--muted-foreground)]">
             Default about me is edited on the {kind === "persona" ? "persona" : "character"} card. A chat-specific
             override only applies here.
           </p>
         </div>
+
+        {/* Mobile: emoji picker docked in normal flow at the sheet's bottom, so it
+            pushes the bio field up instead of overlaying it. */}
+        {isMobile && editing && emojiOpen && (
+          <div
+            ref={emojiPanelRef}
+            className="flex h-[45vh] max-h-[24rem] min-h-[15rem] shrink-0 flex-col overflow-hidden border-t border-[var(--border)] bg-[var(--card)]"
+          >
+            {emojiPickerNode}
+          </div>
+        )}
       </div>
     </div>,
     document.body,
