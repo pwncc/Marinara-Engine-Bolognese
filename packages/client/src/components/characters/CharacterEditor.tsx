@@ -1818,7 +1818,7 @@ function DialogueTab({
           rows={6}
           title="First Message"
           className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-4 text-sm leading-relaxed outline-none placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
-          placeholder="What does the character say when they first meet someone? Use *asterisks* for actions…"
+          placeholder="What is the character's first message when a new chat starts?"
         />
       </div>
 

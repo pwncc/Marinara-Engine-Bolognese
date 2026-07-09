@@ -2746,8 +2746,10 @@ export function ChatArea() {
             characters={gameCharacters}
             personaInfo={personaInfo}
             chatBackground={chatBackground}
+            connectedChatName={connectedChatName}
             onOpenSettings={handleOpenSettingsPanel}
             onCloseSettings={handleCloseSettingsPanel}
+            onSwitchChat={chat.connectedChatId ? () => setActiveChatId(chat.connectedChatId!) : undefined}
             onDeleteMessage={handleDelete}
             multiSelectMode={multiSelectMode}
             selectedMessageIds={selectedMessageIds}

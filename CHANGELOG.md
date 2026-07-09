@@ -16,6 +16,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Added Conversation prompt relocation macros for auto-inserted context: `{{context}}`/`{{status}}`, `{{commands}}`, `{{reactRules}}`, `{{memories}}`, and `{{lorebook}}`.
 - Added a TTS cache export control in Text to Speech settings so generated cached voice clips can be downloaded from IndexedDB.
 - Added a Roleplay Chat Summary maximum output size setting under Summary Connection, defaulting to 4096 tokens for manual and automatic summaries.
+- Added a connected-chat shortcut to Game mode so connected Conversation and Game chats can switch back and forth like Conversation/Roleplay links.
+- Added a scene prompt setup dialog for user- and character-initiated scenes, remembering POV, tense, and optional prompt wishes for the next scene generation.
 
 ### Changed
 
@@ -23,6 +25,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Android `versionName` is `2.1.2` with `versionCode 31`.
 - Reworked Settings with search-first navigation, compact pinned controls, fixed top-level categories, and finer section shortcuts for faster navigation.
 - Updated the default Illustrator prompt rules so generated image prompts carry available character builds, clothing/outfits, and appearance details instead of relying on the image model to infer them.
+- Changed custom Roleplay Chat Summary prompts to apply globally across roleplay chats instead of only the currently open chat.
 
 ### Fixed
 
@@ -41,6 +44,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Fixed the recovery/error page so **Internal Server Error** uses the configured chat chrome text color instead of a hard-coded pink.
 - Fixed Conversation Calls on Chromium browsers by allowing same-origin microphone, camera, and screen-capture access in the server permissions policy instead of blocking the browser permission prompt.
 - Fixed the Roleplay setup wizard's **Use Settings Presets** shortcut so system "joined the chat" notices no longer block seeding the selected character's first message (#3392).
+- Fixed Conversation-mode prompt assembly so the user's visible status and activity are always included in context unless the persona is set to Invisible, even when a relocated context macro is configured but not present after prompt resolution.
 
 ## [2.1.1]
 
