@@ -22,9 +22,6 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Added Conversation prompt relocation macros for auto-inserted context: `{{context}}`/`{{status}}`, `{{commands}}`, `{{reactRules}}`, `{{memories}}`, and `{{lorebook}}`.
 - Added a TTS cache export control in Text to Speech settings so generated cached voice clips can be downloaded from IndexedDB.
 - Added a Roleplay Chat Summary maximum output size setting under Summary Connection, defaulting to 4096 tokens for manual and automatic summaries.
-- Turn-game bots now choose their moves in character (#3308): move selection is steered by the character's personality, mood, and grudges instead of pure game logic, and UNO board summaries include a "What just happened" recap of recent plays so reactions track the actual game.
-- Characters seated in a turn game now carry their own seat's perspective into normal chat (#3308): mid-game replies know their own UNO hand or chess color and last move, spectators and unseated characters keep a hands-hidden view, and each generation request loads the game state once instead of once per responding character.
-- Turn-game hand secrecy is now personality-gated (#3308): in hidden-information games a seated character knows their hand is private and may deflect, tease, bluff, or let something slip according to their personality, while in open-information games like chess the same treatment applies to their plans.
 
 ### Changed
 
@@ -121,6 +118,9 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Added Gallery **Images** and **Videos** tabs so generated videos are reachable without scrolling through every still image first.
 - Added an optional Game Illustrator toggle for Dynamic LLM Prompt Generation, letting the selected prompt model rewrite Game Mode NPC portrait, location background, and key-moment illustration prompts before image generation (#3225).
 - Added `/illustrate` in Conversation, Roleplay, and Game chats to trigger the same illustration action as the Gallery **Illustrate** button without opening the Gallery first.
+- Turn-game bots now choose their moves in character (#3308): move selection is steered by the character's personality, mood, and grudges instead of pure game logic, and UNO board summaries include a "What just happened" recap of recent plays so reactions track the actual game.
+- Characters seated in a turn game now carry their own seat's perspective into normal chat (#3308): mid-game replies know their own UNO hand or chess color and last move, spectators and unseated characters keep a hands-hidden view, and each generation request loads the game state once instead of once per responding character.
+- Turn-game hand secrecy is now personality-gated (#3308): in hidden-information games a seated character knows their hand is private and may deflect, tease, bluff, or let something slip according to their personality, while in open-information games like chess the same treatment applies to their plans.
 
 ### Changed
 
