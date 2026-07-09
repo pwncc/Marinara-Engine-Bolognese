@@ -183,7 +183,10 @@ export function PokerBoard({ chatId }: Props) {
   const minFloor = yourActions ? (yourActions.canBet ? yourActions.minBet : yourActions.minRaiseTo) : 0;
   const maxTo = yourActions?.maxTo ?? 0;
 
-  const [betAmount, setBetAmount] = useState(0);
+  // The field holds a RAW string so partial entries survive typing (clamping on
+  // every keystroke would snap "1" up to the minimum before "150" can be typed);
+  // it is clamped into the legal range only on blur, quick-pick, and submit.
+  const [betInput, setBetInput] = useState("0");
   // Reset the bet/raise field whenever a fresh decision point arrives (a new
   // street, a new hand, or turn passing back to you) — a stale amount from a
   // prior street could exceed the new maxTo. Depending on the whole `view`
@@ -191,13 +194,14 @@ export function PokerBoard({ chatId }: Props) {
   useEffect(() => {
     if (!view) return;
     const a = view.yourActions;
-    setBetAmount(a.canBet ? a.minBet : a.minRaiseTo);
+    setBetInput(String(a.canBet ? a.minBet : a.minRaiseTo));
   }, [view]);
 
   const clampBet = useMemo(
     () => (n: number) => Math.max(minFloor, Math.min(maxTo, Math.floor(Number.isFinite(n) ? n : minFloor))),
     [minFloor, maxTo],
   );
+  const betAmount = clampBet(Number(betInput));
 
   if (!view) return null;
 
@@ -208,9 +212,8 @@ export function PokerBoard({ chatId }: Props) {
 
   const submitBetOrRaise = () => {
     if (disabled || !yourActions) return;
-    const amount = clampBet(betAmount);
-    if (yourActions.canBet) submit({ type: "bet", amount });
-    else if (yourActions.canRaise) submit({ type: "raise", toAmount: amount });
+    if (yourActions.canBet) submit({ type: "bet", amount: betAmount });
+    else if (yourActions.canRaise) submit({ type: "raise", toAmount: betAmount });
   };
 
   const currentSeat = view.seats.find((s) => s.seatId === view.currentSeatId) ?? null;
@@ -362,41 +365,42 @@ export function PokerBoard({ chatId }: Props) {
                 type="number"
                 min={minFloor}
                 max={maxTo}
-                value={betAmount}
-                onChange={(e) => setBetAmount(clampBet(Number(e.target.value)))}
+                value={betInput}
+                onChange={(e) => setBetInput(e.target.value)}
+                onBlur={() => setBetInput(String(betAmount))}
                 aria-label={yourActions?.canBet ? "Bet amount" : "Raise amount"}
                 className="w-20 rounded-lg border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-sm text-[var(--foreground)]"
               />
               <button
                 type="button"
-                onClick={() => setBetAmount(clampBet(minFloor))}
+                onClick={() => setBetInput(String(clampBet(minFloor)))}
                 className="rounded px-1.5 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--muted)]"
               >
                 Min
               </button>
               <button
                 type="button"
-                onClick={() => setBetAmount(clampBet(potHalf))}
+                onClick={() => setBetInput(String(clampBet(potHalf)))}
                 className="rounded px-1.5 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--muted)]"
               >
                 ½ pot
               </button>
               <button
                 type="button"
-                onClick={() => setBetAmount(clampBet(view.potTotal))}
+                onClick={() => setBetInput(String(clampBet(view.potTotal)))}
                 className="rounded px-1.5 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--muted)]"
               >
                 Pot
               </button>
               <button
                 type="button"
-                onClick={() => setBetAmount(clampBet(maxTo))}
+                onClick={() => setBetInput(String(clampBet(maxTo)))}
                 className="rounded px-1.5 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--muted)]"
               >
                 All-in
               </button>
               <ActionButton highlight onClick={submitBetOrRaise}>
-                {yourActions?.canBet ? `Bet ${clampBet(betAmount)}` : `Raise to ${clampBet(betAmount)}`}
+                {yourActions?.canBet ? `Bet ${betAmount}` : `Raise to ${betAmount}`}
               </ActionButton>
             </div>
           )}
