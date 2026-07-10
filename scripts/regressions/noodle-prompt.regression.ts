@@ -25,11 +25,14 @@ assert.match(
   NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION,
   /Never generate posts, replies, likes, reposts, poll votes, or follows/u,
 );
-assert.equal(NOODLE_CREATIVE_FORMAT_INSTRUCTIONS.length, 2);
+assert.equal(NOODLE_CREATIVE_FORMAT_INSTRUCTIONS.length, 3);
 assert.match(NOODLE_CREATIVE_FORMAT_INSTRUCTIONS[0], /create polls in their own posts and vote in polls/u);
 assert.match(NOODLE_CREATIVE_FORMAT_INSTRUCTIONS[0], /polls are optional, not a quota/u);
 assert.match(NOODLE_CREATIVE_FORMAT_INSTRUCTIONS[1], /Standard Unicode emojis are allowed in post and reply content/u);
 assert.match(NOODLE_CREATIVE_FORMAT_INSTRUCTIONS[1], /not every post or reply needs one/u);
+assert.match(NOODLE_CREATIVE_FORMAT_INSTRUCTIONS[2], /allowed to be assholes to each other/u);
+assert.match(NOODLE_CREATIVE_FORMAT_INSTRUCTIONS[2], /revive old grievances, form rivalries/u);
+assert.match(NOODLE_CREATIVE_FORMAT_INSTRUCTIONS[2], /permission, not a quota/u);
 
 assert.equal(
   canManageNoodleReply({
