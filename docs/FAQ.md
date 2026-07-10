@@ -139,7 +139,7 @@ Professor Mari is the built-in assistant on the Home screen. Open her with the *
 
 When she changes your data, a review card appears with **Keep** and **Restore** buttons, so you can undo anything you do not want. She is a helper, not a replacement for these guides when something is version-specific. For the full list of what she can do, see [Professor Mari](home/professor-mari.md).
 
-Note: on a remote install, Professor Mari's data-changing actions need Basic Auth or an admin secret set up first. See [Remote Access](REMOTE_ACCESS.md).
+Note: on an ordinary remote address, Professor Mari's data-changing actions need both Basic Auth and an admin secret. Trusted or allowlisted network routes can use the bypasses described in [Remote Access](REMOTE_ACCESS.md).
 
 ## How do Game Mode storyboard animations work?
 

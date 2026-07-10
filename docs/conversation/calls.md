@@ -42,7 +42,7 @@ For the full walkthrough, read [Text to Speech (TTS) Setup](../media/tts-setup.m
 2. Choose a source: **OpenAI-compatible**, **ElevenLabs**, **PocketTTS**, or **xAI Voice**.
 3. Enter the provider key or local server address for that source.
 4. Pick a model and a voice.
-5. Choose a voice mode: **One voice for all characters** or **Selected per character**.
+5. Set **Voice Option** to **One voice for all characters** or **Selected per character**.
 6. Save, then use the preview button to confirm you hear audio.
 
 For a group call, per-character voices make it much easier to tell who is talking. If a character has no voice that Marinara can resolve, that character becomes text only for the call.

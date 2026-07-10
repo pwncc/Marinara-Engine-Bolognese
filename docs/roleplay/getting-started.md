@@ -119,7 +119,7 @@ You can set a cheaper model for agents than for chat. Many users run chat on a s
 
 **HUD widgets show the wrong value.** A tracker agent fills each widget. Open the widget panel and edit the value by hand. If values keep drifting, switch the agent connection to a stronger model. You can also lock a field so the next automatic run does not overwrite it.
 
-**Sprite expressions do not change.** Check that the character has an uploaded sprite library and that image generation is set up. Without sprites to show, the expression agent runs but has nothing to display. You can also set an expression by hand with the **/emote** command.
+**Sprite expressions do not change.** Check that the character has an uploaded sprite library. Image generation is needed only when you want Marinara to create new sprites. Without sprites to show, the expression agent runs but has nothing to display. You can also set an expression by hand with the **/emote** command.
 
 **The background never changes.** The **Background** agent picks from your background library. With only one or two backgrounds, it keeps picking those. Add more backgrounds so the agent has more choices. See [Roleplay Backgrounds](backgrounds.md).
 

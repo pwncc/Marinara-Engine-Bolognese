@@ -106,11 +106,11 @@ Important current crossovers:
 
 These are global foundations:
 
-- Chat and message persistence: `server/src/routes/chats.routes.ts`, `services/storage/chats.storage.ts`, shared chat types and schemas.
+- Chat and message persistence: `packages/server/src/routes/chats.routes.ts`, `packages/server/src/services/storage/chats.storage.ts`, shared chat types and schemas.
 - Characters and personas: character routes, storage, schemas, and client character hooks and editors.
 - Connections and providers: connection routes, storage, shared provider constants, and `services/llm`.
 - Prompt presets, lorebooks, regex, custom tools: shared authoring and prompt-injection foundations.
-- Generation transport: `client/src/hooks/use-generate.ts`, `server/src/routes/generate.routes.ts`, and the provider registry.
+- Generation transport: `packages/client/src/hooks/use-generate.ts`, `packages/server/src/routes/generate.routes.ts`, and the provider registry.
 - TTS, translation, gallery, themes, settings, imports, backups.
 
 ### Conversation mode

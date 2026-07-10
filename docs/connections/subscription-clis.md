@@ -1,6 +1,6 @@
 # Claude, ChatGPT, and Grok Subscription Connections
 
-This guide covers the three connections that sign in through a subscription instead of an API key: **Claude (Subscription)**, **OpenAI (ChatGPT)**, and **Grok CLI (Subscription)**. You install a small command line tool, log in once, and Marinara Engine uses your paid plan to chat. A command line tool (CLI) is a program you run by typing a command in a terminal window.
+This guide covers the three connections that sign in through an account instead of an API key: **Claude (Subscription)**, **OpenAI (ChatGPT)**, and **Grok CLI (Subscription)**. You install a small command line tool, log in once, and Marinara Engine uses that account to chat. A command line tool (CLI) is a program you run by typing a command in a terminal window.
 
 ## What subscription connections are
 
@@ -8,7 +8,7 @@ Most connections in Marinara Engine use an API key. An API key is a secret strin
 
 These three connections work differently. They use a local login instead of an API key. You sign in to a CLI on your own machine, and Marinara reuses that login. Nothing is pasted into Marinara.
 
-Use a subscription connection when you already pay for one of these plans and want to chat on it:
+Use a subscription connection when your account includes access through one of these CLIs:
 
 - **Claude (Subscription)** uses your Anthropic **Pro** or **Max** subscription.
 - **OpenAI (ChatGPT)** uses your ChatGPT account.
@@ -16,10 +16,13 @@ Use a subscription connection when you already pay for one of these plans and wa
 
 ## What you need first
 
-Two things are true for all three providers.
+The account requirement depends on the provider.
 
-1. You need a paid subscription with that company. A free account is not enough.
-2. The CLI must be installed and logged in on the same machine that runs the Marinara server. This is not the browser or phone you view Marinara on. Marinara runs the CLI locally, so the login has to live next to the server.
+- **Claude (Subscription)** needs a Claude plan supported by Claude Code subscription login.
+- **OpenAI (ChatGPT)** supports eligible Free and paid ChatGPT plans. Usage limits vary by plan.
+- **Grok CLI (Subscription)** needs SuperGrok or X Premium+.
+
+For all three providers, the CLI must be installed and logged in on the same machine that runs the Marinara server. This is not the browser or phone you view Marinara on. Marinara runs the CLI locally, so the login has to live next to the server.
 
 If you run Marinara on your own computer, that computer is the server. If you run it on another machine or in Docker, install and log in the CLI there.
 
@@ -36,7 +39,7 @@ npm i -g @anthropic-ai/claude-code
 2. Sign in once:
 
 ```
-claude login
+claude auth login
 ```
 
 3. In Marinara, open the **Connections** panel and click **New**.

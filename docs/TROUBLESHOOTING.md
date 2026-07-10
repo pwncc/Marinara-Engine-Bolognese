@@ -257,6 +257,8 @@ If you still need help, gather good detail first.
 1. Open **Settings** > **Advanced** > **Message Tools** and turn on **Debug mode**. This logs the prompt and response payloads to the server console so you can share them.
 2. Note your operating system, your Node.js version, and the full error text from the server console.
 
+Before sharing debug output, remove API keys, access tokens, admin secrets, private prompts, and private chat content.
+
 Then reach the community:
 
 - Read the open issues at https://github.com/Pasta-Devs/Marinara-Engine/issues

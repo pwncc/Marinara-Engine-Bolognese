@@ -48,12 +48,11 @@ Tap that icon to open Marinara in its own window, without the Safari address bar
 
 PWAs behave most reliably over HTTPS. HTTPS means a secure, encrypted web connection, shown by `https://` at the start of the address.
 
-Plain HTTP over your LAN still works in Safari for normal use. But some iOS or iPadOS versions limit standalone PWA behavior for a plain `http://` address. If that happens, you have two good options:
+Plain HTTP over your LAN still works in Safari for normal use. But some iOS or iPadOS versions limit standalone PWA behavior for a plain `http://` address. If that happens, serve Marinara over HTTPS.
 
-- Connect through Tailscale, which gives each device a stable private address.
-- Ask the server owner to put Marinara behind HTTPS.
+Tailscale gives each device a stable private address and improves reachability, but Tailscale alone does not change an `http://` address into HTTPS. Use a Tailscale setup that explicitly serves HTTPS, or ask the server owner to put Marinara behind HTTPS.
 
-Both options are explained in the [Remote Access guide](../REMOTE_ACCESS.md). If a plain HTTP address gives you trouble as a Home Screen app, keep it as a Safari bookmark instead.
+These options are explained in the [Remote Access guide](../REMOTE_ACCESS.md). If a plain HTTP address gives you trouble as a Home Screen app, keep it as a Safari bookmark instead.
 
 ## Clearing and reinstalling the PWA
 

@@ -113,7 +113,7 @@ environment:
 docker compose up -d
 ```
 
-Now other devices on your network can reach Marinara at `http://YOUR_COMPUTER_IP:7860`, and they must enter the username and password you set. To find good ways to allow only certain devices, and to learn what the admin secret does, read [Remote Access: Basic Auth and IP Allowlist](../REMOTE_ACCESS.md).
+Now other devices on your network can reach Marinara at `http://YOUR_COMPUTER_IP:7860` when `PORT` is unset. If you set `PORT`, replace `7860` with that host port. They must enter the username and password you set. To find good ways to allow only certain devices, and to learn what the admin secret does, read [Remote Access: Basic Auth and IP Allowlist](../REMOTE_ACCESS.md).
 
 ## Choosing an image: latest, staging, or lite
 

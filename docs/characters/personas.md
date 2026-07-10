@@ -34,9 +34,9 @@ If you have more personas than fit on one page, a **Load more** button appears a
 
 ### The active persona
 
-Exactly one persona at a time can be the global default. This is the **active persona**. To set one, hover a persona row and click **Set as active**.
+At most one persona at a time can be the global default. This is the **active persona**. To set one, hover a persona row and click **Set as active**.
 
-Setting a persona active turns off the active flag on every other persona first. So only one persona is ever active. New personas, duplicated personas, and imported personas are never active on their own. You must set the active persona yourself. It is also fine to have no active persona at all.
+Setting a persona active turns off the active flag on every other persona first. So no more than one persona is ever active. New personas, duplicated personas, and imported personas are never active on their own. You must set the active persona yourself. It is also fine to have no active persona at all.
 
 ## Creating a persona
 

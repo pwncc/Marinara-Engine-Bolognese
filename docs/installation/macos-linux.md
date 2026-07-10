@@ -129,11 +129,18 @@ AUTO_OPEN_BROWSER=true
 
 ## Manual setup
 
-Most users should use the launcher above. If you prefer to run each step yourself, follow these commands instead. For manual setup you need pnpm available. Corepack, a helper included with Node.js, turns it on for you:
+Most users should use the launcher above. If you prefer to run each step yourself, follow these commands instead. For manual setup you need pnpm available. Node.js 24 includes Corepack, but Node.js 25 does not.
 
-1. Turn on pnpm through Corepack. Run this command:
+1. On Node.js 24, turn on pnpm through Corepack:
 
 ```bash
+corepack enable pnpm
+```
+
+On Node.js 25, install the user-provided Corepack package first, then turn on pnpm:
+
+```bash
+npm install --global corepack
 corepack enable pnpm
 ```
 

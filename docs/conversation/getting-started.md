@@ -54,7 +54,7 @@ For calls, see [Conversation Audio and Video Calls](calls.md).
 
 When **Commands** is on, a grid of 15 command families appears. Each one is a hidden action a character can take on its own. Every family starts on. Turning a toggle off only removes that one family. Commands are model-driven actions, not things you type.
 
-The 14 command families are:
+The 15 command families are:
 
 - **Schedule Updates**: let characters change their current status.
 - **Cross-Post**: let characters redirect a message into another chat.
