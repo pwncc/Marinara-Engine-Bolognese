@@ -192,7 +192,6 @@ import {
   GAME_STORYBOARD_KEYFRAME_COUNT_MIN,
   GAME_VIDEO_BUILT_IN_PROMPT_TEMPLATES,
   GAME_VIDEO_PROMPT_TEMPLATE_ID,
-  VIDEO_GENERATION_SETTINGS_KEY,
   getChatModeCapabilities,
   LIMITS,
   MIN_AGENT_MAX_TOKENS,
@@ -204,7 +203,6 @@ import {
   AGENT_COST_HIGH_TOKENS,
   CONVERSATION_COMMAND_KEYS,
   getDefaultBuiltInAgentSettings,
-  normalizeVideoGenerationUserSettings,
   isAgentAvailableInChatMode,
   isAgentConfigDeleted,
   isAgentHiddenFromChatSettingsPicker,
@@ -918,12 +916,6 @@ export function ChatSettingsDrawer({
       </div>
     </button>
   );
-  const videoGenerationSettingsQuery = useQuery({
-    queryKey: ["app-settings", VIDEO_GENERATION_SETTINGS_KEY],
-    queryFn: () => api.get<{ value: string | null }>(`/app-settings/${VIDEO_GENERATION_SETTINGS_KEY}`),
-    enabled: open && isGame,
-    staleTime: 60_000,
-  });
   const { data: currentPromptPresetFull } = usePresetFull(isRoleplayMode ? (chat.promptPresetId ?? null) : null);
   const promptPresetOptionsLoaded = Array.isArray(presets);
   const promptPresetOptions = useMemo(() => (presets ?? []) as PromptPreset[], [presets]);
@@ -1603,25 +1595,15 @@ export function ChatSettingsDrawer({
   const gameImageIncludeCharacterAppearance = metadata.gameImageIncludeCharacterAppearance !== false;
   const gameImageAutoGenerationEnabled = metadata.gameImageAutoGenerationEnabled !== false;
   const gameImageDynamicPromptEnabled = metadata.gameImageDynamicPromptEnabled === true;
-  const gameStoryboardAutoIllustrationsEnabled = metadata.gameStoryboardAutoIllustrationsEnabled === true;
+  const gameStoryboardAutoIllustrationsEnabled = metadata.gameStoryboardAutoIllustrationsEnabled !== false;
   const gameStoryboardAutoAnimationsEnabled = metadata.gameStoryboardAutoGenerationEnabled === true;
-  const gameStoryboardUseDirectScenePrompt = metadata.gameStoryboardUseDirectScenePrompt !== false;
+  const gameStoryboardUseDirectScenePrompt = metadata.gameStoryboardUseDirectScenePrompt === true;
   const gameStoryboardKeyframeCount = normalizeGameStoryboardKeyframeCount(metadata.gameStoryboardKeyframeCount);
   const gameStoryboardAnimationDurationConfigured = hasGameStoryboardAnimationDuration(
     metadata.gameStoryboardAnimationDurationSeconds,
   );
-  const gameStoryboardAnimationFallbackDuration = useMemo(
-    () =>
-      normalizeGameStoryboardAnimationDuration(
-        normalizeVideoGenerationUserSettings(videoGenerationSettingsQuery.data?.value ?? null)
-          .sceneVideoDurationSeconds,
-      ),
-    [videoGenerationSettingsQuery.data?.value],
-  );
   const gameStoryboardAnimationDurationSeconds = normalizeGameStoryboardAnimationDuration(
-    gameStoryboardAnimationDurationConfigured
-      ? metadata.gameStoryboardAnimationDurationSeconds
-      : gameStoryboardAnimationFallbackDuration,
+    metadata.gameStoryboardAnimationDurationSeconds,
   );
   const commitGameStoryboardAnimationDuration = useCallback(
     (durationSeconds: number) => {
@@ -7726,12 +7708,12 @@ export function ChatSettingsDrawer({
                       <div className="min-w-0">
                         <div className="flex items-center gap-1 text-[0.625rem] font-medium text-[var(--foreground)]">
                           Animation Clip Duration
-                          <HelpTooltip text="Overrides the Video Generation scene fallback for storyboard MP4 clips in this chat. Some video providers may clamp to a lower maximum." />
+                          <HelpTooltip text="Controls the duration of each storyboard MP4 clip in this chat. Some video providers may clamp to a lower maximum." />
                         </div>
                         <p className="mt-0.5 text-[0.5625rem] leading-snug text-[var(--muted-foreground)]">
                           {gameStoryboardAnimationDurationConfigured
                             ? "Used for each generated storyboard animation clip."
-                            : "Uses the global Video Generation scene fallback until set."}
+                            : "Uses the 6-second storyboard default until set."}
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
@@ -7758,11 +7740,11 @@ export function ChatSettingsDrawer({
                             }
                             className="rounded-md border border-[var(--border)] px-2 py-1 text-[0.625rem] text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            Use video default
+                            Use storyboard default
                           </button>
                         ) : (
                           <span className="rounded-md bg-[var(--secondary)]/70 px-2 py-1 text-[0.625rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)]">
-                            Video default
+                            Storyboard default
                           </span>
                         )}
                       </div>

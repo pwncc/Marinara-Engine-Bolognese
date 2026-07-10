@@ -102,6 +102,7 @@ import {
   VIDEO_GENERATION_SETTINGS_KEY,
   VIDEO_DEFAULTS_STORAGE_KEY,
   GAME_STORYBOARD_ANIMATION_PROMPT_TEMPLATE_ID,
+  GAME_STORYBOARD_ANIMATION_DURATION_SECONDS_DEFAULT,
   GAME_STORYBOARD_ANIMATION_DURATION_SECONDS_MAX,
   GAME_STORYBOARD_ANIMATION_DURATION_SECONDS_MIN,
   GAME_STORYBOARD_BUILT_IN_PROMPT_TEMPLATES,
@@ -5719,13 +5720,15 @@ export async function gameRoutes(app: FastifyInstance) {
     const customHudWidgets = sanitizeGameHudWidgets(parsedCreateGameInput.setupConfig.customHudWidgets);
     const gameSystemPrompt = parsedCreateGameInput.setupConfig.gameSystemPrompt?.trim() || null;
     const gameSpecialInstructions = parsedCreateGameInput.setupConfig.gameSpecialInstructions?.trim() || null;
+    const storyboardIllustrationsPreference =
+      parsedCreateGameInput.setupConfig.gameStoryboardAutoIllustrationsEnabled !== false;
     const visualGenerationEnabled =
       parsedCreateGameInput.setupConfig.enableSpriteGeneration === true ||
       parsedCreateGameInput.setupConfig.gameStoryboardAutoIllustrationsEnabled === true ||
       parsedCreateGameInput.setupConfig.gameStoryboardAutoGenerationEnabled === true;
     const storyboardIllustrationsEnabled =
       visualGenerationEnabled &&
-      (parsedCreateGameInput.setupConfig.gameStoryboardAutoIllustrationsEnabled === true ||
+      (storyboardIllustrationsPreference ||
         parsedCreateGameInput.setupConfig.gameStoryboardAutoGenerationEnabled === true);
     const storyboardAnimationsEnabled =
       storyboardIllustrationsEnabled &&
@@ -5734,7 +5737,9 @@ export async function gameRoutes(app: FastifyInstance) {
     const setupConfig: GameSetupConfig = {
       ...parsedCreateGameInput.setupConfig,
       enableSpriteGeneration: visualGenerationEnabled || undefined,
-      gameStoryboardAutoIllustrationsEnabled: storyboardIllustrationsEnabled || undefined,
+      gameStoryboardAutoIllustrationsEnabled: visualGenerationEnabled
+        ? storyboardIllustrationsEnabled
+        : parsedCreateGameInput.setupConfig.gameStoryboardAutoIllustrationsEnabled,
       gameStoryboardAutoGenerationEnabled: storyboardAnimationsEnabled || undefined,
       enableCustomWidgets:
         parsedCreateGameInput.setupConfig.enableCustomWidgets !== false || customHudWidgets.length > 0,
@@ -5824,7 +5829,7 @@ export async function gameRoutes(app: FastifyInstance) {
       enableSpriteGeneration: setupConfig.enableSpriteGeneration || false,
       gameImageConnectionId: setupConfig.imageConnectionId || null,
       gameVideoConnectionId: setupConfig.videoConnectionId || null,
-      gameStoryboardAutoIllustrationsEnabled: setupConfig.gameStoryboardAutoIllustrationsEnabled === true,
+      gameStoryboardAutoIllustrationsEnabled: setupConfig.gameStoryboardAutoIllustrationsEnabled !== false,
       gameStoryboardAutoGenerationEnabled: setupConfig.gameStoryboardAutoGenerationEnabled === true,
       gameLastSceneVideoId: null,
       activeLorebookIds: setupConfig.activeLorebookIds || [],
@@ -10001,9 +10006,6 @@ export async function gameRoutes(app: FastifyInstance) {
       const sceneVideos = createGameSceneVideosStorage(app.db);
       const gallery = createGalleryStorage(app.db);
       const promptOverridesStorage = createPromptOverridesStorage(app.db);
-      const videoSettings = normalizeVideoGenerationUserSettings(
-        await createAppSettingsStorage(app.db).get(VIDEO_GENERATION_SETTINGS_KEY),
-      );
       await recoverStaleGameStoryboards(storyboards, storyboardStaleRenderCutoff(), "storyboard generate");
 
       const chat = await chats.getById(input.chatId);
@@ -10023,7 +10025,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const meta = parseMeta(chat.metadata);
       const storyboardDurationSeconds = normalizeStoryboardDuration(
         input.durationSeconds ?? meta.gameStoryboardAnimationDurationSeconds,
-        videoSettings.sceneVideoDurationSeconds,
+        GAME_STORYBOARD_ANIMATION_DURATION_SECONDS_DEFAULT,
       );
       const storyboardKeyframeCount = normalizeStoryboardKeyframeCount(
         input.keyframeCount,
@@ -10384,7 +10386,7 @@ export async function gameRoutes(app: FastifyInstance) {
             debugLog: debugLogsEnabled ? debugLog : undefined,
             promptOverridesStorage,
             size: backgroundSize,
-            useDirectScenePrompt: meta.gameStoryboardUseDirectScenePrompt !== false,
+            useDirectScenePrompt: meta.gameStoryboardUseDirectScenePrompt === true,
             preserveFullScenePrompt: true,
             onCompiledPrompt: (compiled) => {
               sentIllustrationPrompt = compiled.prompt;

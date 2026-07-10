@@ -3714,7 +3714,7 @@ function GameSurfaceComponent({
   const gameBackgroundGenerationEnabled = gameImageGenerationEnabled && !gameStoryboardBackgroundVisualEnabled;
   const gameBackgroundAutoGenerationEnabled =
     gameImageAutoGenerationEnabled && !gameStoryboardBackgroundVisualEnabled;
-  const gameStoryboardAutoIllustrationsEnabled = chatMeta.gameStoryboardAutoIllustrationsEnabled === true;
+  const gameStoryboardAutoIllustrationsEnabled = chatMeta.gameStoryboardAutoIllustrationsEnabled !== false;
   const gameStoryboardAutoAnimationsEnabled = chatMeta.gameStoryboardAutoGenerationEnabled === true;
   const gameStoryboardAutoGenerationEnabled =
     gameStoryboardAutoIllustrationsEnabled || gameStoryboardAutoAnimationsEnabled;
