@@ -1975,7 +1975,7 @@ export async function generateRoutes(app: FastifyInstance) {
           // Skip the automatic about-me block when the preset already places the
           // bios itself via {{char_about}}/{{persona_about}}, mirroring how the
           // other relocation macros suppress their auto insertion (#3436).
-          if (convoProfileBlocks.aboutMeBlock && !conversationContextMacroSlots.aboutMe) {
+          if (convoProfileBlocks.aboutMeBlock && (!conversationContextMacroSlots.aboutMe || isGroup)) {
             conversationSystemPrompt += "\n\n" + convoProfileBlocks.aboutMeBlock;
           }
 
