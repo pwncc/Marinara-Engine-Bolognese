@@ -11,6 +11,7 @@ import type {
   NoodleCreateInteractionInput,
   NoodleCreatePostInput,
   NoodleInteraction,
+  NoodleInteractionUpdateInput,
   NoodlePost,
   NoodlePostUpdateInput,
   NoodleRemoveInteractionInput,
@@ -19,6 +20,12 @@ import type {
   NoodleSettings,
   NoodleSettingsUpdateInput,
 } from "@marinara-engine/shared";
+import type { ImagePromptOverride, ImagePromptReviewItem } from "../components/ui/ImagePromptReviewModal";
+
+export type NoodleRefreshResult = {
+  bootstrap: NoodleBootstrap;
+  imagePromptReviewItems: ImagePromptReviewItem[];
+};
 
 export const noodleKeys = {
   all: ["noodle"] as const,
@@ -221,11 +228,74 @@ export function useRemoveNoodleInteraction() {
   });
 }
 
+export function useUpdateNoodleInteraction() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      postId,
+      interactionId,
+      ...input
+    }: NoodleInteractionUpdateInput & { postId: string; interactionId: string }) =>
+      api.patch<NoodleInteraction>(
+        `/noodle/posts/${encodeURIComponent(postId)}/interactions/${encodeURIComponent(interactionId)}`,
+        input,
+      ),
+    onSuccess: (interaction) => {
+      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+        current
+          ? {
+              ...current,
+              interactions: current.interactions.map((item) => (item.id === interaction.id ? interaction : item)),
+            }
+          : current,
+      );
+    },
+  });
+}
+
+export function useDeleteNoodleInteraction() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ postId, interactionId, personaId }: { postId: string; interactionId: string; personaId: string }) =>
+      api.delete<NoodleInteraction[]>(
+        `/noodle/posts/${encodeURIComponent(postId)}/interactions/${encodeURIComponent(interactionId)}?personaId=${encodeURIComponent(personaId)}`,
+      ),
+    onSuccess: (interactions) => {
+      const deletedIds = new Set(interactions.map((interaction) => interaction.id));
+      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+        current
+          ? {
+              ...current,
+              interactions: current.interactions.filter((item) => !deletedIds.has(item.id)),
+            }
+          : current,
+      );
+    },
+  });
+}
+
 export function useRefreshNoodle() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { personaId?: string; connectionId?: string }) =>
-      api.post<NoodleBootstrap>("/noodle/refresh", { ...input, debugMode: useUIStore.getState().debugMode }),
+      api.post<NoodleRefreshResult>("/noodle/refresh", {
+        ...input,
+        debugMode: useUIStore.getState().debugMode,
+        reviewImagePromptsBeforeSend: useUIStore.getState().reviewImagePromptsBeforeSend,
+      }),
+    onSuccess: (result) => qc.setQueryData(noodleKeys.bootstrap(), result.bootstrap),
+    onSettled: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
+  });
+}
+
+export function useConfirmNoodleImagePrompts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (prompts: ImagePromptOverride[]) =>
+      api.post<NoodleBootstrap>("/noodle/refresh/images", {
+        prompts,
+        debugMode: useUIStore.getState().debugMode,
+      }),
     onSuccess: (bootstrap) => qc.setQueryData(noodleKeys.bootstrap(), bootstrap),
     onSettled: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
   });

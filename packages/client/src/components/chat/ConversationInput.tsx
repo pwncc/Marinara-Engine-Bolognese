@@ -27,12 +27,14 @@ import { useUIStore } from "../../stores/ui.store";
 import { useUnoGameStore } from "../../stores/uno-game.store";
 import { useChessGameStore } from "../../stores/chess-game.store";
 import { usePokerGameStore } from "../../stores/poker-game.store";
+import { useEightBallGameStore } from "../../stores/eightball-game.store";
 import { useGenerate } from "../../hooks/use-generate";
 import { useApplyRegex } from "../../hooks/use-apply-regex";
 import { useCreateMessage, useDeleteMessage, useUpdateMessageExtra, useChat, chatKeys } from "../../hooks/use-chats";
 import { characterKeys } from "../../hooks/use-characters";
 import {
   matchSlashCommand,
+  shouldExecuteQuickPostAsCommand,
   getSlashCompletions,
   type SlashCommand,
   type SlashCommandContext,
@@ -1002,8 +1004,8 @@ export function ConversationInput({
     }
 
     // Natural-language launchers: "let's play uno" / "let's play chess" / "let's
-    // play poker" open the game setup. The message still sends normally, so the
-    // characters can react too.
+    // play poker" / "let's play pool" open the game setup. The message still
+    // sends normally, so the characters can react too.
     {
       const activeUno = useUnoGameStore.getState().current;
       const unoActive = !!activeUno && activeUno.chatId === activeChatId && activeUno.status !== "finished";
@@ -1019,6 +1021,15 @@ export function ConversationInput({
       const pokerActive = !!activePoker && activePoker.chatId === activeChatId && activePoker.status !== "finished";
       if (!pokerActive && /\b(?:play|start|deal)\b[^.!?\n]{0,24}\bpoker\b/i.test(raw)) {
         usePokerGameStore.getState().openSetup(activeChatId);
+      }
+      const activeEightBall = useEightBallGameStore.getState().current;
+      const eightBallActive =
+        !!activeEightBall && activeEightBall.chatId === activeChatId && activeEightBall.status !== "finished";
+      if (
+        !eightBallActive &&
+        /\b(?:play|start|rack)\b[^.!?\n]{0,24}\b(?:8-ball|8 ball|eightball|pool|billiards)\b/i.test(raw)
+      ) {
+        useEightBallGameStore.getState().openSetup(activeChatId);
       }
     }
 
@@ -1222,6 +1233,11 @@ export function ConversationInput({
     const hasFiles = attachments.length > 0;
     if (!hasText && !hasFiles) return;
 
+    if (shouldExecuteQuickPostAsCommand(raw)) {
+      await handleSend();
+      return;
+    }
+
     if (draftTimerRef.current) {
       clearTimeout(draftTimerRef.current);
       draftTimerRef.current = null;
@@ -1337,6 +1353,7 @@ export function ConversationInput({
     createMessage,
     deleteMessage,
     updateMessageExtra,
+    handleSend,
   ]);
 
   const handleGuidedGenerationButton = useCallback(async () => {

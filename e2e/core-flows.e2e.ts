@@ -484,6 +484,7 @@ test("liking one Noodle post leaves unrelated reaction controls visually stable"
 
     const targetLike = targetPost.getByRole("button", { name: "Like post" });
     const unrelatedLike = unrelatedPost.getByRole("button", { name: "Like post" });
+    await expect(targetLike.locator("svg")).toHaveAttribute("fill", "none");
     const unrelatedClass = await unrelatedLike.getAttribute("class");
     const unrelatedText = await unrelatedLike.textContent();
     let markReactionRequestStarted: (() => void) | null = null;
@@ -520,7 +521,9 @@ test("liking one Noodle post leaves unrelated reaction controls visually stable"
 
     releaseReactionRequest?.();
     releaseReactionRequest = null;
-    await expect(targetPost.getByRole("button", { name: "Unlike post" })).toBeEnabled();
+    const targetUnlike = targetPost.getByRole("button", { name: "Unlike post" });
+    await expect(targetUnlike).toBeEnabled();
+    await expect(targetUnlike.locator("svg")).toHaveAttribute("fill", "currentColor");
     await expect(targetPost.locator('[data-noodle-reaction="like"]')).toContainText("1");
     await expect(unrelatedLike).toBeEnabled();
     await page.waitForTimeout(150);
@@ -529,6 +532,246 @@ test("liking one Noodle post leaves unrelated reaction controls visually stable"
   } finally {
     releaseReactionRequest?.();
     for (const postId of createdPostIds) {
+      await page.request.delete(`/api/noodle/posts/${postId}`, { timeout: 5_000 }).catch(() => undefined);
+    }
+    if (createdPersonaId) {
+      await page.request
+        .delete(`/api/characters/personas/${createdPersonaId}`, { timeout: 5_000 })
+        .catch(() => undefined);
+    }
+  }
+});
+
+test("Noodle persona and character comments can be edited and deleted", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("desktop"), "Comment ownership controls are covered on desktop.");
+
+  const errors = collectUnexpectedErrors(page);
+  let personaId: string | null = null;
+  let createdPersonaId: string | null = null;
+  let postId: string | null = null;
+  let controlPostId: string | null = null;
+
+  try {
+    const activePersonaResponse = await page.request.get("/api/characters/personas/active");
+    const activePersona = activePersonaResponse.ok()
+      ? ((await activePersonaResponse.json()) as { id?: string } | null)
+      : null;
+    personaId = activePersona?.id ?? null;
+    if (!personaId) {
+      const personaResponse = await page.request.post("/api/characters/personas", {
+        data: { name: "Noodle Comment Owner", description: "Temporary browser regression persona." },
+      });
+      expect(personaResponse.ok()).toBe(true);
+      const createdPersona = (await personaResponse.json()) as { id: string };
+      personaId = createdPersona.id;
+      createdPersonaId = createdPersona.id;
+      const activateResponse = await page.request.put(`/api/characters/personas/${createdPersona.id}/activate`);
+      expect(activateResponse.ok()).toBe(true);
+    }
+
+    await page.request.get("/api/noodle");
+    const postResponse = await page.request.post("/api/noodle/posts", {
+      data: {
+        authorKind: "character",
+        authorEntityId: "__professor_mari__",
+        content: `Comment ownership regression ${Date.now()}`,
+      },
+    });
+    expect(postResponse.ok()).toBe(true);
+    const post = (await postResponse.json()) as { id: string };
+    postId = post.id;
+    const controlPostResponse = await page.request.post("/api/noodle/posts", {
+      data: {
+        authorKind: "character",
+        authorEntityId: "__professor_mari__",
+        content: `Newer control post ${Date.now()}`,
+      },
+    });
+    expect(controlPostResponse.ok()).toBe(true);
+    const controlPost = (await controlPostResponse.json()) as { id: string };
+    controlPostId = controlPost.id;
+
+    const ownReplyResponse = await page.request.post(`/api/noodle/posts/${postId}/interactions`, {
+      data: {
+        actorKind: "persona",
+        actorEntityId: personaId,
+        type: "reply",
+        content: "Original persona comment.",
+      },
+    });
+    expect(ownReplyResponse.ok()).toBe(true);
+    const ownReply = (await ownReplyResponse.json()) as { id: string };
+
+    const childReplyResponse = await page.request.post(`/api/noodle/posts/${postId}/interactions`, {
+      data: {
+        actorKind: "character",
+        actorEntityId: "__professor_mari__",
+        type: "reply",
+        content: "Character-owned child reply.",
+        parentInteractionId: ownReply.id,
+      },
+    });
+    expect(childReplyResponse.ok()).toBe(true);
+    const childReply = (await childReplyResponse.json()) as { id: string };
+
+    await page.goto("/");
+    await page.locator('[data-tour="noodle-tab"]').click();
+
+    const noodle = page.locator('[data-component="NoodleView"]');
+    const activePost = noodle.locator(`[data-noodle-post-id="${postId}"]`);
+    const newerControlPost = noodle.locator(`[data-noodle-post-id="${controlPostId}"]`);
+    const ownComment = noodle.locator(`[data-noodle-interaction-id="${ownReply.id}"]`);
+    const characterComment = noodle.locator(`[data-noodle-interaction-id="${childReply.id}"]`);
+    await expect(newerControlPost).toBeVisible();
+    await expect(ownComment).toBeVisible();
+    await expect(characterComment).toBeVisible();
+    expect(
+      await activePost.evaluate((element, controlPostId) => {
+        const control = document.querySelector(`[data-noodle-post-id="${controlPostId}"]`);
+        return Boolean(control && element.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING);
+      }, controlPostId),
+    ).toBe(true);
+    await expect(ownComment.getByRole("button", { name: "Edit comment" })).toBeVisible();
+    await expect(ownComment.getByRole("button", { name: "Delete comment" })).toBeVisible();
+    await expect(characterComment.getByRole("button", { name: "Edit comment" })).toBeVisible();
+    await expect(characterComment.getByRole("button", { name: "Delete comment" })).toBeVisible();
+
+    await characterComment.getByRole("button", { name: "Edit comment" }).click();
+    const characterEditor = characterComment.locator('[data-component="NoodleView.CommentEditor"]');
+    await characterEditor.getByRole("textbox", { name: "Edit comment" }).fill("Edited character reply.");
+    await characterEditor.getByRole("button", { name: "Save" }).click();
+    await expect(characterComment).toContainText("Edited character reply.");
+
+    await characterComment.getByRole("button", { name: "Delete comment" }).click();
+    const characterDeleteDialog = page.getByRole("dialog", { name: "Delete Noodle Comment" });
+    await expect(characterDeleteDialog).toBeVisible();
+    await characterDeleteDialog.getByRole("button", { name: "Delete comment" }).click();
+    await expect(characterComment).toHaveCount(0);
+    await expect(ownComment).toBeVisible();
+
+    await ownComment.getByRole("button", { name: "Edit comment" }).click();
+    const editor = ownComment.locator('[data-component="NoodleView.CommentEditor"]');
+    await editor.getByRole("textbox", { name: "Edit comment" }).fill("Edited persona comment.");
+    await editor.getByRole("button", { name: "Save" }).click();
+    await expect(ownComment).toContainText("Edited persona comment.");
+
+    await ownComment.getByRole("button", { name: "Delete comment" }).click();
+    const deleteDialog = page.getByRole("dialog", { name: "Delete Noodle Comment" });
+    await expect(deleteDialog).toBeVisible();
+    await deleteDialog.getByRole("button", { name: "Delete comment" }).click();
+    await expect(ownComment).toHaveCount(0);
+    await expect(characterComment).toHaveCount(0);
+
+    expect(errors).toEqual([]);
+  } finally {
+    if (postId) {
+      await page.request.delete(`/api/noodle/posts/${postId}`, { timeout: 5_000 }).catch(() => undefined);
+    }
+    if (controlPostId) {
+      await page.request.delete(`/api/noodle/posts/${controlPostId}`, { timeout: 5_000 }).catch(() => undefined);
+    }
+    if (createdPersonaId) {
+      await page.request
+        .delete(`/api/characters/personas/${createdPersonaId}`, { timeout: 5_000 })
+        .catch(() => undefined);
+    }
+  }
+});
+
+test("Noodle post and reply composers autocomplete character handles", async ({ page }) => {
+  const errors = collectUnexpectedErrors(page);
+  let personaId: string | null = null;
+  let createdPersonaId: string | null = null;
+  let postId: string | null = null;
+
+  try {
+    const activePersonaResponse = await page.request.get("/api/characters/personas/active");
+    const activePersona = activePersonaResponse.ok()
+      ? ((await activePersonaResponse.json()) as { id?: string } | null)
+      : null;
+    personaId = activePersona?.id ?? null;
+    if (!personaId) {
+      const personaResponse = await page.request.post("/api/characters/personas", {
+        data: { name: "Noodle Mention Tester", description: "Temporary browser regression persona." },
+      });
+      expect(personaResponse.ok()).toBe(true);
+      const createdPersona = (await personaResponse.json()) as { id: string };
+      personaId = createdPersona.id;
+      createdPersonaId = createdPersona.id;
+      const activateResponse = await page.request.put(`/api/characters/personas/${createdPersona.id}/activate`);
+      expect(activateResponse.ok()).toBe(true);
+    }
+
+    const bootstrapResponse = await page.request.get("/api/noodle");
+    expect(bootstrapResponse.ok()).toBe(true);
+    const bootstrap = (await bootstrapResponse.json()) as {
+      accounts: Array<{ entityId: string; handle: string; kind: string; invited: boolean }>;
+    };
+    const mentionAccount = bootstrap.accounts.find(
+      (account) => account.kind === "character" && account.invited && account.handle.length > 0,
+    );
+    expect(mentionAccount).toBeDefined();
+
+    const postResponse = await page.request.post("/api/noodle/posts", {
+      data: {
+        authorKind: "character",
+        authorEntityId: mentionAccount!.entityId,
+        content: `Mention autocomplete regression ${Date.now()}`,
+      },
+    });
+    expect(postResponse.ok()).toBe(true);
+    const post = (await postResponse.json()) as { id: string };
+    postId = post.id;
+    const commentResponse = await page.request.post(`/api/noodle/posts/${post.id}/interactions`, {
+      data: {
+        actorKind: "character",
+        actorEntityId: mentionAccount!.entityId,
+        type: "reply",
+        content: "A comment waiting for a tagged response.",
+      },
+    });
+    expect(commentResponse.ok()).toBe(true);
+    const comment = (await commentResponse.json()) as { id: string };
+
+    await page.goto("/");
+    await page.locator('[data-tour="noodle-tab"]').click();
+
+    const noodle = page.locator('[data-component="NoodleView"]');
+    const mentionPrefix = mentionAccount!.handle.slice(0, Math.min(2, mentionAccount!.handle.length));
+    const inlineComposer = noodle.locator('[data-component="NoodleView.InlineComposer"]');
+    const postTextarea = inlineComposer.getByPlaceholder("What's simmering?");
+    await postTextarea.fill(`Hello @${mentionPrefix}`);
+
+    const postMentionList = page.locator("#noodle-inline-mention-list");
+    await expect(postMentionList).toBeVisible();
+    const postMentionOption = postMentionList
+      .getByRole("option")
+      .filter({ hasText: `@${mentionAccount!.handle}` });
+    await expect(postMentionOption).toBeVisible();
+    await postMentionOption.click();
+    await expect(postTextarea).toHaveValue(`Hello @${mentionAccount!.handle} `);
+
+    const activePost = noodle.locator(`[data-noodle-post-id="${postId}"]`);
+    const targetComment = activePost.locator(`[data-noodle-interaction-id="${comment.id}"]`);
+    await targetComment.getByTitle("Reply").click();
+    const replyComposer = activePost.locator(
+      `[data-component="NoodleView.ReplyComposer"][data-noodle-reply-parent-id="${comment.id}"]`,
+    );
+    const replyTextarea = replyComposer.getByPlaceholder("Leave a comment…");
+    await replyTextarea.fill(`Replying @${mentionAccount!.handle}`);
+
+    const replyMentionList = page.locator("#noodle-reply-mention-list");
+    await expect(replyMentionList).toBeVisible();
+    const replyMentionOption = replyMentionList
+      .getByRole("option")
+      .filter({ hasText: `@${mentionAccount!.handle}` });
+    await expect(replyMentionOption).toBeVisible();
+    await replyTextarea.press("Tab");
+    await expect(replyTextarea).toHaveValue(`Replying @${mentionAccount!.handle} `);
+
+    expect(errors).toEqual([]);
+  } finally {
+    if (postId) {
       await page.request.delete(`/api/noodle/posts/${postId}`, { timeout: 5_000 }).catch(() => undefined);
     }
     if (createdPersonaId) {
@@ -588,7 +831,10 @@ test("Noodle reply notifications focus the actionable timeline reply", async ({ 
     await page.locator('[data-tour="noodle-tab"]').click();
 
     const noodle = page.locator('[data-component="NoodleView"]');
-    await noodle.getByRole("button", { name: "Noodle notifications" }).click();
+    const notificationsButton = noodle.getByRole("button", { name: "Noodle notifications" });
+    await expect(notificationsButton.locator('[data-component="NoodleView.NotificationBadge"]')).toBeVisible();
+    await notificationsButton.click();
+    await expect(noodle.locator('[data-component="NoodleView.NotificationBadge"]')).toHaveCount(0);
     await noodle.getByRole("button", { name: "Replies", exact: true }).click();
 
     const notification = noodle.locator(`[data-noodle-notification-target="${reply.id}"]`);
@@ -600,6 +846,28 @@ test("Noodle reply notifications focus the actionable timeline reply", async ({ 
     await expect(focusedReply).toBeFocused();
     await expect(focusedReply.getByTitle(/Like comment|Unlike comment/)).toBeVisible();
     await expect(focusedReply.getByTitle("Reply")).toBeVisible();
+
+    await focusedReply.getByTitle("Reply").click();
+    const nestedComposer = noodle.locator(
+      `[data-component="NoodleView.ReplyComposer"][data-noodle-reply-parent-id="${reply.id}"]`,
+    );
+    await expect(nestedComposer).toBeVisible();
+    await expect(nestedComposer).toContainText("Replying to");
+    const [replyRect, composerRect] = await Promise.all([focusedReply.boundingBox(), nestedComposer.boundingBox()]);
+    expect(replyRect).not.toBeNull();
+    expect(composerRect).not.toBeNull();
+    expect(composerRect!.y).toBeGreaterThanOrEqual(replyRect!.y + replyRect!.height - 1);
+    expect(
+      await nestedComposer.evaluate((composer, interactionId) => {
+        const target = document.querySelector(`[data-noodle-interaction-id="${interactionId}"]`);
+        return Boolean(target && target.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING);
+      }, reply.id),
+    ).toBe(true);
+
+    await nestedComposer.getByTitle("Attach image").click();
+    const replyImageDivider = page.locator('[data-component="NoodleView.ReplyImageDivider"]');
+    await expect(replyImageDivider).toBeVisible();
+    await expect(replyImageDivider).toHaveCSS("color", "rgb(126, 167, 255)");
 
     expect(errors).toEqual([]);
   } finally {

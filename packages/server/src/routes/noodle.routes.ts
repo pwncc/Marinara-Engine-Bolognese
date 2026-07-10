@@ -5,8 +5,10 @@ import type { FastifyInstance } from "fastify";
 import { existsSync, readFileSync } from "fs";
 import { basename, dirname, resolve } from "path";
 import { fileURLToPath } from "url";
+import { z } from "zod";
 import {
   createNoodlePoll,
+  canManageNoodleReply,
   extractNoodleMentionHandles,
   noodleAccountUpdateSchema,
   noodleBulkInviteSchema,
@@ -15,6 +17,8 @@ import {
   noodleGeneratedProfilesSchema,
   noodleGeneratedRefreshSchema,
   noodleInviteSchema,
+  noodleInteractionOwnerSchema,
+  noodleInteractionUpdateSchema,
   noodlePostUpdateSchema,
   noodleRemoveInteractionSchema,
   noodleRescheduleRefreshSchema,
@@ -52,15 +56,22 @@ import {
   noodleRefreshSchedulerStatus,
   rescheduleNoodleRefreshTime,
 } from "../services/noodle/noodle-refresh-schedule.js";
+import { NOODLE_JSON_OUTPUT_HEADING, noodleResponseFormat } from "../services/noodle/noodle-response-format.js";
 import {
+  canGenerateNoodleActivityForAccountKind,
+  formatNoodleTimelineForPrompt,
   noodlePastMemoryCutoff,
   noodlePastMemorySampleSize,
+  noodlePersonaCommentPostIds,
+  NOODLE_CREATIVE_FORMAT_INSTRUCTIONS,
+  NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION,
   noodleTimelineFeatureInstructions,
   sampleNoodlePastMemories,
 } from "../services/noodle/noodle-prompt.js";
 
 const NOODLE_ROUTE_DIR = dirname(fileURLToPath(import.meta.url));
 const CLIENT_PUBLIC_DIR = resolve(NOODLE_ROUTE_DIR, "../../../client/public");
+const NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY = "followingAccountTimestamps";
 const PROFESSOR_MARI_REFERENCE_ASSETS = [
   "sprites/mari/Mari_profile.png",
   "sprites/mari/chibi-professor-mari.png",
@@ -413,37 +424,6 @@ async function ensureSelectedGroupCharacterAccounts(
   return selectedCharacterIds;
 }
 
-function formatTimelineForPrompt(
-  posts: NoodlePost[],
-  interactions: Array<{ postId: string; type: string; content: string | null }>,
-  options: { emptyMessage?: string; includeTimestamp?: boolean } = {},
-) {
-  if (posts.length === 0) return options.emptyMessage ?? "No Noodle posts yet today.";
-  return posts
-    .slice()
-    .reverse()
-    .map((post) => {
-      const author = post.authorSnapshot?.displayName ?? post.authorAccountId;
-      const poll = readNoodlePollFromMetadata(post.metadata);
-      const pollSummary = poll
-        ? ` [poll: ${poll.question}; ${poll.options
-            .map((option, index) => {
-              const votes = interactions.filter(
-                (interaction) =>
-                  interaction.postId === post.id && interaction.type === "vote" && interaction.content === option.id,
-              ).length;
-              return `option ${index}: ${option.label} (${votes} vote${votes === 1 ? "" : "s"})`;
-            })
-            .join("; ")}]`
-        : "";
-      const timestamp = options.includeTimestamp ? ` at ${post.createdAt}` : "";
-      return `- ${post.id} by ${author}${timestamp}: ${post.content}${pollSummary}${
-        post.imagePrompt ? ` [image prompt: ${post.imagePrompt}]` : ""
-      }`;
-    })
-    .join("\n");
-}
-
 async function ensurePersonaAccounts(
   noodle: ReturnType<typeof createNoodleStorage>,
   characters: ReturnType<typeof createCharactersStorage>,
@@ -619,13 +599,30 @@ async function buildRefreshPrompt(input: {
   const selectedCharacterIds = activeCharacters.map((account) => account.entityId);
   const characterRows = await Promise.all(selectedCharacterIds.map((id) => input.characters.getById(id)));
   const personaRow = input.personaAccount ? await input.characters.getPersona(input.personaAccount.entityId) : null;
-  const todayPosts = await input.noodle.listPosts({ since: dayStartIso(), limit: 100 });
+  const recentCutoff = sinceHoursIso(48);
+  const [recentCreatedPosts, recentPersonaComments] = await Promise.all([
+    input.noodle.listPosts({ since: recentCutoff, limit: 100 }),
+    input.personaAccount
+      ? input.noodle.listRepliesByActorSince(input.personaAccount.id, recentCutoff, 100)
+      : Promise.resolve([]),
+  ]);
+  const recentlyCommentedPostIds = noodlePersonaCommentPostIds(recentPersonaComments, input.personaAccount?.id);
+  const recentlyCommentedPosts = (
+    await Promise.all(recentlyCommentedPostIds.map((postId) => input.noodle.getPostById(postId)))
+  ).filter((post): post is NoodlePost => Boolean(post));
+  const recentPostById = new Map([...recentCreatedPosts, ...recentlyCommentedPosts].map((post) => [post.id, post]));
+  const recentPosts = [...recentPostById.values()].sort(
+    (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+  );
   const pastMemorySampleSize = noodlePastMemorySampleSize();
-  const olderPosts = pastMemorySampleSize > 0 ? await input.noodle.listPostsBefore(noodlePastMemoryCutoff()) : [];
+  const olderPosts =
+    pastMemorySampleSize > 0
+      ? (await input.noodle.listPostsBefore(noodlePastMemoryCutoff())).filter((post) => !recentPostById.has(post.id))
+      : [];
   const recalledPosts = sampleNoodlePastMemories(olderPosts, pastMemorySampleSize);
-  const [chatContext, todayInteractions, recalledInteractions] = await Promise.all([
+  const [chatContext, recentInteractions, recalledInteractions] = await Promise.all([
     buildOptedInChatContext(input.chats, input.characters, selectedCharacterIds),
-    input.noodle.listInteractions(todayPosts.map((post) => post.id)),
+    input.noodle.listInteractions(recentPosts.map((post) => post.id)),
     input.noodle.listInteractions(recalledPosts.map((post) => post.id)),
   ]);
 
@@ -645,7 +642,9 @@ async function buildRefreshPrompt(input: {
   const activeAccountList = [...input.activeAccounts, ...(input.personaAccount ? [input.personaAccount] : [])]
     .map(
       (account) =>
-        `- ${account.displayName} (@${account.handle}) kind=${account.kind} entityId=${account.entityId} accountId=${account.id}`,
+        `- ${account.displayName} (@${account.handle}) kind=${account.kind} entityId=${account.entityId} accountId=${account.id} generationRole=${
+          account.kind === "persona" ? "reference-target-only" : "allowed-author-and-actor"
+        }`,
     )
     .join("\n");
 
@@ -656,6 +655,11 @@ async function buildRefreshPrompt(input: {
     "- Random user accounts are not characters. Treat them as ordinary fictional Noodle profiles that may follow, like, reply, repost, gossip, or casually join public drama.",
     "- Structured actions are limited to posts, polls, follows, likes, reposts, replies, and poll votes.",
     "- Generated interactions may target existing posts included in this prompt or posts you create in this response.",
+    "- To respond directly to an existing comment, create a reply interaction for its post and set parentInteractionId to that comment's exact replyId.",
+    NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION,
+    ...NOODLE_CREATIVE_FORMAT_INSTRUCTIONS,
+    "- For each interaction, set either targetTempId or targetPostId and set the unused target field to null.",
+    "- pollOptionIndex must be a zero-based integer for votes and null for every other interaction.",
     "- An exact @handle in post or reply text tags that active account. Preserve the @handle exactly when mentioning someone.",
     ...noodleTimelineFeatureInstructions(input.settings),
     "- Return JSON only. No prose outside the JSON object.",
@@ -678,16 +682,20 @@ async function buildRefreshPrompt(input: {
     "Only chats whose Chat Settings allow Noodle references are included here.",
     chatContext,
     "",
-    "# Today's Existing Noodle Timeline",
-    formatTimelineForPrompt(todayPosts, todayInteractions),
+    "# Recent Noodle Timeline",
+    "Recent persona comments are especially relevant. Characters may naturally respond to them by using the comment replyId as parentInteractionId.",
+    formatNoodleTimelineForPrompt(recentPosts, recentInteractions, {
+      priorityActorAccountId: input.personaAccount?.id,
+    }),
     ...(recalledPosts.length > 0
       ? [
           "",
           "# Randomly Recalled Older Noodle Activity",
           "These posts are more than 48 hours old and are optional long-term memories. Active accounts may naturally remember, revisit, like, repost, reply to, or build on them, but do not force a reference.",
-          formatTimelineForPrompt(recalledPosts, recalledInteractions, {
+          formatNoodleTimelineForPrompt(recalledPosts, recalledInteractions, {
             emptyMessage: "No older Noodle activity was recalled.",
             includeTimestamp: true,
+            priorityActorAccountId: input.personaAccount?.id,
           }),
         ]
       : []),
@@ -707,13 +715,13 @@ async function buildRefreshPrompt(input: {
   ].join("\n");
 
   const outputFormat = [
-    "# Output Format",
+    NOODLE_JSON_OUTPUT_HEADING,
     JSON.stringify(
       {
         posts: [
           {
             tempId: "local id used only inside this response",
-            authorEntityId: "exact entityId from Active Noodle Accounts",
+            authorEntityId: "exact non-persona entityId allowed to author generated activity",
             content: "post text",
             poll: { question: "optional poll question", options: ["first answer", "second answer"] },
             imagePrompt: "optional image prompt or null",
@@ -722,9 +730,10 @@ async function buildRefreshPrompt(input: {
         ],
         interactions: [
           {
-            actorEntityId: "exact entityId from Active Noodle Accounts",
+            actorEntityId: "exact non-persona entityId allowed to perform generated activity",
             targetTempId: "tempId from posts, if targeting a newly created post",
             targetPostId: "existing post id, if targeting an existing post",
+            parentInteractionId: "existing replyId when directly answering a comment, otherwise null",
             type: "like | repost | reply | vote",
             content: "required for reply, optional/null otherwise",
             pollOptionIndex: 1,
@@ -732,7 +741,7 @@ async function buildRefreshPrompt(input: {
         ],
         follows: [
           {
-            actorEntityId: "exact entityId from Active Noodle Accounts",
+            actorEntityId: "exact non-persona entityId allowed to perform generated activity",
             targetEntityId: "exact entityId from Active Noodle Accounts",
           },
         ],
@@ -796,7 +805,7 @@ async function generateMissingNoodleProfiles(input: {
     )
     .join("\n\n");
   const outputFormat = [
-    "# Output Format",
+    NOODLE_JSON_OUTPUT_HEADING,
     JSON.stringify(
       {
         profiles: [
@@ -844,7 +853,7 @@ async function generateMissingNoodleProfiles(input: {
     topP: 0.9,
     stream: false,
     debugMode: input.debugMode,
-    responseFormat: { type: "json_object" },
+    responseFormat: noodleResponseFormat(input.connection.model, "profiles"),
   });
   const generated = noodleGeneratedProfilesSchema.parse(parseGameJsonish(result.content ?? ""));
   const profileByEntityId = new Map(generated.profiles.map((profile) => [profile.entityId, profile]));
@@ -881,6 +890,8 @@ async function generateNoodlePostImage(input: {
   imageConnection: NonNullable<Awaited<ReturnType<ReturnType<typeof createConnectionsStorage>["getWithKey"]>>>;
   app: FastifyInstance;
   debugMode: boolean;
+  previewOnly?: boolean;
+  promptOverride?: { prompt: string; negativePrompt?: string };
 }) {
   const imageSettings = await loadImageGenerationUserSettings(input.app.db);
   const imageDefaults = resolveConnectionImageDefaults(input.imageConnection);
@@ -951,19 +962,38 @@ async function generateNoodlePostImage(input: {
     styleProfiles: imageSettings.styleProfiles,
     imageDefaults,
   });
+  const finalPrompt = input.promptOverride?.prompt.trim() || compiledPrompt.prompt;
+  const finalNegativePrompt = input.promptOverride
+    ? input.promptOverride.negativePrompt?.trim() || undefined
+    : compiledPrompt.negativePrompt || undefined;
   logDebugOverride(
     input.debugMode,
     "[debug/noodle/image] final image prompt for %s:\n%s",
     input.account.displayName,
-    compiledPrompt.prompt,
+    finalPrompt,
   );
-  if (compiledPrompt.negativePrompt) {
-    logDebugOverride(input.debugMode, "[debug/noodle/image] negative prompt:\n%s", compiledPrompt.negativePrompt);
+  if (finalNegativePrompt) {
+    logDebugOverride(input.debugMode, "[debug/noodle/image] negative prompt:\n%s", finalNegativePrompt);
+  }
+
+  if (input.previewOnly) {
+    return {
+      imageUrl: null,
+      metadata: {},
+      preview: {
+        kind: "illustration" as const,
+        title: `${input.account.displayName} Noodle image`,
+        prompt: finalPrompt,
+        negativePrompt: finalNegativePrompt,
+        width: imageSettings.illustration.width,
+        height: imageSettings.illustration.height,
+      },
+    };
   }
 
   const image = await generateImage(imageSource, imageBaseUrl, input.imageConnection.apiKey || "", imageServiceHint, {
-    prompt: compiledPrompt.prompt,
-    negativePrompt: compiledPrompt.negativePrompt || undefined,
+    prompt: finalPrompt,
+    negativePrompt: finalNegativePrompt,
     model: imageModel,
     width: imageSettings.illustration.width,
     height: imageSettings.illustration.height,
@@ -978,7 +1008,7 @@ async function generateNoodlePostImage(input: {
     const galleryImage = await input.characterGallery.create({
       characterId: input.account.entityId,
       filePath,
-      prompt: compiledPrompt.prompt,
+      prompt: finalPrompt,
       provider,
       model: imageModel || "unknown",
       width: imageSettings.illustration.width,
@@ -993,6 +1023,7 @@ async function generateNoodlePostImage(input: {
         imageStyleProfileId: compiledPrompt.profile.id,
         characterGalleryImageId: galleryImage?.id ?? null,
       },
+      preview: null,
     };
   }
 
@@ -1005,8 +1036,22 @@ async function generateNoodlePostImage(input: {
       imageModel: imageModel || "unknown",
       imageStyleProfileId: compiledPrompt.profile.id,
     },
+    preview: null,
   };
 }
+
+const noodleImagePromptConfirmationSchema = z.object({
+  prompts: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        prompt: z.string().trim().min(1).max(20_000),
+        negativePrompt: z.string().trim().max(20_000).optional(),
+      }),
+    )
+    .max(20),
+  debugMode: z.boolean().optional(),
+});
 
 export async function noodleRoutes(app: FastifyInstance) {
   const noodle = createNoodleStorage(app.db);
@@ -1211,6 +1256,65 @@ export async function noodleRoutes(app: FastifyInstance) {
     return interaction;
   });
 
+  app.patch("/posts/:postId/interactions/:interactionId", async (req, reply) => {
+    const { postId, interactionId } = req.params as { postId: string; interactionId: string };
+    const parsed = noodleInteractionUpdateSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    const interaction = await noodle.getInteractionById(interactionId);
+    if (!interaction || interaction.postId !== postId) {
+      return reply.code(404).send({ error: "Noodle comment not found" });
+    }
+    await ensurePersonaAccounts(noodle, characters);
+    const persona = await noodle.getAccountByEntity("persona", parsed.data.personaId);
+    if (!persona) return reply.code(404).send({ error: "Noodle persona not found" });
+    const interactionActor = await noodle.getAccountById(interaction.actorAccountId);
+    const actorKind = interactionActor?.kind ?? interaction.actorSnapshot?.kind;
+    if (
+      interaction.type !== "reply" ||
+      !canManageNoodleReply({
+        actorKind,
+        actorAccountId: interaction.actorAccountId,
+        personaAccountId: persona.id,
+      })
+    ) {
+      return reply.code(403).send({ error: "You can only edit comments from this persona or a character." });
+    }
+    const content = parsed.data.content === undefined ? interaction.content : parsed.data.content?.trim() || null;
+    const imageUrl = parsed.data.imageUrl === undefined ? interaction.imageUrl : parsed.data.imageUrl?.trim() || null;
+    if (!content && !imageUrl) return reply.code(400).send({ error: "Comments need text or an image." });
+    const updated = await noodle.updateInteraction(interactionId, { content, imageUrl });
+    if (!updated) return reply.code(404).send({ error: "Noodle comment not found" });
+    return updated;
+  });
+
+  app.delete("/posts/:postId/interactions/:interactionId", async (req, reply) => {
+    const { postId, interactionId } = req.params as { postId: string; interactionId: string };
+    const parsed = noodleInteractionOwnerSchema.safeParse(req.query);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    const interaction = await noodle.getInteractionById(interactionId);
+    if (!interaction || interaction.postId !== postId) {
+      return reply.code(404).send({ error: "Noodle comment not found" });
+    }
+    await ensurePersonaAccounts(noodle, characters);
+    const persona = await noodle.getAccountByEntity("persona", parsed.data.personaId);
+    if (!persona) return reply.code(404).send({ error: "Noodle persona not found" });
+    const interactionActor = await noodle.getAccountById(interaction.actorAccountId);
+    const actorKind = interactionActor?.kind ?? interaction.actorSnapshot?.kind;
+    if (
+      interaction.type !== "reply" ||
+      !canManageNoodleReply({
+        actorKind,
+        actorAccountId: interaction.actorAccountId,
+        personaAccountId: persona.id,
+      })
+    ) {
+      return reply.code(403).send({ error: "You can only delete comments from this persona or a character." });
+    }
+    const deleted = await noodle.deleteInteractionById(interactionId);
+    if (deleted.length === 0) return reply.code(404).send({ error: "Noodle comment not found" });
+    return deleted;
+  });
+
   app.delete("/posts/:id/interactions", async (req, reply) => {
     const { id } = req.params as { id: string };
     const parsed = noodleRemoveInteractionSchema.safeParse(req.query);
@@ -1227,6 +1331,53 @@ export async function noodleRoutes(app: FastifyInstance) {
     });
     if (!interaction) return reply.code(404).send({ error: "Noodle interaction not found" });
     return interaction;
+  });
+
+  app.post("/refresh/images", async (req, reply) => {
+    const parsed = noodleImagePromptConfirmationSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    const settings = await noodle.getSettings();
+    const imageConnection = settings.imageGenerationConnectionId
+      ? await connections.getWithKey(settings.imageGenerationConnectionId)
+      : await connections.getDefaultForImageGeneration();
+    if (!imageConnection) return reply.code(400).send({ error: "Select a Noodle image generation connection first." });
+
+    for (const promptOverride of parsed.data.prompts) {
+      const post = await noodle.getPostById(promptOverride.id);
+      if (!post || !post.imagePrompt || post.imageUrl) continue;
+      const account = await noodle.getAccountById(post.authorAccountId);
+      if (!account) continue;
+      try {
+        const generatedImage = await generateNoodlePostImage({
+          account,
+          referenceAccounts: [account],
+          postContent: post.content,
+          draftPrompt: post.imagePrompt,
+          settings,
+          characters,
+          characterGallery,
+          promptOverrides,
+          imageConnection,
+          app,
+          debugMode: parsed.data.debugMode === true,
+          promptOverride,
+        });
+        await noodle.updatePostMedia(post.id, {
+          imageUrl: generatedImage.imageUrl,
+          metadata: generatedImage.metadata,
+        });
+      } catch (error) {
+        logger.warn(error, "[noodle] Failed to generate reviewed image for %s", account.displayName);
+        await noodle.updatePostMedia(post.id, {
+          metadata: {
+            imageGenerationFailed: true,
+            imageGenerationError: getErrorMessage(error).slice(0, 500),
+          },
+        });
+      }
+    }
+
+    return bootstrapVisibleNoodle(noodle, characters);
   });
 
   app.post("/refresh", async (req, reply) => {
@@ -1330,7 +1481,7 @@ export async function noodleRoutes(app: FastifyInstance) {
         topP: 0.95,
         stream: false,
         debugMode,
-        responseFormat: { type: "json_object" },
+        responseFormat: noodleResponseFormat(conn.model, "timeline"),
       });
       const content = result.content ?? "";
       const generated = noodleGeneratedRefreshSchema.parse(parseGameJsonish(content));
@@ -1340,22 +1491,42 @@ export async function noodleRoutes(app: FastifyInstance) {
       );
       const freshPosts = await noodle.listPosts({ since: sinceHoursIso(48), limit: 200 });
       const allowedExistingPostIds = new Set([...freshPosts.map((post) => post.id), ...recalledPostIds]);
+      const existingInteractionById = new Map(
+        (await noodle.listInteractions([...allowedExistingPostIds])).map((interaction) => [
+          interaction.id,
+          interaction,
+        ]),
+      );
       const todayPosts = await noodle.listPosts({ since: dayStartIso(), limit: 200 });
       let remainingImagePrompts = settings.enableImagePrompts
         ? Math.max(0, settings.maxImagePromptsPerDay - todayPosts.filter((post) => !!post.imagePrompt).length)
         : 0;
       const tempIdToPostId = new Map<string, string>();
       const createdPostIds: string[] = [];
+      const imagePromptReviewItems: Array<{
+        id: string;
+        kind: "illustration";
+        title: string;
+        prompt: string;
+        negativePrompt?: string;
+        width: number;
+        height: number;
+      }> = [];
       const activeCharacterReferenceAccounts = activeAccounts.filter((account) => account.kind === "character");
 
       for (const generatedPost of generated.posts.slice(0, settings.maxGeneratedPostsPerRefresh)) {
         const account = entityToAccount.get(generatedPost.authorEntityId);
         if (!account) continue;
+        if (!canGenerateNoodleActivityForAccountKind(account.kind)) {
+          logger.warn("[noodle] Ignoring generated post attributed to persona %s", account.entityId);
+          continue;
+        }
         const imagePrompt =
           remainingImagePrompts > 0 && generatedPost.imagePrompt?.trim() ? generatedPost.imagePrompt.trim() : null;
         if (imagePrompt) remainingImagePrompts -= 1;
         let imageUrl: string | null = null;
         const mediaMetadata: Record<string, unknown> = {};
+        let imagePromptPreview: Omit<(typeof imagePromptReviewItems)[number], "id"> | null = null;
         if (imagePrompt && imageConnection) {
           try {
             const generatedImage = await generateNoodlePostImage({
@@ -1370,9 +1541,11 @@ export async function noodleRoutes(app: FastifyInstance) {
               imageConnection,
               app,
               debugMode,
+              previewOnly: parsed.data.reviewImagePromptsBeforeSend === true,
             });
             imageUrl = generatedImage.imageUrl;
             Object.assign(mediaMetadata, generatedImage.metadata);
+            imagePromptPreview = generatedImage.preview;
           } catch (err) {
             logger.warn(err, "[noodle] Failed to generate image for %s", account.displayName);
             mediaMetadata.imageGenerationFailed = true;
@@ -1407,6 +1580,7 @@ export async function noodleRoutes(app: FastifyInstance) {
         });
         if (!post) continue;
         createdPostIds.push(post.id);
+        if (imagePromptPreview) imagePromptReviewItems.push({ id: post.id, ...imagePromptPreview });
         if (generatedPost.tempId) tempIdToPostId.set(generatedPost.tempId, post.id);
         const digest = await noodle.createDigest({
           accountIds: [account.id, ...mentionedAccounts.map((mentionedAccount) => mentionedAccount.id)],
@@ -1427,6 +1601,14 @@ export async function noodleRoutes(app: FastifyInstance) {
         if (quotas[generatedInteraction.type] <= 0) continue;
         const actor = entityToAccount.get(generatedInteraction.actorEntityId);
         if (!actor) continue;
+        if (!canGenerateNoodleActivityForAccountKind(actor.kind)) {
+          logger.warn(
+            "[noodle] Ignoring generated %s interaction attributed to persona %s",
+            generatedInteraction.type,
+            actor.entityId,
+          );
+          continue;
+        }
         const targetPostId =
           generatedInteraction.targetPostId ?? tempIdToPostId.get(generatedInteraction.targetTempId ?? "");
         if (!targetPostId || (!allowedExistingPostIds.has(targetPostId) && !createdPostIds.includes(targetPostId))) {
@@ -1434,6 +1616,15 @@ export async function noodleRoutes(app: FastifyInstance) {
         }
         const targetPost = await noodle.getPostById(targetPostId);
         if (!targetPost) continue;
+        const parentInteraction = generatedInteraction.parentInteractionId
+          ? (existingInteractionById.get(generatedInteraction.parentInteractionId) ?? null)
+          : null;
+        if (
+          generatedInteraction.parentInteractionId &&
+          (!parentInteraction || parentInteraction.postId !== targetPostId || parentInteraction.type !== "reply")
+        ) {
+          continue;
+        }
         const poll = readNoodlePollFromMetadata(targetPost.metadata);
         const selectedPollOption =
           generatedInteraction.type === "vote" ? poll?.options[generatedInteraction.pollOptionIndex ?? -1] : undefined;
@@ -1442,6 +1633,7 @@ export async function noodleRoutes(app: FastifyInstance) {
           actorAccountId: actor.id,
           type: generatedInteraction.type,
           content: selectedPollOption?.id ?? generatedInteraction.content ?? null,
+          parentInteractionId: parentInteraction?.id ?? null,
         });
         if (!interaction) continue;
         quotas[generatedInteraction.type] -= 1;
@@ -1451,7 +1643,9 @@ export async function noodleRoutes(app: FastifyInstance) {
               ? `${poll.question}: ${selectedPollOption.label}`
               : interaction.content || targetPost.content;
           await noodle.createDigest({
-            accountIds: Array.from(new Set([actor.id, targetPost.authorAccountId])).filter(Boolean),
+            accountIds: Array.from(
+              new Set([actor.id, targetPost.authorAccountId, parentInteraction?.actorAccountId]),
+            ).filter((accountId): accountId is string => Boolean(accountId)),
             content: `${actor.displayName} ${interactionDigestVerb(
               generatedInteraction.type,
             )} a Noodle post: ${interactionSummary}`,
@@ -1466,16 +1660,25 @@ export async function noodleRoutes(app: FastifyInstance) {
       for (const generatedFollow of generated.follows.slice(0, maxGeneratedFollows)) {
         const actor = entityToAccount.get(generatedFollow.actorEntityId);
         const target = entityToAccount.get(generatedFollow.targetEntityId);
-        if (!actor || !target || actor.id === target.id || actor.kind === "persona") continue;
+        if (!actor || !target || actor.id === target.id) continue;
+        if (!canGenerateNoodleActivityForAccountKind(actor.kind)) {
+          logger.warn("[noodle] Ignoring generated follow attributed to persona %s", actor.entityId);
+          continue;
+        }
         const followKey = `${actor.id}:${target.id}`;
         if (seenGeneratedFollows.has(followKey)) continue;
         seenGeneratedFollows.add(followKey);
         const actorSettings = mutableAccountSettings.get(actor.id) ?? actor.settings;
         const currentFollowingAccountIds = parseStringArray(actorSettings.followingAccountIds);
         if (currentFollowingAccountIds.includes(target.id)) continue;
+        const followedAtByAccount = parseRecord(actorSettings[NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY]);
         const nextSettings = {
           ...actorSettings,
           followingAccountIds: [...currentFollowingAccountIds, target.id],
+          [NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY]: {
+            ...followedAtByAccount,
+            [target.id]: new Date().toISOString(),
+          },
         };
         mutableAccountSettings.set(actor.id, nextSettings);
         await noodle.updateAccount(actor.id, { settings: nextSettings });
@@ -1495,7 +1698,10 @@ export async function noodleRoutes(app: FastifyInstance) {
       }
 
       await noodle.finishRefreshRun(runId, { status: "completed", result: content });
-      return bootstrapVisibleNoodle(noodle, characters);
+      return {
+        bootstrap: await bootstrapVisibleNoodle(noodle, characters),
+        imagePromptReviewItems,
+      };
     } catch (error) {
       logger.error(error, "[noodle] Timeline refresh failed");
       if (run) await noodle.finishRefreshRun(run.id, { status: "failed", error: getErrorMessage(error) });
