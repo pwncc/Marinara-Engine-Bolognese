@@ -437,7 +437,14 @@ import {
 } from "./generate/agent-write-approval.js";
 
 const PROFESSOR_MARI_INTERNAL_CHAT_MARKER = "professor-mari";
-type ConversationContextMacroKey = "context" | "commands" | "reactRules" | "replyRules" | "memories" | "lorebook";
+type ConversationContextMacroKey =
+  | "context"
+  | "commands"
+  | "reactRules"
+  | "replyRules"
+  | "memories"
+  | "lorebook"
+  | "aboutMe";
 type ConversationContextMacroSlots = Record<ConversationContextMacroKey, boolean>;
 
 const EMPTY_CONVERSATION_CONTEXT_MACRO_SLOTS: ConversationContextMacroSlots = {
@@ -447,6 +454,7 @@ const EMPTY_CONVERSATION_CONTEXT_MACRO_SLOTS: ConversationContextMacroSlots = {
   replyRules: false,
   memories: false,
   lorebook: false,
+  aboutMe: false,
 };
 
 const CONVERSATION_CONTEXT_MACRO_ALIASES: Record<ConversationContextMacroKey, string[]> = {
@@ -460,6 +468,11 @@ const CONVERSATION_CONTEXT_MACRO_ALIASES: Record<ConversationContextMacroKey, st
   replyRules: ["replyRules"],
   memories: ["memories", "memoryRecall"],
   lorebook: ["lorebook", "lore"],
+  // Detection-only slot: when the preset hand-places participant bios via the
+  // {{char_about}} / {{persona_about}} field macros, suppress the automatic
+  // about-me block so it isn't duplicated (#3436). No placement alias — these
+  // field macros are rendered by the shared macro engine's flat pass.
+  aboutMe: ["char_about", "persona_about"],
 };
 
 function conversationContextMacroPattern(key: ConversationContextMacroKey): RegExp {
@@ -1972,7 +1985,10 @@ export async function generateRoutes(app: FastifyInstance) {
           if (convoProfileBlocks.behaviorConstantAfter) {
             conversationSystemPrompt += "\n\n" + convoProfileBlocks.behaviorConstantAfter;
           }
-          if (convoProfileBlocks.aboutMeBlock) {
+          // Skip the automatic about-me block when the preset already places the
+          // bios itself via {{char_about}}/{{persona_about}}, mirroring how the
+          // other relocation macros suppress their auto insertion (#3436).
+          if (convoProfileBlocks.aboutMeBlock && (!conversationContextMacroSlots.aboutMe || isGroup)) {
             conversationSystemPrompt += "\n\n" + convoProfileBlocks.aboutMeBlock;
           }
 
