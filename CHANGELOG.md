@@ -6,6 +6,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Added
 
+- Added GLM-5.2 to custom OpenAI-compatible connection model choices, including its 1M context and 128K output limits.
 - Added prefix-matched `@handle` suggestions to Noodle post and reply composers, with click, touch, and keyboard insertion.
 - Added OpenAI GPT-5.6 Sol/Terra/Luna model support, including the `gpt-5.6` Sol alias, a `gpt-5.6-sol-pro` pro-mode alias, Responses API routing, GPT-5.6 `max` reasoning effort mapping, and reuse of the existing Exclude Past Reasoning toggle for GPT-5.6 reasoning context.
 - Added the first Noodle fake-social-media surface: a top-bar Noodle tab, persona-linked user profiles, character invites, a scrollable fake timeline with posts/replies/likes/reposts, configurable refresh generation, stored image-prompt slots, and optional recent-social activity carryover into Conversation, Roleplay/VN, and Game prompts using the chat preset wrapper.
@@ -32,6 +33,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Fixed
 
+- Fixed GPT-5.6 Sol rejecting Noodle timeline/profile generation by supplying strict JSON schemas with `additionalProperties: false` at every object level and placing an explicit JSON instruction in Responses API input messages.
+- Fixed native Z.AI GLM-5.2 connections using legacy thinking parameters; Marinara now sends the documented `thinking.type` and compatible `reasoning_effort` values while preserving JSON mode on Z.AI endpoints.
 - Expanded every standard emoji picker from a hand-curated subset to the complete Unicode Emoji 17.0 base catalog, including science emoji such as 🧪 plus the previously missing travel, activity, object, symbol, animal, and flag groups.
 - Fixed Quick Replies' **Post only** action saving recognized slash commands as ordinary messages; known commands now execute normally while unknown slash-prefixed text can still be posted.
 - Moved **Quick replies** from Advanced settings to **General -> Input & Editing**, and clarified that image prompt review is a global generation preference rather than a Game-only option.

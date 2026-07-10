@@ -56,6 +56,7 @@ import {
   noodleRefreshSchedulerStatus,
   rescheduleNoodleRefreshTime,
 } from "../services/noodle/noodle-refresh-schedule.js";
+import { NOODLE_JSON_OUTPUT_HEADING, noodleResponseFormat } from "../services/noodle/noodle-response-format.js";
 import {
   canGenerateNoodleActivityForAccountKind,
   formatNoodleTimelineForPrompt,
@@ -657,8 +658,8 @@ async function buildRefreshPrompt(input: {
     "- To respond directly to an existing comment, create a reply interaction for its post and set parentInteractionId to that comment's exact replyId.",
     NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION,
     ...NOODLE_CREATIVE_FORMAT_INSTRUCTIONS,
-    "- For each interaction, set either targetTempId or targetPostId. The unused target field may be omitted or null.",
-    "- pollOptionIndex is required only for votes and must be a zero-based integer. For other interactions, omit it or use null.",
+    "- For each interaction, set either targetTempId or targetPostId and set the unused target field to null.",
+    "- pollOptionIndex must be a zero-based integer for votes and null for every other interaction.",
     "- An exact @handle in post or reply text tags that active account. Preserve the @handle exactly when mentioning someone.",
     ...noodleTimelineFeatureInstructions(input.settings),
     "- Return JSON only. No prose outside the JSON object.",
@@ -714,7 +715,7 @@ async function buildRefreshPrompt(input: {
   ].join("\n");
 
   const outputFormat = [
-    "# Output Format",
+    NOODLE_JSON_OUTPUT_HEADING,
     JSON.stringify(
       {
         posts: [
@@ -804,7 +805,7 @@ async function generateMissingNoodleProfiles(input: {
     )
     .join("\n\n");
   const outputFormat = [
-    "# Output Format",
+    NOODLE_JSON_OUTPUT_HEADING,
     JSON.stringify(
       {
         profiles: [
@@ -852,7 +853,7 @@ async function generateMissingNoodleProfiles(input: {
     topP: 0.9,
     stream: false,
     debugMode: input.debugMode,
-    responseFormat: { type: "json_object" },
+    responseFormat: noodleResponseFormat(input.connection.model, "profiles"),
   });
   const generated = noodleGeneratedProfilesSchema.parse(parseGameJsonish(result.content ?? ""));
   const profileByEntityId = new Map(generated.profiles.map((profile) => [profile.entityId, profile]));
@@ -1480,7 +1481,7 @@ export async function noodleRoutes(app: FastifyInstance) {
         topP: 0.95,
         stream: false,
         debugMode,
-        responseFormat: { type: "json_object" },
+        responseFormat: noodleResponseFormat(conn.model, "timeline"),
       });
       const content = result.content ?? "";
       const generated = noodleGeneratedRefreshSchema.parse(parseGameJsonish(content));
