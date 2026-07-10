@@ -1604,7 +1604,7 @@ export function ChatSettingsDrawer({
   const gameImageIncludeCharacterAppearance = metadata.gameImageIncludeCharacterAppearance !== false;
   const gameImageAutoGenerationEnabled = metadata.gameImageAutoGenerationEnabled !== false;
   const gameImageDynamicPromptEnabled = metadata.gameImageDynamicPromptEnabled === true;
-  const gameStoryboardAutoIllustrationsEnabled = metadata.gameStoryboardAutoIllustrationsEnabled !== false;
+  const gameStoryboardAutoIllustrationsEnabled = metadata.gameStoryboardAutoIllustrationsEnabled === true;
   const gameStoryboardAutoAnimationsEnabled = metadata.gameStoryboardAutoGenerationEnabled === true;
   const gameStoryboardUseDirectScenePrompt = metadata.gameStoryboardUseDirectScenePrompt === true;
   const gameStoryboardUseNovelAiCharacterPrompts = metadata.gameStoryboardUseNovelAiCharacterPrompts !== false;
@@ -3042,6 +3042,7 @@ export function ChatSettingsDrawer({
         activeAgentIds: Array.from(new Set([...readLatestActiveAgentIds(), agent.id])),
         ...buildAgentAddMetadataPatch(agent.id, setup, metadata, {
           allowSecretPlot: supportsNarrativeDirectorSecretPlot,
+          defaultPromptTemplateId: resolveDefaultAgentPromptTemplateId(nextSettings),
         }),
       });
       toast.success(`Added ${agent.name}! You can access its settings in Agents section in Chat Settings!`);
@@ -7084,7 +7085,10 @@ export function ChatSettingsDrawer({
                       >
                         <AgentPromptTemplateSelect
                           options={getPromptOptionsForAgent("echo-chamber")}
-                          selectedId={agentPromptTemplateSelections["echo-chamber"] ?? DEFAULT_AGENT_PROMPT_TEMPLATE_ID}
+                          selectedId={
+                            agentPromptTemplateSelections["echo-chamber"] ??
+                            getDefaultPromptTemplateIdForAgent("echo-chamber")
+                          }
                           onChange={(promptTemplateId) =>
                             updateAgentPromptTemplateSelection("echo-chamber", promptTemplateId)
                           }
@@ -7739,7 +7743,7 @@ export function ChatSettingsDrawer({
                         <p className="mt-0.5 text-[0.5625rem] leading-snug text-[var(--muted-foreground)]">
                           {gameStoryboardAnimationDurationConfigured
                             ? "Used for each generated storyboard animation clip."
-                            : "Uses the 6-second storyboard default until set."}
+                            : `Uses the ${GAME_STORYBOARD_ANIMATION_DURATION_SECONDS_DEFAULT}-second storyboard default until set.`}
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">

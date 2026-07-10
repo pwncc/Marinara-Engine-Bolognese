@@ -377,13 +377,14 @@ export function buildAgentAddMetadataPatch(
   agentId: string,
   setup: AgentAddSetupState,
   metadata: Record<string, unknown>,
-  options?: { allowSecretPlot?: boolean },
+  options?: { allowSecretPlot?: boolean; defaultPromptTemplateId?: string },
 ): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
 
   const existingPromptSelections = normalizeAgentPromptTemplateSelectionMap(metadata.agentPromptTemplateIds);
   const nextPromptSelections = { ...existingPromptSelections };
-  const defaultPromptTemplateId = resolveDefaultAgentPromptTemplateId(getDefaultBuiltInAgentSettings(agentId));
+  const defaultPromptTemplateId =
+    options?.defaultPromptTemplateId ?? resolveDefaultAgentPromptTemplateId(getDefaultBuiltInAgentSettings(agentId));
   if (setup.promptTemplateId && setup.promptTemplateId !== defaultPromptTemplateId) {
     nextPromptSelections[agentId] = setup.promptTemplateId;
   } else {
