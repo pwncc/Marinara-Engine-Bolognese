@@ -89,6 +89,9 @@ export { chessEngine } from "./features/turn-games/chess/engine.js";
 export * from "./features/turn-games/poker/types.js";
 export * from "./features/turn-games/poker/tools.js";
 export { pokerEngine, buildPots } from "./features/turn-games/poker/engine.js";
+export * from "./features/turn-games/eightball/types.js";
+export * from "./features/turn-games/eightball/tools.js";
+export { eightBallEngine } from "./features/turn-games/eightball/engine.js";
 
 // Utils
 export * from "./utils/macro-engine.js";
@@ -116,3 +119,4 @@ export * from "./utils/sprite-labels.js";
 export * from "./utils/conversation-presence.js";
 export * from "./utils/noodle-mentions.js";
 export * from "./utils/noodle-polls.js";
+export * from "./utils/noodle-interactions.js";
