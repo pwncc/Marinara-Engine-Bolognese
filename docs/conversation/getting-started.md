@@ -52,7 +52,7 @@ For calls, see [Conversation Audio and Video Calls](calls.md).
 
 ### The Commands grid
 
-When **Commands** is on, a grid of 14 command families appears. Each one is a hidden action a character can take on its own. Every family starts on. Turning a toggle off only removes that one family. Commands are model-driven actions, not things you type.
+When **Commands** is on, a grid of 15 command families appears. Each one is a hidden action a character can take on its own. Every family starts on. Turning a toggle off only removes that one family. Commands are model-driven actions, not things you type.
 
 The 14 command families are:
 
@@ -70,6 +70,7 @@ The 14 command families are:
 - **UNO**: let characters start a game of UNO at the table when you agree to play.
 - **Chess**: let characters accept a one-on-one chess challenge at the table.
 - **Poker**: let characters sit down for a game of Texas Hold'em poker at the table.
+- **8-Ball Pool**: let characters rack up a game of 8-ball pool at the table.
 
 A single master **Commands** toggle gates all of them. When the master toggle is off, no command family works, even if it looks enabled.
 
@@ -108,7 +109,7 @@ Full setup, including style, resolution, and the manual request button, lives in
 
 ## Table games
 
-Conversation Mode has built-in table games you can play against a character: **UNO**, **Chess**, and **Poker**. The app deals the board, enforces the rules, and has each character narrate its own moves in character. Table games only run in Conversation chats.
+Conversation Mode has built-in table games you can play against a character: **UNO**, **Chess**, **Poker**, and **8-Ball Pool**. The app deals the board, enforces the rules, and has each character narrate its own moves in character. Table games only run in Conversation chats.
 
 You can start a game three ways:
 

@@ -122,6 +122,8 @@ The **Release Channel** dropdown picks which builds you track. It has two choice
 
 Choosing **Staging/UAT** shows a warning: "Staging builds are pre-release tester builds. Back up your app data before applying them."
 
+Switching channels is treated as a deliberate choice. When you pick a different channel from a browser on the machine that runs the server, the update button changes to **Switch to** followed by the channel name, and it works even when ordinary in-app updates are turned off. It shows **Switching...** while it runs. Normal same-channel updates still need the setup described under Apply Update below, and remote devices always do.
+
 ### Check for Updates
 
 Click **Check for Updates**. The button shows **Checking...** while it works.

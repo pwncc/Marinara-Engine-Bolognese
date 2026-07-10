@@ -179,7 +179,7 @@ Related privileged settings:
 | --- | --- | --- |
 | `ADMIN_SECRET` | empty | Shared secret required for privileged actions from remote devices. |
 | `MARINARA_REQUIRE_ADMIN_SECRET_ON_LOOPBACK` | `false` | When `true`, requires the secret even on the local machine. |
-| `UPDATES_APPLY_ENABLED` | `false` | Allows the browser to apply updates. Git-based installs only. |
+| `UPDATES_APPLY_ENABLED` | `false` | Allows the browser to apply ordinary same-channel updates. A deliberate release-channel switch from a browser on the server machine works without this flag. Git-based installs only. |
 | `UPDATES_ALLOW_REMOTE_APPLY` | `false` | Allows a remote device to apply updates, with a valid secret. |
 | `HAPTICS_ALLOW_REMOTE` | `false` | Allows haptic device actions from a remote device, with a valid secret. |
 | `CUSTOM_TOOL_SCRIPT_ENABLED` | `false` | Enables custom script tools. Keep off for untrusted or imported tools. |

@@ -112,9 +112,10 @@ These commands only work in a **Conversation** chat.
 | `/uno` | Starts a game of UNO with the characters in the chat. |
 | `/chess` | Starts a one-on-one chess game with a character. |
 | `/poker` | Starts a game of Texas Hold'em poker with the characters. |
+| `/8ball` | Starts a one-on-one game of 8-ball pool with a character. `/pool` does the same. |
 | `/status` | Sets or clears a character's presence status. |
 
-The `/uno`, `/chess`, and `/poker` commands open the setup screen for that game. You can play one game at a time in a chat. For the rules and options, see [Table Games](../conversation/table-games.md).
+The `/uno`, `/chess`, `/poker`, and `/8ball` commands open the setup screen for that game. You can play one game at a time in a chat. For the rules and options, see [Table Games](../conversation/table-games.md).
 
 The `/status` command overrides a character's presence. The status can be `online`, `idle`, `dnd` (do not disturb), or `offline`. Use `clear` to remove an override. This sets the character to idle:
 

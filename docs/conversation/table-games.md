@@ -1,6 +1,6 @@
-# Table Games: UNO, Chess, and Poker
+# Table Games: UNO, Chess, Poker, and 8-Ball Pool
 
-This guide covers the three built-in table games you can play against a chat's characters in Conversation Mode: **UNO**, **Chess**, and **Poker**. It explains how to start a game and what each setup option means. It also shows how to play each board and how to let characters start games on their own.
+This guide covers the four built-in table games you can play against a chat's characters in Conversation Mode: **UNO**, **Chess**, **Poker**, and **8-Ball Pool**. It explains how to start a game and what each setup option means. It also shows how to play each board and how to let characters start games on their own.
 
 ## What table games are
 
@@ -24,6 +24,7 @@ A **slash command** is a short instruction you type in the message box that star
 - **/uno** starts a game of UNO with the characters in this chat.
 - **/chess** starts a one-on-one chess game with a character in this chat.
 - **/poker** starts a game of Texas Hold'em poker with the characters in this chat.
+- **/8ball** (or **/pool**) starts a one-on-one game of 8-ball pool with a character in this chat.
 
 ### Say it in chat
 
@@ -120,6 +121,23 @@ On your turn, an action bar gives you **Fold**, **Check**, **Call**, and a highl
 
 At the end of each hand, a **Showdown** panel reveals the hands and awards the pot. A **Next hand** button deals the next round. When the whole session ends, a banner names the session winner and lists every seat's final chip count.
 
+## 8-Ball Pool
+
+### Set up 8-Ball Pool
+
+The setup window is titled **Start 8-Ball Pool**. Pool is one-on-one, so you play against a single character.
+
+- **Opponent**: pick the character you play against.
+- **Announcer**: optional. The default is **Silent (no announcer)**. Pick a character to call the shots in their own voice.
+- **Match length**: **Race to 1**, **Race to 3**, or **Race to 5**. This is how many racks you need to win the match. A rack is one full game of pool.
+- **Who breaks first**: **You**, **Random**, or **Them**. A note reads "Later racks alternate the break."
+
+Click **Start game** to begin. The button reads "Racking up..." while the table is set.
+
+### Play the 8-Ball Pool board
+
+The board shows a top-down pool table with the real position of every ball. On your turn, the turn line reads "Your turn". On the character's turn it shows their name with "is thinking...". You shoot by picking one of the suggested shots, and the balls then roll on the table using a physics simulation. A line under the table describes the last shot, or reads "Rack over." between racks.
+
 ## Ending a game
 
 Every board has a button to end the game early, marked with an X icon.
@@ -127,6 +145,7 @@ Every board has a button to end the game early, marked with an X icon.
 - On the UNO board it is labeled **End game** and asks "End this game?" first.
 - On the Chess board it is labeled **Resign** and asks "Resign and end this game?" first.
 - On the Poker board it is labeled **End game** while a hand is in play and asks "End this poker game?" first. Once the whole session has finished, it changes to **Close** and needs no confirmation.
+- On the 8-Ball Pool board it is labeled **End game** and asks "End this pool game?" first. Once the match has finished, it changes to **Close** and needs no confirmation.
 
 Ending a game deletes its state. No winner is recorded when you end a game early this way.
 
@@ -136,13 +155,14 @@ You control whether a character can offer or accept a game in **Chat Settings**,
 
 The master **Commands** toggle is on by default. It controls all character-run commands, including the table games, selfies, memories, and calls. Turning it off stops characters from starting anything on their own.
 
-Under Commands, each game has its own toggle, and all three are on by default:
+Under Commands, each game has its own toggle, and all four are on by default:
 
 - **UNO**: "Let characters start a game of UNO at the table when you agree to play."
 - **Chess**: "Let characters accept a one-on-one chess challenge at the table."
 - **Poker**: "Let characters sit down for a game of Texas Hold'em poker at the table."
+- **8-Ball Pool**: "Let characters rack up a game of 8-ball pool at the table."
 
-These toggles only control the character-run path. The **/uno**, **/chess**, and **/poker** commands and the "let's play" chat phrases always work, no matter how the toggles are set.
+These toggles only control the character-run path. The **/uno**, **/chess**, **/poker**, and **/8ball** commands and the "let's play" chat phrases always work, no matter how the toggles are set.
 
 ## Related guides
 
