@@ -59,6 +59,7 @@ import {
   formatNoodleTimelineForPrompt,
   noodlePastMemoryCutoff,
   noodlePastMemorySampleSize,
+  noodlePersonaCommentPostIds,
   NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION,
   noodleTimelineFeatureInstructions,
   sampleNoodlePastMemories,
@@ -593,9 +594,26 @@ async function buildRefreshPrompt(input: {
   const selectedCharacterIds = activeCharacters.map((account) => account.entityId);
   const characterRows = await Promise.all(selectedCharacterIds.map((id) => input.characters.getById(id)));
   const personaRow = input.personaAccount ? await input.characters.getPersona(input.personaAccount.entityId) : null;
-  const recentPosts = await input.noodle.listPosts({ since: sinceHoursIso(48), limit: 100 });
+  const recentCutoff = sinceHoursIso(48);
+  const [recentCreatedPosts, recentPersonaComments] = await Promise.all([
+    input.noodle.listPosts({ since: recentCutoff, limit: 100 }),
+    input.personaAccount
+      ? input.noodle.listRepliesByActorSince(input.personaAccount.id, recentCutoff, 100)
+      : Promise.resolve([]),
+  ]);
+  const recentlyCommentedPostIds = noodlePersonaCommentPostIds(recentPersonaComments, input.personaAccount?.id);
+  const recentlyCommentedPosts = (
+    await Promise.all(recentlyCommentedPostIds.map((postId) => input.noodle.getPostById(postId)))
+  ).filter((post): post is NoodlePost => Boolean(post));
+  const recentPostById = new Map([...recentCreatedPosts, ...recentlyCommentedPosts].map((post) => [post.id, post]));
+  const recentPosts = [...recentPostById.values()].sort(
+    (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+  );
   const pastMemorySampleSize = noodlePastMemorySampleSize();
-  const olderPosts = pastMemorySampleSize > 0 ? await input.noodle.listPostsBefore(noodlePastMemoryCutoff()) : [];
+  const olderPosts =
+    pastMemorySampleSize > 0
+      ? (await input.noodle.listPostsBefore(noodlePastMemoryCutoff())).filter((post) => !recentPostById.has(post.id))
+      : [];
   const recalledPosts = sampleNoodlePastMemories(olderPosts, pastMemorySampleSize);
   const [chatContext, recentInteractions, recalledInteractions] = await Promise.all([
     buildOptedInChatContext(input.chats, input.characters, selectedCharacterIds),

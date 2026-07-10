@@ -44,6 +44,20 @@ export function canGenerateNoodleActivityForAccountKind(kind: NoodleAccountKind)
   return kind === "character" || kind === "random_user";
 }
 
+export function noodlePersonaCommentPostIds(
+  interactions: Array<Pick<NoodleInteraction, "postId" | "actorAccountId" | "type">>,
+  personaAccountId?: string,
+): string[] {
+  if (!personaAccountId) return [];
+  return Array.from(
+    new Set(
+      interactions
+        .filter((interaction) => interaction.type === "reply" && interaction.actorAccountId === personaAccountId)
+        .map((interaction) => interaction.postId),
+    ),
+  );
+}
+
 function promptRepliesForPost(
   interactions: NoodlePromptInteraction[],
   postId: string,

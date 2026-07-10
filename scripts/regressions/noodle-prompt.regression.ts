@@ -4,6 +4,7 @@ import {
   formatNoodleTimelineForPrompt,
   noodlePastMemoryCutoff,
   noodlePastMemorySampleSize,
+  noodlePersonaCommentPostIds,
   NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION,
   noodleTimelineFeatureInstructions,
   sampleNoodlePastMemories,
@@ -62,6 +63,17 @@ const threadedTimeline = formatNoodleTimelineForPrompt(
 assert.match(threadedTimeline, /replyId=persona-comment-1/u);
 assert.match(threadedTimeline, /@smarinara_spaghetti/u);
 assert.match(threadedTimeline, /Mari asks a follow-up question/u);
+assert.deepEqual(
+  noodlePersonaCommentPostIds(
+    [
+      { postId: "old-post-with-new-comment", actorAccountId: "persona-account", type: "reply" },
+      { postId: "other-post", actorAccountId: "character-account", type: "reply" },
+      { postId: "old-post-with-new-comment", actorAccountId: "persona-account", type: "reply" },
+    ],
+    "persona-account",
+  ),
+  ["old-post-with-new-comment"],
+);
 
 const activeAccountsInstruction = "- Use only the active accounts listed by entityId. Do not invent accounts.";
 const imageGenerationInstruction =

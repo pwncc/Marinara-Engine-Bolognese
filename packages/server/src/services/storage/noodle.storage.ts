@@ -504,6 +504,22 @@ export function createNoodleStorage(db: DB) {
       return rows.map(mapInteraction);
     },
 
+    async listRepliesByActorSince(actorAccountId: string, since: string, limit = 100): Promise<NoodleInteraction[]> {
+      const rows = await db
+        .select()
+        .from(noodleInteractions)
+        .where(
+          and(
+            eq(noodleInteractions.actorAccountId, actorAccountId),
+            eq(noodleInteractions.type, "reply"),
+            gt(noodleInteractions.createdAt, since),
+          ),
+        )
+        .orderBy(desc(noodleInteractions.createdAt))
+        .limit(Math.max(1, Math.min(200, Math.floor(limit))));
+      return rows.map(mapInteraction);
+    },
+
     async getInteractionById(id: string): Promise<NoodleInteraction | null> {
       const rows = await db.select().from(noodleInteractions).where(eq(noodleInteractions.id, id));
       return rows[0] ? mapInteraction(rows[0]) : null;
