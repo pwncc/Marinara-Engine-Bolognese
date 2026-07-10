@@ -14,6 +14,7 @@
 // - [call] or [call: reason="..."] (ring the user for an audio call; Conversation mode)
 // - [uno] (start a game of UNO at the table; Conversation mode)
 // - [chess] (start a one-on-one chess game against the user; Conversation mode)
+// - [poker] (start a game of Texas Hold'em poker at the table; Conversation mode)
 // - [spotify: title="Song title", artist="Artist"] (play a song on the user's active Spotify player)
 // - [youtube: query="Song title Artist"] (play a song on the user's active YouTube player)
 // - [react: emoji="😂"] or [react: emoji=":custom_name:"] (react to the user's latest message; Conversation mode)
@@ -93,6 +94,11 @@ export interface UnoCommand {
 export interface ChessCommand {
   /** Start a one-on-one chess game against the user. Param-less; the system sets up + runs the board. */
   type: "chess";
+}
+
+export interface PokerCommand {
+  /** Start a game of Texas Hold'em poker at the table. Param-less; the system seats + runs the game. */
+  type: "poker";
 }
 
 export interface InfluenceCommand {
@@ -359,6 +365,7 @@ export type CharacterCommand =
   | CallCommand
   | UnoCommand
   | ChessCommand
+  | PokerCommand
   | InfluenceCommand
   | NoteCommand
   | DirectMessageCommand
@@ -387,6 +394,8 @@ const CALL_RE = new RegExp(`\\[call(?::\\s*(${QUOTED_PARAM_BLOCK}))?\\]`, "gi");
 const UNO_RE = /\[uno(?::[^\]\r\n]*)?\]/gi;
 // Param-less chess trigger. Same tolerant shape as UNO_RE.
 const CHESS_RE = /\[chess(?::[^\]\r\n]*)?\]/gi;
+// Param-less poker trigger. Same tolerant shape as UNO_RE.
+const POKER_RE = /\[poker(?::[^\]\r\n]*)?\]/gi;
 const HAPTIC_RE = new RegExp(`\\[haptic:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
 const SPOTIFY_RE = new RegExp(`\\[spotify:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
 const YOUTUBE_RE = new RegExp(`\\[youtube:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
@@ -1123,6 +1132,12 @@ export function parseCharacterCommands(content: string): {
     break;
   }
 
+  // Parse poker command — start a game of Texas Hold'em. Param-less; only one per message.
+  for (const _pokerMatch of content.matchAll(POKER_RE)) {
+    commands.push({ type: "poker" });
+    break;
+  }
+
   // Parse influence commands (<influence>text</influence>)
   for (const match of content.matchAll(INFLUENCE_RE)) {
     const text = stripConversationPromptTimestamps(match[1]!.trim());
@@ -1337,6 +1352,7 @@ export function parseCharacterCommands(content: string): {
     .replace(CALL_RE, "")
     .replace(UNO_RE, "")
     .replace(CHESS_RE, "")
+    .replace(POKER_RE, "")
     .replace(HAPTIC_RE, "")
     .replace(SPOTIFY_RE, "")
     .replace(YOUTUBE_RE, "")

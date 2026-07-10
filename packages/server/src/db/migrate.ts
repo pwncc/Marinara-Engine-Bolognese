@@ -153,6 +153,62 @@ const CREATE_TABLES: string[] = [
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS noodle_accounts (
+    id TEXT PRIMARY KEY NOT NULL,
+    kind TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    handle TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    bio TEXT NOT NULL DEFAULT '',
+    avatar_url TEXT,
+    invited TEXT NOT NULL DEFAULT 'false',
+    settings TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS noodle_posts (
+    id TEXT PRIMARY KEY NOT NULL,
+    author_account_id TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    image_url TEXT,
+    image_prompt TEXT,
+    parent_post_id TEXT,
+    quote_post_id TEXT,
+    source TEXT NOT NULL DEFAULT 'manual',
+    metadata TEXT NOT NULL DEFAULT '{}',
+    author_snapshot TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS noodle_interactions (
+    id TEXT PRIMARY KEY NOT NULL,
+    post_id TEXT NOT NULL,
+    parent_interaction_id TEXT,
+    actor_account_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    content TEXT,
+    image_url TEXT,
+    actor_snapshot TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS noodle_activity_digests (
+    id TEXT PRIMARY KEY NOT NULL,
+    account_ids TEXT NOT NULL DEFAULT '[]',
+    content TEXT NOT NULL DEFAULT '',
+    source_run_id TEXT,
+    source_post_id TEXT,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS noodle_refresh_runs (
+    id TEXT PRIMARY KEY NOT NULL,
+    status TEXT NOT NULL,
+    active_account_ids TEXT NOT NULL DEFAULT '[]',
+    prompt TEXT NOT NULL DEFAULT '',
+    result TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS lorebooks (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
@@ -1140,6 +1196,16 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     column: "anchor_kind",
     definition: "TEXT NOT NULL DEFAULT ''",
   },
+  {
+    table: "noodle_interactions",
+    column: "parent_interaction_id",
+    definition: "TEXT",
+  },
+  {
+    table: "noodle_interactions",
+    column: "image_url",
+    definition: "TEXT",
+  },
 ];
 
 /**
@@ -1318,6 +1384,28 @@ export async function runMigrations(db: DB) {
     sql.raw(
       `CREATE INDEX IF NOT EXISTS idx_persona_card_versions ON persona_card_versions(persona_id, created_at DESC)`,
     ),
+  );
+  await db.run(sql.raw(`CREATE INDEX IF NOT EXISTS idx_noodle_accounts_entity ON noodle_accounts(kind, entity_id)`));
+  await db.run(sql.raw(`CREATE INDEX IF NOT EXISTS idx_noodle_posts_created ON noodle_posts(created_at DESC)`));
+  await db.run(
+    sql.raw(`CREATE INDEX IF NOT EXISTS idx_noodle_posts_author ON noodle_posts(author_account_id, created_at DESC)`),
+  );
+  await db.run(
+    sql.raw(`CREATE INDEX IF NOT EXISTS idx_noodle_interactions_post ON noodle_interactions(post_id, created_at ASC)`),
+  );
+  await db.run(sql.raw(`DROP INDEX IF EXISTS uniq_noodle_toggle_interactions`));
+  await db.run(
+    sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uniq_noodle_root_toggle_interactions ON noodle_interactions(post_id, actor_account_id, type) WHERE type IN ('like', 'repost') AND parent_interaction_id IS NULL`,
+    ),
+  );
+  await db.run(
+    sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uniq_noodle_reply_like ON noodle_interactions(post_id, actor_account_id, type, parent_interaction_id) WHERE type = 'like' AND parent_interaction_id IS NOT NULL`,
+    ),
+  );
+  await db.run(
+    sql.raw(`CREATE INDEX IF NOT EXISTS idx_noodle_digests_created ON noodle_activity_digests(created_at DESC)`),
   );
   await db.run(sql.raw(`CREATE INDEX IF NOT EXISTS idx_custom_themes_active ON custom_themes(is_active)`));
   await db.run(sql.raw(`CREATE INDEX IF NOT EXISTS idx_chat_presets_mode_active ON chat_presets(mode, is_active)`));

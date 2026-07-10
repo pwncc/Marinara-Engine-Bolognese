@@ -10,6 +10,7 @@ import { formatAgentFailuresToast, toAgentFailure, type AgentFailure } from "../
 import { chatBackgroundMetadataToUrl } from "../lib/backgrounds";
 import { formatGenerationParameterError } from "../lib/generation-parameter-errors";
 import { requestChatScrollToBottom } from "../lib/chat-scroll-events";
+import { startSceneWithPromptPreferences } from "../lib/scene-generation";
 import { agentKeys } from "./use-agents";
 import { discardPendingGameStatePatch } from "./use-game-state-patcher";
 import { turnGameKeys } from "./turn-game-keys";
@@ -410,6 +411,7 @@ import { useGameModeStore } from "../stores/game-mode.store";
 import { useGameStateStore } from "../stores/game-state.store";
 import { useUnoGameStore } from "../stores/uno-game.store";
 import { useChessGameStore } from "../stores/chess-game.store";
+import { usePokerGameStore } from "../stores/poker-game.store";
 import { useTranslationStore } from "../stores/translation.store";
 import { useUIStore } from "../stores/ui.store";
 import {
@@ -1847,6 +1849,7 @@ export function useGenerate() {
                 // returning to the chat refetches the board.
                 if (turnGameType === "chess") useChessGameStore.getState().clearChess(params.chatId);
                 else if (turnGameType === "uno") useUnoGameStore.getState().clearUno(params.chatId);
+                else if (turnGameType === "poker") usePokerGameStore.getState().clearPoker(params.chatId);
                 void qc.invalidateQueries({ queryKey: turnGameKeys.state(params.chatId) });
                 break;
               }
@@ -1854,6 +1857,8 @@ export function useGenerate() {
                 useChessGameStore.getState().setChess(event.data as never, params.chatId);
               } else if (turnGameType === "uno") {
                 useUnoGameStore.getState().setUno(event.data as never, params.chatId);
+              } else if (turnGameType === "poker") {
+                usePokerGameStore.getState().setPoker(event.data as never, params.chatId);
               }
               break;
             }
@@ -2237,6 +2242,36 @@ export function useGenerate() {
                   .getState()
                   .setChatBackground(`/api/backgrounds/file/${encodeURIComponent(sceneData.background)}`);
               }
+              break;
+            }
+
+            case "scene_requested": {
+              const sceneData = event.data as {
+                originChatId?: string;
+                prompt?: string;
+                background?: string | null;
+                plan?: string | null;
+                initiatorCharId?: string | null;
+                initiatorCharName?: string | null;
+              };
+              const sceneOriginChatId = sceneData.originChatId || params.chatId;
+              if (!isChatSurfaceVisible(sceneOriginChatId)) {
+                break;
+              }
+              void startSceneWithPromptPreferences({
+                chatId: sceneOriginChatId,
+                prompt: sceneData.prompt ?? "",
+                background: sceneData.background ?? null,
+                planHint: sceneData.plan ?? null,
+                initiatorCharId: sceneData.initiatorCharId ?? null,
+                initiatorCharName: sceneData.initiatorCharName ?? "Character",
+                connectionId: params.connectionId,
+                onCreated: () => {
+                  qc.invalidateQueries({ queryKey: chatKeys.all });
+                },
+              }).catch((error) => {
+                console.warn("[scene] Failed to handle requested scene:", error);
+              });
               break;
             }
 
@@ -3013,6 +3048,7 @@ export function useGenerate() {
                 // returning to the chat refetches the board.
                 if (turnGameType === "chess") useChessGameStore.getState().clearChess(chatId);
                 else if (turnGameType === "uno") useUnoGameStore.getState().clearUno(chatId);
+                else if (turnGameType === "poker") usePokerGameStore.getState().clearPoker(chatId);
                 void qc.invalidateQueries({ queryKey: turnGameKeys.state(chatId) });
                 break;
               }
@@ -3020,6 +3056,8 @@ export function useGenerate() {
                 useChessGameStore.getState().setChess(event.data as never, chatId);
               } else if (turnGameType === "uno") {
                 useUnoGameStore.getState().setUno(event.data as never, chatId);
+              } else if (turnGameType === "poker") {
+                usePokerGameStore.getState().setPoker(event.data as never, chatId);
               }
               break;
             }

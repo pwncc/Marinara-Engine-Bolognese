@@ -24,6 +24,7 @@ import {
   normalizeTrackerFieldLocksForState,
   trackerFieldLocksAreEmpty,
   customAgentHasCapability,
+  CHAT_SUMMARY_PROMPT_SETTINGS_KEY,
   DEFAULT_CONVERSATION_PROMPT,
   unwrapConversationInstructions,
   findKnownModel,
@@ -58,7 +59,11 @@ import { createCustomEmojisStorage } from "../services/storage/custom-emojis.sto
 import { createCustomStickersStorage } from "../services/storage/custom-stickers.storage.js";
 import { createCharacterGalleryStorage } from "../services/storage/character-gallery.storage.js";
 import { createPersonaGalleryStorage } from "../services/storage/persona-gallery.storage.js";
-import { buildLorebookSemanticEmbeddingsById } from "../services/lorebook/embeddings.js";
+import { createAppSettingsStorage } from "../services/storage/app-settings.storage.js";
+import {
+  buildLorebookSemanticEmbeddingsById,
+  warmLorebookEntryEmbeddings,
+} from "../services/lorebook/embeddings.js";
 import { applyRegexScriptsToPromptMessages } from "../services/regex/regex-application.js";
 import { createPromptOverridesStorage } from "../services/storage/prompt-overrides.storage.js";
 import { filterRelevantLorebooks, processLorebooks } from "../services/lorebook/index.js";
@@ -240,6 +245,7 @@ import {
   resolveLorebookKeeperTarget,
 } from "./generate/lorebook-keeper-utils.js";
 import { registerDryRunRoute } from "./generate/dry-run-route.js";
+import { registerRawRoute } from "./generate/raw-route.js";
 import { registerRetryAgentsRoute } from "./generate/retry-agents-route.js";
 import { fingerprintChatSummary } from "../services/prompt/chat-summary-fingerprint.js";
 import { sendSseEvent, startSseKeepalive, startSseReply, trySendSseEvent } from "./generate/sse.js";
@@ -249,6 +255,7 @@ import {
   getTurnGameContextBuilder,
   startTurnGame,
 } from "../services/turn-games/turn-game-runner.service.js";
+import { buildRecentSocialMediaActivityBlock } from "../services/noodle/noodle-context.js";
 import { normalizeContextInjections } from "./generate/agent-normalizers.js";
 import {
   buildGenerationPromptPresetCandidates,
@@ -310,7 +317,7 @@ import {
   clampRoleplaySummaryMaxTokens,
   isAutomaticRoleplaySummaryEnabled,
   parseChatSummaryText,
-  resolveChatSummaryPromptFromMetadata,
+  resolveChatSummaryPrompt,
   withoutRetiredChatSummaryAgentIds,
 } from "../services/generation/roleplay-summary-runtime.js";
 import { getMaxToolRounds } from "../config/runtime-config.js";
@@ -500,6 +507,7 @@ export async function generateRoutes(app: FastifyInstance) {
   const customStickersStore = createCustomStickersStorage(app.db);
   const characterGallery = createCharacterGalleryStorage(app.db);
   const personaGallery = createPersonaGalleryStorage(app.db);
+  const appSettings = createAppSettingsStorage(app.db);
 
   /**
    * In-memory cache for OpenAI Responses API encrypted reasoning items.
@@ -1970,10 +1978,12 @@ export async function generateRoutes(app: FastifyInstance) {
             ...(convoProfileBlocks.behaviorPostHistoryBlock
               ? [{ role: "user" as const, content: convoProfileBlocks.behaviorPostHistoryBlock }]
               : []),
-            ...(conversationContextMacroSlots.context ? [] : [{ role: "user" as const, content: contextBlock }]),
           ];
-          if (conversationContextMacroSlots.context) {
-            replaceConversationContextMacro(finalMessages, "context", contextBlock);
+          const conversationContextInserted = conversationContextMacroSlots.context
+            ? replaceConversationContextMacro(finalMessages, "context", contextBlock)
+            : false;
+          if (!conversationContextInserted) {
+            finalMessages.push({ role: "user" as const, content: contextBlock });
           }
           if (conversationContextMacroSlots.reactRules) {
             replaceConversationContextMacro(finalMessages, "reactRules", conversationReactRules);
@@ -2133,6 +2143,23 @@ export async function generateRoutes(app: FastifyInstance) {
           chats,
           finalMessages,
         });
+
+        const recentSocialMediaActivityBlock = await buildRecentSocialMediaActivityBlock({
+          db: app.db,
+          chatMode,
+          characterIds: promptCharacterIds,
+          personaId,
+          wrapFormat,
+        });
+        if (recentSocialMediaActivityBlock) {
+          const firstUserIdx = finalMessages.findIndex((m) => m.role === "user" || m.role === "assistant");
+          const insertAt = firstUserIdx >= 0 ? firstUserIdx : finalMessages.length;
+          finalMessages.splice(insertAt, 0, {
+            role: "system" as const,
+            content: recentSocialMediaActivityBlock,
+            contextKind: "injection",
+          });
+        }
 
         const providerRuntime = resolveGenerationProviderRuntime({
           connectionId: connId ?? "",
@@ -2347,6 +2374,7 @@ export async function generateRoutes(app: FastifyInstance) {
             persona,
             promptTemplateSources: identityFallbackPromptTemplateSources,
             resolvePromptMacros,
+            isConversation: chatMode === "conversation",
           });
         }
 
@@ -4662,6 +4690,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   enableThinking,
                   captureReasoning,
                   reasoningEffort: resolvedEffort ?? undefined,
+                  excludePastReasoning,
                   verbosity: verbosity ?? undefined,
                   serviceTier,
                   customParameters,
@@ -4746,7 +4775,9 @@ export async function generateRoutes(app: FastifyInstance) {
                 // user isn't impersonating; otherwise the caller is ambiguous (merged group)
                 // and the tool refuses rather than write the wrong character's about-me.
                 callingCharacterId:
-                  speaksOnlyTargetCharacter && !input.impersonate ? (targetCharId ?? input.forCharacterId ?? null) : null,
+                  speaksOnlyTargetCharacter && !input.impersonate
+                    ? (targetCharId ?? input.forCharacterId ?? null)
+                    : null,
               });
               const toolResultsById = new Map(
                 [...executedToolResults, ...deniedToolResults].map((result) => [result.toolCallId, result]),
@@ -4870,6 +4901,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   enableThinking,
                   captureReasoning,
                   reasoningEffort: resolvedEffort ?? undefined,
+                  excludePastReasoning,
                   verbosity: verbosity ?? undefined,
                   serviceTier,
                   customParameters,
@@ -4927,6 +4959,7 @@ export async function generateRoutes(app: FastifyInstance) {
               enableThinking,
               captureReasoning,
               reasoningEffort: resolvedEffort ?? undefined,
+              excludePastReasoning,
               verbosity: verbosity ?? undefined,
               serviceTier,
               customParameters,
@@ -5497,23 +5530,24 @@ export async function generateRoutes(app: FastifyInstance) {
               }
             }
 
-            // Evict cachedPrompt from older messages to save storage (keep last 2 assistant msgs)
+            // Evict cachedPrompt from older messages to save storage (keep last 2 assistant msgs).
+            // Reuse the already-fetched message objects (they carry `extra`) rather than a
+            // per-id chats.getMessage — the latter is a full table scan each in the file-native
+            // store, which made this loop O(n^2) in total chat size (#3402). Only messages that
+            // still hold a cachedPrompt need the (bounded) update + swipe cleanup.
             const allMsgs = await chats.listMessages(input.chatId);
-            const assistantMsgIds = allMsgs.filter((m) => m.role === "assistant").map((m) => m.id);
-            const staleIds = assistantMsgIds.slice(0, -2);
-            for (const staleId of staleIds) {
-              const staleMsg = await chats.getMessage(staleId);
-              if (!staleMsg) continue;
+            const staleAssistants = allMsgs.filter((m) => m.role === "assistant").slice(0, -2);
+            for (const staleMsg of staleAssistants) {
               const staleExtra =
                 typeof staleMsg.extra === "string" ? JSON.parse(staleMsg.extra) : (staleMsg.extra ?? {});
               if (!staleExtra.cachedPrompt) continue;
-              await chats.updateMessageExtra(staleId, { cachedPrompt: null });
+              await chats.updateMessageExtra(staleMsg.id, { cachedPrompt: null });
               // Also clean swipes
-              const swipes = await chats.getSwipes(staleId);
+              const swipes = await chats.getSwipes(staleMsg.id);
               for (const sw of swipes) {
                 const swExtra = typeof sw.extra === "string" ? JSON.parse(sw.extra) : (sw.extra ?? {});
                 if (swExtra.cachedPrompt) {
-                  await chats.updateSwipeExtra(staleId, sw.index, { cachedPrompt: null });
+                  await chats.updateSwipeExtra(staleMsg.id, sw.index, { cachedPrompt: null });
                 }
               }
             }
@@ -5849,9 +5883,16 @@ export async function generateRoutes(app: FastifyInstance) {
             .map((message: any) => `[${message.role}]: ${(message.content as string).slice(0, 2000)}`)
             .join("\n\n");
           const previousSummary = typeof chatMeta.summary === "string" ? chatMeta.summary.trim() : "";
+          const globalSummaryPromptSettings = await appSettings.get(CHAT_SUMMARY_PROMPT_SETTINGS_KEY);
           const result = await summaryProvider.chatComplete(
             [
-              { role: "system", content: resolveChatSummaryPromptFromMetadata(chatMeta) },
+              {
+                role: "system",
+                content: resolveChatSummaryPrompt({
+                  chatMetadata: chatMeta,
+                  globalSettingsValue: globalSummaryPromptSettings,
+                }),
+              },
               {
                 role: "user",
                 content:
@@ -7161,6 +7202,14 @@ export async function generateRoutes(app: FastifyInstance) {
                     preferredTargetLorebookId,
                     writableLorebookIds,
                     updates,
+                    revectorizeEntry: memoryRecallVectorizerAvailable
+                      ? async (entry) => {
+                          await warmLorebookEntryEmbeddings(app.db, [entry], {
+                            embeddingSource: memoryRecallEmbeddingSource,
+                            signal: abortController.signal,
+                          });
+                        }
+                      : undefined,
                   });
                 }
               } catch {
@@ -7191,9 +7240,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 const updates = Array.isArray(rawUpdates) ? (rawUpdates as Array<Record<string, unknown>>) : [];
                 const validCharIds = new Set(agentContext.characters.map((c) => c.id));
                 const isUsable = (u: Record<string, unknown>) =>
-                  typeof u.characterId === "string" &&
-                  validCharIds.has(u.characterId) &&
-                  typeof u.newText === "string";
+                  typeof u.characterId === "string" && validCharIds.has(u.characterId) && typeof u.newText === "string";
                 const chatUpdates = updates.filter((u) => u.target === "chat" && isUsable(u));
                 const publicUpdates = updates.filter((u) => u.target === "public" && isUsable(u));
 
@@ -7883,13 +7930,11 @@ export async function generateRoutes(app: FastifyInstance) {
                   command,
                   characterId,
                   chatId: input.chatId,
-                  app,
                   chars,
-                  chats,
-                  sendSceneCreated: (data) => {
+                  sendSceneRequested: (data) => {
                     reply.raw.write(
                       `data: ${JSON.stringify({
-                        type: "scene_created",
+                        type: "scene_requested",
                         data,
                       })}\n\n`,
                     );
@@ -8135,5 +8180,6 @@ export async function generateRoutes(app: FastifyInstance) {
   });
 
   await registerDryRunRoute(app);
+  await registerRawRoute(app);
   await registerRetryAgentsRoute(app);
 }

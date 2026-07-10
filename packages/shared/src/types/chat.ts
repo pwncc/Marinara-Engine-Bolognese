@@ -38,6 +38,7 @@ export const CONVERSATION_COMMAND_KEYS = [
   "call",
   "uno",
   "chess",
+  "poker",
   "music",
   "haptic",
   "influence",
@@ -131,6 +132,15 @@ export interface ChatSummaryPromptTemplate {
   id: string;
   name: string;
   prompt: string;
+}
+
+/** Server app-setting key for Roleplay Chat Summary prompt templates shared across all roleplays. */
+export const CHAT_SUMMARY_PROMPT_SETTINGS_KEY = "chat-summary-prompts";
+
+/** Global Roleplay Chat Summary prompt template settings. */
+export interface ChatSummaryPromptSettings {
+  templates: ChatSummaryPromptTemplate[];
+  activeTemplateId: string | null;
 }
 
 /** Rolling summary entry category. Extensible beyond rolling summaries later. */
@@ -342,6 +352,8 @@ export interface ChatMetadata {
   enableMemoryRecall?: boolean;
   /** Discord webhook URL to mirror messages to a Discord channel. */
   discordWebhookUrl?: string;
+  /** When true, Noodle timeline refreshes may include this chat's recent messages as generation context. */
+  noodleTimelineContextEnabled?: boolean;
   /** Per-chat ephemeral / enabled overrides for lorebook entries (entryId → state).
    *  Tracked per-chat so ephemeral countdown in one chat doesn't affect others. */
   entryStateOverrides?: Record<string, { ephemeral?: number | null; enabled?: boolean }>;
@@ -491,6 +503,10 @@ export interface ChatMetadata {
   gameStoryboardAutoIllustrationsEnabled?: boolean;
   /** When true, completed Game Mode GM turns automatically create storyboard keyframe videos. */
   gameStoryboardAutoGenerationEnabled?: boolean;
+  /** Target number of Game Mode storyboard keyframes to create per GM turn. */
+  gameStoryboardKeyframeCount?: number;
+  /** Per-chat storyboard animation clip duration in seconds. Null/omitted uses Video Generation settings. */
+  gameStoryboardAnimationDurationSeconds?: number | null;
   /** How the Game Mode storyboard viewer is displayed in the game surface. */
   gameStoryboardViewerDisplayMode?: GameStoryboardViewerDisplayMode;
   /** Selected Game Mode storyboard prompt template for image-only auto storyboards. */
@@ -499,6 +515,10 @@ export interface ChatMetadata {
   gameStoryboardAnimationPromptTemplateId?: string | null;
   /** Chat-local storyboard prompt templates, merged with built-in storyboard prompt modes. */
   gameStoryboardPromptTemplates?: import("./agent.js").AgentPromptTemplateOption[];
+  /** Send storyboard imagePrompt tags directly to the image provider instead of wrapping them with the global scene-illustration template. */
+  gameStoryboardUseDirectScenePrompt?: boolean;
+  /** Use native NovelAI V4/V4.5 per-character captions for multi-character storyboard illustrations. Defaults to true. */
+  gameStoryboardUseNovelAiCharacterPrompts?: boolean;
   /** Last generated scene-video record ID for this game. */
   gameLastSceneVideoId?: string | null;
   /** Connection used for roleplay/gallery scene-video generation. */

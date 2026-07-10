@@ -4,6 +4,40 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+### Added
+
+- Added OpenAI GPT-5.6 Sol/Terra/Luna model support, including the `gpt-5.6` Sol alias, a `gpt-5.6-sol-pro` pro-mode alias, Responses API routing, GPT-5.6 `max` reasoning effort mapping, and reuse of the existing Exclude Past Reasoning toggle for GPT-5.6 reasoning context.
+- Added the first Noodle fake-social-media surface: a top-bar Noodle tab, persona-linked user profiles, character invites, a scrollable fake timeline with posts/replies/likes/reposts, configurable refresh generation, stored image-prompt slots, and optional recent-social activity carryover into Conversation, Roleplay/VN, and Game prompts using the chat preset wrapper.
+- Added long-term Noodle timeline recall: refreshes can now sample up to three posts older than 48 hours so characters may naturally remember, revisit, or interact with past activity.
+- Added a configurable source picker (⚙️) for the Conversation "about me" AI-write, in both the character-card editor and the in-chat profile popout: choose which of the card fields (description, personality, scenario, backstory, appearance), the Convo behavior directive, the character's lorebook entries (with per-entry selection in the card editor), and recent chat context feed the draft. Defaults to personality only.
+- Added a Revert control to the about-me editor (card editor and in-chat popout) to undo a manual or AI-write change, and an emoji picker in the about-me editor.
+- Added an optional per-character toggle to declare a character's Convo display name on its card in the prompt, so the model can map the display name to the right card in group chats.
+- The Convo display name is now shown as the sender label above messages in Conversation (read live, so renames reflect immediately), not only in the prompt and the profile popout.
+- Added Poker (No-Limit Texas Hold'em) as a Conversation-mode table game for 2-8 players: seeded fair dealing, full no-limit betting with all-ins and side pots, showdown hand ranking with natural-language labels, and multi-hand sessions with a rotating dealer button, optional blind escalation, an optional hand limit, and player-paced "Next hand" breaks between hands.
+- Added a selectable poker dealer: choose the silent house dealer or seat any chat character as the croupier, who announces hand starts, flop/turn/river reveals, showdowns, and blind increases in their own voice and personality — narration only, with dealing always seeded and fair.
+- Poker joins the `[poker]` Conversation command family alongside `[uno]` and `[chess]`, with a `/poker` slash command, natural-language launcher, per-chat command toggle, and a setup modal for players, dealer, and stakes.
+
+### Changed
+
+- Restyled Noodle around the Klusek blue logo asset, replacing the always-visible settings column with a profile-triggered drawer and a more Twitter-like central feed.
+- Updated Noodle image prompt generation so character posts may request either character-focused images or in-character memes when image generation is enabled.
+- Updated Noodle settings so selected character folders can be bulk-invited directly, and automated refreshes can be disabled by setting refreshes per day to `0`.
+- Updated Noodle posts with edit/delete actions for every post, toggleable likes/reposts, a confirmed timeline reset control, multi-character image references, and automatic character-gallery saves for generated character post images.
+
+### Fixed
+
+- Completed Noodle's automatic timeline refresh scheduling: daily refresh times are now distributed across persisted local-day windows, survive restarts, collapse overdue slots into one catch-up refresh, retry safely after failures, and update an open Noodle timeline automatically.
+- Fixed PocketTTS voice refresh so built-in and custom voices returned by the provider `/v1/voices` endpoint are listed, including custom voices identified by URL/path fields (#3410).
+- Fixed Conversation Call live-mic input so Local Whisper/provider media submissions cannot queue unbounded speech segments and lock the call UI behind repeated "too many requests" failures (#3411).
+- Fixed Game Mode reputation widget updates accepting generated action descriptions longer than 50 characters, preventing scene-analysis reputation updates from failing on natural-language actions (#3409).
+- Fixed the v2.1.1 auto-update build regression by resolving the stale TypeScript errors that broke the server/client build during update (#3401).
+- Fixed the chat-specific about-me override being lost on reload or refetch — the popout read chat metadata without parsing it, so the override reset to the card default and, on save, could drop other characters' overrides.
+- Fixed the about-me AI-write failing on "thinking" models (e.g. Gemini 3.x) that spent the entire output budget on reasoning and returned no content; the output ceiling was raised and reasoning effort lowered.
+- Fixed the about-me source picker listing only "linked" lorebooks — a character whose lorebook is embedded now sees and can select its entries.
+- Fixed the Conversation participant-profiles block labeling the persona as "the user," which nudged some models toward sycophancy; the persona is now presented as just another participant.
+- Fixed the about-me profile popout on mobile (now a full-height sheet so the keyboard and emoji picker no longer overlap the field) and its overflow on desktop when the source panel is opened.
+- Fixed help tooltips stacking — opening one now closes any other.
+
 ## [2.1.2]
 
 ### Added
@@ -16,6 +50,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Added Conversation prompt relocation macros for auto-inserted context: `{{context}}`/`{{status}}`, `{{commands}}`, `{{reactRules}}`, `{{memories}}`, and `{{lorebook}}`.
 - Added a TTS cache export control in Text to Speech settings so generated cached voice clips can be downloaded from IndexedDB.
 - Added a Roleplay Chat Summary maximum output size setting under Summary Connection, defaulting to 4096 tokens for manual and automatic summaries.
+- Added a connected-chat shortcut to Game mode so connected Conversation and Game chats can switch back and forth like Conversation/Roleplay links.
+- Added a scene prompt setup dialog for user- and character-initiated scenes, remembering POV, tense, and optional prompt wishes for the next scene generation.
 
 ### Changed
 
@@ -23,6 +59,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Android `versionName` is `2.1.2` with `versionCode 31`.
 - Reworked Settings with search-first navigation, compact pinned controls, fixed top-level categories, and finer section shortcuts for faster navigation.
 - Updated the default Illustrator prompt rules so generated image prompts carry available character builds, clothing/outfits, and appearance details instead of relying on the image model to infer them.
+- Changed custom Roleplay Chat Summary prompts to apply globally across roleplay chats instead of only the currently open chat.
 
 ### Fixed
 
@@ -41,6 +78,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Fixed the recovery/error page so **Internal Server Error** uses the configured chat chrome text color instead of a hard-coded pink.
 - Fixed Conversation Calls on Chromium browsers by allowing same-origin microphone, camera, and screen-capture access in the server permissions policy instead of blocking the browser permission prompt.
 - Fixed the Roleplay setup wizard's **Use Settings Presets** shortcut so system "joined the chat" notices no longer block seeding the selected character's first message (#3392).
+- Fixed Conversation-mode prompt assembly so the user's visible status and activity are always included in context unless the persona is set to Invisible, even when a relocated context macro is configured but not present after prompt resolution.
 
 ## [2.1.1]
 
@@ -83,6 +121,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Made the Connections panel's unfiled/root drop area more forgiving so desktop users, including Windows users, can reliably drag connections out of folders without hitting a tiny target.
 - Fixed native lorebook import so nested folders keep their parent/child hierarchy instead of being flattened to the top level (#3347).
 - Fixed the character Lorebook tab so an embedded lorebook can be removed from the card: added a **Remove from card** action (including for cards with no linked copy), clarified that the row delete only unlinks the standalone while the embedded copy stays, and renamed **Edit Linked Lorebook** to **Edit Embedded Lorebook** (#3359).
+- Fixed a growing pause after each response completes in long chats: removed two O(n²) passes over the whole message history in the post-generation path (a per-message cachedPrompt eviction scan and the swipe-count lookup), so completing a response no longer takes tens of seconds in very large chats (#3402).
 
 ## [2.1.0]
 
@@ -112,6 +151,9 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Added Gallery **Images** and **Videos** tabs so generated videos are reachable without scrolling through every still image first.
 - Added an optional Game Illustrator toggle for Dynamic LLM Prompt Generation, letting the selected prompt model rewrite Game Mode NPC portrait, location background, and key-moment illustration prompts before image generation (#3225).
 - Added `/illustrate` in Conversation, Roleplay, and Game chats to trigger the same illustration action as the Gallery **Illustrate** button without opening the Gallery first.
+- Turn-game bots now choose their moves in character (#3308): move selection is steered by the character's personality, mood, and grudges instead of pure game logic, and UNO board summaries include a "What just happened" recap of recent plays so reactions track the actual game.
+- Characters seated in a turn game now carry their own seat's perspective into normal chat (#3308): mid-game replies know their own UNO hand or chess color and last move, spectators and unseated characters keep a hands-hidden view, and each generation request loads the game state once instead of once per responding character.
+- Turn-game hand secrecy is now personality-gated (#3308): in hidden-information games a seated character knows their hand is private and may deflect, tease, bluff, or let something slip according to their personality, while in open-information games like chess the same treatment applies to their plans.
 
 ### Changed
 

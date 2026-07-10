@@ -38,6 +38,7 @@ import {
   LOCAL_SIDECAR_CONNECTION_ID,
   MODEL_LISTS,
   PROFESSOR_MARI_ID,
+  resolveProviderReasoningEffort,
   sanitizeMariSuggestionChips,
   type APIProvider,
   type GenerationParameterSendMap,
@@ -480,12 +481,21 @@ function normalizeGenerationParameterSendMap(value: unknown): GenerationParamete
   return Object.keys(enabledParameters).length > 0 ? enabledParameters : undefined;
 }
 
-function normalizeMariReasoningEffort(value: unknown): ChatOptions["reasoningEffort"] | undefined {
-  if (value === "maximum") return "xhigh";
-  if (value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max") {
-    return value;
-  }
-  return undefined;
+function normalizeMariReasoningEffort(
+  provider: string,
+  model: string,
+  value: unknown,
+): ChatOptions["reasoningEffort"] | undefined {
+  const requested =
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh" ||
+    value === "maximum" ||
+    value === "max"
+      ? value
+      : null;
+  return resolveProviderReasoningEffort({ provider, model, reasoningEffort: requested }) ?? undefined;
 }
 
 function normalizeMariVerbosity(value: unknown): ChatOptions["verbosity"] | undefined {
@@ -890,7 +900,8 @@ function parseBracketCommandCalls(content: string): WorkspaceCommandCall[] {
       const numberMatch = params.match(new RegExp(`${key}=(-?[0-9]+)`, "i"));
       if (numberMatch) args[key] = Number.parseInt(numberMatch[1] ?? "", 10);
     }
-    if (Object.keys(args).length > 0) calls.push({ id: newToolCallId(name, index), name, arguments: args, raw: match[0] });
+    if (Object.keys(args).length > 0)
+      calls.push({ id: newToolCallId(name, index), name, arguments: args, raw: match[0] });
   }
   return calls;
 }
@@ -1026,7 +1037,8 @@ function buildWorkspaceContinuitySnapshot(args: {
 }): string | null {
   const sections: string[] = [];
   if (args.userText.trim()) sections.push(`User request: ${compactTraceText(args.userText, 900)}`);
-  if (args.assistantText.trim()) sections.push(`Visible assistant response/plan: ${compactTraceText(args.assistantText, 1400)}`);
+  if (args.assistantText.trim())
+    sections.push(`Visible assistant response/plan: ${compactTraceText(args.assistantText, 1400)}`);
   if (args.commandResults.length > 0) {
     sections.push(
       `Hidden workspace evidence/results:\n${args.commandResults
@@ -1046,7 +1058,8 @@ function summarizeStoredTimeline(timeline: unknown): string | null {
     if (item.type === "tool" && isRecord(item.tool)) {
       const name = typeof item.tool.name === "string" ? item.tool.name : "tool";
       const status = typeof item.tool.status === "string" ? item.tool.status : "unknown";
-      const input = item.tool.input === undefined ? "" : ` input=${JSON.stringify(compactTraceValue(item.tool.input, 480))}`;
+      const input =
+        item.tool.input === undefined ? "" : ` input=${JSON.stringify(compactTraceValue(item.tool.input, 480))}`;
       const output = typeof item.tool.output === "string" ? `\n${compactTraceText(item.tool.output, 800)}` : "";
       lines.push(`- ${name} ${status}${input}${output}`);
     } else if ((item.type === "status" || item.type === "text") && typeof item.content === "string") {
@@ -1063,7 +1076,9 @@ function workspaceContinuityFromExtra(extra: Record<string, unknown>): string | 
   return summarizeStoredTimeline(extra.mariWorkspaceTimeline);
 }
 
-function buildRecentWorkspaceContinuityPrompt(rows: Array<{ role: string; content: string; extra?: unknown }>): string | null {
+function buildRecentWorkspaceContinuityPrompt(
+  rows: Array<{ role: string; content: string; extra?: unknown }>,
+): string | null {
   const entries = rows
     .filter((row) => row.role === "assistant")
     .map((row) => {
@@ -1088,7 +1103,11 @@ function chunkText(value: string, chunkSize = 1200): string[] {
   return chunks;
 }
 
-function mapUsage(usage: LLMUsage | undefined): { promptTokens: number; completionTokens: number; totalTokens: number } {
+function mapUsage(usage: LLMUsage | undefined): {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+} {
   if (!usage) return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   return {
     promptTokens: usage.promptTokens,
@@ -1143,18 +1162,25 @@ function booleanArg(args: Record<string, unknown>, key: string, fallback = false
 function isWithin(parent: string, child: string): boolean {
   const normalizedParent = process.platform === "win32" ? parent.toLowerCase() : parent;
   const normalizedChild = process.platform === "win32" ? child.toLowerCase() : child;
-  return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}${process.platform === "win32" ? "\\" : "/"}`);
+  return (
+    normalizedChild === normalizedParent ||
+    normalizedChild.startsWith(`${normalizedParent}${process.platform === "win32" ? "\\" : "/"}`)
+  );
 }
 
 function isReadOnlyWorkspaceCommand(command: WorkspaceCommandCall): boolean {
-  if (command.name === "read" || command.name === "grep" || command.name === "find" || command.name === "ls") return true;
+  if (command.name === "read" || command.name === "grep" || command.name === "find" || command.name === "ls")
+    return true;
   if (command.name !== "app_data") return false;
   return appDataActionLooksReadOnly(command.arguments.action);
 }
 
 function appDataActionLooksReadOnly(action: unknown): boolean {
   if (typeof action !== "string") return false;
-  const normalized = action.trim().toLowerCase().replace(/[-_\s]+/g, "");
+  const normalized = action
+    .trim()
+    .toLowerCase()
+    .replace(/[-_\s]+/g, "");
   return /\.(list|get|search|active|entries)$/.test(normalized);
 }
 
@@ -1173,7 +1199,9 @@ function bashLooksMutating(command: string): boolean {
   return (
     /\b--apply\b/.test(normalized) ||
     /\bmari\s+db\s+(insert|patch|replace|delete|transform)\b/.test(normalized) ||
-    /\bmari\s+(characters?|personas?|lorebooks?)\s+(create|update|delete|add-entry|link-character|unlink-character)\b/.test(normalized) ||
+    /\bmari\s+(characters?|personas?|lorebooks?)\s+(create|update|delete|add-entry|link-character|unlink-character)\b/.test(
+      normalized,
+    ) ||
     /\bmari\s+themes\s+(create|update|set-active)\b/.test(normalized) ||
     /\bmari\s+images\s+(generate|edit|assign|delete)\b/.test(normalized)
   );
@@ -1721,7 +1749,11 @@ ${sections.join("\n\n")}
   ): ChatOptions {
     const defaultParameters = parseJsonObject(connection.defaultParameters);
     const customParameters = isRecord(defaultParameters?.customParameters) ? defaultParameters.customParameters : {};
-    const reasoningEffort = normalizeMariReasoningEffort(defaultParameters?.reasoningEffort);
+    const reasoningEffort = normalizeMariReasoningEffort(
+      connection.provider,
+      connection.model,
+      defaultParameters?.reasoningEffort,
+    );
     const verbosity = normalizeMariVerbosity(defaultParameters?.verbosity);
     return {
       model: connection.model,
@@ -1791,7 +1823,9 @@ ${sections.join("\n\n")}
         group.push(commands[index]!);
         index += 1;
       }
-      results.push(...(await Promise.all(group.map((entry) => this.executeWorkspaceCommand(entry, signal, trace, onEvent)))));
+      results.push(
+        ...(await Promise.all(group.map((entry) => this.executeWorkspaceCommand(entry, signal, trace, onEvent)))),
+      );
     }
     return results;
   }
@@ -1803,14 +1837,27 @@ ${sections.join("\n\n")}
     onEvent: PromptEventSink,
   ): Promise<WorkspaceCommandResult> {
     const input = command.arguments;
-    upsertTraceTool(trace, { id: command.id, name: command.name, status: "running", input, output: null, updatedAt: Date.now() });
+    upsertTraceTool(trace, {
+      id: command.id,
+      name: command.name,
+      status: "running",
+      input,
+      output: null,
+      updatedAt: Date.now(),
+    });
     onEvent({ type: "tool_start", data: { id: command.id, name: command.name, input } });
     try {
       const validationIssue = workspaceCommandValidationIssue(command);
       if (validationIssue) throw new Error(validationIssue);
       const output = await this.runWorkspaceCommand(command, signal);
       const compacted = compactOutput(output);
-      upsertTraceTool(trace, { id: command.id, name: command.name, status: "done", output: compacted, updatedAt: Date.now() });
+      upsertTraceTool(trace, {
+        id: command.id,
+        name: command.name,
+        status: "done",
+        output: compacted,
+        updatedAt: Date.now(),
+      });
       onEvent({ type: "tool_end", data: { id: command.id, name: command.name, isError: false, output: compacted } });
       return { id: command.id, name: command.name, input, output: compacted, success: true };
     } catch (err) {
@@ -1844,7 +1891,10 @@ ${sections.join("\n\n")}
     }
   }
 
-  private resolveWorkspacePath(inputPath: string, options: { allowMissing?: boolean; forbidStorageMutation?: boolean } = {}) {
+  private resolveWorkspacePath(
+    inputPath: string,
+    options: { allowMissing?: boolean; forbidStorageMutation?: boolean } = {},
+  ) {
     const rawPath = inputPath.trim() || ".";
     const absolute = resolve(this.workspaceRoot, rawPath);
     const workspaceRoot = resolve(this.workspaceRoot);
@@ -1881,7 +1931,11 @@ ${sections.join("\n\n")}
     const normalized = normalizeSlashPath(command);
     const tablesRoot = normalizeSlashPath(resolve(getFileStorageDir(), "tables"));
     const tablesRel = normalizeSlashPath(relative(this.workspaceRoot, resolve(getFileStorageDir(), "tables")));
-    if (!normalized.includes("data/storage/tables/") && !normalized.includes(tablesRoot) && !normalized.includes(tablesRel)) {
+    if (
+      !normalized.includes("data/storage/tables/") &&
+      !normalized.includes(tablesRoot) &&
+      !normalized.includes(tablesRel)
+    ) {
       return null;
     }
     return "Do not pass DATA_DIR/storage/tables/*.json to mari --json-file/--file. Those are full raw table exports; create a temp file containing one row/card payload instead.";
@@ -1923,7 +1977,11 @@ ${sections.join("\n\n")}
       .sort((a, b) => a.localeCompare(b))
       .slice(0, limit);
     const truncated = entries.length > names.length;
-    return [`Directory: ${this.displayPath(dirPath)}`, ...names, truncated ? `… ${entries.length - names.length} more` : ""]
+    return [
+      `Directory: ${this.displayPath(dirPath)}`,
+      ...names,
+      truncated ? `… ${entries.length - names.length} more` : "",
+    ]
       .filter(Boolean)
       .join("\n");
   }
@@ -2011,7 +2069,10 @@ ${sections.join("\n\n")}
   }
 
   private async commandWrite(args: Record<string, unknown>): Promise<string> {
-    const filePath = this.resolveWorkspacePath(stringArg(args, "path"), { allowMissing: true, forbidStorageMutation: true });
+    const filePath = this.resolveWorkspacePath(stringArg(args, "path"), {
+      allowMissing: true,
+      forbidStorageMutation: true,
+    });
     const content = stringArg(args, "content");
     await mkdir(dirname(filePath), { recursive: true });
     await writeFile(filePath, content, "utf8");
@@ -2076,13 +2137,7 @@ ${sections.join("\n\n")}
     if (storageIssue) throw new Error(storageIssue);
     const storageTableJsonIssue = this.storageTableJsonFileIssue(command);
     if (storageTableJsonIssue) throw new Error(storageTableJsonIssue);
-    const timeoutSeconds = numberArg(
-      args,
-      "timeout",
-      DEFAULT_BASH_TIMEOUT_SECONDS,
-      1,
-      MAX_BASH_TIMEOUT_SECONDS,
-    );
+    const timeoutSeconds = numberArg(args, "timeout", DEFAULT_BASH_TIMEOUT_SECONDS, 1, MAX_BASH_TIMEOUT_SECONDS);
     const mariCliBinDir = await this.ensureMariCliShim();
     const env = this.withMariRuntimeEnv({ ...process.env }, mariCliBinDir);
     const directMariArgv = parseDirectMariArgv(command, this.workspaceRoot);
@@ -2128,12 +2183,14 @@ ${sections.join("\n\n")}
       child.on("error", (err) => finish(() => rejectRun(err)));
       child.on("close", (exitCode) =>
         finish(() => {
-          const output = compactOutput([
-            `Command: ${command}`,
-            `Exit code: ${exitCode}${timedOut ? ` (timeout after ${timeoutSeconds}s)` : ""}`,
-            stdout ? `\nstdout:\n${stdout.trimEnd()}` : "",
-            stderr ? `\nstderr:\n${stderr.trimEnd()}` : "",
-          ].join("\n"));
+          const output = compactOutput(
+            [
+              `Command: ${command}`,
+              `Exit code: ${exitCode}${timedOut ? ` (timeout after ${timeoutSeconds}s)` : ""}`,
+              stdout ? `\nstdout:\n${stdout.trimEnd()}` : "",
+              stderr ? `\nstderr:\n${stderr.trimEnd()}` : "",
+            ].join("\n"),
+          );
           if (timedOut || exitCode !== 0) rejectRun(new Error(output));
           else resolveRun(output);
         }),
@@ -2148,9 +2205,8 @@ ${sections.join("\n\n")}
       cwd: this.workspaceRoot,
       sessionId: SESSION_ID,
     });
-    const printable = isRecord(result) && "output" in result && !("summary" in result)
-      ? result.output
-      : compactMutationResult(result);
+    const printable =
+      isRecord(result) && "output" in result && !("summary" in result) ? result.output : compactMutationResult(result);
     const output = compactOutput(
       [
         `Command: ${command}`,
@@ -2170,9 +2226,8 @@ ${sections.join("\n\n")}
       cwd: this.workspaceRoot,
       sessionId: SESSION_ID,
     });
-    const printable = isRecord(result) && "output" in result && !("summary" in result)
-      ? result.output
-      : compactMutationResult(result);
+    const printable =
+      isRecord(result) && "output" in result && !("summary" in result) ? result.output : compactMutationResult(result);
     const action = typeof args.action === "string" ? args.action : "unknown";
     const output = compactOutput(
       [
@@ -2216,7 +2271,9 @@ ${sections.join("\n\n")}
     }
 
     const rows = (await this.app.db.select().from(apiConnections)) as Array<typeof apiConnections.$inferSelect>;
-    const languageRows = rows.filter((row) => row.provider !== "image_generation" && row.provider !== "video_generation");
+    const languageRows = rows.filter(
+      (row) => row.provider !== "image_generation" && row.provider !== "video_generation",
+    );
     const selected = connectionId ? languageRows.find((row) => row.id === connectionId) : null;
     const fallback =
       selected ??
@@ -2301,10 +2358,7 @@ function formatWorkspaceToolName(name: string): string {
 
 // Extracts and streams a single named string field from a JSON object as tokens arrive,
 // forwarding each character to the provided sink as it is encountered.
-function createJsonFieldStreamExtractor(
-  fieldName: string,
-  onChunk: (chunk: string) => void,
-): (chunk: string) => void {
+function createJsonFieldStreamExtractor(fieldName: string, onChunk: (chunk: string) => void): (chunk: string) => void {
   const pattern = new RegExp(`"${fieldName}"\\s*:\\s*"`);
   let buffer = "";
   let state: "seeking" | "in_value" | "done" = "seeking";

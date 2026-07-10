@@ -10,6 +10,7 @@ import {
   type ImageStyleProfileSettings,
   type LorebookCategory,
   type QuoteFormat,
+  type ScenePromptPreferences,
 } from "@marinara-engine/shared";
 import { isCssGradient, RAINBOW_GRADIENT_PRESET } from "../lib/css-colors";
 import { announceChatFloatingUiDismiss } from "../lib/chat-floating-ui-events";
@@ -159,6 +160,11 @@ const DEFAULT_SUMMARY_POPOVER_SETTINGS: SummaryPopoverSettings = {
   rangeEnd: null,
   hideSummarisedMessages: false,
   collapseHiddenMessages: false,
+};
+const DEFAULT_SCENE_PROMPT_PREFERENCES: ScenePromptPreferences = {
+  pov: "third_person",
+  tense: "present",
+  extraInstructions: "",
 };
 
 function normalizeUserActivity(activity: string): string {
@@ -312,6 +318,21 @@ function normalizeSummaryPopoverSettings(value: unknown): SummaryPopoverSettings
   };
 }
 
+export function normalizeScenePromptPreferences(value: unknown): ScenePromptPreferences {
+  const raw = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const pov =
+    raw.pov === "first_person" || raw.pov === "second_person" || raw.pov === "third_person"
+      ? raw.pov
+      : DEFAULT_SCENE_PROMPT_PREFERENCES.pov;
+  const tense =
+    raw.tense === "past" || raw.tense === "present" || raw.tense === "future"
+      ? raw.tense
+      : DEFAULT_SCENE_PROMPT_PREFERENCES.tense;
+  const extraInstructions =
+    typeof raw.extraInstructions === "string" ? raw.extraInstructions.trim().slice(0, 2000) : "";
+  return { pov, tense, extraInstructions };
+}
+
 export function normalizeConversationMessageStyle(value: unknown): ConversationMessageStyle {
   return value === "bubble" || value === "classic" ? value : "classic";
 }
@@ -454,6 +475,8 @@ interface UIState {
   botBrowserOpen: boolean;
   /** When true, the main area shows the game assets browser */
   gameAssetsBrowserOpen: boolean;
+  /** When true, the main area shows the Noodle social timeline */
+  noodleOpen: boolean;
   /** When true, the main area shows the full-page character library */
   characterLibraryOpen: boolean;
   /** Last selected character card inside the full-page character library */
@@ -599,6 +622,8 @@ interface UIState {
   editMessageOnDoubleClick: boolean;
   /** Persisted controls shown in the Chat Summary popover settings window. */
   summaryPopoverSettings: SummaryPopoverSettings;
+  /** Last-used preferences for generating character/user-initiated roleplay scenes. */
+  scenePromptPreferences: ScenePromptPreferences;
 
   // ── Text Appearance ──
   /** Color for narrator text in RP mode (empty = default amber) */
@@ -798,6 +823,8 @@ interface UIState {
   closeBotBrowser: () => void;
   openGameAssetsBrowser: () => void;
   closeGameAssetsBrowser: () => void;
+  openNoodle: () => void;
+  closeNoodle: () => void;
 
   /** Returns true if any full-page detail editor is currently open */
   hasAnyDetailOpen: () => boolean;
@@ -864,6 +891,7 @@ interface UIState {
   setEditLastMessageOnArrowUp: (v: boolean) => void;
   setEditMessageOnDoubleClick: (v: boolean) => void;
   setSummaryPopoverSettings: (settings: Partial<SummaryPopoverSettings>) => void;
+  setScenePromptPreferences: (preferences: ScenePromptPreferences) => void;
   setNarrationFontColor: (v: string) => void;
   setNarrationOpacity: (v: number) => void;
   setChatFontColor: (v: string) => void;
@@ -958,6 +986,7 @@ function normalizePersistedMainSurface(persisted: Record<string, unknown>) {
     "characterLibraryOpen",
     "botBrowserOpen",
     "gameAssetsBrowserOpen",
+    "noodleOpen",
   ] as const;
   let found = false;
   for (const key of surfaceKeys) {
@@ -1064,6 +1093,7 @@ export function pickSyncedSettings(state: UIState) {
     editLastMessageOnArrowUp: state.editLastMessageOnArrowUp,
     editMessageOnDoubleClick: state.editMessageOnDoubleClick,
     summaryPopoverSettings: state.summaryPopoverSettings,
+    scenePromptPreferences: state.scenePromptPreferences,
     narrationFontColor: state.narrationFontColor,
     narrationOpacity: state.narrationOpacity,
     chatFontColor: state.chatFontColor,
@@ -1156,6 +1186,7 @@ export const useUIStore = create<UIState>()(
       characterDetailInitialTab: null,
       botBrowserOpen: false,
       gameAssetsBrowserOpen: false,
+      noodleOpen: false,
       characterLibraryOpen: false,
       characterLibrarySelectedId: null,
       characterLibrarySort: "name-asc" as CharacterLibrarySort,
@@ -1240,6 +1271,7 @@ export const useUIStore = create<UIState>()(
       editLastMessageOnArrowUp: true,
       editMessageOnDoubleClick: true,
       summaryPopoverSettings: DEFAULT_SUMMARY_POPOVER_SETTINGS,
+      scenePromptPreferences: DEFAULT_SCENE_PROMPT_PREFERENCES,
       narrationFontColor: "",
       narrationOpacity: 80,
       chatFontColor: "",
@@ -1436,6 +1468,7 @@ export const useUIStore = create<UIState>()(
             characterLibrarySelectedId: preserveCharacterLibrary ? id : s.characterLibrarySelectedId,
             botBrowserOpen: false,
             gameAssetsBrowserOpen: false,
+            noodleOpen: false,
             ...getMobileDetailReturnState(s),
           };
         }),
@@ -1451,6 +1484,7 @@ export const useUIStore = create<UIState>()(
           characterLibraryOpen: false,
           botBrowserOpen: false,
           gameAssetsBrowserOpen: false,
+          noodleOpen: false,
           characterDetailId: null,
           presetDetailId: null,
           connectionDetailId: null,
@@ -1472,6 +1506,7 @@ export const useUIStore = create<UIState>()(
           characterLibraryOpen: false,
           botBrowserOpen: false,
           gameAssetsBrowserOpen: false,
+          noodleOpen: false,
           characterDetailId: null,
           lorebookDetailId: null,
           connectionDetailId: null,
@@ -1493,6 +1528,7 @@ export const useUIStore = create<UIState>()(
           characterLibraryOpen: false,
           botBrowserOpen: false,
           gameAssetsBrowserOpen: false,
+          noodleOpen: false,
           characterDetailId: null,
           lorebookDetailId: null,
           presetDetailId: null,
@@ -1514,6 +1550,7 @@ export const useUIStore = create<UIState>()(
           characterLibraryOpen: false,
           botBrowserOpen: false,
           gameAssetsBrowserOpen: false,
+          noodleOpen: false,
           characterDetailId: null,
           lorebookDetailId: null,
           presetDetailId: null,
@@ -1536,6 +1573,7 @@ export const useUIStore = create<UIState>()(
           characterLibraryOpen: false,
           botBrowserOpen: false,
           gameAssetsBrowserOpen: false,
+          noodleOpen: false,
           characterDetailId: null,
           lorebookDetailId: null,
           presetDetailId: null,
@@ -1556,6 +1594,7 @@ export const useUIStore = create<UIState>()(
           characterLibraryOpen: false,
           botBrowserOpen: false,
           gameAssetsBrowserOpen: false,
+          noodleOpen: false,
           characterDetailId: null,
           lorebookDetailId: null,
           presetDetailId: null,
@@ -1580,6 +1619,7 @@ export const useUIStore = create<UIState>()(
           characterLibraryOpen: false,
           botBrowserOpen: false,
           gameAssetsBrowserOpen: false,
+          noodleOpen: false,
           characterDetailId: null,
           lorebookDetailId: null,
           presetDetailId: null,
@@ -1621,6 +1661,7 @@ export const useUIStore = create<UIState>()(
           personaDetailId: null,
           regexDetailId: null,
           botBrowserOpen: false,
+          noodleOpen: false,
           editorDirty: false,
           detailReturnRightPanel: null,
           rightPanelOpen: false,
@@ -1630,6 +1671,7 @@ export const useUIStore = create<UIState>()(
         set({
           botBrowserOpen: true,
           gameAssetsBrowserOpen: false,
+          noodleOpen: false,
           characterLibraryOpen: false,
           detailReturnRightPanel: null,
           regexDetailId: null,
@@ -1647,6 +1689,7 @@ export const useUIStore = create<UIState>()(
         set({
           gameAssetsBrowserOpen: true,
           botBrowserOpen: false,
+          noodleOpen: false,
           characterLibraryOpen: false,
           detailReturnRightPanel: null,
           regexDetailId: null,
@@ -1660,6 +1703,25 @@ export const useUIStore = create<UIState>()(
           ...(window.innerWidth < 768 && { rightPanelOpen: false }),
         }),
       closeGameAssetsBrowser: () => set({ gameAssetsBrowserOpen: false }),
+      openNoodle: () =>
+        set({
+          noodleOpen: true,
+          botBrowserOpen: false,
+          gameAssetsBrowserOpen: false,
+          characterLibraryOpen: false,
+          detailReturnRightPanel: null,
+          regexDetailId: null,
+          personaDetailId: null,
+          characterDetailId: null,
+          lorebookDetailId: null,
+          presetDetailId: null,
+          connectionDetailId: null,
+          agentDetailId: null,
+          toolDetailId: null,
+          editorDirty: false,
+          ...(window.innerWidth < 768 && { rightPanelOpen: false }),
+        }),
+      closeNoodle: () => set({ noodleOpen: false }),
 
       hasAnyDetailOpen: () => {
         const s = get();
@@ -1674,7 +1736,8 @@ export const useUIStore = create<UIState>()(
           s.regexDetailId ||
           s.characterLibraryOpen ||
           s.botBrowserOpen ||
-          s.gameAssetsBrowserOpen
+          s.gameAssetsBrowserOpen ||
+          s.noodleOpen
         );
       },
       closeAllDetails: () =>
@@ -1690,6 +1753,7 @@ export const useUIStore = create<UIState>()(
           characterLibraryOpen: false,
           botBrowserOpen: false,
           gameAssetsBrowserOpen: false,
+          noodleOpen: false,
           editorDirty: false,
           detailReturnRightPanel: null,
         }),
@@ -1709,6 +1773,7 @@ export const useUIStore = create<UIState>()(
           characterLibraryOpen: false,
           botBrowserOpen: false,
           gameAssetsBrowserOpen: false,
+          noodleOpen: false,
           editorDirty: false,
           detailReturnRightPanel: null,
           chatModeShortcutRequest: {
@@ -1815,6 +1880,8 @@ export const useUIStore = create<UIState>()(
             ...settings,
           }),
         })),
+      setScenePromptPreferences: (preferences) =>
+        set({ scenePromptPreferences: normalizeScenePromptPreferences(preferences) }),
       setNarrationFontColor: (v) => set({ narrationFontColor: v }),
       setNarrationOpacity: (v) => set({ narrationOpacity: Math.max(0, Math.min(100, v)) }),
       setChatFontColor: (v) => set({ chatFontColor: v }),
@@ -1979,7 +2046,7 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: "marinara-engine-ui",
-      version: 69,
+      version: 70,
       // Debounce localStorage writes to avoid sync I/O on every state change
       storage: createJSONStorage(() => {
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -2360,6 +2427,8 @@ export const useUIStore = create<UIState>()(
           persisted.ttsLineVolume = 50;
         }
         persisted.ttsLineVolume = Math.max(0, Math.min(100, Math.round(persisted.ttsLineVolume)));
+        // v69 -> v70: remember scene prompt setup choices.
+        persisted.scenePromptPreferences = normalizeScenePromptPreferences(persisted.scenePromptPreferences);
         // v42 -> v44: reconcile parallel v43 UI preference additions.
         if (version <= 43 && persisted.youtubePlayerEnabled === undefined) {
           persisted.youtubePlayerEnabled = true;
@@ -2507,6 +2576,7 @@ export const useUIStore = create<UIState>()(
         regexDetailId: state.regexDetailId,
         botBrowserOpen: state.botBrowserOpen,
         gameAssetsBrowserOpen: state.gameAssetsBrowserOpen,
+        noodleOpen: state.noodleOpen,
         characterLibraryOpen: state.characterLibraryOpen,
         characterLibrarySelectedId: state.characterLibrarySelectedId,
         characterLibrarySort: state.characterLibrarySort,
@@ -2609,6 +2679,7 @@ export const useUIStore = create<UIState>()(
         editLastMessageOnArrowUp: state.editLastMessageOnArrowUp,
         editMessageOnDoubleClick: state.editMessageOnDoubleClick,
         summaryPopoverSettings: state.summaryPopoverSettings,
+        scenePromptPreferences: state.scenePromptPreferences,
         narrationFontColor: state.narrationFontColor,
         narrationOpacity: state.narrationOpacity,
         chatFontColor: state.chatFontColor,
