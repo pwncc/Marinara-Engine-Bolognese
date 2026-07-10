@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import {
   ANIME_GAME_PROMPT_TEMPLATE_ID,
+  ANIME_GAME_SYSTEM_PROMPT,
   ANIME_GAME_VIDEO_PROMPT_TEMPLATE_ID,
   DEFAULT_GAME_SYSTEM_PROMPT,
   GAME_STORYBOARD_ANIME_EPISODE_PROMPT_TEMPLATE_ID,
@@ -432,6 +433,7 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
   const [promptPresetTouched, setPromptPresetTouched] = useState(false);
   const [customGamePromptEnabled, setCustomGamePromptEnabled] = useState(false);
   const [gameSystemPromptDraft, setGameSystemPromptDraft] = useState(DEFAULT_GAME_SYSTEM_PROMPT);
+  const [gameSystemPromptEdited, setGameSystemPromptEdited] = useState(false);
   const [gamePresentation, setGamePresentation] = useState<"standard" | "anime">("standard");
   const [language, setLanguage] = useState("English");
   const [startMuted, setStartMuted] = useState(false);
@@ -506,12 +508,29 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
   const preferredImageConnectionId = useMemo(() => getPreferredConnectionId(imageConnections), [imageConnections]);
   const preferredVideoConnectionId = useMemo(() => getPreferredConnectionId(videoConnections), [videoConnections]);
   const promptPresets = useMemo(
-    () => (promptPresetsList as Array<{ id: string; name: string; isDefault?: boolean | string }>) ?? [],
+    () =>
+      (promptPresetsList as Array<{
+        id: string;
+        name: string;
+        gamePrompt?: string;
+        isDefault?: boolean | string;
+      }>) ?? [],
     [promptPresetsList],
   );
-  const selectedPromptPresetName = useMemo(
-    () => promptPresets.find((preset) => preset.id === promptPresetId)?.name ?? null,
+  const selectedPromptPreset = useMemo(
+    () => promptPresets.find((preset) => preset.id === promptPresetId) ?? null,
     [promptPresetId, promptPresets],
+  );
+  const selectedPromptPresetName = useMemo(
+    () => selectedPromptPreset?.name ?? null,
+    [selectedPromptPreset],
+  );
+  const effectiveGameSystemPrompt = useMemo(
+    () =>
+      gamePresentation === "anime"
+        ? ANIME_GAME_SYSTEM_PROMPT
+        : selectedPromptPreset?.gamePrompt?.trim() || DEFAULT_GAME_SYSTEM_PROMPT,
+    [gamePresentation, selectedPromptPreset?.gamePrompt],
   );
   const personas = useMemo(
     () =>
@@ -684,6 +703,12 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
     }
   }, [defaultPreset?.id, promptPresetId, promptPresetTouched]);
 
+  useEffect(() => {
+    if (!gameSystemPromptEdited) {
+      setGameSystemPromptDraft(effectiveGameSystemPrompt);
+    }
+  }, [effectiveGameSystemPrompt, gameSystemPromptEdited]);
+
   const handlePromptPresetChange = useCallback((presetId: string | null) => {
     setPromptPresetTouched(true);
     setPromptPresetId(presetId);
@@ -742,7 +767,7 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
     const customGameSystemPrompt =
       customGamePromptEnabled &&
       trimmedGameSystemPrompt &&
-      trimmedGameSystemPrompt !== DEFAULT_GAME_SYSTEM_PROMPT.trim()
+      trimmedGameSystemPrompt !== effectiveGameSystemPrompt.trim()
         ? trimmedGameSystemPrompt
         : null;
     const trimmedGameSpecialInstructions = gameSpecialInstructions.trim();
@@ -2256,7 +2281,9 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
                     <p className="text-xs font-medium text-[var(--foreground)]">GM Prompt</p>
                     <p className="text-[0.55rem] text-[var(--muted-foreground)]">
                       {customGamePromptEnabled
-                        ? "Custom prompt will override the selected preset"
+                        ? gameSystemPromptEdited
+                          ? "Custom prompt will override the selected prompt"
+                          : "Previewing the selected prompt; edit it to override"
                         : gamePresentation === "anime"
                           ? "Using Anime Game Prompt"
                           : selectedPromptPresetName
@@ -2267,7 +2294,15 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="rounded-full bg-[var(--background)] px-2 py-0.5 text-[0.5625rem] font-medium text-[var(--muted-foreground)] ring-1 ring-[var(--border)]">
-                    {customGamePromptEnabled ? "Custom" : selectedPromptPresetName ? "Preset" : "Default"}
+                    {customGamePromptEnabled
+                      ? gameSystemPromptEdited
+                        ? "Custom"
+                        : "Preview"
+                      : gamePresentation === "anime"
+                        ? "Anime"
+                        : selectedPromptPresetName
+                          ? "Preset"
+                          : "Default"}
                   </span>
                   <div
                     className={cn(
@@ -2289,22 +2324,28 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
                 <div className="mt-3 space-y-2 border-t border-[var(--border)] pt-3">
                   <textarea
                     value={gameSystemPromptDraft}
-                    onChange={(event) => setGameSystemPromptDraft(event.target.value)}
+                    onChange={(event) => {
+                      setGameSystemPromptDraft(event.target.value);
+                      setGameSystemPromptEdited(true);
+                    }}
                     rows={10}
                     maxLength={16000}
                     className="max-h-72 min-h-48 w-full resize-y rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs leading-relaxed text-[var(--foreground)] outline-none ring-1 ring-[var(--border)] transition-all placeholder:text-[var(--muted-foreground)]/50 focus:ring-[var(--primary)]/40"
                   />
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-[0.5625rem] text-[var(--muted-foreground)]">
-                      Resetting or leaving this unchanged keeps the built-in default.
+                      Leaving this unchanged keeps the selected presentation or preset.
                     </p>
                     <button
                       type="button"
-                      onClick={() => setGameSystemPromptDraft(DEFAULT_GAME_SYSTEM_PROMPT)}
+                      onClick={() => {
+                        setGameSystemPromptDraft(effectiveGameSystemPrompt);
+                        setGameSystemPromptEdited(false);
+                      }}
                       className="inline-flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
                     >
                       <RotateCcw size={11} />
-                      Reset
+                      Reset to selected
                     </button>
                   </div>
                 </div>

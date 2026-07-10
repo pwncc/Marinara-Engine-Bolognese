@@ -64,6 +64,8 @@ New to Game Mode? Leave **Game Master Mode** on **Standalone GM**. Marinara buil
 
 Choose **Anime Episode** on the final step when you want GM turns written as filmable visual beats. It selects the built-in **Anime Game Prompt**, **Anime Episode Director**, and **Anime Game Video** presets, and sends storyboard image prompts directly to the image provider. It does not turn image or video generation on and does not change your selected connections. The GM uses the wizard's **Keyframes per Turn** value as a target for strong visual anchor moments, but it can write fewer for a short exchange and can use more narration paragraphs when the story needs them.
 
+The **GM Prompt** editor previews the effective prompt for the selected presentation. With **Anime Episode** selected, opening the editor shows the Anime Game Prompt, including its keyframe-count macro. Leaving that text unchanged keeps the built-in preset selected; editing it creates a custom prompt that overrides the presentation preset.
+
 ## The three kinds of AI call
 
 Game Mode uses three different kinds of AI call. Knowing them helps you understand where cost and errors come from.

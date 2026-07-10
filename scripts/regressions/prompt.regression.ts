@@ -796,6 +796,10 @@ const cases: RegressionCase[] = [
   {
     name: "Anime Game presets stay keyframe-aware and causally animation-ready",
     run() {
+      const gameSetupWizardSource = readFileSync(
+        new URL("../../packages/client/src/components/game/GameSetupWizard.tsx", import.meta.url),
+        "utf8",
+      );
       const gmPreset = GAME_GM_BUILT_IN_PROMPT_TEMPLATES.find(
         (template) => template.id === ANIME_GAME_PROMPT_TEMPLATE_ID,
       );
@@ -822,6 +826,9 @@ const cases: RegressionCase[] = [
       assert.match(directorPreset?.promptTemplate ?? "", /time T=0: the exact first frame/);
       assert.match(directorPreset?.promptTemplate ?? "", /PROVIDER-SAFE STAGING/);
       assert.match(directorPreset?.promptTemplate ?? "", /Create exactly \$\{keyframeCount\} shots/);
+      assert.match(gameSetupWizardSource, /gamePresentation === "anime"\s*\? ANIME_GAME_SYSTEM_PROMPT/);
+      assert.match(gameSetupWizardSource, /trimmedGameSystemPrompt !== effectiveGameSystemPrompt\.trim\(\)/);
+      assert.match(gameSetupWizardSource, /Reset to selected/);
     },
   },
   {
