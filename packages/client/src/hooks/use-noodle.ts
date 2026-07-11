@@ -20,6 +20,7 @@ import type {
   NoodleSettings,
   NoodleSettingsUpdateInput,
 } from "@marinara-engine/shared";
+import { mergeNoodlePollVoteInteractions } from "@marinara-engine/shared";
 import type { ImagePromptOverride, ImagePromptReviewItem } from "../components/ui/ImagePromptReviewModal";
 
 export type NoodleRefreshResult = {
@@ -32,6 +33,12 @@ export const noodleKeys = {
   bootstrap: () => [...noodleKeys.all, "bootstrap"] as const,
 };
 
+function preservePollVotes(current: NoodleBootstrap | undefined, next: NoodleBootstrap): NoodleBootstrap {
+  if (!current) return next;
+  const interactions = mergeNoodlePollVoteInteractions(current.interactions, next.posts, next.interactions);
+  return interactions === next.interactions ? next : { ...next, interactions };
+}
+
 export function useNoodle(enabled = true) {
   return useQuery({
     queryKey: noodleKeys.bootstrap(),
@@ -40,6 +47,8 @@ export function useNoodle(enabled = true) {
     staleTime: 10_000,
     refetchInterval: enabled ? 30_000 : false,
     refetchIntervalInBackground: false,
+    structuralSharing: (current, next) =>
+      preservePollVotes(current as NoodleBootstrap | undefined, next as NoodleBootstrap),
   });
 }
 
@@ -283,7 +292,10 @@ export function useRefreshNoodle() {
         debugMode: useUIStore.getState().debugMode,
         reviewImagePromptsBeforeSend: useUIStore.getState().reviewImagePromptsBeforeSend,
       }),
-    onSuccess: (result) => qc.setQueryData(noodleKeys.bootstrap(), result.bootstrap),
+    onSuccess: (result) =>
+      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+        preservePollVotes(current, result.bootstrap),
+      ),
     onSettled: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
   });
 }
@@ -296,7 +308,10 @@ export function useConfirmNoodleImagePrompts() {
         prompts,
         debugMode: useUIStore.getState().debugMode,
       }),
-    onSuccess: (bootstrap) => qc.setQueryData(noodleKeys.bootstrap(), bootstrap),
+    onSuccess: (bootstrap) =>
+      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+        preservePollVotes(current, bootstrap),
+      ),
     onSettled: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
   });
 }

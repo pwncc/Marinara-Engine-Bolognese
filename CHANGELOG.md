@@ -44,6 +44,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Fixed
 
+- Preserved stored votes on older Noodle polls when manual or automatic refresh hydration briefly returns an incomplete interaction snapshot.
+
 - Fixed persona-authored Noodle comments bumping their target posts to the top of the timeline; a post now moves up only when another account directly responds to the active persona's comment.
 - Fixed failed Noodle image generations leaving a visible image prompt in place of the missing picture; Noodle now retries the image provider once, then publishes a clean text-only post if the second attempt also fails and clears orphan prompts from earlier failed posts.
 - Fixed provider concurrency-limit failures being reduced to generic agent errors or omitted from generation guidance; affected toasts now identify the concurrency limit and include the provider's message.
