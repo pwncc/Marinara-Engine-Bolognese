@@ -308,7 +308,7 @@ export function createNoodleStorage(db: DB) {
       const currentSchedule = await this.getRefreshSchedule();
       const reconciled = reconcileNoodleRefreshSchedule(currentSchedule, next.refreshesPerDay, new Date());
       await this.saveRefreshSchedule(clearNoodleRefreshFailure(reconciled));
-      return next;
+      return this.getSettings();
     },
 
     async getRefreshSchedule(): Promise<PersistedNoodleRefreshSchedule | null> {

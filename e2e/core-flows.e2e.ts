@@ -487,6 +487,128 @@ test("Noodle interface icons consistently use Noodle blue", async ({ page }, tes
   expect(errors).toEqual([]);
 });
 
+test("Noodle settings persist through refetch and reload", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("desktop"), "Noodle settings persistence is covered on desktop.");
+
+  const initialResponse = await page.request.get("/api/noodle");
+  expect(initialResponse.ok()).toBe(true);
+  const initial = (await initialResponse.json()) as {
+    settings: {
+      enableImagePrompts: boolean;
+      maxImagesPerRefresh: number;
+      allowRandomUsers: boolean;
+      carryoverMaxItems: number;
+      refreshesPerDay: number;
+    };
+  };
+  const nextImageLimit = initial.settings.maxImagesPerRefresh === 9 ? 8 : 9;
+  const nextRandomUsers = !initial.settings.allowRandomUsers;
+  const nextCarryItems = initial.settings.carryoverMaxItems === 10 ? 9 : 10;
+  const nextRefreshesPerDay = initial.settings.refreshesPerDay === 3 ? 4 : 3;
+
+  const enableImagesResponse = await page.request.put("/api/noodle/settings", {
+    data: { enableImagePrompts: true },
+  });
+  expect(enableImagesResponse.ok()).toBe(true);
+  const enabledSettings = (await enableImagesResponse.json()) as typeof initial.settings;
+  expect(enabledSettings.enableImagePrompts).toBe(true);
+
+  try {
+    await page.goto("/");
+    await page.locator('[data-tour="noodle-tab"]').click();
+    const noodle = page.locator('[data-component="NoodleView"]');
+    await noodle.getByRole("button", { name: "Settings", exact: true }).click();
+
+    const imageLimitInput = noodle
+      .locator("label")
+      .filter({ hasText: "Images/refresh" })
+      .locator('input[type="number"]');
+    await expect(imageLimitInput).toBeVisible();
+    const imageSaveResponse = page.waitForResponse(
+      (response) => response.request().method() === "PUT" && new URL(response.url()).pathname === "/api/noodle/settings",
+    );
+    await imageLimitInput.fill(String(nextImageLimit));
+    await imageLimitInput.blur();
+    expect((await imageSaveResponse).ok()).toBe(true);
+    await expect(imageLimitInput).toHaveValue(String(nextImageLimit));
+
+    const randomUsersButton = noodle.getByRole("button", { name: /Random users/ });
+    const randomUsersSaveResponse = page.waitForResponse(
+      (response) => response.request().method() === "PUT" && new URL(response.url()).pathname === "/api/noodle/settings",
+    );
+    await randomUsersButton.click();
+    expect((await randomUsersSaveResponse).ok()).toBe(true);
+
+    await expect
+      .poll(async () => {
+        const response = await page.request.get("/api/noodle");
+        const bootstrap = (await response.json()) as typeof initial;
+        return {
+          maxImagesPerRefresh: bootstrap.settings.maxImagesPerRefresh,
+          allowRandomUsers: bootstrap.settings.allowRandomUsers,
+        };
+      })
+      .toEqual({ maxImagesPerRefresh: nextImageLimit, allowRandomUsers: nextRandomUsers });
+
+    await page.reload();
+    await page.locator('[data-tour="noodle-tab"]').click();
+    const reloadedNoodle = page.locator('[data-component="NoodleView"]');
+    await reloadedNoodle.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(
+      reloadedNoodle.locator("label").filter({ hasText: "Images/refresh" }).locator('input[type="number"]'),
+    ).toHaveValue(String(nextImageLimit));
+    await expect(reloadedNoodle.getByRole("button", { name: /Random users/ })).toContainText(
+      nextRandomUsers ? "Enabled" : "Ambient fake profiles",
+    );
+
+    const carryItemsInput = reloadedNoodle
+      .locator("label")
+      .filter({ hasText: "Carry items" })
+      .locator('input[type="number"]');
+    await carryItemsInput.fill(String(nextCarryItems));
+    await reloadedNoodle.getByRole("button", { name: "Home", exact: true }).click();
+    await reloadedNoodle.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(
+      reloadedNoodle.locator("label").filter({ hasText: "Carry items" }).locator('input[type="number"]'),
+    ).toHaveValue(String(nextCarryItems));
+    await expect
+      .poll(async () => {
+        const response = await page.request.get("/api/noodle");
+        const bootstrap = (await response.json()) as typeof initial;
+        return bootstrap.settings.carryoverMaxItems;
+      })
+      .toBe(nextCarryItems);
+
+    const refreshesPerDayInput = reloadedNoodle
+      .locator("label")
+      .filter({ hasText: "Refreshes/day" })
+      .locator('input[type="number"]');
+    await refreshesPerDayInput.fill(String(nextRefreshesPerDay));
+    await reloadedNoodle.getByRole("button", { name: /Notifications/ }).click();
+    await reloadedNoodle.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(
+      reloadedNoodle.locator("label").filter({ hasText: "Refreshes/day" }).locator('input[type="number"]'),
+    ).toHaveValue(String(nextRefreshesPerDay));
+    await expect
+      .poll(async () => {
+        const response = await page.request.get("/api/noodle");
+        const bootstrap = (await response.json()) as typeof initial;
+        return bootstrap.settings.refreshesPerDay;
+      })
+      .toBe(nextRefreshesPerDay);
+  } finally {
+    await page.request.put("/api/noodle/settings", {
+      data: {
+        enableImagePrompts: initial.settings.enableImagePrompts,
+        maxImagesPerRefresh: initial.settings.maxImagesPerRefresh,
+        allowRandomUsers: initial.settings.allowRandomUsers,
+        carryoverMaxItems: initial.settings.carryoverMaxItems,
+        refreshesPerDay: initial.settings.refreshesPerDay,
+      },
+    });
+  }
+});
+
 test("Noodle posts tag invited characters with @handle mentions", async ({ page }) => {
   const errors = collectUnexpectedErrors(page);
   const activePersonaResponse = await page.request.get("/api/characters/personas/active");

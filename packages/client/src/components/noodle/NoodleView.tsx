@@ -5248,7 +5248,54 @@ function NumberSetting({
   onCommit: (value: number) => void;
 }) {
   const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
+  const draftRef = useRef(String(value));
+  const savedValueRef = useRef(value);
+  const dirtyRef = useRef(false);
+  const onCommitRef = useRef(onCommit);
+  const boundsRef = useRef({ min, max });
+
+  onCommitRef.current = onCommit;
+  boundsRef.current = { min, max };
+
+  useEffect(() => {
+    savedValueRef.current = value;
+    if (dirtyRef.current) return;
+    const nextDraft = String(value);
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
+  }, [value]);
+
+  useEffect(
+    () => () => {
+      if (!dirtyRef.current) return;
+      const parsed = Number(draftRef.current);
+      if (!Number.isFinite(parsed)) return;
+      const bounds = boundsRef.current;
+      const normalized = Math.max(bounds.min, Math.min(bounds.max, Math.round(parsed)));
+      if (normalized !== savedValueRef.current) onCommitRef.current(normalized);
+    },
+    [],
+  );
+
+  const commitDraft = (rawDraft: string) => {
+    const parsed = Number(rawDraft);
+    if (!Number.isFinite(parsed)) {
+      const savedDraft = String(savedValueRef.current);
+      draftRef.current = savedDraft;
+      dirtyRef.current = false;
+      setDraft(savedDraft);
+      return;
+    }
+    const normalized = Math.max(min, Math.min(max, Math.round(parsed)));
+    const normalizedDraft = String(normalized);
+    draftRef.current = normalizedDraft;
+    dirtyRef.current = false;
+    setDraft(normalizedDraft);
+    if (normalized === savedValueRef.current) return;
+    savedValueRef.current = normalized;
+    onCommitRef.current(normalized);
+  };
+
   return (
     <label className="block space-y-1.5">
       <FieldLabel help={help}>{label}</FieldLabel>
@@ -5257,14 +5304,14 @@ function NumberSetting({
         min={min}
         max={max}
         value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => {
-          const parsed = Number(draft);
-          if (!Number.isFinite(parsed)) {
-            setDraft(String(value));
-            return;
-          }
-          onCommit(Math.max(min, Math.min(max, Math.round(parsed))));
+        onChange={(event) => {
+          draftRef.current = event.target.value;
+          dirtyRef.current = true;
+          setDraft(event.target.value);
+        }}
+        onBlur={(event) => commitDraft(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
         }}
         className={fieldClass}
       />

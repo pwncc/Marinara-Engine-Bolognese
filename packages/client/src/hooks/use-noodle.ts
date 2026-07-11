@@ -55,13 +55,30 @@ export function useNoodle(enabled = true) {
 export function useUpdateNoodleSettings() {
   const qc = useQueryClient();
   return useMutation({
+    scope: { id: "noodle-settings" },
     mutationFn: (settings: NoodleSettingsUpdateInput) => api.put<NoodleSettings>("/noodle/settings", settings),
+    onMutate: async (patch) => {
+      await qc.cancelQueries({ queryKey: noodleKeys.bootstrap() });
+      const previous = qc.getQueryData<NoodleBootstrap>(noodleKeys.bootstrap());
+      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+        current
+          ? {
+              ...current,
+              settings: { ...current.settings, ...patch } as NoodleSettings,
+            }
+          : current,
+      );
+      return { previous };
+    },
+    onError: (_error, _patch, context) => {
+      if (context?.previous) qc.setQueryData(noodleKeys.bootstrap(), context.previous);
+    },
     onSuccess: (settings) => {
       qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
         current ? { ...current, settings } : current,
       );
-      qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() });
     },
+    onSettled: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
   });
 }
 
