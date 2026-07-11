@@ -1996,6 +1996,8 @@ export function NoodleView() {
         onSuccess: () => {
           composerValueRef.current = "";
           composerHasTextRef.current = false;
+          if (inlineComposerRef.current) inlineComposerRef.current.value = "";
+          if (modalComposerRef.current) modalComposerRef.current.value = "";
           setComposer("");
           setComposerHasText(false);
           setActiveMention(null);

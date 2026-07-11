@@ -35,6 +35,9 @@ assert.deepEqual(normalizeOpenAIChatCompletionsResponseFormat(solTimelineFormat)
     strict: true,
   },
 });
+assert.deepEqual(normalizeOpenAIChatCompletionsResponseFormat({ type: "json_object" }), {
+  type: "json_object",
+});
 const solProfileFormat = noodleResponseFormat("gpt-5.6-sol", "profiles");
 assert.equal(solProfileFormat.name, "noodle_profiles");
 assertStrictObjects(solProfileFormat.schema);

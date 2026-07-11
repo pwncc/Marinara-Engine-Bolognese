@@ -18,6 +18,13 @@ const PARAMETER_LABELS: Record<string, string> = {
   verbosity: "Verbosity",
 };
 
+const CONCURRENCY_LIMIT_PATTERN =
+  /\b(concurrenc(?:y|ies)|concurrent(?:ly)?|parallel (?:requests?|generations?)(?: limit)?|simultaneous (?:requests?|generations?)(?: limit)?)\b/i;
+
+export function isConcurrencyLimitError(message: string): boolean {
+  return CONCURRENCY_LIMIT_PATTERN.test(message);
+}
+
 function normalizeParameterName(raw: string) {
   return raw
     .trim()
@@ -47,7 +54,7 @@ function isPrivilegedAccessError(message: string): boolean {
 export function formatGenerationParameterError(message: string): string {
   if (isPrivilegedAccessError(message)) return message;
 
-  if (/\b(concurrenc(?:y|ies)|concurrent(?:ly)?|parallel request limit|simultaneous request limit)\b/i.test(message)) {
+  if (isConcurrencyLimitError(message)) {
     return `The provider's concurrency limit was reached. Wait for another generation to finish, then try again. Provider message: ${message}`;
   }
 

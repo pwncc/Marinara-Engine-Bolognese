@@ -23,7 +23,7 @@ import {
   shouldSuppressUnknownModelParameters,
 } from "@marinara-engine/shared";
 import { logger } from "../../../lib/logger.js";
-import { applyGlmThinkingParameters, isNativeGlmEndpoint } from "./glm-request-compat.js";
+import { applyGlmThinkingParameters } from "./glm-request-compat.js";
 
 /**
  * Models that ONLY support the Responses API (`/responses`) and not Chat Completions.
@@ -78,7 +78,6 @@ type OpenAIProviderKind =
 
 export function normalizeOpenAIChatCompletionsResponseFormat(
   responseFormat: { type: string; [key: string]: unknown } | undefined,
-  rewriteJsonObject = false,
 ): unknown | undefined {
   if (!responseFormat) return undefined;
 
@@ -98,10 +97,6 @@ export function normalizeOpenAIChatCompletionsResponseFormat(
         },
       };
     }
-  }
-
-  if (rewriteJsonObject && responseFormat.type === "json_object") {
-    return { type: "json_schema", json_schema: { name: "response", schema: { type: "object" }, strict: true } };
   }
 
   return responseFormat;
@@ -277,10 +272,7 @@ export class OpenAIProvider extends BaseLLMProvider {
   }
 
   private normalizeChatCompletionsResponseFormat(responseFormat?: { type: string }): unknown | undefined {
-    return normalizeOpenAIChatCompletionsResponseFormat(
-      responseFormat,
-      this.isGenericCustomProvider() && !isNativeGlmEndpoint(this.baseUrl),
-    );
+    return normalizeOpenAIChatCompletionsResponseFormat(responseFormat);
   }
 
   /**

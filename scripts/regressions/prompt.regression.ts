@@ -810,11 +810,17 @@ const cases: RegressionCase[] = [
     run() {
       const providerMessage = "Provider concurrency limit exceeded for this account";
       assert.match(formatGenerationParameterError(providerMessage), /Provider message: Provider concurrency limit/);
+      assert.match(formatGenerationParameterError("Too many parallel requests"), /concurrency limit was reached/);
+      assert.match(formatGenerationParameterError("Simultaneous generations limit reached"), /concurrency limit was reached/);
       assert.equal(
         formatAgentFailuresToast([
           toAgentFailure({ agentType: "illustrator", agentName: "Illustrator", error: providerMessage }),
         ]),
         "Illustrator failed: Concurrency limit: Provider concurrency limit exceeded for this account. Use Retry Failed Agents in the Agents menu to try again.",
+      );
+      assert.equal(
+        toAgentFailure({ agentType: "illustrator", error: "Too many parallel generations" }).reasonLabel,
+        "Concurrency limit",
       );
     },
   },

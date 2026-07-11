@@ -1,3 +1,5 @@
+import { isConcurrencyLimitError } from "./generation-parameter-errors";
+
 export interface AgentFailure {
   agentType: string;
   agentName: string;
@@ -31,7 +33,7 @@ function classifyAgentFailureReason(error: string | null | undefined): string | 
   if (/\b(unauthorized|forbidden|invalid api key|api key|401|403|permission|credential|auth)\b/.test(value)) {
     return "Authentication";
   }
-  if (/\b(concurrenc(?:y|ies)|concurrent(?:ly)?|parallel (?:request|generation)|simultaneous (?:request|generation))\b/.test(value)) {
+  if (isConcurrencyLimitError(value)) {
     return "Concurrency limit";
   }
   if (/\b(rate limit|too many requests|quota|429)\b/.test(value)) {

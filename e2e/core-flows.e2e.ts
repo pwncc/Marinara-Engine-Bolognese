@@ -542,6 +542,7 @@ test("Noodle posts tag invited characters with @handle mentions", async ({ page 
       metadata: { mentionedAccountIds?: string[] };
     };
     createdPostId = post.id;
+    await expect(textarea).toHaveValue("");
     expect(post.metadata.mentionedAccountIds).toContain(professorMariAccount!.id);
 
     const postArticle = noodle.locator(`[data-noodle-post-id="${post.id}"]`);

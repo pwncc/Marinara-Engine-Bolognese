@@ -3812,7 +3812,7 @@ export function GameNarration({
       showMessageActions &&
       !!onPeekPrompt &&
       !!sourceMessageId &&
-      sourceMessageRole === "assistant" &&
+      (sourceMessageRole === "assistant" || sourceMessageRole === "narrator") &&
       hasExactCachedPrompt(sourceMessage);
     const canDeleteThisSegment =
       !!onDeleteSegment &&
@@ -5019,7 +5019,7 @@ export function GameNarration({
                         entrySegmentIndex === 0 &&
                         !!onPeekPrompt &&
                         !!sourceMessageId &&
-                        sourceMessageRole === "assistant" &&
+                        (sourceMessageRole === "assistant" || sourceMessageRole === "narrator") &&
                         hasExactCachedPrompt(promptSourceMessage);
                       const canDeleteThisSegment =
                         !!onDeleteSegment &&
