@@ -20,12 +20,12 @@ const GROK_ERROR_PREVIEW_CHARS = 2000;
 const GROK_MODELS_TIMEOUT_MS = 30 * 1000;
 const GROK_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
 const GROK_TOKENS_PER_CHAR = 4;
-// 128k is a conservative floor for current Grok models; the per-connection
-// "max context" setting overrides it upward. The old 32k default matched the
-// inline `-p` argv ceiling (Linux caps a single exec argument at 128 KiB;
-// ~32k tokens at 4 chars/token) — prompts now travel via --prompt-file, so
-// that limit no longer applies.
-const GROK_CLI_DEFAULT_CONTEXT_TOKENS = 128_000;
+// 32k stays the DEFAULT window: very large roleplay prompts can make the
+// local CLI hit its own turn limit, so the conservative floor is kept for
+// connections that never touched the setting. It is no longer a hard cap —
+// prompts travel via --prompt-file (the inline `-p` argv ceiling is gone),
+// so an explicitly configured Max Context Window is honored as-is.
+const GROK_CLI_DEFAULT_CONTEXT_TOKENS = 32_000;
 const GROK_CLI_MAX_TURNS = 8;
 const GROK_CLI_SAFE_HEADLESS_MODEL_ID = "grok-composer-2.5-fast";
 const GROK_CLI_SYSTEM_PROMPT =
@@ -71,8 +71,10 @@ function normalizeGrokCliModelForFlag(model: string): string {
 
 function normalizeGrokCliContextWindow(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return GROK_CLI_DEFAULT_CONTEXT_TOKENS;
-  // No upper clamp: --prompt-file delivery removed the argv-size reason for
-  // one, so the configured per-connection max context flows through as-is.
+  // No upper clamp on explicit values: --prompt-file delivery removed the
+  // transport-size reason for one, so a deliberately configured max context
+  // flows through as-is. Oversized values fail soft via the existing
+  // "max turns reached" guidance rather than being silently capped.
   return Math.floor(value);
 }
 
