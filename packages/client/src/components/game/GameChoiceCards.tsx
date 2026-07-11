@@ -7,6 +7,7 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { normalizeChoiceText } from "../../lib/game-choice-utils";
 import { AnimatedText } from "./AnimatedText";
 
 interface GameChoiceCardsProps {
@@ -18,18 +19,32 @@ interface GameChoiceCardsProps {
   replayChoice?: string | null;
 }
 
-function normalizeChoice(value: string): string {
-  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+function choiceStateClassName(
+  selected: boolean,
+  replayMode: boolean,
+  recordedChoice: boolean,
+  selectionMade: boolean,
+): string {
+  if (selected) {
+    return "border-[var(--primary)]/50 bg-[var(--primary)]/20 text-white ring-2 ring-[var(--primary)]/30 scale-[0.98]";
+  }
+  if (replayMode && recordedChoice) {
+    return "border-[var(--primary)]/35 bg-[var(--primary)]/12 text-white hover:border-[var(--primary)]/55 hover:bg-[var(--primary)]/20";
+  }
+  if (selectionMade || (replayMode && !recordedChoice)) {
+    return "border-white/5 bg-white/3 text-white/30 opacity-50";
+  }
+  return "border-white/10 bg-white/5 text-white/90 hover:border-[var(--primary)]/30 hover:bg-[var(--primary)]/10 hover:text-white";
 }
 
 export function GameChoiceCards({ choices, onSelect, onDismiss, disabled, replayChoice }: GameChoiceCardsProps) {
   const [selected, setSelected] = useState<number | null>(null);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const replayMode = replayChoice !== undefined;
-  const normalizedReplayChoice = replayChoice ? normalizeChoice(replayChoice) : null;
+  const normalizedReplayChoice = replayChoice ? normalizeChoiceText(replayChoice) : null;
 
   const handleSelect = (choice: string, index: number) => {
-    const isRecordedChoice = !replayMode || normalizeChoice(choice) === normalizedReplayChoice;
+    const isRecordedChoice = !replayMode || normalizeChoiceText(choice) === normalizedReplayChoice;
     if (disabled || selected !== null || !isRecordedChoice) return;
     setSelected(index);
     // Brief animation before sending
@@ -60,7 +75,7 @@ export function GameChoiceCards({ choices, onSelect, onDismiss, disabled, replay
 
         <div className="flex min-h-0 flex-1 touch-pan-y flex-col gap-2 overflow-y-auto overscroll-contain pr-1 [-webkit-overflow-scrolling:touch]">
           {choices.map((choice, i) => {
-            const isRecordedChoice = !replayMode || normalizeChoice(choice) === normalizedReplayChoice;
+            const isRecordedChoice = !replayMode || normalizeChoiceText(choice) === normalizedReplayChoice;
             const choiceDisabled = disabled || selected !== null || !isRecordedChoice;
             return (
               <button
@@ -74,13 +89,7 @@ export function GameChoiceCards({ choices, onSelect, onDismiss, disabled, replay
                 }
                 className={cn(
                   "group relative shrink-0 overflow-hidden rounded-xl border px-4 py-3 text-left text-sm transition-all duration-200",
-                  selected === i
-                    ? "border-[var(--primary)]/50 bg-[var(--primary)]/20 text-white ring-2 ring-[var(--primary)]/30 scale-[0.98]"
-                    : replayMode && isRecordedChoice
-                      ? "border-[var(--primary)]/35 bg-[var(--primary)]/12 text-white hover:border-[var(--primary)]/55 hover:bg-[var(--primary)]/20"
-                      : selected !== null || (replayMode && !isRecordedChoice)
-                        ? "border-white/5 bg-white/3 text-white/30 opacity-50"
-                        : "border-white/10 bg-white/5 text-white/90 hover:border-[var(--primary)]/30 hover:bg-[var(--primary)]/10 hover:text-white",
+                  choiceStateClassName(selected === i, replayMode, isRecordedChoice, selected !== null),
                   disabled && "pointer-events-none opacity-50",
                 )}
               >

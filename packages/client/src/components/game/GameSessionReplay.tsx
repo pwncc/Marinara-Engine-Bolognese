@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronRight, History, Loader2, RotateCcw, X } from "lucide-react";
-import type { Message } from "@marinara-engine/shared";
+import { useQuery } from "@tanstack/react-query";
+import type { DirectionCommand, Message } from "@marinara-engine/shared";
 import type { SpriteInfo } from "../../hooks/use-characters";
+import { useGameSessions } from "../../hooks/use-game";
+import { api } from "../../lib/api-client";
+import { audioManager } from "../../lib/game-audio";
+import { resolveAssetTag } from "../../lib/asset-fuzzy-match";
+import { findReplayableGameSessionChat } from "../../lib/game-session-resolution";
 import type { CharacterMap, PersonaInfo } from "../chat/chat-area.types";
 import type { AvatarCrop, LegacyAvatarCrop } from "../../lib/utils";
 import { buildGameSessionReplayTurns, type GameReplayPresentationCue } from "../../lib/game-session-replay";
+import { useGameAssetStore } from "../../stores/game-asset.store";
+import { ttsService } from "../../lib/tts-service";
 import { GameChoiceCards } from "./GameChoiceCards";
 import { GameNarration } from "./GameNarration";
 
@@ -15,11 +23,11 @@ interface SpeakerAvatarInfo {
   dialogueColor?: string;
 }
 
+const EMPTY_REPLAY_MESSAGES: Message[] = [];
+
 interface GameSessionReplayProps {
+  gameId: string;
   sessionNumber: number;
-  messages?: Message[];
-  isLoading: boolean;
-  error?: Error | null;
   characterMap: CharacterMap;
   activeCharacterIds: string[];
   personaInfo?: PersonaInfo;
@@ -27,16 +35,18 @@ interface GameSessionReplayProps {
   speakerAvatarMap: Map<string, SpeakerAvatarInfo>;
   gameVoiceVolume: number;
   directionsActive: boolean;
+  assetMap: Parameters<typeof resolveAssetTag>[2];
+  useMusicDjPlayerMusic: boolean;
   onActiveSpeakerChange: (speaker: { name: string; avatarUrl: string; expression?: string } | null) => void;
-  onPresentationCue: (cue: GameReplayPresentationCue, segmentIndex: number | null) => void;
+  onBackgroundChange: (background: string | null) => void;
+  onPlayDirections: (directions: DirectionCommand[]) => void;
+  onMessagesLoaded: (messages: Message[]) => void;
   onExit: () => void;
 }
 
 export function GameSessionReplay({
+  gameId,
   sessionNumber,
-  messages,
-  isLoading,
-  error,
   characterMap,
   activeCharacterIds,
   personaInfo,
@@ -44,11 +54,27 @@ export function GameSessionReplay({
   speakerAvatarMap,
   gameVoiceVolume,
   directionsActive,
+  assetMap,
+  useMusicDjPlayerMusic,
   onActiveSpeakerChange,
-  onPresentationCue,
+  onBackgroundChange,
+  onPlayDirections,
+  onMessagesLoaded,
   onExit,
 }: GameSessionReplayProps) {
-  const turns = useMemo(() => buildGameSessionReplayTurns(messages ?? []), [messages]);
+  const gameSessionsQuery = useGameSessions(gameId || null);
+  const sessionChat = useMemo(
+    () => findReplayableGameSessionChat(gameSessionsQuery.data, sessionNumber),
+    [gameSessionsQuery.data, sessionNumber],
+  );
+  const replayMessagesQuery = useQuery({
+    queryKey: ["game", "session-replay", sessionChat?.id ?? ""],
+    queryFn: () => api.get<Message[]>(`/chats/${sessionChat!.id}/messages`),
+    enabled: !!sessionChat?.id,
+    staleTime: 60_000,
+  });
+  const messages = replayMessagesQuery.data ?? EMPTY_REPLAY_MESSAGES;
+  const turns = useMemo(() => buildGameSessionReplayTurns(messages), [messages]);
   const [turnIndex, setTurnIndex] = useState(0);
   const [turnComplete, setTurnComplete] = useState(false);
   const [replayComplete, setReplayComplete] = useState(false);
@@ -61,6 +87,46 @@ export function GameSessionReplay({
     setReplayComplete(false);
     presentedTurnIdRef.current = null;
   }, [sessionNumber]);
+
+  useEffect(() => {
+    onMessagesLoaded(messages);
+    return () => onMessagesLoaded([]);
+  }, [messages, onMessagesLoaded]);
+
+  const handlePresentationCue = useCallback(
+    (cue: GameReplayPresentationCue, segmentIndex: number | null) => {
+      const effects =
+        segmentIndex == null ? [cue] : cue.segmentEffects.filter((effect) => effect.segment === segmentIndex);
+      for (const effect of effects) {
+        if (effect.background) {
+          onBackgroundChange(resolveAssetTag(effect.background, "backgrounds", assetMap));
+        }
+        if (effect.music && !useMusicDjPlayerMusic) {
+          audioManager.playMusic(resolveAssetTag(effect.music, "music", assetMap), assetMap);
+        }
+        if (effect.ambient) {
+          audioManager.playAmbient(resolveAssetTag(effect.ambient, "ambient", assetMap), assetMap);
+        }
+        for (const sfx of effect.sfx ?? []) {
+          audioManager.playSfx(resolveAssetTag(sfx, "sfx", assetMap), assetMap);
+        }
+        if (effect.directions?.length) {
+          onPlayDirections(effect.directions);
+        }
+      }
+    },
+    [assetMap, onBackgroundChange, onPlayDirections, useMusicDjPlayerMusic],
+  );
+
+  const exitReplay = useCallback(() => {
+    ttsService.stop();
+    const { currentMusic, currentAmbient } = useGameAssetStore.getState();
+    if (currentMusic && !useMusicDjPlayerMusic) audioManager.playMusic(currentMusic, assetMap);
+    else if (!useMusicDjPlayerMusic) audioManager.stopMusic();
+    if (currentAmbient) audioManager.playAmbient(currentAmbient, assetMap);
+    else audioManager.stopAmbient();
+    onExit();
+  }, [assetMap, onExit, useMusicDjPlayerMusic]);
 
   const advance = useCallback(() => {
     if (turnIndex >= turns.length - 1) {
@@ -78,7 +144,7 @@ export function GameSessionReplay({
     setReplayComplete(false);
   }, []);
 
-  if (isLoading) {
+  if (gameSessionsQuery.isLoading || (sessionChat && replayMessagesQuery.isLoading)) {
     return (
       <div className="flex h-full flex-1 items-center justify-center">
         <div className="flex items-center gap-2 rounded-xl border border-white/15 bg-black/70 px-4 py-3 text-sm text-white/80 shadow-lg">
@@ -89,18 +155,25 @@ export function GameSessionReplay({
     );
   }
 
-  if (error || !turn) {
+  const replayError =
+    gameSessionsQuery.error instanceof Error
+      ? gameSessionsQuery.error
+      : replayMessagesQuery.error instanceof Error
+        ? replayMessagesQuery.error
+        : null;
+
+  if (replayError || !sessionChat || !turn) {
     return (
       <div className="flex h-full flex-1 items-center justify-center px-6">
         <div className="max-w-md rounded-xl border border-white/15 bg-black/75 px-5 py-4 text-center shadow-lg">
           <History size={22} className="mx-auto text-white/55" />
           <h2 className="mt-3 text-sm font-semibold text-white">Replay unavailable</h2>
           <p className="mt-1 text-xs leading-relaxed text-white/60">
-            {error?.message || "This session does not contain any replayable GM turns."}
+            {replayError?.message || "This session does not contain any replayable GM turns."}
           </p>
           <button
             type="button"
-            onClick={onExit}
+            onClick={exitReplay}
             className="mari-chrome-control mari-chrome-control--primary mt-4 px-4 py-2 text-xs"
           >
             Return to current session
@@ -142,7 +215,7 @@ export function GameSessionReplay({
           </button>
           <button
             type="button"
-            onClick={onExit}
+            onClick={exitReplay}
             className="mari-chrome-control mari-chrome-control--primary px-3 py-1.5 text-xs"
           >
             Return to current session
@@ -187,7 +260,7 @@ export function GameSessionReplay({
         </div>
         <button
           type="button"
-          onClick={onExit}
+          onClick={exitReplay}
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/15 bg-black/70 text-white/70 shadow-lg backdrop-blur-md transition-colors hover:bg-black/85 hover:text-white"
           title="Return to current session"
           aria-label="Return to current session"
@@ -209,9 +282,9 @@ export function GameSessionReplay({
         onSegmentEnter={(segmentIndex) => {
           if (presentedTurnIdRef.current !== turn.message.id) {
             presentedTurnIdRef.current = turn.message.id;
-            onPresentationCue(turn.presentation, null);
+            handlePresentationCue(turn.presentation, null);
           }
-          onPresentationCue(turn.presentation, segmentIndex);
+          handlePresentationCue(turn.presentation, segmentIndex);
         }}
         showUserMessages
         partyDialogue={turn.partyDialogue}

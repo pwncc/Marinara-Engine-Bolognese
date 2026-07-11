@@ -1,5 +1,7 @@
-import type { DirectionCommand, Message, SceneSegmentEffect } from "@marinara-engine/shared";
+import type { DirectionCommand, Message, SceneAnalysis, SceneSegmentEffect } from "@marinara-engine/shared";
+import { api } from "./api-client";
 import { parseGmTags } from "./game-tag-parser";
+import { normalizeChoiceText } from "./game-choice-utils";
 import { parsePartyDialogue } from "./party-dialogue-parser";
 
 export interface GameReplayChoice {
@@ -46,14 +48,6 @@ function messageExtra(message: Message): Record<string, unknown> {
     }
   }
   return typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-}
-
-function normalizeChoiceText(value: string): string {
-  return value
-    .trim()
-    .replace(/^['"]|['"]$/g, "")
-    .replace(/\s+/g, " ")
-    .toLocaleLowerCase();
 }
 
 export function recordedChoiceText(content: string): string | null {
@@ -155,4 +149,25 @@ export function buildGameSessionReplayTurns(messages: readonly Message[]): GameS
       presentation: replayCue(message),
     };
   });
+}
+
+/** Store scene-analysis presentation output on its source message for deterministic replay. */
+export function persistGameReplayPresentationCue(
+  chatId: string,
+  message: { id: string; content?: string | null },
+  scene: SceneAnalysis,
+): void {
+  const inline = parseGmTags(message.content || "");
+  void api
+    .patch(`/chats/${chatId}/messages/${message.id}/extra`, {
+      gameReplayCue: {
+        background: scene.background ?? inline.background,
+        music: scene.music ?? inline.music,
+        ambient: scene.ambient ?? inline.ambient,
+        sfx: inline.sfx,
+        directions: [...inline.directions, ...(scene.directions ?? [])],
+        segmentEffects: scene.segmentEffects ?? [],
+      },
+    })
+    .catch((error) => console.warn("[game-replay] Failed to persist presentation cues", error));
 }
