@@ -310,7 +310,6 @@ export async function botBrowserJannyRoutes(app: FastifyInstance) {
     }
   });
 
-  // ── Proxy JannyAI avatar images ──
   // ── Fetch full character details by scraping JannyAI page ──
   app.get<{ Params: { id: string } }>("/janny/character/:id", async (req, reply) => {
     const charId = req.params.id;
@@ -453,6 +452,7 @@ export async function botBrowserJannyRoutes(app: FastifyInstance) {
     }
   });
 
+  // ── Proxy JannyAI avatar images ──
   app.get<{ Params: { "*": string } }>("/janny/avatar/*", async (req, reply) => {
     const avatarPath = (req.params as Record<string, string>)["*"];
     if (!avatarPath) throw new Error("Missing avatar path");

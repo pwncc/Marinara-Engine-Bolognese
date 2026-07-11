@@ -2029,7 +2029,7 @@ function AdvancedTab({
   );
 }
 
-// ── Sprites Tab ──
+// ── Gallery Tab ──
 
 type CharacterGalleryMediaTab = "images" | "clips";
 

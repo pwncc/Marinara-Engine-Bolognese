@@ -792,7 +792,7 @@ const jannyProvider: ProviderConfig = {
       /* fall through */
     }
 
-    // Strategy 2: server-side proxy (likely fails due to Cloudflare, but try anyway)
+    // Fall back to our server-side proxy (likely fails due to Cloudflare, but try anyway)
     try {
       const res = await fetch(`/api/bot-browser/janny/character/${charId}?slug=character-${slug}`);
       if (res.ok) {
@@ -3133,10 +3133,6 @@ function DetailView({
 }
 
 // ════════════════════════════════════════════════
-// Definition Section
-// ════════════════════════════════════════════════
-
-// ════════════════════════════════════════════════
 // PNG Character Card Builder
 // ════════════════════════════════════════════════
 
@@ -3265,6 +3261,10 @@ function crc32(data: Uint8Array): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 crc32.table = null as Uint32Array | null;
+
+// ════════════════════════════════════════════════
+// Definition Section
+// ════════════════════════════════════════════════
 
 function DefSection({ title, content }: { title: string; content: string }) {
   return (

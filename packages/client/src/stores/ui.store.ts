@@ -610,9 +610,9 @@ interface UIState {
   conversationCallVoiceVolume: number;
   /** When true, mute character voices in Conversation Calls. */
   conversationCallVoiceMuted: boolean;
-  /** Mobile Spotify widget collapsed state. */
+  /** Mobile floating-widget collapsed state, shared by the Spotify, YouTube, and local-music players despite the spotify-prefixed name. */
   spotifyMobileWidgetCollapsed: boolean;
-  /** Mobile Spotify widget position in viewport pixels. */
+  /** Mobile floating-widget position in viewport pixels, shared by the Spotify, YouTube, and local-music players despite the spotify-prefixed name. */
   spotifyMobileWidgetPosition: FloatingWidgetPosition;
   /** When true, Roleplay and Conversation modes support arrow-key and touch-swipe navigation between message swipes. */
   intuitiveSwipeNavigation: boolean;
