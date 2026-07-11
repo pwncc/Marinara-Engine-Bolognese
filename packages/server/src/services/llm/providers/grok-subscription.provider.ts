@@ -8,7 +8,7 @@
 // the prompt pipeline, command parsing, and tool execution.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BaseLLMProvider, type ChatMessage, type ChatOptions, type LLMUsage } from "../base-provider.js";
@@ -21,9 +21,10 @@ import { DATA_DIR } from "../../../utils/data-dir.js";
 // working tree on every one-shot call (45k+ file opens and ~10s of startup
 // CPU on a full Marinara checkout — paid by every chat AND agent request
 // when this lived under DATA_DIR). The OS temp dir is never inside a repo;
-// the uid suffix keeps per-user paths distinct on shared multi-user hosts.
-const GROK_SCRATCH_OWNER = typeof process.getuid === "function" ? `-${process.getuid()}` : "";
-const GROK_SCRATCH_DIR = join(tmpdir(), `marinara-grok-cli${GROK_SCRATCH_OWNER}`);
+// a unique process-local directory prevents another local user from pre-creating
+// the cwd or replacing a predictable path with a symlink.
+const GROK_SCRATCH_PREFIX = join(tmpdir(), "marinara-grok-cli-");
+let grokScratchDirPromise: Promise<string> | null = null;
 const GROK_PROMPT_DIR = join(DATA_DIR, "grok-cli-prompts");
 const GROK_ERROR_PREVIEW_CHARS = 2000;
 const GROK_MODELS_TIMEOUT_MS = 30 * 1000;
@@ -40,6 +41,11 @@ const GROK_CLI_SAFE_HEADLESS_MODEL_ID = "grok-composer-2.5-fast";
 const GROK_CLI_SYSTEM_PROMPT =
   "You are Marinara Engine's one-shot chat completion backend. Return exactly one assistant response for the transcript. Do not inspect files, run tools, ask clarifying questions, plan, or continue beyond the final answer.";
 const STALE_GROK_CLI_MODEL_IDS = new Set(["grok-build-latest", "grok-build-0.1"]);
+
+function getGrokScratchDir(): Promise<string> {
+  grokScratchDirPromise ??= mkdtemp(GROK_SCRATCH_PREFIX);
+  return grokScratchDirPromise;
+}
 
 export interface GrokCliModel {
   id: string;
@@ -222,10 +228,10 @@ async function runGrokCliCommand(
   args: string[],
   options: { timeoutMs: number; signal?: AbortSignal; timeoutLabel: string },
 ): Promise<GrokCliCommandResult> {
-  await mkdir(GROK_SCRATCH_DIR, { recursive: true, mode: 0o700 });
+  const grokScratchDir = await getGrokScratchDir();
 
   const child = spawn("grok", args, {
-    cwd: GROK_SCRATCH_DIR,
+    cwd: grokScratchDir,
     env: { ...process.env },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -345,6 +351,7 @@ export class GrokSubscriptionProvider extends BaseLLMProvider {
     // prompt files outside --cwd so the model's file tools cannot discover the
     // transcript by listing the CLI workspace.
     await mkdir(GROK_PROMPT_DIR, { recursive: true, mode: 0o700 });
+    const grokScratchDir = await getGrokScratchDir();
     const promptFile = join(GROK_PROMPT_DIR, `prompt-${randomUUID()}.txt`);
     await writeFile(promptFile, prompt, { encoding: "utf8", mode: 0o600 });
     const args = [
@@ -364,7 +371,7 @@ export class GrokSubscriptionProvider extends BaseLLMProvider {
       "--max-turns",
       String(GROK_CLI_MAX_TURNS),
       "--cwd",
-      GROK_SCRATCH_DIR,
+      grokScratchDir,
     ];
     if (cliModel) args.push("-m", cliModel);
 
