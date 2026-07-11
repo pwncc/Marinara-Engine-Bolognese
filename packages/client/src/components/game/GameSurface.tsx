@@ -227,6 +227,20 @@ type GameAssetGenerationResult = {
   generatedNpcAvatars: Array<{ name: string; avatarUrl: string }>;
 };
 
+function persistReplayPresentationCue(
+  chatId: string,
+  message: { id: string; content?: string | null },
+  cue: import("../../lib/game-session-replay").GameReplayPresentationCue,
+): void {
+  void import("../../lib/game-session-replay")
+    .then(({ persistGameReplayPresentationCue }) => {
+      persistGameReplayPresentationCue(chatId, message, cue);
+    })
+    .catch((error) => {
+      console.warn("[game-replay] Failed to load presentation-cue persistence", error);
+    });
+}
+
 const GAME_TOP_ICON_BUTTON = getChatToolbarButtonClass();
 const GAME_MOBILE_ROOT_BUTTON = getChatToolbarButtonClass({
   compact: true,
@@ -2970,6 +2984,9 @@ function GameSurfaceComponent({
   useEffect(() => {
     if (prevSceneRuntimeScopeRef.current === sceneRuntimeScopeKey) return; // skip initial mount
     prevSceneRuntimeScopeRef.current = sceneRuntimeScopeKey;
+    setReplaySessionNumber(null);
+    setReplayBackgroundTag(null);
+    setReplaySpriteMessages([]);
     recentMusicHistoryRef.current = normalizeRecentMusicHistory(chatMeta.gameRecentMusic);
     recentSpotifyTrackHistoryRef.current = normalizeRecentSpotifyTrackHistory(chatMeta.gameRecentSpotifyTracks);
     setPartyDialogue([]);
@@ -3284,7 +3301,11 @@ function GameSurfaceComponent({
     })),
   });
 
-  const recentSpriteSpeakerNames = useMemo(() => extractRecentGameDialogueSpeakerNames(messages), [messages]);
+  const spriteSpeakerMessages = replayActive ? replaySpriteMessages : messages;
+  const recentSpriteSpeakerNames = useMemo(
+    () => extractRecentGameDialogueSpeakerNames(spriteSpeakerMessages),
+    [spriteSpeakerMessages],
+  );
 
   useEffect(() => {
     const avatarPatches: Array<{ name: string; avatarUrl: string }> = [];
@@ -4846,7 +4867,11 @@ function GameSurfaceComponent({
     runSceneAnalysis(sceneContext);
   };
 
-  function applyInlineTags(gmTags: ReturnType<typeof parseGmTags>, assetMap: any, msg: { id: string }) {
+  function applyInlineTags(
+    gmTags: ReturnType<typeof parseGmTags>,
+    assetMap: any,
+    msg: { id: string; content?: string | null },
+  ) {
     const sceneAnalysisState: GameActiveState =
       gmTags.combatEncounter || gmTags.stateChange === "combat"
         ? "combat"
@@ -4899,6 +4924,15 @@ function GameSurfaceComponent({
         useGameAssetStore.getState().setCurrentBackground(pick);
       }
     }
+    const appliedPresentation = useGameAssetStore.getState();
+    persistReplayPresentationCue(activeChatId, msg, {
+      background: appliedPresentation.currentBackground ?? gmTags.background,
+      music: appliedPresentation.currentMusic ?? scoredMusic ?? gmTags.music,
+      ambient: appliedPresentation.currentAmbient ?? scoredAmbient ?? gmTags.ambient,
+      sfx: gmTags.sfx.map((tag) => resolveAssetTag(tag, "sfx", assetMap)),
+      directions: gmTags.directions,
+      segmentEffects: [],
+    });
     // Scene effects are applied — ungate narration
     markSceneReady(msg.id);
   }
@@ -5121,10 +5155,6 @@ function GameSurfaceComponent({
       });
     }
 
-    void import("../../lib/game-session-replay").then(({ persistGameReplayPresentationCue }) => {
-      persistGameReplayPresentationCue(activeChatId, msg, result);
-    });
-
     if (result.timeOfDay) {
       _advanceTime.mutate({ chatId: activeChatId, action: result.timeOfDay });
     }
@@ -5206,6 +5236,44 @@ function GameSurfaceComponent({
       useGameModeStore.getState().patchNpcAvatars(result.generatedNpcAvatars);
       clearFailedNpcAvatars(result.generatedNpcAvatars.map((avatar) => avatar.name));
     }
+
+    const inlinePresentation = parseGmTags(msg.content || "");
+    const replaySegmentEffects: SceneSegmentEffect[] = (result.segmentEffects ?? []).map((effect) => ({
+      ...effect,
+      sfx: effect.sfx ? [...effect.sfx] : undefined,
+      directions: effect.directions ? [...effect.directions] : undefined,
+    }));
+    const generatedIllustration = result.generatedIllustration;
+    if (generatedIllustration?.segment !== undefined && generatedIllustration.segment > 0) {
+      const existingIndex = replaySegmentEffects.findIndex(
+        (effect) => effect.segment === generatedIllustration.segment,
+      );
+      if (existingIndex >= 0) {
+        replaySegmentEffects[existingIndex] = {
+          ...replaySegmentEffects[existingIndex]!,
+          background: generatedIllustration.tag,
+        };
+      } else {
+        replaySegmentEffects.push({ segment: generatedIllustration.segment, background: generatedIllustration.tag });
+      }
+    } else if (generatedIllustration) {
+      const segmentZeroIndex = replaySegmentEffects.findIndex((effect) => effect.segment === 0);
+      if (segmentZeroIndex >= 0) {
+        replaySegmentEffects[segmentZeroIndex] = {
+          ...replaySegmentEffects[segmentZeroIndex]!,
+          background: generatedIllustration.tag,
+        };
+      }
+    }
+    const appliedPresentation = useGameAssetStore.getState();
+    persistReplayPresentationCue(activeChatId, msg, {
+      background: appliedPresentation.currentBackground ?? result.background ?? inlinePresentation.background,
+      music: appliedPresentation.currentMusic ?? result.music ?? inlinePresentation.music,
+      ambient: appliedPresentation.currentAmbient ?? result.ambient ?? inlinePresentation.ambient,
+      sfx: inlinePresentation.sfx.map((tag) => resolveAssetTag(tag, "sfx", getScopedAssetMap())),
+      directions: [...inlinePresentation.directions, ...(result.directions ?? [])],
+      segmentEffects: replaySegmentEffects,
+    });
 
     const latestAssetMap = getScopedAssetMap();
     if (latestAssetMap) {
@@ -9183,7 +9251,7 @@ function GameSurfaceComponent({
 
   // Resolve background image URL — supports exact tag match, partial/fuzzy match, and "black" override
   const resolvedBackground = useMemo(() => {
-    if (chatBackground) {
+    if (chatBackground && (!replayActive || !effectiveBackgroundTag)) {
       return chatBackground;
     }
 

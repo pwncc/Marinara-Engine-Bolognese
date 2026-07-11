@@ -1,4 +1,4 @@
-import type { DirectionCommand, Message, SceneAnalysis, SceneSegmentEffect } from "@marinara-engine/shared";
+import type { DirectionCommand, Message, SceneSegmentEffect } from "@marinara-engine/shared";
 import { api } from "./api-client";
 import { parseGmTags } from "./game-tag-parser";
 import { normalizeChoiceText } from "./game-choice-utils";
@@ -155,19 +155,11 @@ export function buildGameSessionReplayTurns(messages: readonly Message[]): GameS
 export function persistGameReplayPresentationCue(
   chatId: string,
   message: { id: string; content?: string | null },
-  scene: SceneAnalysis,
+  cue: GameReplayPresentationCue,
 ): void {
-  const inline = parseGmTags(message.content || "");
   void api
     .patch(`/chats/${chatId}/messages/${message.id}/extra`, {
-      gameReplayCue: {
-        background: scene.background ?? inline.background,
-        music: scene.music ?? inline.music,
-        ambient: scene.ambient ?? inline.ambient,
-        sfx: inline.sfx,
-        directions: [...inline.directions, ...(scene.directions ?? [])],
-        segmentEffects: scene.segmentEffects ?? [],
-      },
+      gameReplayCue: cue,
     })
     .catch((error) => console.warn("[game-replay] Failed to persist presentation cues", error));
 }
