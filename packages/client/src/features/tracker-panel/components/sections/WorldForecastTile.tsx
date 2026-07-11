@@ -5,7 +5,7 @@ import {
   getTemperatureColor,
   getTemperatureGaugeDisplay,
   getWeatherEmoji,
-  parseTemperatureValue,
+  parsePureTemperatureValue,
 } from "../../lib/world-state-display";
 import { visibleText } from "../../lib/tracker-display";
 import { FittedText } from "../controls/InlineControls";
@@ -36,9 +36,7 @@ export function WorldForecastTile({
   const weatherText = visibleText(weather, "Set weather");
   const temperatureDisplay = getTemperatureGaugeDisplay(temperature, trackerTemperatureUnit);
   const temperatureText = temperature?.trim() ?? "";
-  const useDescriptiveTempRail =
-    parseTemperatureValue(temperatureText) === null &&
-    (temperatureText.includes(" ") || temperatureText.length > 7);
+  const useDescriptiveTempRail = temperatureText.length > 0 && parsePureTemperatureValue(temperatureText) === null;
   const useHorizontalTempRail = trackerPanelSizeProfile !== "compact";
   const useHorizontalTempLayout = useHorizontalTempRail || useDescriptiveTempRail;
   return (
@@ -51,8 +49,8 @@ export function WorldForecastTile({
             useDescriptiveTempRail
               ? "right-[46%] @min-[10rem]:right-[44%] @min-[14rem]:right-[42%]"
               : useHorizontalTempRail
-              ? "right-[4rem] @min-[7rem]:right-[4.15rem] @min-[10rem]:right-[4.25rem] @min-[14rem]:right-[4.35rem]"
-              : "right-[2rem] @min-[7rem]:right-[2.3rem] @min-[10rem]:right-[2.7rem] @min-[14rem]:right-[3.05rem]",
+                ? "right-[4rem] @min-[7rem]:right-[4.15rem] @min-[10rem]:right-[4.25rem] @min-[14rem]:right-[4.35rem]"
+                : "right-[2rem] @min-[7rem]:right-[2.3rem] @min-[10rem]:right-[2.7rem] @min-[14rem]:right-[3.05rem]",
           )}
         >
           {getWeatherEmoji(weather)}
@@ -69,23 +67,23 @@ export function WorldForecastTile({
             useDescriptiveTempRail
               ? "pr-[48%] @min-[10rem]:pr-[46%] @min-[14rem]:pr-[44%]"
               : useHorizontalTempRail
-              ? "pr-[4.75rem] @min-[7rem]:pr-[4.9rem] @min-[10rem]:pr-[5rem] @min-[14rem]:pr-[5.1rem]"
-              : "pr-[2.65rem] @min-[7rem]:pr-[2.95rem] @min-[10rem]:pr-[3.35rem] @min-[14rem]:pr-[3.85rem]",
+                ? "pr-[4.75rem] @min-[7rem]:pr-[4.9rem] @min-[10rem]:pr-[5rem] @min-[14rem]:pr-[5.1rem]"
+                : "pr-[2.65rem] @min-[7rem]:pr-[2.95rem] @min-[10rem]:pr-[3.35rem] @min-[14rem]:pr-[3.85rem]",
           )}
           inputClassName={cn(
             "text-left text-[0.75rem]",
             useDescriptiveTempRail
               ? "pr-[48%] @min-[10rem]:pr-[46%] @min-[14rem]:pr-[44%]"
               : useHorizontalTempRail
-              ? "pr-[4.75rem] @min-[7rem]:pr-[4.9rem] @min-[10rem]:pr-[5rem] @min-[14rem]:pr-[5.1rem]"
-              : "pr-[2.65rem] @min-[7rem]:pr-[2.95rem] @min-[10rem]:pr-[3.35rem] @min-[14rem]:pr-[3.85rem]",
+                ? "pr-[4.75rem] @min-[7rem]:pr-[4.9rem] @min-[10rem]:pr-[5rem] @min-[14rem]:pr-[5.1rem]"
+                : "pr-[2.65rem] @min-[7rem]:pr-[2.95rem] @min-[10rem]:pr-[3.35rem] @min-[14rem]:pr-[3.85rem]",
           )}
           editHintClassName={cn(
             useDescriptiveTempRail
               ? "right-[47%] @min-[10rem]:right-[45%] @min-[14rem]:right-[43%]"
               : useHorizontalTempRail
-              ? "right-[4.45rem] @min-[7rem]:right-[4.6rem] @min-[10rem]:right-[4.7rem] @min-[14rem]:right-[4.8rem]"
-              : "right-[2.45rem] @min-[7rem]:right-[2.65rem] @min-[10rem]:right-[2.95rem] @min-[14rem]:right-[3.25rem]",
+                ? "right-[4.45rem] @min-[7rem]:right-[4.6rem] @min-[10rem]:right-[4.7rem] @min-[14rem]:right-[4.8rem]"
+                : "right-[2.45rem] @min-[7rem]:right-[2.65rem] @min-[10rem]:right-[2.95rem] @min-[14rem]:right-[3.25rem]",
           )}
           {...weatherLock}
         >
@@ -97,8 +95,8 @@ export function WorldForecastTile({
             useDescriptiveTempRail
               ? "w-[46%] @min-[10rem]:w-[44%] @min-[14rem]:w-[42%]"
               : useHorizontalTempRail
-              ? "w-[4.15rem] @min-[7rem]:w-[4.25rem] @min-[10rem]:w-[4.35rem] @min-[14rem]:w-[4.45rem]"
-              : "w-[2.3rem] @min-[7rem]:w-[2.45rem] @min-[10rem]:bottom-0.5 @min-[10rem]:top-auto @min-[10rem]:h-[2.95rem] @min-[10rem]:w-[2.7rem] @min-[14rem]:w-[3rem]",
+                ? "w-[4.15rem] @min-[7rem]:w-[4.25rem] @min-[10rem]:w-[4.35rem] @min-[14rem]:w-[4.45rem]"
+                : "w-[2.3rem] @min-[7rem]:w-[2.45rem] @min-[10rem]:bottom-0.5 @min-[10rem]:top-auto @min-[10rem]:h-[2.95rem] @min-[10rem]:w-[2.7rem] @min-[14rem]:w-[3rem]",
           )}
         >
           <WorldRenderedEdit
@@ -136,9 +134,7 @@ export function WorldForecastTile({
             <span
               className={cn(
                 "flex min-w-0 items-center justify-center overflow-visible",
-                useHorizontalTempLayout
-                  ? "h-full w-full"
-                  : "order-first h-[1.55rem] w-full @min-[14rem]:h-[1.6rem]",
+                useHorizontalTempLayout ? "h-full w-full" : "order-first h-[1.55rem] w-full @min-[14rem]:h-[1.6rem]",
               )}
             >
               <WorldThermometerGauge
