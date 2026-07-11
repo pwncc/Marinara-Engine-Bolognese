@@ -928,7 +928,6 @@ export function AgentEditor() {
 
   // Whether the prompt textarea shows the default or a custom override
   const isUsingDefaultPrompt = !localPrompt.trim();
-  const _displayPrompt = isUsingDefaultPrompt ? defaultPrompt : localPrompt;
 
   const allConnections =
     (connections as

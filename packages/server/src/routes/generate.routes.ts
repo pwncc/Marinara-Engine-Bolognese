@@ -2856,10 +2856,6 @@ export async function generateRoutes(app: FastifyInstance) {
             );
           }
 
-          if (groupChatMode === "individual" && !input.regenerateMessageId) {
-            // targetCharName is set later in the multi-char loop; for now placeholder
-            // The actual injection happens per-character in the generation loop below
-          }
 
           if (groupInstructions.length > 0) {
             const rawBlock = groupInstructions.join("\n");

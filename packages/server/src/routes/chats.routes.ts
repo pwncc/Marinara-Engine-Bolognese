@@ -298,10 +298,6 @@ function formatPeekTrackerContextBlock(args: {
   });
 }
 
-function resolveLorebookGenerationTriggers(mode: unknown): string[] {
-  const modeTrigger = mode === "game" ? "game" : typeof mode === "string" && mode.trim() ? mode.trim() : "roleplay";
-  return Array.from(new Set([modeTrigger, "chat"]));
-}
 
 function resolveChatCharacterIds(raw: unknown): string[] {
   if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === "string" && id.trim().length > 0);

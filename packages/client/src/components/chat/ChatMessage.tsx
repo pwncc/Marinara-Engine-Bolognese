@@ -1359,7 +1359,6 @@ export const ChatMessage = memo(function ChatMessage({
   );
 
   // Model name display
-  const _modelName = !isUser && showModelName ? (extra.generationInfo?.model ?? null) : null;
   const genInfo = !isUser && (showModelName || showTokenUsage) ? extra.generationInfo : null;
   const genLabel = useMemo(() => {
     if (!genInfo) return null;

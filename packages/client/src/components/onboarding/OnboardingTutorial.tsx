@@ -233,27 +233,6 @@ function isChatModeTourTarget(target: string | null): boolean {
   return target?.startsWith("chat-mode-") ?? false;
 }
 
-function _buildClipPath(rect: Rect): string {
-  const t = Math.max(0, rect.top - PAD);
-  const l = Math.max(0, rect.left - PAD);
-  const b = rect.top + rect.height + PAD;
-  const r = rect.left + rect.width + PAD;
-  const rad = 12; // border-radius in px for the cutout
-  // Use inset with round for a nice cutout
-  return `polygon(
-    0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%,
-    ${l}px ${t + rad}px,
-    ${l + rad}px ${t}px,
-    ${r - rad}px ${t}px,
-    ${r}px ${t + rad}px,
-    ${r}px ${b - rad}px,
-    ${r - rad}px ${b}px,
-    ${l + rad}px ${b}px,
-    ${l}px ${b - rad}px,
-    ${l}px ${t + rad}px
-  )`;
-}
-
 // ─── Tooltip position ─────────────────────────
 
 function computeTooltipStyle(rect: Rect, step: TourStep): React.CSSProperties {

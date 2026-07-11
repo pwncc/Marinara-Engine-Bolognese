@@ -40,9 +40,7 @@ import {
   useGenerateMap,
   useAdvanceTime,
   useUpdateWeather,
-  useRollEncounter,
   useUpdateReputation,
-  useJournalEntry,
   useTransitionGameState,
   useRecruitPartyMember,
   useRemovePartyMember,
@@ -3525,9 +3523,7 @@ function GameSurfaceComponent({
   // New game mechanics hooks
   const _advanceTime = useAdvanceTime();
   const updateWeather = useUpdateWeather();
-  const _rollEncounter = useRollEncounter();
   const _updateReputation = useUpdateReputation();
-  const _journalEntry = useJournalEntry();
   const transitionGameState = useTransitionGameState();
   const sceneAnalysis = useSceneAnalysis();
   const sidecarConfig = useSidecarStore((s) => s.config);
@@ -9072,7 +9068,6 @@ function GameSurfaceComponent({
     setPendingSegmentEffects([]);
     setPendingInventorySegmentUpdates([]);
     appliedSegmentsRef.current = new Set();
-    appliedInventorySegmentsRef.current = new Set();
     appliedInventorySegmentsRef.current = new Set();
 
     const tags = parseGmTags(latestAssistantMsg.content);

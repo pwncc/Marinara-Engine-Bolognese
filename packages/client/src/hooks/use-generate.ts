@@ -3168,20 +3168,9 @@ export function useGenerate() {
  * Format agent result data into a human-readable thought bubble string.
  * Every branch returns a string describing the outcome (failure, no-op, or completion).
  */
-function formatRetryAgentActivityBubble(
-  result: {
-    success: boolean;
-    resultType: string;
-    error: string | null;
-    data?: unknown;
-  },
-  isTrackerRetry: boolean,
-): string | null {
+function formatRetryAgentActivityBubble(result: { data?: unknown }, isTrackerRetry: boolean): string | null {
   if (result.data && typeof result.data === "object" && (result.data as { parseError?: unknown }).parseError === true) {
     return "Failed: agent returned invalid JSON instead of the requested format.";
-  }
-  if (!result.success) {
-    return result.error ? `Failed: ${result.error}` : "Failed.";
   }
   if (isTrackerRetry) {
     return "Completed, but no tracker changes were returned.";
