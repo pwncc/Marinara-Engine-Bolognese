@@ -87,7 +87,7 @@ All of these live in the **Storyboards** card. Open **Chat Settings**, go to **A
 
 **Animation Clip Duration** is a number of seconds. It is greyed out unless **Automatic Storyboard Animations** is on. Until you set a value, it uses the 6-second default and shows a **Storyboard default** pill. Once you set your own value, a **Use storyboard default** button appears to clear it. Some video providers may clamp your value to a lower maximum, so the exact length is not promised.
 
-In **Background** viewer mode, the source frame stays visible while the covered narration is read. After the last covered narration segment and its automatic voice line finish, narration progression pauses, the animation plays once, and the final frame remains visible. The game toolbar provides replay, play/pause, and mute controls on desktop and mobile; every new background clip starts muted. Floating storyboard videos also play once and can be replayed instead of looping indefinitely.
+In **Background** viewer mode, each animation starts once with sound when its story beat becomes active. Narration can display while it plays, but narration auto-play waits for the clip to finish. The animation then stays paused on its final frame. The game toolbar provides replay, play/pause, and mute controls on desktop and mobile. Floating storyboard videos also play once and can be replayed instead of looping indefinitely.
 
 **Storyboard Video Prompt** is separate from the general **Game Video Prompt** in the **Scene Videos** card. Leave it on the inherited choice to reuse the general prompt, or select **Anime Game Video** for keyframe clips without changing manual Gallery or Game Assets videos.
 

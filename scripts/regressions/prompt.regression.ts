@@ -903,10 +903,6 @@ const cases: RegressionCase[] = [
         new URL("../../packages/client/src/components/game/GameSurface.tsx", import.meta.url),
         "utf8",
       );
-      const gameNarrationSource = readFileSync(
-        new URL("../../packages/client/src/components/game/GameNarration.tsx", import.meta.url),
-        "utf8",
-      );
       const backgroundControlsSource = readFileSync(
         new URL("../../packages/client/src/components/game/StoryboardBackgroundControls.tsx", import.meta.url),
         "utf8",
@@ -945,10 +941,14 @@ const cases: RegressionCase[] = [
       const backgroundViewerSource = gameSurfaceSource.slice(backgroundViewerStart, backgroundViewerEnd);
       assert.match(backgroundControlsSource, /Replay background animation/);
       assert.match(gameSurfaceSource, /storyboardBackgroundAnimationPlaying/);
-      assert.match(gameSurfaceSource, /frame\.sectionEndIndex !== segmentIndex/);
-      assert.match(gameSurfaceSource, /onSegmentDisplayComplete=\{handleStoryboardNarrationBeatComplete\}/);
-      assert.match(gameNarrationSource, /onSegmentDisplayComplete\(sourceSegmentIndex\)/);
-      assert.match(backgroundViewerSource, /onEnded=\{\(\) => setStoryboardViewerPlaying\(false\)\}/);
+      assert.match(gameSurfaceSource, /storyboardViewerPlayingVideoId === activeStoryboardKeyframe\.video\.id/);
+      assert.match(gameSurfaceSource, /video\.playbackRate = 1/);
+      assert.match(gameSurfaceSource, /setStoryboardViewerMuted\(false\)/);
+      assert.match(
+        gameSurfaceSource,
+        /setStoryboardViewerPlayingVideoId\(activeStoryboardKeyframe\.video\.id\)/,
+      );
+      assert.match(backgroundViewerSource, /onEnded=\{\(\) =>/);
       assert.doesNotMatch(backgroundViewerSource, /\bloop\b/);
     },
   },
