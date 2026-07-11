@@ -23,6 +23,7 @@ import { extractLeadingThinkingBlocks } from "../services/llm/inline-thinking.js
 import { type ChatCompletionResult, type ChatMessage, type ChatOptions } from "../services/llm/base-provider.js";
 import { isDiceNotation, rollDice } from "../services/game/dice.service.js";
 import { jsonishLooksTruncated, parseGameJsonish } from "../services/game/jsonish.js";
+import { resolveInitialGameGmConnectionId } from "../services/game/initial-game-setup.js";
 import { validateTransition } from "../services/game/state-machine.service.js";
 import {
   buildSetupPrompt,
@@ -5893,11 +5894,6 @@ export async function gameRoutes(app: FastifyInstance) {
     };
     const chats = createChatsStorage(app.db);
     const connectionStorage = createConnectionsStorage(app.db);
-    let defaultGenerationParameters: StoredGenerationParameters | null = null;
-    if (connectionId && connectionId !== "random") {
-      const conn = await connectionStorage.getById(connectionId);
-      defaultGenerationParameters = parseStoredGenerationParameters(conn?.defaultParameters);
-    }
 
     const gameId = randomUUID();
 
@@ -5930,6 +5926,13 @@ export async function gameRoutes(app: FastifyInstance) {
     }
     if (!sessionChat) throw new Error("Failed to create game session chat");
 
+    const resolvedGmConnectionId = resolveInitialGameGmConnectionId(connectionId, sessionChat.connectionId);
+    let defaultGenerationParameters: StoredGenerationParameters | null = null;
+    if (resolvedGmConnectionId && resolvedGmConnectionId !== "random") {
+      const conn = await connectionStorage.getById(resolvedGmConnectionId);
+      defaultGenerationParameters = parseStoredGenerationParameters(conn?.defaultParameters);
+    }
+
     const sessionMeta = parseMeta(sessionChat.metadata);
     const setupActiveAgentIds = [...(setupConfig.enableSpotifyDj ? ["spotify"] : [])];
     const spotifySourceType = setupConfig.spotifySourceType ?? "liked";
@@ -5945,7 +5948,7 @@ export async function gameRoutes(app: FastifyInstance) {
       return snapshotInitialSetupConnection(await connectionStorage.getById(id));
     };
     const [gmConnection, sceneConnection, imageConnection, videoConnection] = await Promise.all([
-      snapshotConnection(connectionId || sessionChat.connectionId),
+      snapshotConnection(resolvedGmConnectionId),
       snapshotConnection(setupConfig.sceneConnectionId),
       snapshotConnection(setupConfig.imageConnectionId),
       snapshotConnection(setupConfig.videoConnectionId),

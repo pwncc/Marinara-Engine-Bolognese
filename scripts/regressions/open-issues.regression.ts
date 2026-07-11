@@ -15,6 +15,7 @@ import {
 import { isGitUpdateApplyAllowed } from "../../packages/server/src/services/updates/update-apply-policy.js";
 import { parseNoodleAvatarCrop } from "../../packages/server/src/services/storage/noodle.storage.js";
 import { sanitizeExampleDialoguePromptLeaf } from "../../packages/server/src/services/prompt/prompt-escaping.js";
+import { resolveInitialGameGmConnectionId } from "../../packages/server/src/services/game/initial-game-setup.js";
 import { buildGameSessionReplayTurns } from "../../packages/client/src/lib/game-session-replay.js";
 import { findReplayableGameSessionChat } from "../../packages/client/src/lib/game-session-resolution.js";
 import { formatGameSetupShareText } from "../../packages/client/src/lib/game-setup-share.js";
@@ -22,6 +23,10 @@ import {
   getTemperatureGaugeDisplay,
   parsePureTemperatureValue,
 } from "../../packages/client/src/features/tracker-panel/lib/world-state-display.js";
+
+assert.equal(resolveInitialGameGmConnectionId(undefined, "chat-connection"), "chat-connection");
+assert.equal(resolveInitialGameGmConnectionId("explicit-connection", "chat-connection"), "explicit-connection");
+assert.equal(resolveInitialGameGmConnectionId(undefined, null), null);
 
 assert.equal(parsePureTemperatureValue("15°C"), 15);
 assert.equal(parsePureTemperatureValue("59 Fahrenheit"), 15);

@@ -26,7 +26,7 @@ Game Mode keeps an immutable snapshot of the setup used to create each new campa
 1. Open the Game Mode campaign you want to share.
 2. Click the **Session** button (the feather icon) in the top toolbar.
 3. Stay on **Session History**, then expand **Initial Game Setup**.
-4. Review the saved adventure, cast, model, prompt, effective generation parameter, visual, storyboard, and world-tool settings.
+4. Review the saved adventure, cast, model, prompt, effective generation parameters, visual, storyboard, and world-tool settings.
 5. Click **Copy setup** to put the text on your clipboard, or **Download .txt** to save a shareable text file.
 
 The copied text includes long player preferences and custom GM instructions. Read it before posting it publicly if those fields contain private material. Connection credentials, server URLs, API keys, and local database IDs are never included. Character cards, personas, lorebooks, models, and provider accounts are named for reference but are not bundled, so another player must have or select their own local equivalents.
