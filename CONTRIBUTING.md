@@ -212,7 +212,7 @@ Android policy:
 Release-related behavior already in the repo:
 
 - Docker publishing is triggered by `v*` tags.
-- Tagged releases are published from `CHANGELOG.md` by the GitHub release workflow, with a temporary Android APK notice prepended so release-page downloaders know the APK still requires Termux.
+- Tagged releases are published from `CHANGELOG.md` by the GitHub release workflow, with a named versioned source ZIP and a temporary Android APK notice prepended so release-page downloaders know the APK still requires Termux.
 - The server update check reads the newest GitHub `v*` tag and uses matching release metadata when it exists.
 - Git-based installs can apply updates automatically; Docker installs are prompted with the pull command instead.
 - Pull request CI runs `pnpm check`, `pnpm version:check`, and the tracked-installer guard.
@@ -226,7 +226,7 @@ Standard release flow:
 4. Update `CHANGELOG.md`.
 5. Merge the release-ready `staging` change to `main`.
 6. Create and push the tag `vX.Y.Z` from the `main` commit that contains that exact version bump.
-7. Let the release workflows publish or update the GitHub Release, Windows installer, Android WebView shell APK, and GHCR container images (`X.Y.Z`, `X.Y`, `X`, `latest`, plus `X.Y.Z-lite` / `lite`) from the matching changelog entry.
+7. Let the release workflows publish or update the GitHub Release, named source ZIP, Windows installer, Android WebView shell APK, and GHCR container images (`X.Y.Z`, `X.Y`, `X`, `latest`, plus `X.Y.Z-lite` / `lite`) from the matching changelog entry.
 
 Release helpers now in the repo:
 

@@ -4,31 +4,30 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
-### Added
-
-- Documentation search in the in-app docs viewer now highlights what you searched for: every occurrence of the query lights up in the opened guide (live while the search is active), sidebar result titles and snippet lines highlight the matched term, and opening a guide from a search result scrolls to the first highlighted match.
-
 ## [2.2.0]
 
 ### Added
 
+- Added **Noodle**, Marinara's fake social network and the headline feature of v2.2.0: invited characters and optional random users can create posts, nested replies, polls, images, likes, reposts, mentions, and notifications on a persistent generated timeline; personas can participate directly; automatic and manual refreshes support scheduling and social-memory carryover into Conversation, Roleplay, and Game; and the responsive mobile shell provides profile navigation, search, settings, notifications, and pinned bottom navigation.
+- Added long-term Noodle timeline recall: refreshes can now sample up to three posts older than 48 hours so characters may naturally remember, revisit, or interact with past activity.
+- Added native multimodal Noodle timeline context: refresh models can inspect images attached to recent posts and comments, with deterministic post/reply labels, bounded image inputs, and an automatic text-only fallback for models that reject vision content.
+- Added optional Noodle image captioning with a selectable vision connection so text-only timeline models can understand images attached to posts and replies (#3505).
+- Added prefix-matched `@handle` suggestions to Noodle post and reply composers, with click, touch, and keyboard insertion.
 - Added first-class custom fields and hide controls to World State and Present Character trackers, including inline editing, lock-aware persistence, tracker-agent updates, and matching displays in the Tracker Panel and Roleplay HUD (#3518).
 - Added per-agent manual scheduling for Roleplay tracker agents, so selected trackers can be excluded from automatic post-turn runs and triggered from the HUD without forcing the whole tracker suite into manual mode (#3522).
 - Added batch editing for selected Lorebook entries, letting one boolean setting such as recursion, case sensitivity, whole-word matching, vector exclusion, or enabled state be applied to thousands of entries in one atomic update (#3513).
 - Added Discord-style standard emoji shortcodes and Conversation autocomplete, so names such as `:crying:` render as Unicode emoji and `:cry…` suggestions appear alongside custom emoji (#3515).
+- Added server-backed extension storage APIs and client/server runtime helpers so installed extensions can persist validated, size-limited settings across devices (#3524).
+- Added a message-scoped Game state endpoint so extensions and integrations can retrieve the exact stored snapshot for a selected chat message and swipe (#3526).
+- Documentation search in the in-app docs viewer now highlights every occurrence of the active query in the opened guide, result titles, and snippets, and opens each result at its first highlighted match.
 - Added visible Game setup progress with an elapsed timer and indeterminate progress bar while the Game Master builds the initial world, plus live phase labels during the first turn (#3495).
-- Added optional Noodle image captioning with a selectable vision connection so text-only timeline models can understand images attached to posts and replies (#3505).
 - Added an **Initial Game Setup** section to Game Mode Session History so players can review, copy, or download a `.txt` file containing the complete setup that created a successful campaign, including preferences, prompt choices, visual/storyboard options, safe model descriptors, and effective generation parameters without credentials or local IDs.
-- Added native multimodal Noodle timeline context: refresh models can now inspect images attached to recent posts and comments, with deterministic post/reply labels, bounded image inputs, and an automatic text-only fallback for models that reject vision content.
 - Added per-turn **Peek Prompt** actions to Game Mode Logs and **History Above Dialogue Box**, opening the exact cached prompt that was actually sent for that historical GM turn.
 - Added read-only replay for completed Game Mode sessions from Session History, including click-through narration, stored presentation cues, and deterministic choice forks that only permit the option selected during the original session (#3465).
 - Added a selectable **Comic Page Video** prompt for storyboard clips that interprets comic and manga panels as duration-aware ordered animation beats without changing the shared Game Video Prompt.
 - Added an Anime Episode presentation for Game Mode with coordinated **Anime Game Prompt**, **Comic Page Animation**, and **Comic Page Video** defaults; setup-time keyframe targeting; a `{{gameStoryboardKeyframeCount}}` GM macro; and independent storyboard prompt selectors that keep **Anime Episode Director** plus **Anime Game Video** available as the alternative still-shot combination.
 - Added GLM-5.2 to custom OpenAI-compatible connection model choices, including its 1M context and 128K output limits.
-- Added prefix-matched `@handle` suggestions to Noodle post and reply composers, with click, touch, and keyboard insertion.
 - Added OpenAI GPT-5.6 Sol/Terra/Luna model support, including the `gpt-5.6` Sol alias, a `gpt-5.6-sol-pro` pro-mode alias, Responses API routing, GPT-5.6 `max` reasoning effort mapping, and reuse of the existing Exclude Past Reasoning toggle for GPT-5.6 reasoning context.
-- Added the first Noodle fake-social-media surface: a top-bar Noodle tab, persona-linked user profiles, character invites, a scrollable fake timeline with posts/replies/likes/reposts, configurable refresh generation, stored image-prompt slots, and optional recent-social activity carryover into Conversation, Roleplay/VN, and Game prompts using the chat preset wrapper.
-- Added long-term Noodle timeline recall: refreshes can now sample up to three posts older than 48 hours so characters may naturally remember, revisit, or interact with past activity.
 - Added a configurable source picker (⚙️) for the Conversation "about me" AI-write, in both the character-card editor and the in-chat profile popout: choose which of the card fields (description, personality, scenario, backstory, appearance), the Convo behavior directive, the character's lorebook entries (with per-entry selection in the card editor), and recent chat context feed the draft. Defaults to personality only.
 - Added Professor Mari suggestion chips and guided creation follow-ups so Home Mari and legacy Mari chats can surface color-coded quick replies for step-by-step creation, editing, and contextual next actions.
 - Added a Revert control to the about-me editor (card editor and in-chat popout) to undo a manual or AI-write change, and an emoji picker in the about-me editor.
@@ -139,6 +138,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 - Bumped release metadata to v2.2.0 across packages, the PWA manifest, README release pointer, Windows installer sources, Android APK metadata, and the home-page-visible app version.
 - Android `versionName` is `2.2.0` with `versionCode 32`.
+- Tagged releases now attach a clearly named, versioned source ZIP alongside the Windows installer and Android bootstrap APK, in addition to GitHub's automatic source archives.
 - Reworked Settings with search-first navigation, compact pinned controls, fixed top-level categories, and finer section shortcuts for faster navigation.
 - Updated the default Illustrator prompt rules so generated image prompts carry available character builds, clothing/outfits, and appearance details instead of relying on the image model to infer them.
 - Changed custom Roleplay Chat Summary prompts to apply globally across roleplay chats instead of only the currently open chat.
