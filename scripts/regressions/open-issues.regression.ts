@@ -49,6 +49,10 @@ assert.equal(
   ),
   "Handle must contain at most 40 characters.",
 );
+assert.equal(
+  getApiErrorMessage({ code: "USER_NOT_FOUND", requestId: "abc-123" }, "Request failed"),
+  "Request failed",
+);
 
 assert.equal(stripLeadingMessageTimestamps("[11.07 15:53] Character: Hello!"), "Character: Hello!");
 assert.equal(stripLeadingMessageTimestamps("[11.07.2026 15:53] Character: Hello!"), "Character: Hello!");

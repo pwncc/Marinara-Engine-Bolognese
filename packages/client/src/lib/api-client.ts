@@ -56,6 +56,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function findNestedApiErrorMessage(value: unknown): string {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const message = findNestedApiErrorMessage(item);
+      if (message) return message;
+    }
+  } else if (isRecord(value)) {
+    for (const nested of Object.values(value)) {
+      const message = findNestedApiErrorMessage(nested);
+      if (message) return message;
+    }
+  }
+  return "";
+}
+
 export function getApiErrorMessage(value: unknown, fallback: string): string {
   if (typeof value === "string" && value.trim()) return value.trim();
   if (Array.isArray(value)) {
@@ -68,11 +84,7 @@ export function getApiErrorMessage(value: unknown, fallback: string): string {
   if (isRecord(value)) {
     for (const key of ["message", "formErrors", "fieldErrors", "issues"] as const) {
       if (!(key in value)) continue;
-      const message = getApiErrorMessage(value[key], "");
-      if (message) return message;
-    }
-    for (const nested of Object.values(value)) {
-      const message = getApiErrorMessage(nested, "");
+      const message = findNestedApiErrorMessage(value[key]);
       if (message) return message;
     }
   }

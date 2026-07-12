@@ -1760,9 +1760,6 @@ export function useGenerate() {
                 flushLeadingSpeakerPrefix();
                 // Drain typewriter for the previous character (only if streaming)
                 await waitForTypewriterDrain();
-                // The previous member's durable row becomes visible only after
-                // its presentation stream has finished draining.
-                setStreamedMessageId(params.chatId, null);
                 const previousGroupMessage = latestAssistantMessage(persistedMessages.values());
 
                 // Pick up the just-saved message from the previous character
@@ -1803,6 +1800,9 @@ export function useGenerate() {
                 thinkingStreamFilter.reset();
                 setStreamBuffer("", params.chatId);
                 clearThinkingBuffer(params.chatId);
+                // Reveal the previous member's durable row only after its live
+                // presentation buffers are fully cleared.
+                setStreamedMessageId(params.chatId, null);
               } else {
                 setStreamedMessageId(params.chatId, null);
               }

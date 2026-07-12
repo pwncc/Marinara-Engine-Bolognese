@@ -365,14 +365,18 @@ test("Roleplay side panels use compositor-only desktop transitions", async ({ pa
     const rightPanel = page.locator('[data-component="RightPanelDesktop"]');
     const leftPanel = page.locator('[data-component="ChatSidebarPanel"]');
     await expect(rightPanel).toHaveCSS("animation-name", "mari-shell-panel-enter-right");
-    await page.waitForTimeout(250);
+    await rightPanel.evaluate(async (element) => {
+      await Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => undefined)));
+    });
     await page.getByRole("button", { name: "Close panel" }).click();
     await expect(rightPanel).toHaveCSS("width", "0px");
 
     await page.locator('[data-tour="sidebar-toggle"]').click();
     await expect(leftPanel).not.toHaveCSS("width", "0px");
     await expect(leftPanel).toHaveCSS("animation-name", "mari-shell-panel-enter-left");
-    await page.waitForTimeout(200);
+    await leftPanel.evaluate(async (element) => {
+      await Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => undefined)));
+    });
     await page.locator('[data-tour="sidebar-toggle"]').click();
     await expect(leftPanel).toHaveCSS("width", "0px");
 

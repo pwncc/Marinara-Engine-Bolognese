@@ -1,12 +1,10 @@
 // ──────────────────────────────────────────────
 // Conversation: Transcript Sanitizers
 // ──────────────────────────────────────────────
+import { CLOCK_TOKEN_SOURCE, DATE_TIME_TOKEN_SOURCE, FULL_DATE_TOKEN_SOURCE } from "@marinara-engine/shared";
 
 const DATE_TAG_RE = /<\/?date(?:="[^"]*")?>/gi;
-const CLOCK_TOKEN = String.raw`\d{1,2}[:.]\d{2}(?:\s*(?:am|pm))?`;
-const FULL_DATE_TOKEN = String.raw`\d{1,2}\.\d{1,2}\.\d{2,4}`;
-const DATE_TIME_TOKEN = String.raw`\d{1,2}\.\d{1,2}(?:\.\d{2,4})?\s+${CLOCK_TOKEN}`;
-const TIMESTAMP_TOKEN = String.raw`\[(?:${DATE_TIME_TOKEN}|${CLOCK_TOKEN}|${FULL_DATE_TOKEN})\]`;
+const TIMESTAMP_TOKEN = String.raw`\[(?:${DATE_TIME_TOKEN_SOURCE}|${CLOCK_TOKEN_SOURCE}|${FULL_DATE_TOKEN_SOURCE})\]`;
 const LEADING_TIMESTAMP_RE = new RegExp(`^(\\s*(?:[-*]\\s*)?)(?:${TIMESTAMP_TOKEN}\\s*)+`, "gim");
 const SPEAKER_TIMESTAMP_RE = new RegExp(`^(\\s*(?:[-*]\\s*)?[^:\\n]{1,80}:\\s*)(?:${TIMESTAMP_TOKEN}\\s*)+`, "gim");
 

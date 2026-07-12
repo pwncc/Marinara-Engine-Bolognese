@@ -9,9 +9,9 @@
 import { normalizeTextForMatch } from "./text-matching.js";
 
 const ENCODED_SPEAKER_TAG_RE = /&(?:lt|#0*60|#x0*3c);([^<>]*?\bspeaker\b[^<>]*?)&(?:gt|#0*62|#x0*3e);/gi;
-const CLOCK_TOKEN_SOURCE = String.raw`\d{1,2}[:.]\d{2}(?:\s*(?:am|pm))?`;
-const FULL_DATE_TOKEN_SOURCE = String.raw`\d{1,2}\.\d{1,2}\.\d{2,4}`;
-const DATE_TIME_TOKEN_SOURCE = String.raw`\d{1,2}\.\d{1,2}(?:\.\d{2,4})?\s+${CLOCK_TOKEN_SOURCE}`;
+export const CLOCK_TOKEN_SOURCE = String.raw`\d{1,2}[:.]\d{2}(?:\s*(?:am|pm))?`;
+export const FULL_DATE_TOKEN_SOURCE = String.raw`\d{1,2}\.\d{1,2}\.\d{2,4}`;
+export const DATE_TIME_TOKEN_SOURCE = String.raw`\d{1,2}\.\d{1,2}(?:\.\d{2,4})?\s+${CLOCK_TOKEN_SOURCE}`;
 const CONVERSATION_TIMESTAMP_TOKEN_SOURCE = String.raw`\[(?:${DATE_TIME_TOKEN_SOURCE}|${CLOCK_TOKEN_SOURCE}|${FULL_DATE_TOKEN_SOURCE})\]`;
 const LEADING_CONVERSATION_TIMESTAMPS_RE = new RegExp(
   String.raw`^([^\S\n]*(?:${CONVERSATION_TIMESTAMP_TOKEN_SOURCE})\s*)+`,

@@ -3,7 +3,7 @@
 // ──────────────────────────────────────────────
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import {
   Wand2,
   ArrowRight,
@@ -379,6 +379,7 @@ function normalizeGameLanguage(language: string): string {
 }
 
 export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }: GameSetupWizardProps) {
+  const prefersReducedMotion = useReducedMotion();
   const [step, setStep] = useState(0);
   const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0);
   const [gameName, setGameName] = useState("");
@@ -2390,12 +2391,12 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
 
             <div className="shrink-0 border-t border-[var(--border)]/70 px-5 py-3">
               {isLoading && (
-                <div className="mb-3" role="status" aria-live="polite">
+                <div className="mb-3">
                   <div className="flex items-center justify-between gap-3 text-[0.6875rem]">
-                    <span className="font-medium text-[var(--foreground)]">
+                    <span className="font-medium text-[var(--foreground)]" role="status" aria-live="polite">
                       Hold on tight, the game is being generated right now!
                     </span>
-                    <span className="shrink-0 tabular-nums text-[var(--muted-foreground)]">
+                    <span aria-hidden="true" className="shrink-0 tabular-nums text-[var(--muted-foreground)]">
                       {generationElapsedSeconds}s
                     </span>
                   </div>
@@ -2406,8 +2407,12 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
                   >
                     <motion.div
                       className="h-full w-2/5 rounded-full bg-[var(--primary)]"
-                      animate={{ x: ["-110%", "260%"] }}
-                      transition={{ duration: 1.35, ease: [0.16, 1, 0.3, 1], repeat: Infinity }}
+                      animate={prefersReducedMotion ? { x: 0 } : { x: ["-110%", "260%"] }}
+                      transition={
+                        prefersReducedMotion
+                          ? undefined
+                          : { duration: 1.35, ease: [0.16, 1, 0.3, 1], repeat: Infinity }
+                      }
                     />
                   </div>
                 </div>

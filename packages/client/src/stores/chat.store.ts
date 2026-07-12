@@ -328,6 +328,7 @@ export const useChatStore = create<ChatState>()(
       set({
         activeChatId: id,
         swipeIndex: new Map(),
+        ...(id !== prev && { generationPhase: null }),
         ...(!id && { activeChat: null }),
         ...(activeCall ? { conversationCallExpanded: id === activeCall.session.chatId } : {}),
       });
