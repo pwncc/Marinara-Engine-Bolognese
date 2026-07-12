@@ -898,7 +898,7 @@ export function AgentEditor() {
     };
   }, [isMusicAgent, dbConfig?.id]);
 
-  // Fetch YouTube key-configured status when viewing Music DJ or a legacy YouTube agent.
+  // Fetch YouTube key-configured status when viewing Music DJ (Spotify); the legacy YouTube-agent path is unreachable.
   useEffect(() => {
     if (!showsYoutubeSettings || !dbConfig?.id) {
       setYoutubeConfigured(false);
@@ -3570,7 +3570,7 @@ export function AgentEditor() {
                   ))}
                 </div>
                 <p className="mt-2 text-[0.625rem] text-[var(--muted-foreground)]">
-                  Tool-use must also be enabled per chat via Chat Settings → "Enable Function Calling".
+                  Tool-use must also be enabled per chat via Chat Settings → Function Calling → "Enable Tool Use".
                 </p>
               </>
             )}

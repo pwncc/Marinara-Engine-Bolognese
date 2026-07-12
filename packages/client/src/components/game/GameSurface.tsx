@@ -11002,7 +11002,7 @@ function GameSurfaceComponent({
                             onOpenInventory={() => setInventoryOpen(true)}
                             onCustomInstruction={handleCombatCustomInstruction}
                             onSpriteSuggestionChange={setCombatSpriteSuggestion}
-                            _isStreaming={isStreaming}
+                            isStreaming={isStreaming}
                             narration="Battle starts."
                             combatDialogue={combatDialogueLines}
                             combatDialogueCues={combatDialogueCues}
@@ -11402,9 +11402,6 @@ function GameSurfaceComponent({
             </div>
           </div>
         </DirectionEngine>
-
-        {/* Right: Party rail spans full game height */}
-        {/* REMOVED: Old sidebar replaced by compact GamePartyBar in map area */}
       </GameTransitionManager>
 
       {/* Character sheet modal */}

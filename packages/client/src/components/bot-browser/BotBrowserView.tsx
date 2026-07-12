@@ -1,6 +1,6 @@
 // ──────────────────────────────────────────────
 // View: Browser (full-page, replaces chat area)
-// Multi-provider: ChubAI, JannyAI, CharacterTavern, Pygmalion, Wyvern
+// Multi-provider: ChubAI, JannyAI, CharacterTavern, Pygmalion, Wyvern, DataCat
 // With login modals for Pygmalion & CharacterTavern NSFW, PNG download for all providers
 // ──────────────────────────────────────────────
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
@@ -105,7 +105,7 @@ interface ProviderConfig {
   hasTokenFilters: boolean;
   extraToggles: { key: string; label: string; icon: string }[];
   nsfwAvailable: boolean;
-  /** "login" = show login modal, "wyvern" = show sort hint, true/false = normal */
+  /** "free" = NSFW toggle enabled; "login" = toggle enabled once logged in; "wyvern" = toggle rendered disabled (only sourceId "wyvern" pairs this with a sort-hint toast on click — other "wyvern"-mode providers, e.g. DataCat, get no toast) */
   nsfwMode: "free" | "login" | "wyvern";
   search: (params: SearchParams) => Promise<{ cards: BrowseCard[]; totalCount: number }>;
   fetchDetail: (card: BrowseCard) => Promise<CardDetail | null>;
@@ -792,7 +792,7 @@ const jannyProvider: ProviderConfig = {
       /* fall through */
     }
 
-    // Strategy 2: server-side proxy (likely fails due to Cloudflare, but try anyway)
+    // Fall back to our server-side proxy (likely fails due to Cloudflare, but try anyway)
     try {
       const res = await fetch(`/api/bot-browser/janny/character/${charId}?slug=character-${slug}`);
       if (res.ok) {
@@ -3133,10 +3133,6 @@ function DetailView({
 }
 
 // ════════════════════════════════════════════════
-// Definition Section
-// ════════════════════════════════════════════════
-
-// ════════════════════════════════════════════════
 // PNG Character Card Builder
 // ════════════════════════════════════════════════
 
@@ -3265,6 +3261,10 @@ function crc32(data: Uint8Array): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 crc32.table = null as Uint32Array | null;
+
+// ════════════════════════════════════════════════
+// Definition Section
+// ════════════════════════════════════════════════
 
 function DefSection({ title, content }: { title: string; content: string }) {
   return (
