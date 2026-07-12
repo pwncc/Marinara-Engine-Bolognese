@@ -21,6 +21,7 @@ import {
   stripMacroComments,
   summariesPatchSchema,
   coerceGameStateTextValue,
+  normalizeWorldCustomFields,
   normalizeTrackerFieldLocks,
   normalizeTrackerHiddenFields,
   parseTrackerFieldLocks,
@@ -40,6 +41,7 @@ import type {
   GameNpc,
   LorebookEntryTimingState,
   RPGStatsConfig,
+  WorldCustomField,
 } from "@marinara-engine/shared";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createAppSettingsStorage } from "../services/storage/app-settings.storage.js";
@@ -299,7 +301,6 @@ function formatPeekTrackerContextBlock(args: {
     wrapFormat: args.wrapFormat,
   });
 }
-
 
 function resolveChatCharacterIds(raw: unknown): string[] {
   if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === "string" && id.trim().length > 0);
@@ -1716,6 +1717,7 @@ export async function chatsRoutes(app: FastifyInstance) {
       : null;
     const fieldLocks = parseTrackerFieldLocks(row.fieldLocks);
     const hiddenTrackerFields = parseTrackerHiddenFields(row.hiddenTrackerFields);
+    const worldCustomFields = normalizeWorldCustomFields(parseSnapshotJson(row.worldCustomFields, []));
 
     // ── Enrich present characters with avatar paths ──
     // Match NPC names against the chat's known character cards, then fall back to stored NPC avatars on disk.
@@ -1781,6 +1783,7 @@ export async function chatsRoutes(app: FastifyInstance) {
       location: row.location,
       weather: row.weather,
       temperature: row.temperature,
+      worldCustomFields,
       presentCharacters,
       recentEvents: JSON.parse((row.recentEvents as string) ?? "[]"),
       playerStats,
@@ -1812,6 +1815,7 @@ export async function chatsRoutes(app: FastifyInstance) {
       location: string | null;
       weather: string | null;
       temperature: string | null;
+      worldCustomFields: WorldCustomField[];
       presentCharacters: any[];
       playerStats: any;
       personaStats: any[];
@@ -1823,6 +1827,8 @@ export async function chatsRoutes(app: FastifyInstance) {
     if (body.location !== undefined) fields.location = coerceGameStateTextValue(body.location);
     if (body.weather !== undefined) fields.weather = coerceGameStateTextValue(body.weather);
     if (body.temperature !== undefined) fields.temperature = coerceGameStateTextValue(body.temperature);
+    if (body.worldCustomFields !== undefined)
+      fields.worldCustomFields = normalizeWorldCustomFields(body.worldCustomFields);
     if (body.presentCharacters !== undefined) fields.presentCharacters = body.presentCharacters as any[];
     if (body.playerStats !== undefined) fields.playerStats = body.playerStats;
     if (body.personaStats !== undefined) fields.personaStats = body.personaStats as any[];
@@ -1887,6 +1893,7 @@ export async function chatsRoutes(app: FastifyInstance) {
           location: (fields.location as string) ?? null,
           weather: (fields.weather as string) ?? null,
           temperature: (fields.temperature as string) ?? null,
+          worldCustomFields: normalizeWorldCustomFields(fields.worldCustomFields),
           presentCharacters: (fields.presentCharacters as any[]) ?? [],
           recentEvents: [],
           playerStats: (fields.playerStats as any) ?? null,
@@ -1985,7 +1992,10 @@ export async function chatsRoutes(app: FastifyInstance) {
         const swipes = await storage.getSwipes(promptSourceMessage.id);
         const activeSwipe = swipes.find((s: any) => s.index === promptSourceMessage.activeSwipeIndex);
         if (activeSwipe) {
-          cached = readCachedPrompt(parseExtra(activeSwipe.extra) as Record<string, unknown>, Boolean(requestedMessage));
+          cached = readCachedPrompt(
+            parseExtra(activeSwipe.extra) as Record<string, unknown>,
+            Boolean(requestedMessage),
+          );
         }
         if (!cached) {
           for (const sw of swipes) {
@@ -3236,6 +3246,7 @@ export async function chatsRoutes(app: FastifyInstance) {
               location: (snapshot.location as string) ?? null,
               weather: (snapshot.weather as string) ?? null,
               temperature: (snapshot.temperature as string) ?? null,
+              worldCustomFields: normalizeWorldCustomFields(parseSnapshotJson(snapshot.worldCustomFields, [])),
               presentCharacters: parseSnapshotJson(snapshot.presentCharacters, []),
               recentEvents: parseSnapshotJson(snapshot.recentEvents, []),
               playerStats: parseSnapshotJson(snapshot.playerStats, null),

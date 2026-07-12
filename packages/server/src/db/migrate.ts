@@ -458,6 +458,7 @@ const CREATE_TABLES: string[] = [
     location TEXT,
     weather TEXT,
     temperature TEXT,
+    world_custom_fields TEXT NOT NULL DEFAULT '[]',
     present_characters TEXT NOT NULL DEFAULT '[]',
     recent_events TEXT NOT NULL DEFAULT '[]',
     player_stats TEXT,
@@ -792,6 +793,11 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     table: "game_state_snapshots",
     column: "hidden_tracker_fields",
     definition: "TEXT",
+  },
+  {
+    table: "game_state_snapshots",
+    column: "world_custom_fields",
+    definition: "TEXT NOT NULL DEFAULT '[]'",
   },
   {
     table: "lorebooks",

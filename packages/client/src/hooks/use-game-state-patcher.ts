@@ -9,6 +9,7 @@ export type GameStatePatchField =
   | "location"
   | "weather"
   | "temperature"
+  | "worldCustomFields"
   | "presentCharacters"
   | "playerStats"
   | "personaStats"
@@ -65,6 +66,7 @@ function createEmptyGameState(chatId: string): GameState {
     location: null,
     weather: null,
     temperature: null,
+    worldCustomFields: [],
     presentCharacters: [],
     recentEvents: [],
     playerStats: null,
