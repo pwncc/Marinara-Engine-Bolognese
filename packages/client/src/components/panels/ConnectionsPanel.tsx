@@ -87,7 +87,6 @@ import { SelectionActionBar } from "../ui/SelectionActionBar";
 import { SmoothFolderContent } from "../ui/SmoothFolderContent";
 import { TouchDragHandle } from "../ui/TouchDragHandle";
 
-/** Provider color pair for connection icons. Kept as one blue family by design. */
 const CONNECTION_ICON_COLORS = {
   from: "from-sky-400",
   to: "to-blue-500",
@@ -112,6 +111,12 @@ const PROVIDER_COLORS: Record<string, { from: string; to: string; ring: string; 
   video_generation: CONNECTION_ICON_COLORS,
 };
 const DEFAULT_COLOR = CONNECTION_ICON_COLORS;
+
+function getConnectionFallbackIcon(provider: string) {
+  if (provider === "image_generation") return <ImageIcon size="1rem" />;
+  if (provider === "video_generation") return <Film size="1rem" />;
+  return <Link size="1rem" />;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
@@ -908,7 +913,7 @@ function ConnectionRow({
   const iconContent = conn.imagePath ? (
     <img src={conn.imagePath} alt="" className="h-full w-full object-cover" draggable={false} />
   ) : (
-    <Link size="1rem" />
+    getConnectionFallbackIcon(conn.provider)
   );
   const iconFrameClasses = cn(
     "relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br text-white shadow-sm",
@@ -1030,10 +1035,10 @@ function ConnectionRow({
             }
             deleteConnection.mutate(conn.id);
           }}
-          className="mari-chrome-control mari-chrome-control--small mari-chrome-control--danger p-1.5"
+          className="mari-chrome-control mari-chrome-control--small p-1.5"
           title="Delete"
         >
-          <Trash2 size="0.75rem" className="text-[var(--destructive)]" />
+          <Trash2 size="0.75rem" />
         </button>
       </div>
     </div>
@@ -1183,7 +1188,7 @@ function ConnectionFolderRow({
             e.stopPropagation();
             onDelete(folder);
           }}
-          className="mari-chrome-control mari-chrome-control--small mari-chrome-control--danger shrink-0 p-1 opacity-0 transition-opacity group-hover:opacity-100 max-md:opacity-100"
+          className="mari-chrome-control mari-chrome-control--small shrink-0 p-1 opacity-0 transition-opacity group-hover:opacity-100 max-md:opacity-100"
           title="Delete folder"
         >
           <Trash2 size="0.75rem" />

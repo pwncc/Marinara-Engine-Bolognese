@@ -107,7 +107,6 @@ type Participant = {
   avatarCrop?: AvatarCropValue | null;
   kind: "user" | "character";
   characterId: string | null;
-  canSpeak: boolean;
   conversationStatus?: "online" | "idle" | "dnd" | "offline";
 };
 
@@ -171,6 +170,7 @@ const CALL_TTS_MAX_REQUEST_CHARS = 3_900;
 const CALL_VIDEO_LOOP_GUARD_SECONDS = 0.12;
 const CALL_OPTIMISTIC_MESSAGE_RECONCILE_MS = 5 * 60 * 1000;
 const CALL_MUTED_REMINDER_TIMEOUT_MS = 10_000;
+const CALL_SPEECH_BACKPRESSURE_NOTICE_MS = 8_000;
 const DEFAULT_TEXT_TO_VOICE_PAUSE_MS = 1_800;
 const ONLINE_CHARACTER_JOIN_DELAY_MS = 1_600;
 const AWAY_CHARACTER_JOIN_DELAY_MS = 10_000;
@@ -627,21 +627,6 @@ function keepCallVideoSilent(event: SyntheticEvent<HTMLVideoElement>) {
 function messageLabel(message: ConversationCallMessage, participants: Participant[]) {
   if (message.participantKind === "user") return participants.find((p) => p.kind === "user")?.name ?? "You";
   return participants.find((p) => p.characterId === message.characterId)?.name ?? "Character";
-}
-
-function messageContent(message: ConversationCallMessage, participants: Participant[]) {
-  if (message.kind !== "command") return message.content;
-  const speaker = messageLabel(message, participants);
-  switch (getBracketCommandName(message.content)) {
-    case "end_call":
-      return `${speaker} ended the call.`;
-    case "leave_call":
-      return `${speaker} left the call.`;
-    case "soundboard":
-      return `${speaker} used the soundboard.`;
-    default:
-      return message.content;
-  }
 }
 
 function callMessageTimestampMs(message: ConversationCallMessage) {
@@ -1188,6 +1173,8 @@ export function ConversationCallSurface({
   const micSpeechFrameCountRef = useRef(0);
   const userSpeakingRef = useRef(false);
   const callInteractionQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const callSpeechSubmissionPendingRef = useRef(false);
+  const callSpeechDropNoticeAtRef = useRef(0);
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const inputBarRef = useRef<HTMLDivElement | null>(null);
@@ -1239,7 +1226,6 @@ export function ConversationCallSurface({
   const videoControlsEnabled = ttsConfig?.callVideoInputEnabled === true && nativeInputMode;
   const characterVideoEnabled = ttsConfig?.callCharacterVideoEnabled === true;
   const automaticVideoClipGenerationEnabled = ttsConfig?.callAutomaticVideoClipsEnabled === true;
-  const soundboardEnabled = true;
   const characterVoicesMuted = conversationCallVoiceMuted || conversationCallVoiceVolume <= 0;
   const characterVoicePlaybackVolume = characterVoicesMuted ? 0 : conversationCallVoiceVolume / 100;
   const characterVoiceVolumeLabel = characterVoicesMuted ? "Muted" : `${conversationCallVoiceVolume}%`;
@@ -1272,12 +1258,10 @@ export function ConversationCallSurface({
       avatarCrop: personaInfo?.avatarCrop,
       kind: "user",
       characterId: null,
-      canSpeak: false,
     };
     const characters = chatCharIds.flatMap((id) => {
       const character = characterMap.get(id);
       if (character?.conversationStatus === "offline") return [];
-      const voice = ttsConfig ? resolveTTSVoiceForSpeaker(ttsConfig, character?.name, id) : "";
       return [
         {
           id: `character:${id}`,
@@ -1287,13 +1271,12 @@ export function ConversationCallSurface({
           avatarCrop: character?.avatarCrop,
           kind: "character" as const,
           characterId: id,
-          canSpeak: Boolean(ttsConfig?.enabled && voice),
           conversationStatus: character?.conversationStatus,
         },
       ];
     });
     return [user, ...characters];
-  }, [characterMap, chatCharIds, personaInfo, ttsConfig]);
+  }, [characterMap, chatCharIds, personaInfo]);
 
   const characterJoinPlan = useMemo(
     () =>
@@ -1441,6 +1424,7 @@ export function ConversationCallSurface({
 
   const cleanupLiveCallMedia = useCallback(() => {
     activeCallVoiceRef.current = null;
+    callSpeechSubmissionPendingRef.current = false;
     userInterruptionVoicedMsRef.current = 0;
     voicePlaybackInterruptedRef.current = false;
     ttsService.stop();
@@ -1708,7 +1692,6 @@ export function ConversationCallSurface({
 
   const playSoundById = useCallback(
     async (soundId: string) => {
-      if (!soundboardEnabled) return;
       const sound = sounds.find((item) => item.id === soundId);
       if (!sound) return;
       if (sound.builtIn) {
@@ -1719,19 +1702,18 @@ export function ConversationCallSurface({
         toast.error(error instanceof Error ? error.message : "Could not play sound.");
       });
     },
-    [soundboardEnabled, sounds],
+    [sounds],
   );
 
   const playSoundByName = useCallback(
     async (soundName: string) => {
-      if (!soundboardEnabled) return;
       const normalized = soundName.trim().toLowerCase();
       if (!normalized) return;
       const sound = sounds.find((item) => item.name.trim().toLowerCase() === normalized);
       if (!sound) return;
       await playSoundById(sound.id);
     },
-    [playSoundById, soundboardEnabled, sounds],
+    [playSoundById, sounds],
   );
 
   const playCustomClipByName = useCallback(
@@ -2407,10 +2389,22 @@ export function ConversationCallSurface({
 
   const enqueueRecordedCallMedia = useCallback(
     (blob: Blob, includeVideo: boolean) => {
+      if (callSpeechSubmissionPendingRef.current) {
+        const now = Date.now();
+        if (now - callSpeechDropNoticeAtRef.current >= CALL_SPEECH_BACKPRESSURE_NOTICE_MS) {
+          callSpeechDropNoticeAtRef.current = now;
+          toast.info("Still processing your last voice message.");
+        }
+        return;
+      }
+
+      callSpeechSubmissionPendingRef.current = true;
       void enqueueCallInteraction(
         () => submitRecordedCallMedia(blob, includeVideo),
         "Call speech transcription failed.",
-      );
+      ).finally(() => {
+        callSpeechSubmissionPendingRef.current = false;
+      });
     },
     [enqueueCallInteraction, submitRecordedCallMedia],
   );
@@ -2718,13 +2712,8 @@ export function ConversationCallSurface({
                     />
                   ) : null}
                 </div>
-                <p
-                  className={cn(
-                    "whitespace-pre-wrap text-sm leading-relaxed text-[var(--marinara-chat-chrome-panel-text)]",
-                    message.kind === "command" && "text-[var(--marinara-chat-chrome-panel-muted)]",
-                  )}
-                >
-                  {messageContent(message, participants)}
+                <p className="whitespace-pre-wrap text-sm leading-relaxed text-[var(--marinara-chat-chrome-panel-text)]">
+                  {message.content}
                 </p>
                 {customClip ? <CallCustomClipPreview clip={customClip} /> : null}
                 {attachments.length > 0 ? (
@@ -2961,7 +2950,7 @@ export function ConversationCallSurface({
 
           <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center px-3">
             <div className="pointer-events-auto relative max-w-[calc(100vw-1.5rem)]">
-              {soundboardEnabled && soundboardOpen && (
+              {soundboardOpen && (
                 <div className="absolute bottom-full left-1/2 z-30 mb-2 flex max-h-72 w-[min(32rem,calc(100vw-1.5rem))] -translate-x-1/2 flex-col gap-2 overflow-hidden rounded-lg border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--marinara-chat-chrome-panel-bg)] p-3 shadow-xl">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-[var(--marinara-chat-chrome-panel-title)]">
@@ -3166,20 +3155,18 @@ export function ConversationCallSurface({
                     <Volume2 className={callControlIconClass} />
                   )}
                 </button>
-                {soundboardEnabled && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSoundboardOpen((value) => !value);
-                      setVoiceVolumeOpen(false);
-                    }}
-                    aria-pressed={soundboardOpen}
-                    className={callControlButtonClass}
-                    title="Soundboard"
-                  >
-                    <Sparkles className={callControlIconClass} />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSoundboardOpen((value) => !value);
+                    setVoiceVolumeOpen(false);
+                  }}
+                  aria-pressed={soundboardOpen}
+                  className={callControlButtonClass}
+                  title="Soundboard"
+                >
+                  <Sparkles className={callControlIconClass} />
+                </button>
                 <button
                   type="button"
                   onClick={() => setMobileChatOpen(true)}

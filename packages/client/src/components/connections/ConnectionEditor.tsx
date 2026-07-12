@@ -1158,7 +1158,7 @@ export function ConnectionEditor() {
           </button>
           <button
             onClick={handleDelete}
-            className="mari-editor-action mari-editor-action--danger inline-flex"
+            className="mari-editor-action inline-flex"
             title="Delete connection"
             aria-label="Delete connection"
           >
@@ -1253,7 +1253,7 @@ export function ConnectionEditor() {
                     // `grok models`. Other providers keep their usual seeded
                     // default model when we know one.
                     setLocalModel(
-                      key === "grok_subscription" ? "" : (defaultModel?.id ?? (key === "xai" ? "grok-4.3" : "")),
+                      key === "grok_subscription" ? "" : (defaultModel?.id ?? (key === "xai" ? "grok-4.5" : "")),
                     );
                     setLocalMaxContext(
                       key === "grok_subscription"
@@ -1991,7 +1991,7 @@ export function ConnectionEditor() {
               </div>
               <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
                 {isGrokSubscriptionProvider
-                  ? "Grok CLI starts at a safer 32k window because very large roleplay prompts can make the local CLI hit its own turn limit. Larger saved values are kept in settings, but requests are capped conservatively."
+                  ? "Grok CLI starts at a safer 32k window because very large roleplay prompts can make the local CLI hit its own turn limit. A value you set here is used as-is — raise it gradually, and lower it if requests start failing with \"max turns reached\"."
                   : "This is auto-set when selecting a model from the list. Override manually if needed."}
               </p>
             </FieldGroup>
@@ -2084,7 +2084,7 @@ export function ConnectionEditor() {
             <FieldGroup
               label="Prompt Preset Override"
               icon={<FileText size="0.875rem" className="mari-chrome-accent-icon mari-accent-animated" />}
-              help="Optional. When roleplay or visual novel chats use this connection, Marinara assembles this prompt preset instead of the chat's selected prompt preset. Conversation and game mode keep their built-in prompt flows."
+              help="Optional. When roleplay chats use this connection, Marinara assembles this prompt preset instead of the chat's selected prompt preset. Conversation and game mode keep their built-in prompt flows."
             >
               <select
                 value={localPromptPresetId}

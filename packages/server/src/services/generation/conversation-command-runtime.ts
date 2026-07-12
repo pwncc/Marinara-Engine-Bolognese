@@ -2,10 +2,12 @@ import {
   CONVERSATION_COMMAND_KEYS,
   type ChatMode,
   type ConversationCommandKey,
+  type WrapFormat,
 } from "@marinara-engine/shared";
 
 import { logger } from "../../lib/logger.js";
 import type { CharacterCommand } from "../conversation/character-commands.js";
+import { wrapContent } from "../prompt/format-engine.js";
 import { resolveSpotifyCredentials, spotifyHasScope } from "../spotify/spotify.service.js";
 import { getActiveTurnGame } from "../turn-games/turn-game-runner.service.js";
 import { getChatHapticIntifaceUrl } from "./haptic-runtime.js";
@@ -64,6 +66,10 @@ function getConversationCommandKey(command: CharacterCommand): ConversationComma
       return "uno";
     case "chess":
       return "chess";
+    case "poker":
+      return "poker";
+    case "eightball":
+      return "eightball";
     case "spotify":
     case "youtube":
       return "music";
@@ -124,6 +130,7 @@ export async function buildConversationCommandsReminder(args: {
   chars: ConversationCommandsCharactersStore;
   agentsStore: Parameters<typeof resolveSpotifyCredentials>[0];
   db: Parameters<typeof getActiveTurnGame>[0];
+  wrapFormat: WrapFormat;
   resolvePromptMacros: (value: string) => string;
 }): Promise<string | null> {
   if (!args.enabled) return null;
@@ -201,7 +208,6 @@ export async function buildConversationCommandsReminder(args: {
   }
 
   const commandLines: string[] = [
-    `<commands>`,
     `Here are your optional, hidden commands you may use if you wish to, but only when they genuinely fit the conversation:`,
     ``,
   ];
@@ -242,14 +248,14 @@ export async function buildConversationCommandsReminder(args: {
   // Scene command: only in conversation mode
   if (sceneCommandEnabled && chatMode === "conversation") {
     addCommandLines(
-      `- [scene: scenario="brief description of what happens in this scene", background="place"] - initiate a mini-roleplay scene branching from this conversation. The system will plan and create a complete immersive scene for you.`,
+      `- [scene: scenario="brief description of what happens in this scene", background="place"] - request a mini-roleplay scene branching from this conversation. The user will be asked for POV, tense, and optional prompt wishes before the system plans and creates the scene.`,
       `   Example: You agree to go stargazing → include [scene: scenario="lying on a blanket in the park, looking at the stars together", background="park"]`,
       `   WHEN TO USE: You SHOULD proactively trigger a scene whenever the conversation naturally leads to an activity, outing, or situation that would be more immersive as a scene. Examples:`,
       `   - {{user}} says "I'm coming over" or "Let's go to the park" → trigger a scene for arriving/being at that location.`,
       `   - You invite {{user}} somewhere and they accept → trigger a scene for that activity.`,
       `   - A plan is made (date, trip, hangout, confrontation) and the moment arrives → trigger a scene.`,
       `   Do NOT wait for {{user}} to explicitly ask for a scene. If the conversation implies you and {{user}} are about to DO something together, initiate the scene yourself.`,
-      `   EXCEPTION: Do NOT start a scene for playing UNO, chess, cards, or other board/table games — those have their own commands. Use [uno] for UNO and [chess] for chess, not [scene].`,
+      `   EXCEPTION: Do NOT start a scene for playing UNO, chess, poker, 8-ball pool, cards, or other board/table games — those have their own commands. Use [uno] for UNO, [chess] for chess, [poker] for poker, and [eightball] for 8-ball pool, not [scene].`,
     );
   }
 
@@ -264,8 +270,13 @@ export async function buildConversationCommandsReminder(args: {
     chatMode === "conversation" && isConversationCommandEnabled(chatMeta, "uno") && characterIds.length >= 1;
   const chessAdvertisable =
     chatMode === "conversation" && isConversationCommandEnabled(chatMeta, "chess") && characterIds.length >= 1;
+  const pokerAdvertisable =
+    chatMode === "conversation" && isConversationCommandEnabled(chatMeta, "poker") && characterIds.length >= 1;
+  const eightballAdvertisable =
+    chatMode === "conversation" && isConversationCommandEnabled(chatMeta, "eightball") && characterIds.length >= 1;
   const noActiveTurnGame =
-    (unoAdvertisable || chessAdvertisable) && !(await getActiveTurnGame(args.db, args.chatId));
+    (unoAdvertisable || chessAdvertisable || pokerAdvertisable || eightballAdvertisable) &&
+    !(await getActiveTurnGame(args.db, args.chatId));
   if (unoAdvertisable && noActiveTurnGame) {
     addCommandLines(
       `- [uno] - start a game of UNO at the table. Include this ONLY when ${personaName} proposes playing UNO (or cards) and you are willing to play right now. The system deals the cards and runs the game — you do NOT narrate dealing or describe the hands.`,
@@ -278,6 +289,20 @@ export async function buildConversationCommandsReminder(args: {
       `- [chess] - start a one-on-one chess game against ${personaName}. Include this ONLY when ${personaName} proposes playing chess and YOU are willing to play right now. Chess seats exactly two players: ${personaName} and you — whichever character includes [chess] takes the opponent's seat. The system sets up the board and runs the game — you do NOT describe the board or narrate setup.`,
       `   If you'd rather not play, say so in character and do NOT include [chess]. Agreeing to play IS including [chess].`,
       `   Example: ${personaName} says "up for a game of chess?" and you're in → "Prepare to lose your queen. [chess]"`,
+    );
+  }
+  if (pokerAdvertisable && noActiveTurnGame) {
+    addCommandLines(
+      `- [poker] - start a game of Texas Hold'em poker at the table. Include this ONLY when ${personaName} proposes playing poker and you are willing to play right now. The system seats ${personaName} plus every willing character at the table and runs the game — you do NOT narrate dealing, blinds, or describe anyone's cards.`,
+      `   If you are busy, tired, or simply don't feel like it, just say so in character and do NOT include [poker]. Agreeing to play IS including [poker].`,
+      `   Example: ${personaName} says "who's up for some poker?" and you're in → "Deal me in. [poker]"`,
+    );
+  }
+  if (eightballAdvertisable && noActiveTurnGame) {
+    addCommandLines(
+      `- [eightball] - start a one-on-one game of 8-ball pool against ${personaName}. Include this ONLY when ${personaName} proposes playing pool/8-ball and YOU are willing to play right now. 8-ball seats exactly two players: ${personaName} and you — whichever character includes [eightball] takes the opponent's seat. The system racks the table and runs the game — you do NOT describe the table or narrate shots.`,
+      `   If you'd rather not play, say so in character and do NOT include [eightball]. Agreeing to play IS including [eightball].`,
+      `   Example: ${personaName} says "rack 'em up?" and you're in → "You're breaking. [eightball]"`,
     );
   }
 
@@ -318,8 +343,7 @@ export async function buildConversationCommandsReminder(args: {
   if (availableCommandCount === 0) return null;
   commandLines.push(
     `IMPORTANT: Commands are stripped from your message before the user sees it. The rest of your message is shown normally. You can include multiple commands in one message, but you do not need to use any of them unless it makes sense in context.`,
-    `</commands>`,
   );
 
-  return args.resolvePromptMacros(commandLines.join("\n"));
+  return wrapContent(args.resolvePromptMacros(commandLines.join("\n")), "commands", args.wrapFormat);
 }

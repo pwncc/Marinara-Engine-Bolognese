@@ -6,15 +6,16 @@ import { useChatStore } from "../stores/chat.store";
 import { useUIStore } from "../stores/ui.store";
 import { useUnoGameStore } from "../stores/uno-game.store";
 import { useChessGameStore } from "../stores/chess-game.store";
+import { usePokerGameStore } from "../stores/poker-game.store";
+import { useEightBallGameStore } from "../stores/eightball-game.store";
 import { useGalleryStore } from "../stores/gallery.store";
 import { toast } from "sonner";
+import { startSceneWithPromptPreferences } from "./scene-generation";
 import {
   SUPPORTED_MACROS,
   buildGuidedGenerationInstructionMessage,
   buildNarratorInstructionMessage,
   normalizeTextForMatch,
-  type SceneCreateResponse,
-  type ScenePlanResponse,
 } from "@marinara-engine/shared";
 
 export interface SlashCommand {
@@ -579,6 +580,33 @@ const COMMANDS: SlashCommand[] = [
     },
   },
   {
+    name: "poker",
+    description: "Start a game of Texas Hold'em poker with the characters in this chat",
+    usage: "/poker",
+    local: true,
+    async execute(_args, ctx) {
+      if (ctx.mode === "roleplay") {
+        return { handled: true, feedback: "Poker can only be played in conversation chats." };
+      }
+      usePokerGameStore.getState().openSetup(ctx.chatId);
+      return { handled: true };
+    },
+  },
+  {
+    name: "8ball",
+    aliases: ["pool"],
+    description: "Start a game of 8-ball pool with a character in this chat",
+    usage: "/8ball",
+    local: true,
+    async execute(_args, ctx) {
+      if (ctx.mode === "roleplay") {
+        return { handled: true, feedback: "8-ball pool can only be played in conversation chats." };
+      }
+      useEightBallGameStore.getState().openSetup(ctx.chatId);
+      return { handled: true };
+    },
+  },
+  {
     name: "sys",
     aliases: ["system"],
     description: "Insert a system message",
@@ -1074,50 +1102,17 @@ const COMMANDS: SlashCommand[] = [
         }
       }
 
-      // Step 1: Ask the LLM to plan the scene (comprehensive plan)
-      const planToastId = toast.loading("Planning scene...", { icon: "🎬" });
-      let planRes: ScenePlanResponse;
-      try {
-        planRes = await api.post<ScenePlanResponse>("/scene/plan", {
-          chatId: ctx.chatId,
-          prompt,
-          connectionId: null,
-        });
-      } catch {
-        toast.dismiss(planToastId);
-        return { handled: true, feedback: "Failed to plan scene. Check your API connection." };
-      }
-
-      if (!planRes.plan) {
-        toast.dismiss(planToastId);
-        return { handled: true, feedback: planRes.error || "Scene planning returned empty result. Try again." };
-      }
-
-      // Step 2: Create the scene chat using the full plan
-      toast.loading("Creating scene...", { id: planToastId, icon: "🎬" });
-      try {
-        const res = await api.post<SceneCreateResponse>("/scene/create", {
-          originChatId: ctx.chatId,
-          initiatorCharId: null, // user-initiated
-          plan: planRes.plan,
-          connectionId: null,
-        });
-
-        // Invalidate chats so the new scene appears + navigate to it
-        ctx.invalidate();
-        useChatStore.getState().setActiveChatId(res.chatId);
-
-        // Apply background if the plan chose one
-        if (res.background) {
-          useUIStore.getState().setChatBackground(`/api/backgrounds/file/${encodeURIComponent(res.background)}`);
-        }
-
-        toast.success(`Scene created: ${res.chatName}`, { id: planToastId, icon: "🎬" });
-        return { handled: true };
-      } catch {
-        toast.dismiss(planToastId);
-        return { handled: true, feedback: "Failed to create scene chat." };
-      }
+      await startSceneWithPromptPreferences({
+        chatId: ctx.chatId,
+        prompt,
+        initiatorCharId: null,
+        connectionId: null,
+        onCreated: () => {
+          // Invalidate chats so the new scene appears in the sidebar.
+          ctx.invalidate();
+        },
+      });
+      return { handled: true };
     },
   },
   {
@@ -1281,6 +1276,11 @@ export function matchSlashCommand(input: string): { command: SlashCommand; args:
     }
   }
   return null;
+}
+
+/** Keep Quick Replies' Post Only action from saving a real slash command as plain chat text. */
+export function shouldExecuteQuickPostAsCommand(input: string): boolean {
+  return matchSlashCommand(input.trim()) !== null;
 }
 
 /** Get all commands that match a partial prefix (for autocomplete). */

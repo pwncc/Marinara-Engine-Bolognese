@@ -8,8 +8,10 @@ import {
   generationParametersSchema,
   localAuthProviderBaseUrl,
   normalizeTextForMatch,
+  normalizeWorldCustomFields,
   normalizeThinkingTagPairs,
   parseTrackerFieldLocks,
+  parseTrackerHiddenFields,
   resolveMacros,
   unwrapConversationInstructions,
   wrapConversationInstructions,
@@ -39,6 +41,24 @@ export type SpeakerPrefixMessage = SimpleMessage & {
   providerMetadata?: Record<string, unknown>;
 };
 export type StoredGenerationParameters = Partial<GenerationParameters>;
+
+/**
+ * Resolve the persona visible to a chat. An explicit chat persona always wins;
+ * non-game chats may fall back to the globally active persona, while Game Mode
+ * deliberately remains persona-less unless setup selected one.
+ */
+export function resolveActivePersonaCandidate<T extends { id: string; isActive?: unknown }>(
+  personas: readonly T[],
+  chatPersonaId: string | null | undefined,
+  chatMode: string | null | undefined,
+): T | null {
+  return (
+    (chatPersonaId ? personas.find((persona) => persona.id === chatPersonaId) : null) ??
+    (chatMode !== "game" ? personas.find((persona) => persona.isActive === "true") : null) ??
+    null
+  );
+}
+
 export type LocalSidecarGenerationConnection = {
   id: typeof LOCAL_SIDECAR_CONNECTION_ID;
   name: string;
@@ -322,12 +342,8 @@ export function shouldAbortOnPassiveGenerationDisconnect(args: { impersonate?: b
   return args.impersonate === true;
 }
 
-export function resolveProviderTopK(provider: unknown, topK: number): number | undefined {
+export function resolveProviderTopK(topK: number): number | undefined {
   const normalized = Number.isFinite(topK) ? Math.max(0, Math.trunc(topK)) : 0;
-  const providerId = typeof provider === "string" ? provider.toLowerCase() : "";
-  if (providerId === "google" || providerId === "google_vertex") {
-    return normalized > 0 ? normalized : undefined;
-  }
   return normalized > 0 ? normalized : undefined;
 }
 
@@ -1391,6 +1407,13 @@ export function preserveTrackerCharacterUiFields(
     const previousPortraitZoom = previous?.portraitZoom;
     const previousAvatarPath = previous?.avatarPath;
     const previousAvatarCrop = previous?.avatarCrop;
+    const previousCustomFields = isPlainRecord(previous?.customFields) ? previous.customFields : null;
+    const nextCustomFields = isPlainRecord(character.customFields) ? character.customFields : null;
+    if (previousCustomFields) {
+      // Character custom fields are user-defined tracker structure. Merge model
+      // values over it so an omitted field cannot erase the user's configuration.
+      character.customFields = { ...previousCustomFields, ...(nextCustomFields ?? {}) };
+    }
     if (
       (typeof character.avatarPath !== "string" || !character.avatarPath.trim()) &&
       isNpcTrackerAvatarPath(previousAvatarPath)
@@ -1438,6 +1461,7 @@ export function parseJsonField<T>(value: unknown, fallback: T): T {
 export function parseGameStateRow(row: Record<string, unknown>): GameState {
   const manualOverrides = parseJsonField<Record<string, string> | null>(row.manualOverrides, null);
   const fieldLocks = parseTrackerFieldLocks(row.fieldLocks);
+  const hiddenTrackerFields = parseTrackerHiddenFields(row.hiddenTrackerFields);
   return {
     id: row.id as string,
     chatId: row.chatId as string,
@@ -1448,12 +1472,14 @@ export function parseGameStateRow(row: Record<string, unknown>): GameState {
     location: row.location as string | null,
     weather: row.weather as string | null,
     temperature: row.temperature as string | null,
+    worldCustomFields: normalizeWorldCustomFields(parseJsonField<unknown[]>(row.worldCustomFields, [])),
     presentCharacters: parseJsonField<any[]>(row.presentCharacters, []),
     recentEvents: parseJsonField<string[]>(row.recentEvents, []),
     playerStats: parseJsonField<PlayerStats | null>(row.playerStats, null),
     personaStats: parseJsonField<any[] | null>(row.personaStats, null),
     manualOverrides,
     fieldLocks,
+    hiddenTrackerFields,
     createdAt: row.createdAt as string,
   };
 }
