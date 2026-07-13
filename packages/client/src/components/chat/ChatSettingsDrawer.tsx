@@ -140,6 +140,7 @@ import { extractCreatorNotesCss } from "../../lib/creator-notes-css";
 import { isLorebookScopeActiveForChat } from "../../lib/lorebook-scope";
 import { addSilentGreetingSwipes } from "../../lib/message-swipes";
 import { useUIStore } from "../../stores/ui.store";
+import { isDesktopShellNavigationTarget } from "../../lib/chat-floating-ui-events";
 import { useTouchFolderDrag } from "../../hooks/use-touch-folder-drag";
 import {
   useChatPresets,
@@ -3812,6 +3813,7 @@ export function ChatSettingsDrawer({
 
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
+      if (isDesktopShellNavigationTarget(target)) return;
       if (!(target instanceof Node)) return;
       if (panelRef.current?.contains(target)) return;
       if (target instanceof Element && target.closest("[data-chat-floating-panel]")) return;
@@ -3834,7 +3836,10 @@ export function ChatSettingsDrawer({
           top: `${anchor.top}px`,
           width: `min(34rem, calc(100vw - ${anchor.right}px - 0.75rem))`,
         }
-      : { right: `${anchor.right}px`, top: `${anchor.top}px` }
+      : {
+          right: `max(${anchor.right}px, calc(var(--mari-chat-ui-inset-right, 0px) + 0.75rem))`,
+          top: `${anchor.top}px`,
+        }
     : undefined;
 
   return (
