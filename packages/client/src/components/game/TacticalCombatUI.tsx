@@ -412,7 +412,10 @@ function renderMapFromState(state: TacticalCombatState): Map<string, RenderUnit>
 
 interface FloatingPopup {
   id: number;
-  unitId: string;
+  // Grid coords captured at spawn time — a killing blow removes the target's
+  // token from the board mid-playback, so popups must not depend on it.
+  x: number;
+  y: number;
   text: string;
   tone: "damage" | "crit" | "heal" | "miss" | "status";
 }
@@ -685,9 +688,10 @@ export function TacticalCombatUI({
     return forecastAttack(stagedState, selectedUnit.id, forecastTargetId);
   }, [stagedState, selectedUnit, forecastTargetId, ui]);
 
-  const spawnPopup = useCallback((unitId: string, text: string, tone: FloatingPopup["tone"]) => {
+  const spawnPopup = useCallback((at: { x: number; y: number } | undefined, text: string, tone: FloatingPopup["tone"]) => {
+    if (!at) return;
     const id = ++popupIdRef.current;
-    setPopups((prev) => [...prev, { id, unitId, text, tone }]);
+    setPopups((prev) => [...prev, { id, x: at.x, y: at.y, text, tone }]);
     const t = setTimeout(() => setPopups((prev) => prev.filter((p) => p.id !== id)), 1200);
     timersRef.current.push(t);
   }, []);
@@ -717,7 +721,7 @@ export function TacticalCombatUI({
           if (ev.targetId && typeof ev.amount === "number") {
             const u = working.get(ev.targetId);
             if (u) u.hp = Math.max(0, u.hp - ev.amount);
-            spawnPopup(ev.targetId, `-${ev.amount}`, "damage");
+            spawnPopup(u, `-${ev.amount}`, "damage");
           }
           playSfx(SFX.hit);
           break;
@@ -726,7 +730,7 @@ export function TacticalCombatUI({
           if (ev.targetId && typeof ev.amount === "number") {
             const u = working.get(ev.targetId);
             if (u) u.hp = Math.max(0, u.hp - ev.amount);
-            spawnPopup(ev.targetId, `-${ev.amount}!`, "crit");
+            spawnPopup(u, `-${ev.amount}!`, "crit");
           }
           setCritFlash(true);
           const t = setTimeout(() => setCritFlash(false), 220);
@@ -738,18 +742,18 @@ export function TacticalCombatUI({
           if (ev.targetId && typeof ev.amount === "number") {
             const u = working.get(ev.targetId);
             if (u) u.hp = Math.min(u.maxHp, u.hp + ev.amount);
-            spawnPopup(ev.targetId, `+${ev.amount}`, "heal");
+            spawnPopup(u, `+${ev.amount}`, "heal");
           }
           playSfx(SFX.item);
           break;
         }
         case "miss": {
-          if (ev.targetId) spawnPopup(ev.targetId, "Miss", "miss");
+          if (ev.targetId) spawnPopup(working.get(ev.targetId), "Miss", "miss");
           playSfx(SFX.miss);
           break;
         }
         case "status": {
-          if (ev.targetId && ev.statusName) spawnPopup(ev.targetId, ev.statusName, "status");
+          if (ev.targetId && ev.statusName) spawnPopup(working.get(ev.targetId), ev.statusName, "status");
           break;
         }
         case "skill": {
@@ -1132,8 +1136,14 @@ export function TacticalCombatUI({
         x,
         y,
         hp: anim?.hp ?? u.hp,
+        // Uncommitted move preview — the token needs distinct "not real yet" styling.
+        staged: !animUnits && !!stagedMove && selectedUnitId === u.id,
       };
-    });
+    })
+      // KO'd units leave the battlefield (FE-style). The defeat event zeroes hp
+      // in the anim map, so the token exits mid-playback via AnimatePresence;
+      // they stay in `state.units` for the summary/outcome screens.
+      .filter((r) => r.hp > 0);
   }, [liveState, animUnits, stagedMove, selectedUnitId, optimisticMove]);
 
   // ── Loading / error states (translucent so the scene shows through) ──
@@ -1316,6 +1326,10 @@ export function TacticalCombatUI({
                 const inMove = movementKeys.has(key);
                 const inThreat = threatKeys.has(key);
                 const isStaged = stagedMove?.x === x && stagedMove?.y === y;
+                // While a move is staged, mark the unit's REAL tile so the preview
+                // reads as "came from here, not committed yet".
+                const isMoveOrigin =
+                  !!stagedMove && !!selectedUnit && selectedUnit.x === x && selectedUnit.y === y;
                 const isInspected = inspectTile?.x === x && inspectTile?.y === y;
                 const icon = resolveTerrainIcon(activeEnvironment, terrain);
                 return (
@@ -1376,20 +1390,22 @@ export function TacticalCombatUI({
                     {isStaged && (
                       <span className="pointer-events-none absolute inset-0 animate-pulse bg-[var(--primary)]/50 ring-2 ring-inset ring-[var(--primary)]" />
                     )}
+                    {isMoveOrigin && (
+                      <span className="pointer-events-none absolute inset-0 rounded-[3px] border-2 border-dashed border-[var(--primary)]/80" />
+                    )}
                   </button>
                 );
               }),
             )}
           </div>
 
-          {/* Unit tokens */}
-          {renderUnits.map(({ unit, x, y, hp }) => {
+          {/* Unit tokens (KO'd units exit-fade off the board) */}
+          <AnimatePresence>
+          {renderUnits.map(({ unit, x, y, hp, staged }) => {
             const isSel = selectedUnitId === unit.id;
             const isTarget = ui.kind === "target" && targetIds.has(unit.id);
             const isForecastTarget = forecastTargetId === unit.id;
-            const dead = hp <= 0;
             const ready =
-              !dead &&
               !isSel &&
               isPlayerPhase &&
               unit.side === "party" &&
@@ -1407,7 +1423,7 @@ export function TacticalCombatUI({
                 selected={isSel}
                 targetable={isTarget}
                 forecastTarget={isForecastTarget}
-                dead={dead}
+                preview={staged}
                 ready={ready}
                 onClick={() => {
                   if (isTarget && ui.kind === "target" && ui.action !== "attack") {
@@ -1422,14 +1438,13 @@ export function TacticalCombatUI({
               />
             );
           })}
+          </AnimatePresence>
 
           {/* Floating damage popups */}
           <AnimatePresence>
             {popups.map((p) => {
-              const target = renderUnits.find((r) => r.unit.id === p.unitId);
-              if (!target) return null;
-              const left = ((target.x + 0.5) / gridW) * 100;
-              const top = ((target.y + 0.5) / gridH) * 100;
+              const left = ((p.x + 0.5) / gridW) * 100;
+              const top = ((p.y + 0.5) / gridH) * 100;
               return (
                 <motion.div
                   key={p.id}
@@ -1521,7 +1536,7 @@ export function TacticalCombatUI({
                   {stagedMove && !selectedUnit.hasMoved && (
                     <ActionButton
                       icon={Footprints}
-                      label="Move"
+                      label="Confirm Move"
                       color="text-[var(--primary)]"
                       onClick={commitMove}
                       disabled={animating}
@@ -1813,7 +1828,8 @@ interface UnitTokenProps {
   selected: boolean;
   targetable: boolean;
   forecastTarget: boolean;
-  dead: boolean;
+  /** Uncommitted staged-move position — rendered translucent + dashed. */
+  preview: boolean;
   ready: boolean;
   onClick: () => void;
 }
@@ -1828,7 +1844,7 @@ function UnitToken({
   selected,
   targetable,
   forecastTarget,
-  dead,
+  preview,
   ready,
   onClick,
 }: UnitTokenProps) {
@@ -1852,14 +1868,22 @@ function UnitToken({
     <motion.button
       type="button"
       onClick={onClick}
-      animate={{ left: `${left}%`, top: `${top}%` }}
-      whileHover={{ scale: dead ? 1 : 1.09 }}
+      initial={false}
+      // Opacity lives HERE (inline) — framer would override a Tailwind opacity
+      // class anyway. Exit is opacity-only: a scale would drop the centering
+      // translate the className provides.
+      animate={{
+        left: `${left}%`,
+        top: `${top}%`,
+        opacity: preview ? 0.75 : unit.hasActed && unit.side === "party" ? 0.6 : 1,
+      }}
+      exit={{ opacity: 0 }}
+      whileHover={{ scale: 1.09 }}
       transition={{ type: "tween", duration: 0.25 }}
       style={style}
       className={cn(
         "absolute z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center",
-        dead && "opacity-30 grayscale",
-        unit.hasActed && unit.side === "party" && !dead && "opacity-60 grayscale",
+        unit.hasActed && unit.side === "party" && "grayscale",
       )}
     >
       <div
@@ -1868,6 +1892,7 @@ function UnitToken({
           selected && "ring-2 ring-[var(--primary)] ring-offset-1 ring-offset-slate-900",
           targetable && "ring-2 ring-[var(--destructive)] animate-pulse",
           forecastTarget && "ring-2 ring-[var(--destructive)] ring-offset-1 ring-offset-slate-900",
+          preview && "outline-dashed outline-2 outline-offset-2 outline-[var(--primary)]",
         )}
         style={{
           borderColor: ring,
@@ -1888,19 +1913,16 @@ function UnitToken({
         {unit.isBoss && (
           <Skull className="absolute -top-2 left-1/2 h-3 w-3 -translate-x-1/2 text-[var(--destructive)] drop-shadow" />
         )}
-        {dead && <SkullIcon className="absolute inset-0 m-auto h-1/2 w-1/2 text-white/70" />}
         {/* Class badge (corner, side-tinted) */}
-        {!dead && (
-          <span
-            className="absolute -bottom-0.5 -right-0.5 flex h-[13px] w-[13px] items-center justify-center rounded-full border shadow-sm"
-            style={{
-              backgroundColor: unit.side === "party" ? "rgba(30,58,90,0.95)" : "rgba(90,30,40,0.95)",
-              borderColor: ring,
-            }}
-          >
-            <ClassIcon className="h-2 w-2 text-white/90" />
-          </span>
-        )}
+        <span
+          className="absolute -bottom-0.5 -right-0.5 flex h-[13px] w-[13px] items-center justify-center rounded-full border shadow-sm"
+          style={{
+            backgroundColor: unit.side === "party" ? "rgba(30,58,90,0.95)" : "rgba(90,30,40,0.95)",
+            borderColor: ring,
+          }}
+        >
+          <ClassIcon className="h-2 w-2 text-white/90" />
+        </span>
       </div>
       {/* HP bar */}
       <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-black/60">
