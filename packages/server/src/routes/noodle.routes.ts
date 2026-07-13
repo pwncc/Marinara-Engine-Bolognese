@@ -1608,6 +1608,118 @@ async function generatePrivateAccountAvatar(input: {
   return galleryImageUrl(filePath, "noodle");
 }
 
+// Generates (or regenerates) a private NoodleR account's stage identity and
+// avatar. On failure, persists a flag + error message on the account's
+// settings instead of only logging, so the UI can surface a retry action
+// rather than silently leaving the account without a stage identity.
+async function ensurePrivateAccountIdentity(input: {
+  noodle: ReturnType<typeof createNoodleStorage>;
+  connections: ReturnType<typeof createConnectionsStorage>;
+  characters: ReturnType<typeof createCharactersStorage>;
+  app: FastifyInstance;
+  publicAccount: NoodleAccount;
+  privateAccount: NoodleAccount;
+  requestedStageProfile?: Partial<NoodlePrivateStageProfile>;
+}): Promise<NoodleAccount> {
+  const { noodle, connections, characters, app, publicAccount, privateAccount } = input;
+  try {
+    const settings = await noodle.getSettings();
+    const connectionId = settings.generationConnectionId;
+    const conn = connectionId ? await connections.getWithKey(connectionId) : null;
+    let stageIdentityFailed = false;
+    let avatarFailed = false;
+    if (conn) {
+      const baseUrl = resolveBaseUrl(conn);
+      const provider = createLLMProvider(
+        conn.provider,
+        baseUrl,
+        conn.apiKey,
+        conn.maxContext,
+        conn.openrouterProvider,
+        conn.maxTokensOverride,
+        conn.claudeFastMode === "true",
+        conn.treatAsLocalEndpoint === "true",
+      );
+      const identity = await generatePrivateAccountStageIdentity({
+        publicAccount,
+        characters,
+        provider,
+        connection: conn,
+        requestedStageProfile: input.requestedStageProfile,
+        debugMode: false,
+      }).catch((error) => {
+        logger.warn(error, "[noodle] Failed to generate NoodleR stage identity for account %s", privateAccount.id);
+        stageIdentityFailed = true;
+        return null;
+      });
+      if (identity) {
+        let avatarUrl: string | null = null;
+        const imageConnection = settings.imageGenerationConnectionId
+          ? await connections.getWithKey(settings.imageGenerationConnectionId)
+          : await connections.getDefaultForImageGeneration();
+        if (imageConnection) {
+          avatarUrl = await generatePrivateAccountAvatar({
+            displayName: identity.name,
+            bio: identity.bio,
+            appearance: identity.appearance,
+            imageConnection,
+            app,
+            debugMode: false,
+          }).catch((error) => {
+            logger.warn(error, "[noodle] Failed to generate NoodleR avatar for %s", identity.name);
+            avatarFailed = true;
+            return null;
+          });
+        } else {
+          avatarFailed = true;
+        }
+        await noodle.updateAccount(privateAccount.id, {
+          handle: identity.handle,
+          displayName: identity.name,
+          bio: identity.bio,
+          ...(avatarUrl ? { avatarUrl } : {}),
+          settings: {
+            ...writePrivateStageProfileSettings(privateAccount.settings, identity.stageProfile),
+            stageIdentityGenerationFailed: false,
+            avatarGenerationFailed: avatarFailed,
+          },
+        });
+      } else {
+        stageIdentityFailed = true;
+      }
+    } else if (input.requestedStageProfile) {
+      const profile = noodlePrivateStageProfileSchema.parse({
+        ...defaultPrivateStageProfile(publicAccount),
+        ...input.requestedStageProfile,
+      });
+      await noodle.updateAccount(privateAccount.id, {
+        displayName: profile.stageName,
+        bio: profile.stageBio,
+        settings: writePrivateStageProfileSettings(privateAccount.settings, profile),
+      });
+    } else {
+      stageIdentityFailed = true;
+    }
+    if (stageIdentityFailed) {
+      await noodle.updateAccount(privateAccount.id, {
+        settings: {
+          ...privateAccount.settings,
+          stageIdentityGenerationFailed: true,
+        },
+      });
+    }
+  } catch (error) {
+    logger.warn(error, "[noodle] Failed to generate NoodleR stage identity for account %s", privateAccount.id);
+    await noodle.updateAccount(privateAccount.id, {
+      settings: {
+        ...privateAccount.settings,
+        stageIdentityGenerationFailed: true,
+      },
+    });
+  }
+  return (await noodle.getAccountById(privateAccount.id)) ?? privateAccount;
+}
+
 async function generateNoodlerReaction(input: {
   noodle: ReturnType<typeof createNoodleStorage>;
   creator: NoodleAccount;
@@ -2171,73 +2283,15 @@ export async function noodleRoutes(app: FastifyInstance) {
     const created = await noodle.createPrivateAccount(id);
     if (!created) return reply.code(400).send({ error: "Could not create a private Noodle account for that account." });
 
-    try {
-      const settings = await noodle.getSettings();
-      const connectionId = settings.generationConnectionId;
-      const conn = connectionId ? await connections.getWithKey(connectionId) : null;
-      if (conn) {
-        const baseUrl = resolveBaseUrl(conn);
-        const provider = createLLMProvider(
-          conn.provider,
-          baseUrl,
-          conn.apiKey,
-          conn.maxContext,
-          conn.openrouterProvider,
-          conn.maxTokensOverride,
-          conn.claudeFastMode === "true",
-          conn.treatAsLocalEndpoint === "true",
-        );
-        const identity = await generatePrivateAccountStageIdentity({
-          publicAccount,
-          characters,
-          provider,
-          connection: conn,
-          requestedStageProfile: parsed.data.stageProfile,
-          debugMode: false,
-        });
-        if (identity) {
-          let avatarUrl: string | null = null;
-          const imageConnection = settings.imageGenerationConnectionId
-            ? await connections.getWithKey(settings.imageGenerationConnectionId)
-            : await connections.getDefaultForImageGeneration();
-          if (imageConnection) {
-            avatarUrl = await generatePrivateAccountAvatar({
-              displayName: identity.name,
-              bio: identity.bio,
-              appearance: identity.appearance,
-              imageConnection,
-              app,
-              debugMode: false,
-            }).catch((error) => {
-              logger.warn(error, "[noodle] Failed to generate NoodleR avatar for %s", identity.name);
-              return null;
-            });
-          }
-          await noodle.updateAccount(created.id, {
-            handle: identity.handle,
-            displayName: identity.name,
-            bio: identity.bio,
-            ...(avatarUrl ? { avatarUrl } : {}),
-            settings: writePrivateStageProfileSettings(created.settings, identity.stageProfile),
-          });
-        }
-      }
-      if (!conn && parsed.data.stageProfile) {
-        const profile = noodlePrivateStageProfileSchema.parse({
-          ...defaultPrivateStageProfile(publicAccount),
-          ...parsed.data.stageProfile,
-        });
-        await noodle.updateAccount(created.id, {
-          displayName: profile.stageName,
-          bio: profile.stageBio,
-          settings: writePrivateStageProfileSettings(created.settings, profile),
-        });
-      }
-    } catch (error) {
-      logger.warn(error, "[noodle] Failed to generate NoodleR stage identity for account %s", id);
-    }
-
-    return (await noodle.getAccountById(created.id)) ?? created;
+    return ensurePrivateAccountIdentity({
+      noodle,
+      connections,
+      characters,
+      app,
+      publicAccount,
+      privateAccount: created,
+      requestedStageProfile: parsed.data.stageProfile,
+    });
   });
 
   app.delete("/accounts/:id/private", async (req, reply) => {
@@ -2245,6 +2299,25 @@ export async function noodleRoutes(app: FastifyInstance) {
     const deleted = await noodle.deletePrivateAccount(id);
     if (!deleted) return reply.code(404).send({ error: "NoodleR profile not found" });
     return deleted;
+  });
+
+  app.post("/accounts/:id/private/retry-identity", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const privateAccount = await noodle.getAccountById(id);
+    if (!privateAccount || privateAccount.visibility !== "private") {
+      return reply.code(404).send({ error: "NoodleR profile not found" });
+    }
+    const allAccounts = await noodle.listAccounts();
+    const publicAccount = allAccounts.find((account) => account.linkedAccountId === privateAccount.id);
+    if (!publicAccount) return reply.code(404).send({ error: "Linked public Noodle account not found" });
+    return ensurePrivateAccountIdentity({
+      noodle,
+      connections,
+      characters,
+      app,
+      publicAccount,
+      privateAccount,
+    });
   });
 
   app.get("/noodler/hub", async (req, reply) => {

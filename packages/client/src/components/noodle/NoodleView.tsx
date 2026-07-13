@@ -102,6 +102,7 @@ import {
   useRemoveNoodleInteraction,
   useRescheduleNoodleRefresh,
   useResetNoodleTimeline,
+  useRetryPrivateIdentityGeneration,
   useSubscribeNoodleAccount,
   useUnlockNoodlePost,
   useUnsubscribeNoodleAccount,
@@ -943,6 +944,7 @@ export function NoodleView() {
   const resetNoodleTimeline = useResetNoodleTimeline();
   const createPrivateAccount = useCreatePrivateNoodleAccount();
   const deletePrivateAccount = useDeletePrivateNoodleAccount();
+  const retryPrivateIdentity = useRetryPrivateIdentityGeneration();
   const subscribeAccount = useSubscribeNoodleAccount();
   const unsubscribeAccount = useUnsubscribeNoodleAccount();
   const unlockPost = useUnlockNoodlePost();
@@ -5826,6 +5828,40 @@ export function NoodleView() {
                           Post from your private profile. Add an image URL to choose subscriber or pay-per-post access.
                         </p>
                       </div>
+                      {(viewedProfileAccount?.settings?.stageIdentityGenerationFailed === true ||
+                        viewedProfileAccount?.settings?.avatarGenerationFailed === true) && (
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--destructive)]/40 bg-[var(--destructive)]/10 px-3 py-2 text-xs text-[var(--destructive)]">
+                          <span>
+                            {viewedProfileAccount?.settings?.stageIdentityGenerationFailed === true
+                              ? "Stage identity generation failed — this profile is using placeholder defaults."
+                              : "Avatar generation failed for this profile."}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              viewedProfileAccount &&
+                              retryPrivateIdentity.mutate(viewedProfileAccount.id, {
+                                onSuccess: (account) => {
+                                  if (
+                                    account.settings?.stageIdentityGenerationFailed === true ||
+                                    account.settings?.avatarGenerationFailed === true
+                                  ) {
+                                    toast.error("Generation still failing — check your generation connection.");
+                                  } else {
+                                    toast.success("NoodleR stage identity regenerated.");
+                                  }
+                                },
+                                onError: (error) =>
+                                  toast.error(error instanceof Error ? error.message : "Could not retry generation."),
+                              })
+                            }
+                            disabled={retryPrivateIdentity.isPending}
+                            className="h-7 shrink-0 rounded-full border border-[var(--destructive)]/50 px-3 font-bold transition-colors hover:bg-[var(--destructive)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {retryPrivateIdentity.isPending ? "Retrying…" : "Retry"}
+                          </button>
+                        </div>
+                      )}
                       <label className="mb-3 flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
                         <input
                           type="checkbox"
