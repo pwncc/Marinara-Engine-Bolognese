@@ -103,6 +103,12 @@ import {
   validateNoodleGeneratedRefresh,
 } from "../services/noodle/noodle-generated-refresh.js";
 import { normalizeNoodleImagePrompt } from "../services/noodle/noodle-image-prompt.js";
+import {
+  NOODLE_PUBLIC_REFRESH_SCOPE,
+  acquireNoodleRefreshLock,
+  isNoodleRefreshLocked,
+  releaseNoodleRefreshLock,
+} from "../services/noodle/noodle-refresh-lock.js";
 
 const NOODLE_ROUTE_DIR = dirname(fileURLToPath(import.meta.url));
 const CLIENT_PUBLIC_DIR = resolve(NOODLE_ROUTE_DIR, "../../../client/public");
@@ -356,7 +362,7 @@ async function resolveNoodleLinkedAuthorContext(input: {
       publicName: personaNameFromRow(row),
       visualDescription: personaAppearanceFromRow(row),
       personalityDescription: personaPersonalityFromRow(row),
-      avatarPath: null,
+      avatarPath: row.avatarPath ?? null,
     };
   }
   return null;
@@ -1741,47 +1747,77 @@ async function generateNoodlePostImage(input: {
     : null;
 
   if (
-    input.account.kind === "character" &&
+    (input.account.kind === "character" || input.account.kind === "persona") &&
     (input.settings.imageGenerationIncludeDescriptions || input.settings.imageGenerationUseAvatarReferences)
   ) {
-    const character = await input.characters.getById(input.account.entityId);
-    if (character) {
-      const referenceAccountByEntityId = new Map(
-        [input.account, ...input.referenceAccounts]
-          .filter((account) => account.kind === "character")
-          .map((account) => [account.entityId, account]),
-      );
-      const referenceRows = await Promise.all(
-        Array.from(referenceAccountByEntityId.keys()).map((characterId) => input.characters.getById(characterId)),
-      );
-      const chatCharacters = referenceRows
-        .filter((row): row is NonNullable<typeof row> => !!row)
-        .map((row) => {
-          const account = referenceAccountByEntityId.get(row.id);
-          return {
-            id: row.id,
-            name: account?.displayName || characterNameFromRow(row),
-            avatarPath: row.avatarPath ?? null,
-            appearance: characterAppearanceFromRow(row),
-          };
+    if (input.account.kind === "character") {
+      const character = await input.characters.getById(input.account.entityId);
+      if (character) {
+        const referenceAccountByEntityId = new Map(
+          [input.account, ...input.referenceAccounts]
+            .filter((account) => account.kind === "character")
+            .map((account) => [account.entityId, account]),
+        );
+        const referenceRows = await Promise.all(
+          Array.from(referenceAccountByEntityId.keys()).map((characterId) => input.characters.getById(characterId)),
+        );
+        const chatCharacters = referenceRows
+          .filter((row): row is NonNullable<typeof row> => !!row)
+          .map((row) => {
+            const account = referenceAccountByEntityId.get(row.id);
+            return {
+              id: row.id,
+              name: account?.displayName || characterNameFromRow(row),
+              avatarPath: row.avatarPath ?? null,
+              appearance: characterAppearanceFromRow(row),
+            };
+          });
+        const referenceResolution = await resolveIllustratorCharacterReferences({
+          charactersStore: input.characters,
+          chatCharacters,
+          persona: null,
+          requestedNames: [input.account.displayName],
+          promptText: [input.account.displayName, input.postContent, input.draftPrompt].join("\n"),
+          maxReferences: 6,
         });
-      const referenceResolution = await resolveIllustratorCharacterReferences({
-        charactersStore: input.characters,
-        chatCharacters,
-        persona: null,
-        requestedNames: [input.account.displayName],
-        promptText: [input.account.displayName, input.postContent, input.draftPrompt].join("\n"),
-        maxReferences: 6,
-      });
-      if (input.settings.imageGenerationIncludeDescriptions && referenceResolution.appearanceBlock) {
-        characterDescription = referenceResolution.appearanceBlock;
+        if (input.settings.imageGenerationIncludeDescriptions && referenceResolution.appearanceBlock) {
+          characterDescription = referenceResolution.appearanceBlock;
+        }
+        if (input.settings.imageGenerationUseAvatarReferences) {
+          const builtInMariReferences =
+            input.account.entityId === PROFESSOR_MARI_ID ? readProfessorMariReferenceImages() : [];
+          const combinedReferences = [...builtInMariReferences, ...referenceResolution.referenceImages];
+          if (combinedReferences.length > 0) {
+            referenceImages = Array.from(new Set(combinedReferences)).slice(0, 6);
+          }
+        }
       }
-      if (input.settings.imageGenerationUseAvatarReferences) {
-        const builtInMariReferences =
-          input.account.entityId === PROFESSOR_MARI_ID ? readProfessorMariReferenceImages() : [];
-        const combinedReferences = [...builtInMariReferences, ...referenceResolution.referenceImages];
-        if (combinedReferences.length > 0) {
-          referenceImages = Array.from(new Set(combinedReferences)).slice(0, 6);
+    } else {
+      // Personas carry the same avatarPath/appearance shape as characters and are
+      // already fully supported by resolveIllustratorCharacterReferences elsewhere
+      // (e.g. conversation-calls.routes.ts) — without this branch, persona-linked
+      // NoodleR accounts got no avatar reference image and no appearance block at
+      // all, leaving image generation to invent an unrelated look.
+      const personaRow = await input.characters.getPersona(input.account.entityId);
+      if (personaRow) {
+        const referenceResolution = await resolveIllustratorCharacterReferences({
+          charactersStore: input.characters,
+          chatCharacters: [],
+          persona: {
+            id: input.account.entityId,
+            name: input.account.displayName,
+            avatarPath: personaRow.avatarPath ?? null,
+            appearance: personaAppearanceFromRow(personaRow),
+          },
+          requestedNames: [input.account.displayName],
+          promptText: [input.account.displayName, input.postContent, input.draftPrompt].join("\n"),
+          maxReferences: 6,
+        });
+        if (input.settings.imageGenerationIncludeDescriptions && referenceResolution.appearanceBlock) {
+          characterDescription = referenceResolution.appearanceBlock;
+        }
+        if (input.settings.imageGenerationUseAvatarReferences && referenceResolution.referenceImages.length > 0) {
+          referenceImages = Array.from(new Set(referenceResolution.referenceImages)).slice(0, 6);
         }
       }
     }
@@ -1940,7 +1976,6 @@ export async function noodleRoutes(app: FastifyInstance) {
   const gallery = createGalleryStorage(app.db);
   const characterGallery = createCharacterGalleryStorage(app.db);
   const promptOverrides = createPromptOverridesStorage(app.db);
-  let refreshInFlight = false;
 
   app.get("/", async () => {
     return bootstrapVisibleNoodle(noodle, characters);
@@ -1955,7 +1990,9 @@ export async function noodleRoutes(app: FastifyInstance) {
   app.put("/refresh-schedule", async (req, reply) => {
     const parsed = noodleRescheduleRefreshSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
-    if (refreshInFlight) return reply.code(409).send({ error: "Wait for the current Noodle refresh to finish." });
+    if (isNoodleRefreshLocked(NOODLE_PUBLIC_REFRESH_SCOPE)) {
+      return reply.code(409).send({ error: "Wait for the current Noodle refresh to finish." });
+    }
     const at = new Date();
     const schedule = await noodle.ensureRefreshSchedule(at);
     try {
@@ -2201,6 +2238,13 @@ export async function noodleRoutes(app: FastifyInstance) {
     }
 
     return (await noodle.getAccountById(created.id)) ?? created;
+  });
+
+  app.delete("/accounts/:id/private", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const deleted = await noodle.deletePrivateAccount(id);
+    if (!deleted) return reply.code(404).send({ error: "NoodleR profile not found" });
+    return deleted;
   });
 
   app.get("/noodler/hub", async (req, reply) => {
@@ -2545,10 +2589,15 @@ export async function noodleRoutes(app: FastifyInstance) {
           : "Select a Noodle image generation connection first.",
       });
     }
-    if (refreshInFlight) {
-      return reply.code(409).send({ error: "A Noodle timeline refresh is already running." });
+    const refreshScopeKey = targetPrivateAccount ? targetPrivateAccount.id : NOODLE_PUBLIC_REFRESH_SCOPE;
+    if (isNoodleRefreshLocked(refreshScopeKey)) {
+      return reply.code(409).send({
+        error: targetPrivateAccount
+          ? "A refresh for this NoodleR account is already running."
+          : "A Noodle timeline refresh is already running.",
+      });
     }
-    refreshInFlight = true;
+    acquireNoodleRefreshLock(refreshScopeKey);
 
     const debugMode = parsed.data.debugMode === true;
     let run: Awaited<ReturnType<typeof noodle.createRefreshRun>> | null = null;
@@ -3065,7 +3114,7 @@ export async function noodleRoutes(app: FastifyInstance) {
       if (run) await noodle.finishRefreshRun(run.id, { status: "failed", error: getErrorMessage(error) });
       return reply.code(500).send({ error: getErrorMessage(error) });
     } finally {
-      refreshInFlight = false;
+      releaseNoodleRefreshLock(refreshScopeKey);
     }
   });
 }
