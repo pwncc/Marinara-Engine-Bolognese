@@ -13,6 +13,14 @@ import {
   validateSpatialContextDefinition,
   validateSpatialTransition,
 } from "../../packages/shared/src/index.js";
+import {
+  buildOwnerSpatialProjection,
+  formatOwnerSpatialBreadcrumb,
+  formatOwnerSpatialPrompt,
+  injectOwnerSpatialPrompt,
+  omitAuthoritativeGameLocation,
+  projectGameSnapshotLocation,
+} from "../../packages/server/src/services/spatial-context/projection.js";
 
 function location(
   id: string,
@@ -330,5 +338,98 @@ const boundMap: GameMap = {
 };
 assert.equal(boundMap.spatialLocationId, "tower");
 assert.equal(boundMap.nodes?.[0]?.spatialLocationId, "tower_library");
+
+const ownerProjection = buildOwnerSpatialProjection("chat-roleplay", validDefinition, "tower_library");
+assert.ok(ownerProjection);
+assert.equal(ownerProjection.chatId, "chat-roleplay");
+assert.equal(ownerProjection.currentLocationId, "tower_library");
+assert.equal(ownerProjection.modelMemory, "The restricted shelf conceals a key.");
+assert.deepEqual(
+  ownerProjection.destinations.map(({ id }) => id),
+  ["tower", "tower_observatory"],
+);
+
+const ownerBlock = formatOwnerSpatialPrompt(ownerProjection);
+assert.match(ownerBlock, /Current path: Known World > Capital City > Wizard Tower > Library/);
+assert.match(ownerBlock, /Private model context:\nThe restricted shelf conceals a key\./);
+assert.match(ownerBlock, /Observatory \[tower_observatory\] — Spiral stairs/);
+assert.doesNotMatch(ownerBlock, /Description for Market|Secret passage|placement|layerOrder|awarenessSummary/);
+
+const injectedOnce = injectOwnerSpatialPrompt(
+  [
+    { role: "system" as const, content: "Base instructions" },
+    { role: "user" as const, content: "Hello" },
+  ],
+  ownerProjection,
+);
+const injectedTwice = injectOwnerSpatialPrompt(injectedOnce, ownerProjection);
+assert.equal(injectedTwice.filter((message) => message.content.includes("<spatial_context")).length, 1);
+assert.equal(injectedTwice.find((message) => message.content.includes("<spatial_context"))?.content, ownerBlock);
+
+const wideProjection = buildOwnerSpatialProjection(
+  "chat-wide",
+  definition([
+    location("hub", "Hub", {
+      description: "H".repeat(4_100),
+      modelMemory: "M".repeat(8_100),
+    }),
+    ...Array.from({ length: 60 }, (_, index) =>
+      location(`destination_${String(index).padStart(2, "0")}`, `Destination ${String(index).padStart(2, "0")}`, {
+        parentId: "hub",
+        sortOrder: index,
+      }),
+    ),
+    location("archived_secret", "Archived Secret", {
+      parentId: "hub",
+      description: "Never expose this archived description.",
+      modelMemory: "Never expose this archived memory.",
+      status: "archived",
+      sortOrder: 100,
+    }),
+  ]),
+  "hub",
+);
+assert.ok(wideProjection);
+assert.equal(wideProjection.description.length, 4_000);
+assert.equal(wideProjection.modelMemory?.length, 8_000);
+assert.equal(wideProjection.destinations.length, 50);
+assert.equal(wideProjection.omittedDestinationCount, 10);
+const wideBlock = formatOwnerSpatialPrompt(wideProjection);
+assert.match(wideBlock, /10 additional destinations omitted/);
+assert.doesNotMatch(wideBlock, /Destination 50|Archived Secret|Never expose/);
+
+const escapedProjection = buildOwnerSpatialProjection(
+  "chat-escaped",
+  definition([
+    location("escaped", "Room <One>", {
+      description: "Use <care> & caution.",
+      modelMemory: "Do not close </spatial_context> early.",
+    }),
+  ]),
+  "escaped",
+);
+assert.ok(escapedProjection);
+const escapedBlock = formatOwnerSpatialPrompt(escapedProjection);
+assert.match(escapedBlock, /Room &lt;One>|Use &lt;care> &amp; caution/);
+assert.doesNotMatch(escapedBlock, /Do not close <\/spatial_context> early/);
+
+const gameProjection = buildOwnerSpatialProjection(
+  "chat-game",
+  { ...validDefinition, ownerMode: "game" },
+  "tower_library",
+);
+assert.ok(gameProjection);
+assert.equal(formatOwnerSpatialBreadcrumb(gameProjection), "Known World > Capital City > Wizard Tower > Library");
+assert.deepEqual(projectGameSnapshotLocation({ location: "Model guess", weather: "Rain" }, gameProjection), {
+  location: "Known World > Capital City > Wizard Tower > Library",
+  weather: "Rain",
+});
+assert.deepEqual(omitAuthoritativeGameLocation({ location: "Model guess", time: "Noon" }, gameProjection), {
+  time: "Noon",
+});
+assert.deepEqual(omitAuthoritativeGameLocation({ location: "Legacy", time: "Noon" }, null), {
+  location: "Legacy",
+  time: "Noon",
+});
 
 process.stdout.write("Spatial context regression passed.\n");

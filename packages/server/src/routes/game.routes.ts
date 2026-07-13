@@ -17,6 +17,7 @@ import { createGameSceneVideosStorage } from "../services/storage/game-scene-vid
 import { createGameStoryboardsStorage } from "../services/storage/game-storyboards.storage.js";
 import { createGameStateStorage } from "../services/storage/game-state.storage.js";
 import { createSpatialContextStorage } from "../services/storage/spatial-context.storage.js";
+import { formatOwnerSpatialBreadcrumb, resolveOwnerSpatialProjection } from "../services/spatial-context/projection.js";
 import { resolveEffectiveSpatialState } from "../services/spatial-context/state-resolution.js";
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
 import { createAgentsStorage } from "../services/storage/agents.storage.js";
@@ -6767,13 +6768,17 @@ export async function gameRoutes(app: FastifyInstance) {
       let carriedStateSnapshotId = "";
       if (previousState) {
         try {
+          const ownerSpatialProjection = await resolveOwnerSpatialProjection(app.db, newChat.id);
           carriedStateSnapshotId = await stateStore.create({
             chatId: newChat.id,
             messageId: recapMessageId,
             swipeIndex: 0,
             date: previousState.date,
             time: previousState.time,
-            location: previousState.location,
+            location:
+              ownerSpatialProjection?.ownerMode === "game"
+                ? formatOwnerSpatialBreadcrumb(ownerSpatialProjection)
+                : previousState.location,
             weather: previousState.weather,
             temperature: previousState.temperature,
             worldCustomFields: previousWorldCustomFields,
@@ -11706,7 +11711,25 @@ export async function gameRoutes(app: FastifyInstance) {
     // locks and manual overrides so they keep protecting fields after a restore.
     // Tolerant parse: malformed JSON must not throw after the restore message is
     // already created, and an object value (not a string) must not be dropped.
+    if (spatialSnapshot) {
+      await spatialStore.replaceAtAnchor({
+        chatId: input.chatId,
+        messageId: restoreMsg.id,
+        swipeIndex: 0,
+        currentLocationId: spatialSnapshot.currentLocationId,
+        definitionRevision: spatialSnapshot.definitionRevision,
+        source: "definition_repair",
+        transitionCommandId: null,
+        transitionPayloadHash: null,
+      });
+    }
+    const ownerSpatialProjection = await resolveOwnerSpatialProjection(app.db, input.chatId, {
+      exactAnchor: { messageId: restoreMsg.id, swipeIndex: 0 },
+    });
     const manualOverrides = parseJsonField<Record<string, string> | null>(snapshot.manualOverrides, null);
+    if (manualOverrides && ownerSpatialProjection?.ownerMode === "game") {
+      delete manualOverrides.location;
+    }
     await stateStore.create(
       {
         chatId: input.chatId,
@@ -11714,7 +11737,10 @@ export async function gameRoutes(app: FastifyInstance) {
         swipeIndex: 0,
         date: snapshot.date,
         time: snapshot.time,
-        location: snapshot.location,
+        location:
+          ownerSpatialProjection?.ownerMode === "game"
+            ? formatOwnerSpatialBreadcrumb(ownerSpatialProjection)
+            : snapshot.location,
         weather: snapshot.weather,
         temperature: snapshot.temperature,
         worldCustomFields: normalizeWorldCustomFields(parseJsonField(snapshot.worldCustomFields, [])),
@@ -11728,18 +11754,6 @@ export async function gameRoutes(app: FastifyInstance) {
       },
       manualOverrides,
     );
-    if (spatialSnapshot) {
-      await spatialStore.replaceAtAnchor({
-        chatId: input.chatId,
-        messageId: restoreMsg.id,
-        swipeIndex: 0,
-        currentLocationId: spatialSnapshot.currentLocationId,
-        definitionRevision: spatialSnapshot.definitionRevision,
-        source: "definition_repair",
-        transitionCommandId: null,
-        transitionPayloadHash: null,
-      });
-    }
 
     // Restore chat metadata fields from checkpoint
     const chat = await chats.getById(input.chatId);

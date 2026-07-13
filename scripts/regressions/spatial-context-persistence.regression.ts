@@ -15,6 +15,7 @@ import {
   SpatialContextServiceError,
 } from "../../packages/server/src/services/spatial-context/definition.service.js";
 import { createChatsStorage } from "../../packages/server/src/services/storage/chats.storage.js";
+import { createGameStateStorage } from "../../packages/server/src/services/storage/game-state.storage.js";
 
 const storageDir = mkdtempSync(join(tmpdir(), "marinara-spatial-persistence-"));
 process.env.FILE_STORAGE_DIR = storageDir;
@@ -169,6 +170,26 @@ try {
   });
   assert.equal(created.definition?.ownerMode, "game");
   assert.equal(created.currentLocationId, "tower");
+
+  const trackerAnchor = await createChatsStorage(legacyDb).createMessage({
+    chatId: legacyChat.id,
+    role: "assistant",
+    content: "Tracker anchor",
+    characterId: null,
+  });
+  assert.ok(trackerAnchor);
+  const clonedTracker = await createGameStateStorage(legacyDb).updateByMessage(
+    trackerAnchor.id,
+    0,
+    legacyChat.id,
+    { weather: "Rain" },
+    true,
+    { compatibilityLocation: "City > Tower" },
+  );
+  assert.equal(clonedTracker?.location, "City > Tower");
+  assert.deepEqual(clonedTracker?.manualOverrides ? JSON.parse(clonedTracker.manualOverrides as string) : null, {
+    weather: "Rain",
+  });
 
   const rowsBefore = {
     chats: await legacyDb.select().from(chats),

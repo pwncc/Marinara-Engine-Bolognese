@@ -90,6 +90,7 @@ export interface SpatialDestination {
 
 export interface ResolvedOwnerSpatialProjection {
   kind: "owner";
+  chatId: string;
   ownerMode: SpatialOwnerMode;
   definitionRevision: number;
   currentLocationId: string;
