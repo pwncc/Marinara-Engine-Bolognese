@@ -769,11 +769,33 @@ async function buildRefreshPrompt(input: {
     )
     .join("\n\n");
   const personaContext = personaRow ? personaContextFromRow(personaRow) : "No user persona is active.";
+  // A guided private NoodleR post can target a persona-linked private account, which
+  // is otherwise never allowed to author generated activity. That single active
+  // account's real persona sheet (description/personality/appearance) must still be
+  // injected here — without it the model has nothing to anchor the post on besides
+  // the unrelated "User Persona" (viewer) section above, which is where borrowed
+  // details would otherwise leak in from.
+  // Persona-kind accounts never appear in activeAccounts for the normal batch
+  // timeline flow (NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION keeps them out of
+  // participant selection there) — the only path that can put one here is a
+  // single-account NoodleR generation targeting a persona-linked private account,
+  // guided or not.
+  const personaAuthorAccounts = input.activeAccounts.filter((account) => account.kind === "persona");
+  const personaAuthorAccountIds = new Set(personaAuthorAccounts.map((account) => account.id));
+  const personaAuthorRows = await Promise.all(
+    personaAuthorAccounts.map((account) => input.characters.getPersona(account.entityId)),
+  );
+  const personaAuthorContext = personaAuthorRows
+    .filter((row): row is NonNullable<typeof row> => !!row)
+    .map(personaContextFromRow)
+    .join("\n\n");
   const activeAccountList = [...input.activeAccounts, ...(input.personaAccount ? [input.personaAccount] : [])]
     .map(
       (account) =>
         `- ${account.displayName} (@${account.handle}) kind=${account.kind} entityId=${account.entityId} accountId=${account.id} generationRole=${
-          account.kind === "persona" ? "reference-target-only" : "allowed-author-and-actor"
+          account.kind === "persona" && !personaAuthorAccountIds.has(account.id)
+            ? "reference-target-only"
+            : "allowed-author-and-actor"
         }`,
     )
     .join("\n");
@@ -829,6 +851,11 @@ async function buildRefreshPrompt(input: {
     "- Do not make an account interact with the same existing post again when it has already liked, reposted, voted, or replied there, unless that account was tagged or is answering a direct response to its own comment. Never make an account reply to its own comment.",
     "- Avoid repeating an account's recent post topic or phrasing. Continue an existing thread only when new activity gives the account a reason to return.",
     NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION,
+    ...(personaAuthorContext
+      ? [
+          "- Exception: the account in the Author Persona Profile section is a persona-linked private NoodleR account and IS allowed to author the single requested post for this generation only. This exception applies to that one account alone.",
+        ]
+      : []),
     "- For each interaction, set either targetTempId or targetPostId and set the unused target field to null.",
     "- pollOptionIndex must be a zero-based integer for votes and null for every other interaction.",
     "- An exact @handle in post or reply text tags that active account. Preserve the @handle exactly when mentioning someone.",
@@ -882,6 +909,13 @@ async function buildRefreshPrompt(input: {
       "# Character Profiles",
       characterContext || "No character profiles.",
       "",
+      ...(personaAuthorContext
+        ? [
+            "# Author Persona Profile (this account is the sole allowed author for this generation only)",
+            personaAuthorContext,
+            "",
+          ]
+        : []),
       ...(loreContext ? ["# World / Lore", loreContext, ""] : []),
       "# Random User Profiles",
       randomUserContext || "Random users are disabled for this refresh.",
@@ -915,7 +949,7 @@ async function buildRefreshPrompt(input: {
       "",
       "# Quotas",
       input.requireImageForSinglePost || input.privatePostGuide
-        ? "posts: generate exactly 1 post, authored by the single active non-persona account."
+        ? `posts: generate exactly 1 post, authored by the single active account${personaAuthorContext ? " (the persona-linked NoodleR account in the Author Persona Profile section)" : ""}.`
         : `posts: at most ${input.settings.maxGeneratedPostsPerRefresh}`,
       `replies: at most ${input.settings.maxRepliesPerRefresh}`,
       `reposts: at most ${input.settings.maxRepostsPerRefresh}`,
@@ -2293,7 +2327,10 @@ export async function noodleRoutes(app: FastifyInstance) {
           .send({ error: "Invite a character, select a character folder, or enable random users before refreshing." });
       }
 
-      const activeAccounts = [...selectedParticipants, ...(personaAccount ? [personaAccount] : [])];
+      // Persona-linked NoodleR accounts can share an entityId with the viewer's active
+      // persona; list selectedParticipants last so entityToAccount (built from this
+      // array) resolves that entityId to the intended author, not the viewer.
+      const activeAccounts = [...(personaAccount ? [personaAccount] : []), ...selectedParticipants];
       const {
         messages,
         textOnlyMessages,
@@ -2457,7 +2494,7 @@ export async function noodleRoutes(app: FastifyInstance) {
       for (const generatedPost of generated.posts.slice(0, effectiveSettings.maxGeneratedPostsPerRefresh)) {
         const account = entityToAccount.get(generatedPost.authorEntityId);
         if (!account) continue;
-        if (!canGenerateNoodleActivityForAccountKind(account.kind)) {
+        if (!canGenerateNoodleActivityForAccountKind(account.kind) && account.id !== targetPrivateAccount?.id) {
           logger.warn("[noodle] Ignoring generated post attributed to persona %s", account.entityId);
           continue;
         }
@@ -2583,7 +2620,7 @@ export async function noodleRoutes(app: FastifyInstance) {
         if (quotas[generatedInteraction.type] <= 0) continue;
         const actor = entityToAccount.get(generatedInteraction.actorEntityId);
         if (!actor) continue;
-        if (!canGenerateNoodleActivityForAccountKind(actor.kind)) {
+        if (!canGenerateNoodleActivityForAccountKind(actor.kind) && actor.id !== targetPrivateAccount?.id) {
           logger.warn(
             "[noodle] Ignoring generated %s interaction attributed to persona %s",
             generatedInteraction.type,
@@ -2656,7 +2693,7 @@ export async function noodleRoutes(app: FastifyInstance) {
         const actor = entityToAccount.get(generatedFollow.actorEntityId);
         const target = entityToAccount.get(generatedFollow.targetEntityId);
         if (!actor || !target || actor.id === target.id) continue;
-        if (!canGenerateNoodleActivityForAccountKind(actor.kind)) {
+        if (!canGenerateNoodleActivityForAccountKind(actor.kind) && actor.id !== targetPrivateAccount?.id) {
           logger.warn("[noodle] Ignoring generated follow attributed to persona %s", actor.entityId);
           continue;
         }
