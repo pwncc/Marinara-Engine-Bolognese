@@ -16,6 +16,7 @@ import type {
   NoodlePost,
   NoodlePostUnlock,
   NoodlePostUpdateInput,
+  NoodleRefreshInput,
   NoodleRemoveInteractionInput,
   NoodleRescheduleRefreshInput,
   NoodleRefreshSchedulerStatus,
@@ -28,6 +29,7 @@ import type { ImagePromptOverride, ImagePromptReviewItem } from "../components/u
 export type NoodleRefreshResult = {
   bootstrap: NoodleBootstrap;
   imagePromptReviewItems: ImagePromptReviewItem[];
+  createdPostIds?: string[];
 };
 
 export const noodleKeys = {
@@ -305,7 +307,7 @@ export function useDeleteNoodleInteraction() {
 export function useRefreshNoodle() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { personaId?: string; connectionId?: string; targetAccountId?: string }) =>
+    mutationFn: (input: Pick<NoodleRefreshInput, "personaId" | "connectionId" | "targetAccountId" | "privatePostGuide">) =>
       api.post<NoodleRefreshResult>("/noodle/refresh", {
         ...input,
         debugMode: useUIStore.getState().debugMode,

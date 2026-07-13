@@ -141,6 +141,7 @@ type ProfileTab = "posts" | "likes" | "media";
 type ProfileConnectionTab = "followers" | "following";
 type NotificationTab = "likes" | "follows" | "replies";
 type TimelineTab = "main" | "following";
+type NoodlePrivatePostAccess = Exclude<NoodlePostAccess, "public">;
 type NoodleViewId = "home" | "search" | "notifications" | "profile" | "settings";
 type NoodleNotificationFocusTarget = {
   postId: string;
@@ -985,6 +986,11 @@ export function NoodleView() {
   const [privateComposerText, setPrivateComposerText] = useState("");
   const [privateComposerImageUrl, setPrivateComposerImageUrl] = useState("");
   const [privateComposerAccess, setPrivateComposerAccess] = useState<NoodlePostAccess>("subscriber");
+  const [privateGuideAccess, setPrivateGuideAccess] = useState<NoodlePrivatePostAccess>("subscriber");
+  const [privateGuideIncludeText, setPrivateGuideIncludeText] = useState(true);
+  const [privateGuideIncludeImage, setPrivateGuideIncludeImage] = useState(true);
+  const [privateGuideTheme, setPrivateGuideTheme] = useState("");
+  const [privateGuidePrompt, setPrivateGuidePrompt] = useState("");
   const [imageUrlDraft, setImageUrlDraft] = useState("");
   const [imageGenerationPromptDraft, setImageGenerationPromptDraft] = useState("");
   const [pollQuestion, setPollQuestion] = useState("");
@@ -1093,8 +1099,8 @@ export function NoodleView() {
   const canRevealPostAccess = (post: NoodlePost) => {
     if (post.access === "public") return true;
     if (post.authorAccountId === personaAccount?.id) return true;
-    if (subscribedCreatorIds.has(post.authorAccountId)) return true;
     if (post.access === "ppv" && unlockedPostIds.has(post.id)) return true;
+    if (post.access === "subscriber" && subscribedCreatorIds.has(post.authorAccountId)) return true;
     return false;
   };
   const toggleSubscription = (creatorAccountId: string) => {
@@ -2398,6 +2404,49 @@ export function NoodleView() {
           toast.success("Noodle timeline refreshed.");
         },
         onError: (error) => toast.error(error instanceof Error ? error.message : "Could not refresh Noodle."),
+      },
+    );
+  };
+
+  const generateGuidedPrivatePost = (account: NoodleAccount) => {
+    if (!privateGuideIncludeText && !privateGuideIncludeImage) {
+      toast.error("Enable text, image, or both for the NoodleR post.");
+      return;
+    }
+    if (!settings?.generationConnectionId) {
+      toast.error("Choose a generation connection for Noodle first.");
+      return;
+    }
+    const defaultImageConnectionId = readString(imageConnections.find((connection) => connection.defaultForAgents)?.id);
+    if (privateGuideIncludeImage && !settings.imageGenerationConnectionId && !defaultImageConnectionId) {
+      toast.error("Choose an image generation connection for Noodle first.");
+      return;
+    }
+    refreshNoodle.mutate(
+      {
+        targetAccountId: account.id,
+        connectionId: settings.generationConnectionId,
+        privatePostGuide: {
+          access: privateGuideAccess,
+          includeText: privateGuideIncludeText,
+          includeImage: privateGuideIncludeImage,
+          theme: privateGuideTheme.trim() || undefined,
+          prompt: privateGuidePrompt.trim() || undefined,
+        },
+      },
+      {
+        onSuccess: (result) => {
+          setProfileTab("posts");
+          if (result.imagePromptReviewItems.length > 0) {
+            setImagePromptReviewItems(result.imagePromptReviewItems);
+            toast.success("NoodleR post created. Review its image prompt to finish the image.");
+            return;
+          }
+          toast.success(
+            result.createdPostIds?.length ? "NoodleR post created." : "NoodleR post generation finished.",
+          );
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not generate a NoodleR post."),
       },
     );
   };
@@ -3839,6 +3888,8 @@ export function NoodleView() {
         onClick={() =>
           revealed
             ? setImageLightbox(createNoodleLightboxImage(post.id, post.imageUrl!, post.imagePrompt ?? ""))
+            : post.access === "ppv"
+              ? unlockAccessPost(post)
             : toggleSubscription(post.authorAccountId)
         }
         className="group relative aspect-square overflow-hidden bg-[var(--accent)]"
@@ -5096,7 +5147,7 @@ export function NoodleView() {
                             className="mb-1 h-9 rounded-full border border-[var(--noodle-divider)] px-5 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)]"
                             title="View private NoodleR account"
                           >
-                            View private
+                            Open NoodleR
                           </button>
                         ) : (
                           <button
@@ -5114,7 +5165,7 @@ export function NoodleView() {
                             className="mb-1 h-9 rounded-full border border-[var(--noodle-divider)] px-5 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
                             title="Create a private NoodleR account linked to this profile"
                           >
-                            {createPrivateAccount.isPending ? "Creating…" : "Create private account"}
+                            {createPrivateAccount.isPending ? "Creating…" : "Create NoodleR"}
                           </button>
                         ))}
                     </div>
@@ -5198,27 +5249,84 @@ export function NoodleView() {
                     )}
                   </div>
                   {viewedProfileAccount?.visibility === "private" && viewedProfileAccount.kind === "character" && (
-                    <div className="flex items-center justify-between gap-3 border-t border-[var(--noodle-divider)] p-4">
-                      <p className="text-xs text-[var(--muted-foreground)]">
-                        This character's NoodleR account never posts automatically. Generate one post at a time.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          refreshNoodle.mutate(
-                            { targetAccountId: viewedProfileAccount.id },
-                            { onError: (error) => toast.error(error instanceof Error ? error.message : "Could not generate a NoodleR post.") },
-                          )
-                        }
-                        disabled={refreshNoodle.isPending}
-                        className="h-8 shrink-0 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {refreshNoodle.isPending ? "Generating…" : "Generate a post"}
-                      </button>
+                    <div className="border-t border-[var(--noodle-divider)] p-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <h4 className="text-sm font-bold text-[var(--foreground)]">NoodleR creator tools</h4>
+                          <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                            Guide one private character post. Timeline refreshes will not post here automatically.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => generateGuidedPrivatePost(viewedProfileAccount)}
+                          disabled={refreshNoodle.isPending}
+                          className="h-8 shrink-0 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {refreshNoodle.isPending ? "Generating..." : "Generate guided post"}
+                        </button>
+                      </div>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                        <label className="block space-y-1.5">
+                          <span className={labelClass}>Status</span>
+                          <select
+                            value={privateGuideAccess}
+                            onChange={(event) => setPrivateGuideAccess(event.target.value as NoodlePrivatePostAccess)}
+                            className={fieldClass}
+                          >
+                            <option value="subscriber">Subscribers only</option>
+                            <option value="ppv">Pay-per-post</option>
+                          </select>
+                        </label>
+                        <label className="block space-y-1.5">
+                          <span className={labelClass}>Theme</span>
+                          <input
+                            value={privateGuideTheme}
+                            onChange={(event) => setPrivateGuideTheme(event.target.value)}
+                            placeholder="Behind the scenes, outfit drop, flirt, teaser"
+                            className={fieldClass}
+                          />
+                        </label>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-3 text-xs font-semibold text-[var(--foreground)]">
+                        <label className="inline-flex h-8 items-center gap-2 rounded-full border border-[var(--noodle-divider)] px-3">
+                          <input
+                            type="checkbox"
+                            checked={privateGuideIncludeText}
+                            onChange={(event) => setPrivateGuideIncludeText(event.target.checked)}
+                            className="h-3.5 w-3.5 accent-[var(--noodle-blue)]"
+                          />
+                          Text
+                        </label>
+                        <label className="inline-flex h-8 items-center gap-2 rounded-full border border-[var(--noodle-divider)] px-3">
+                          <input
+                            type="checkbox"
+                            checked={privateGuideIncludeImage}
+                            onChange={(event) => setPrivateGuideIncludeImage(event.target.checked)}
+                            className="h-3.5 w-3.5 accent-[var(--noodle-blue)]"
+                          />
+                          Image
+                        </label>
+                      </div>
+                      <label className="mt-3 block space-y-1.5">
+                        <span className={labelClass}>Prompt</span>
+                        <textarea
+                          value={privateGuidePrompt}
+                          onChange={(event) => setPrivateGuidePrompt(event.target.value)}
+                          placeholder="Tell the generator what this private post should be about."
+                          className={cn(textareaClass, "min-h-20 resize-none")}
+                        />
+                      </label>
                     </div>
                   )}
                   {viewingOwnPrivateAccount && (
                     <div className="border-t border-[var(--noodle-divider)] p-4">
+                      <div className="mb-3">
+                        <h4 className="text-sm font-bold text-[var(--foreground)]">NoodleR creator tools</h4>
+                        <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                          Post from your private profile. Add an image URL to choose subscriber or pay-per-post access.
+                        </p>
+                      </div>
                       <textarea
                         value={privateComposerText}
                         onChange={(event) => setPrivateComposerText(event.target.value)}

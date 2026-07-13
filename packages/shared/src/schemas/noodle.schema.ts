@@ -250,6 +250,18 @@ export const noodleRefreshSchema = z.object({
   // Manual, single-account refresh for a NoodleR (private) account, which is
   // otherwise excluded from the normal automatic participant selection.
   targetAccountId: z.string().min(1).optional(),
+  privatePostGuide: z
+    .object({
+      access: z.enum(["subscriber", "ppv"]).optional(),
+      includeText: z.boolean().optional(),
+      includeImage: z.boolean().optional(),
+      theme: z.string().trim().max(120).optional(),
+      prompt: z.string().trim().max(1000).optional(),
+    })
+    .refine((guide) => guide.includeText !== false || guide.includeImage !== false, {
+      message: "Enable text, image, or both for a guided NoodleR post.",
+    })
+    .optional(),
 });
 
 export const noodleRescheduleRefreshSchema = z.object({

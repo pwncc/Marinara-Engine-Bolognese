@@ -145,6 +145,8 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+type NoodlePrivatePostGuide = NonNullable<z.infer<typeof noodleRefreshSchema>["privatePostGuide"]>;
+
 const NOODLE_ADULT_PLATFORM_POLICY =
   "Noodle only accepts confirmed adult accounts and personas. Every participant on Noodle is 18+; minors are not allowed on the platform. NSFW content is allowed, anything goes, and adult in-character drama, flirtation, gossip, and explicit references may appear when they fit the accounts involved.";
 
@@ -645,6 +647,8 @@ async function buildRefreshPrompt(input: {
   personaAccount: NoodleAccount | null;
   settings: NoodleSettings;
   imageCaptioning: ImageCaptioningRuntime;
+  requireImageForSinglePost?: boolean;
+  privatePostGuide?: NoodlePrivatePostGuide;
 }) {
   const activeCharacters = input.activeAccounts.filter((account) => account.kind === "character");
   const activeRandomUsers = input.activeAccounts.filter((account) => account.kind === "random_user");
@@ -796,17 +800,39 @@ async function buildRefreshPrompt(input: {
       ...(imageManifest ? ["", imageManifest] : []),
       "",
       "# Quotas",
-      `posts: at most ${input.settings.maxGeneratedPostsPerRefresh}`,
+      input.requireImageForSinglePost || input.privatePostGuide
+        ? "posts: generate exactly 1 post, authored by the single active non-persona account."
+        : `posts: at most ${input.settings.maxGeneratedPostsPerRefresh}`,
       `replies: at most ${input.settings.maxRepliesPerRefresh}`,
       `reposts: at most ${input.settings.maxRepostsPerRefresh}`,
       `likes: at most ${input.settings.maxLikesPerRefresh}`,
       "follows: optional; use sparingly when an account would naturally follow another active account after today's public activity.",
       input.settings.enableImagePrompts
-        ? `image generation: at most ${input.settings.maxImagesPerRefresh} images this refresh; imagePrompt may request either a character image or a meme. For character images, describe concrete appearance, build, clothing, and scene composition. For memes, describe the meme format, visual gag, intended caption/text if any, and why it fits the author's personality.`
+        ? `image generation: ${input.requireImageForSinglePost ? "required for this post" : `at most ${input.settings.maxImagesPerRefresh} images this refresh`}; imagePrompt may request either a character image or a meme. For character images, describe concrete appearance, build, clothing, and scene composition. For memes, describe the meme format, visual gag, intended caption/text if any, and why it fits the author's personality.${
+            input.requireImageForSinglePost
+              ? " This is a paid subscription/OnlyFans-style profile post, so imagePrompt must not be null or omitted."
+              : ""
+          }`
         : "image generation: disabled; omit imagePrompt or return null.",
       input.settings.allowGalleryImageAttachments
         ? "gallery attachments: enabled; you may set attachGalleryImage true on posts that should reuse existing character/chat gallery media."
         : "gallery attachments: disabled; set attachGalleryImage false or omit it.",
+      ...(input.privatePostGuide
+        ? [
+            "",
+            "# Guided Private NoodleR Post",
+            `access status: ${input.privatePostGuide.access ?? "subscriber"}`,
+            `text: ${input.privatePostGuide.includeText === false ? "disabled; set content exactly to Shared an image." : "enabled; write post text that fits the guide"}`,
+            `image: ${input.privatePostGuide.includeImage === false ? "disabled; set imagePrompt to null and attachGalleryImage false" : "enabled; include a concrete imagePrompt"}`,
+            input.privatePostGuide.theme?.trim()
+              ? `theme: ${input.privatePostGuide.theme.trim()}`
+              : "theme: choose a fitting private creator post theme",
+            input.privatePostGuide.prompt?.trim()
+              ? `user direction: ${input.privatePostGuide.prompt.trim()}`
+              : "user direction: no extra direction supplied",
+            "Follow the guide over generic timeline variety. Return exactly one post and no extra creator posts.",
+          ]
+        : []),
     ].join("\n");
 
   const context = buildContext(attachedImageKeys, visionManifest, captionedImages);
@@ -1611,6 +1637,22 @@ export async function noodleRoutes(app: FastifyInstance) {
     if (parsed.data.targetAccountId && targetPrivateAccount?.visibility !== "private") {
       return reply.code(404).send({ error: "Private Noodle account not found." });
     }
+    if (parsed.data.privatePostGuide && !targetPrivateAccount) {
+      return reply.code(400).send({ error: "Guided NoodleR posts require a private target account." });
+    }
+    // NoodleR "generate a post" is a single-account request from the private
+    // profile UI: it should always produce exactly one post, regardless of the
+    // global timeline generation settings. The guided flow may disable images.
+    const forceSinglePrivatePost = Boolean(targetPrivateAccount);
+    const requireImageForPrivatePost = forceSinglePrivatePost && parsed.data.privatePostGuide?.includeImage !== false;
+    const effectiveSettings: NoodleSettings = forceSinglePrivatePost
+      ? {
+          ...settings,
+          enableImagePrompts: requireImageForPrivatePost,
+          maxImagesPerRefresh: requireImageForPrivatePost ? Math.max(settings.maxImagesPerRefresh, 1) : 0,
+          maxGeneratedPostsPerRefresh: 1,
+        }
+      : settings;
     const imageCaptioning = await resolveImageCaptioningRuntime({
       chatMeta: {
         imageCaptioningEnabled: settings.imageCaptioningEnabled,
@@ -1619,13 +1661,17 @@ export async function noodleRoutes(app: FastifyInstance) {
       fallbackConnectionId: connectionId,
       connections,
     });
-    const imageConnection = settings.enableImagePrompts
-      ? settings.imageGenerationConnectionId
-        ? await connections.getWithKey(settings.imageGenerationConnectionId)
+    const imageConnection = effectiveSettings.enableImagePrompts
+      ? effectiveSettings.imageGenerationConnectionId
+        ? await connections.getWithKey(effectiveSettings.imageGenerationConnectionId)
         : await connections.getDefaultForImageGeneration()
       : null;
-    if (settings.enableImagePrompts && !imageConnection) {
-      return reply.code(400).send({ error: "Select a Noodle image generation connection first." });
+    if (effectiveSettings.enableImagePrompts && !imageConnection) {
+      return reply.code(400).send({
+        error: requireImageForPrivatePost
+          ? "Select a Noodle image generation connection before generating a NoodleR post."
+          : "Select a Noodle image generation connection first.",
+      });
     }
     if (refreshInFlight) {
       return reply.code(409).send({ error: "A Noodle timeline refresh is already running." });
@@ -1749,8 +1795,10 @@ export async function noodleRoutes(app: FastifyInstance) {
         chats,
         activeAccounts: selectedParticipants,
         personaAccount,
-        settings,
+        settings: effectiveSettings,
         imageCaptioning,
+        requireImageForSinglePost: requireImageForPrivatePost,
+        privatePostGuide: parsed.data.privatePostGuide,
       });
       logDebugOverride(debugMode, "[debug/noodle] Prompt sent to model:\n%s", promptForLog);
       if (visionAttachmentCount > 0) {
@@ -1820,7 +1868,7 @@ export async function noodleRoutes(app: FastifyInstance) {
         ]),
       );
       const existingInteractions = [...existingInteractionById.values()];
-      let remainingImagePrompts = settings.enableImagePrompts ? settings.maxImagesPerRefresh : 0;
+      let remainingImagePrompts = effectiveSettings.enableImagePrompts ? effectiveSettings.maxImagesPerRefresh : 0;
       const tempIdToPostId = new Map<string, string>();
       const createdPostIds: string[] = [];
       const imagePromptReviewItems: Array<{
@@ -1833,16 +1881,22 @@ export async function noodleRoutes(app: FastifyInstance) {
         height: number;
       }> = [];
       const activeCharacterReferenceAccounts = activeAccounts.filter((account) => account.kind === "character");
+      const privatePostGuide = parsed.data.privatePostGuide;
 
-      for (const generatedPost of generated.posts.slice(0, settings.maxGeneratedPostsPerRefresh)) {
+      for (const generatedPost of generated.posts.slice(0, effectiveSettings.maxGeneratedPostsPerRefresh)) {
         const account = entityToAccount.get(generatedPost.authorEntityId);
         if (!account) continue;
         if (!canGenerateNoodleActivityForAccountKind(account.kind)) {
           logger.warn("[noodle] Ignoring generated post attributed to persona %s", account.entityId);
           continue;
         }
+        const postContent = privatePostGuide?.includeText === false ? "Shared an image." : generatedPost.content;
         const imagePrompt =
-          remainingImagePrompts > 0 && generatedPost.imagePrompt?.trim() ? generatedPost.imagePrompt.trim() : null;
+          privatePostGuide?.includeImage === false
+            ? null
+            : remainingImagePrompts > 0 && generatedPost.imagePrompt?.trim()
+              ? generatedPost.imagePrompt.trim()
+              : null;
         if (imagePrompt) remainingImagePrompts -= 1;
         let persistedImagePrompt = imagePrompt;
         let imageUrl: string | null = null;
@@ -1854,7 +1908,7 @@ export async function noodleRoutes(app: FastifyInstance) {
             const generatedImage = await generateNoodlePostImage({
               account,
               referenceAccounts: activeCharacterReferenceAccounts,
-              postContent: generatedPost.content,
+              postContent,
               draftPrompt: imagePrompt,
               settings,
               characters,
@@ -1885,6 +1939,7 @@ export async function noodleRoutes(app: FastifyInstance) {
           !imageUrl &&
           !imagePromptPreview &&
           !imageGenerationFailed &&
+          privatePostGuide?.includeImage !== false &&
           settings.allowGalleryImageAttachments &&
           generatedPost.attachGalleryImage === true
         ) {
@@ -1898,15 +1953,27 @@ export async function noodleRoutes(app: FastifyInstance) {
             logger.warn(err, "[noodle] Failed to attach gallery image for %s", account.displayName);
           }
         }
-        const mentionedAccounts = mentionedCharacterAccounts(activeAccounts, generatedPost.content);
+        if (requireImageForPrivatePost && !imageUrl && !imagePromptPreview) {
+          throw new Error("The guided NoodleR post did not produce an image. Try again or turn Image off.");
+        }
+        const mentionedAccounts = mentionedCharacterAccounts(activeAccounts, postContent);
         const poll = generatedPost.poll ? createNoodlePoll(generatedPost.poll) : null;
-        // Flavor only: random filler accounts occasionally bait with a locked
-        // image, purely cosmetic parody content — no real account is gated by it.
-        const access: NoodlePost["access"] =
-          account.kind === "random_user" && imageUrl && Math.random() < 0.35 ? "ppv" : "public";
+        // NoodleR private accounts are the OnlyFans-style paywalled profiles:
+        // gate their generated posts behind a subscription by default, with an
+        // occasional per-post unlock (ppv) when there's an image to bait with.
+        // Public accounts keep the existing cosmetic random_user ppv flavor.
+        const access: NoodlePost["access"] = privatePostGuide?.access
+          ? privatePostGuide.access
+          : account.visibility === "private"
+            ? imageUrl && Math.random() < 0.4
+              ? "ppv"
+              : "subscriber"
+            : account.kind === "random_user" && imageUrl && Math.random() < 0.35
+              ? "ppv"
+              : "public";
         const post = await noodle.createPost({
           authorAccountId: account.id,
-          content: generatedPost.content,
+          content: postContent,
           imagePrompt: persistedImagePrompt,
           imageUrl,
           source: "generated",
@@ -1929,6 +1996,10 @@ export async function noodleRoutes(app: FastifyInstance) {
           sourcePostId: post.id,
         });
         if (digest) await noodle.updatePostMedia(post.id, { metadata: { activityDigestId: digest.id } });
+      }
+
+      if (forceSinglePrivatePost && createdPostIds.length === 0) {
+        throw new Error("The model did not generate a post for this NoodleR account. Try again.");
       }
 
       const quotas: Record<NoodleInteractionType, number> = {
@@ -2046,6 +2117,7 @@ export async function noodleRoutes(app: FastifyInstance) {
       return {
         bootstrap: await bootstrapVisibleNoodle(noodle, characters),
         imagePromptReviewItems,
+        createdPostIds,
       };
     } catch (error) {
       logger.error(error, "[noodle] Timeline refresh failed");
