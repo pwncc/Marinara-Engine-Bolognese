@@ -90,6 +90,7 @@ import {
   useCreateNoodleInteraction,
   useCreateNoodlePost,
   useCreatePrivateNoodleAccount,
+  useDeletePrivateNoodleAccount,
   useDeleteNoodleInteraction,
   useDeleteNoodlePost,
   useInviteNoodleCharacter,
@@ -178,6 +179,13 @@ type NoodleConfirmAction =
       kind: "delete-reply";
       postId: string;
       interactionId: string;
+      title: string;
+      message: string;
+      confirmLabel: string;
+    }
+  | {
+      kind: "delete-noodler-profile";
+      accountId: string;
       title: string;
       message: string;
       confirmLabel: string;
@@ -934,6 +942,7 @@ export function NoodleView() {
   const confirmNoodleImagePrompts = useConfirmNoodleImagePrompts();
   const resetNoodleTimeline = useResetNoodleTimeline();
   const createPrivateAccount = useCreatePrivateNoodleAccount();
+  const deletePrivateAccount = useDeletePrivateNoodleAccount();
   const subscribeAccount = useSubscribeNoodleAccount();
   const unsubscribeAccount = useUnsubscribeNoodleAccount();
   const unlockPost = useUnlockNoodlePost();
@@ -1174,8 +1183,17 @@ export function NoodleView() {
   const canRevealPostAccess = (post: NoodlePost) => {
     if (post.access === "public") return true;
     if (post.authorAccountId === personaAccount?.id) return true;
-    if (subscribedCreatorIds.has(post.authorAccountId)) return true;
-    if (post.access === "ppv" && unlockedPostIds.has(post.id)) return true;
+    const subscribed = subscribedCreatorIds.has(post.authorAccountId);
+    if (post.access === "subscriber") return subscribed;
+    if (post.access === "ppv") {
+      if (unlockedPostIds.has(post.id)) return true;
+      if (!subscribed) return false;
+      // Legacy accounts (created before this flag existed) keep the old
+      // "subscription unlocks everything" behavior; new accounts default to
+      // requiring a separate unlock per PPV post unless the creator opts in.
+      const author = accountById.get(post.authorAccountId);
+      return author?.settings?.subscriptionIncludesPpv !== false;
+    }
     return false;
   };
   const toggleSubscription = (creatorAccountId: string) => {
@@ -1662,7 +1680,9 @@ export function NoodleView() {
         ? deleteInteraction.isPending
         : confirmAction?.kind === "reset-timeline"
           ? resetNoodleTimeline.isPending
-          : false;
+          : confirmAction?.kind === "delete-noodler-profile"
+            ? deletePrivateAccount.isPending
+            : false;
   const normalizedProfileHandle = profileHandle.trim().replace(/^@+/, "");
   const isEditingProfile = canEditViewedProfile && profileEditing;
   const profileDisplayName = canEditViewedProfile
@@ -2506,6 +2526,16 @@ export function NoodleView() {
     });
   };
 
+  const deleteNoodlerProfile = (account: NoodleAccount) => {
+    setConfirmAction({
+      kind: "delete-noodler-profile",
+      accountId: account.id,
+      title: "Delete NoodleR Profile",
+      message: "This removes the NoodleR profile, its private posts, comments, subscriptions, and unlocks.",
+      confirmLabel: "Delete profile",
+    });
+  };
+
   const confirmNoodleAction = () => {
     if (!confirmAction) return;
     if (confirmAction.kind === "delete-post") {
@@ -2536,6 +2566,19 @@ export function NoodleView() {
           onError: (error) => toast.error(error instanceof Error ? error.message : "Could not delete Noodle comment."),
         },
       );
+      return;
+    }
+    if (confirmAction.kind === "delete-noodler-profile") {
+      const accountId = confirmAction.accountId;
+      deletePrivateAccount.mutate(accountId, {
+        onSuccess: () => {
+          if (viewedProfileAccountId === accountId) setViewedProfileAccountId(personaAccount?.id ?? null);
+          if (privateGuideAccountId === accountId) setPrivateGuideAccountId(null);
+          setConfirmAction(null);
+          toast.success("NoodleR profile deleted.");
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not delete NoodleR profile."),
+      });
       return;
     }
     resetNoodleTimeline.mutate(undefined, {
@@ -4222,6 +4265,18 @@ export function NoodleView() {
             {subscribed ? "Subscribed" : "Subscribe"}
           </button>
         )}
+        {isOwn && (
+          <button
+            type="button"
+            onClick={() => deleteNoodlerProfile(account)}
+            disabled={deletePrivateAccount.isPending}
+            className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Delete NoodleR profile"
+            aria-label="Delete NoodleR profile"
+          >
+            <Trash2 size={14} />
+          </button>
+        )}
       </div>
     );
   };
@@ -5516,6 +5571,18 @@ export function NoodleView() {
                             {createPrivateAccount.isPending ? "Creating…" : "Create NoodleR"}
                           </button>
                         ))}
+                      {viewingOwnPrivateAccount && viewedProfileAccount && (
+                        <button
+                          type="button"
+                          onClick={() => deleteNoodlerProfile(viewedProfileAccount)}
+                          disabled={deletePrivateAccount.isPending}
+                          className="mb-1 flex h-9 w-9 items-center justify-center rounded-full border border-[var(--destructive)]/40 text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+                          title="Delete NoodleR profile"
+                          aria-label="Delete NoodleR profile"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
                     </div>
 
                     {isEditingProfile ? (
@@ -5759,6 +5826,25 @@ export function NoodleView() {
                           Post from your private profile. Add an image URL to choose subscriber or pay-per-post access.
                         </p>
                       </div>
+                      <label className="mb-3 flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={viewedProfileAccount?.settings?.subscriptionIncludesPpv === true}
+                          onChange={(event) =>
+                            viewedProfileAccount &&
+                            updateAccount.mutate({
+                              id: viewedProfileAccount.id,
+                              settings: { subscriptionIncludesPpv: event.target.checked },
+                            })
+                          }
+                          disabled={updateAccount.isPending}
+                        />
+                        <span>
+                          Subscribers automatically unlock pay-per-post content too. Off by default — subscribers still
+                          have to unlock each pay-per-post individually.
+                        </span>
+                      </label>
                       <textarea
                         value={privateComposerText}
                         onChange={(event) => setPrivateComposerText(event.target.value)}

@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Storage: Noodle Fake Social Media
 // ──────────────────────────────────────────────
-import { and, desc, eq, gt, inArray, isNull, lt } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, lt, or } from "drizzle-orm";
 import {
   DEFAULT_NOODLE_SETTINGS,
   noodleSettingsSchema,
@@ -437,7 +437,11 @@ export function createNoodleStorage(db: DB) {
         bio: "",
         avatarUrl: null,
         invited: "false",
-        settings: JSON.stringify({}),
+        // Defaults new private accounts to requiring a separate PPV unlock
+        // even for subscribers. Accounts created before this flag existed
+        // read as `undefined` and keep the legacy subscription-includes-PPV
+        // behavior (see canRevealPostAccess in NoodleView.tsx).
+        settings: JSON.stringify({ subscriptionIncludesPpv: false }),
         visibility: "private",
         linkedAccountId: null,
         createdAt: timestamp,
@@ -448,6 +452,66 @@ export function createNoodleStorage(db: DB) {
         .set({ linkedAccountId: id, updatedAt: now() })
         .where(eq(noodleAccounts.id, publicAccountId));
       return this.getAccountById(id);
+    },
+
+    async deletePrivateAccount(id: string): Promise<NoodleAccount | null> {
+      const existing = await this.getAccountById(id);
+      if (!existing || existing.visibility !== "private") return null;
+
+      const posts = await db.select().from(noodlePosts).where(eq(noodlePosts.authorAccountId, id));
+      const postIds = posts.map((post) => post.id);
+      const postInteractions =
+        postIds.length > 0
+          ? await db.select().from(noodleInteractions).where(inArray(noodleInteractions.postId, postIds))
+          : [];
+      const actorInteractions = await db.select().from(noodleInteractions).where(eq(noodleInteractions.actorAccountId, id));
+      const allInteractions = await db.select().from(noodleInteractions);
+      const interactionIdSet = new Set([...postInteractions, ...actorInteractions].map((interaction) => interaction.id));
+      let foundChild = true;
+      while (foundChild) {
+        foundChild = false;
+        for (const interaction of allInteractions) {
+          if (
+            !interactionIdSet.has(interaction.id) &&
+            interaction.parentInteractionId &&
+            interactionIdSet.has(interaction.parentInteractionId)
+          ) {
+            interactionIdSet.add(interaction.id);
+            foundChild = true;
+          }
+        }
+      }
+      const interactionIds = [...interactionIdSet];
+
+      await db.transaction(async (tx) => {
+        if (postIds.length > 0) {
+          await tx.delete(noodleActivityDigests).where(inArray(noodleActivityDigests.sourcePostId, postIds));
+          await tx.delete(noodlePostUnlocks).where(inArray(noodlePostUnlocks.postId, postIds));
+          await tx.delete(noodlePosts).where(inArray(noodlePosts.id, postIds));
+        }
+        if (interactionIds.length > 0) {
+          await tx
+            .delete(noodleActivityDigests)
+            .where(inArray(noodleActivityDigests.sourceInteractionId, interactionIds));
+          await tx.delete(noodleInteractions).where(inArray(noodleInteractions.id, interactionIds));
+        }
+        await tx
+          .delete(noodleAccountSubscriptions)
+          .where(
+            or(
+              eq(noodleAccountSubscriptions.subscriberAccountId, id),
+              eq(noodleAccountSubscriptions.creatorAccountId, id),
+            ),
+          );
+        await tx.delete(noodlePostUnlocks).where(eq(noodlePostUnlocks.accountId, id));
+        await tx
+          .update(noodleAccounts)
+          .set({ linkedAccountId: null, updatedAt: now() })
+          .where(eq(noodleAccounts.linkedAccountId, id));
+        await tx.delete(noodleAccounts).where(eq(noodleAccounts.id, id));
+      });
+
+      return existing;
     },
 
     async upsertAccountFromProfile(input: {
