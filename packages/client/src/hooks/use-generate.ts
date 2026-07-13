@@ -40,6 +40,11 @@ type RetryAgentsOptions = {
   lorebookKeeperBackfill?: boolean;
   forMessageId?: string;
   secretPlotRerollMode?: "full" | "turn_only";
+  illustratorPromptReviewOverride?: {
+    resultData: Record<string, unknown>;
+    prompt: string;
+    negativePrompt?: string;
+  };
 };
 
 type RetryAgentsFn = (chatId: string, agentTypes: string[], options?: RetryAgentsOptions) => Promise<boolean>;
@@ -418,6 +423,8 @@ import { useUnoGameStore } from "../stores/uno-game.store";
 import { useChessGameStore } from "../stores/chess-game.store";
 import { usePokerGameStore } from "../stores/poker-game.store";
 import { useEightBallGameStore } from "../stores/eightball-game.store";
+import { useTicTacToeGameStore } from "../stores/tic-tac-toe-game.store";
+import { useRockPaperScissorsGameStore } from "../stores/rock-paper-scissors-game.store";
 import { useTranslationStore } from "../stores/translation.store";
 import { useUIStore } from "../stores/ui.store";
 import {
@@ -981,7 +988,7 @@ export function useGenerate() {
   const addDebugEntry = useAgentStore((s) => s.addDebugEntry);
   const addThoughtBubble = useAgentStore((s) => s.addThoughtBubble);
   const clearThoughtBubbles = useAgentStore((s) => s.clearThoughtBubbles);
-  const addEchoMessage = useAgentStore((s) => s.addEchoMessage);
+  const enqueueEchoMessages = useAgentStore((s) => s.enqueueEchoMessages);
   const setCyoaChoices = useAgentStore((s) => s.setCyoaChoices);
   const clearCyoaChoices = useAgentStore((s) => s.clearCyoaChoices);
   const setMariChips = useAgentStore((s) => s.setMariChips);
@@ -1196,12 +1203,7 @@ export function useGenerate() {
           typeof message.activeSwipeIndex === "number" && Number.isInteger(message.activeSwipeIndex)
             ? message.activeSwipeIndex
             : null;
-        rememberRecentMessageContentEdit(
-          params.chatId,
-          message.id,
-          message.content,
-          swipeIndex,
-        );
+        rememberRecentMessageContentEdit(params.chatId, message.id, message.content, swipeIndex);
       };
       const appendVisibleGeneratedChunk = (chunk: string) => {
         const normalizedChunk = normalizeLineBreakSpacing(chunk);
@@ -1379,9 +1381,7 @@ export function useGenerate() {
       const canRefreshCurrentMessagesNow = () => {
         if (!streamingEnabled || !shouldDisplayRawStream) return true;
         const streamState = useChatStore.getState();
-        return (
-          streamState.streamingChatId !== params.chatId || streamState.committedStreamChatIds.has(params.chatId)
-        );
+        return streamState.streamingChatId !== params.chatId || streamState.committedStreamChatIds.has(params.chatId);
       };
       const invalidateCurrentMessagesIfSafe = () => {
         if (!canRefreshCurrentMessagesNow()) return false;
@@ -1586,9 +1586,7 @@ export function useGenerate() {
                 if (result.agentType === "echo-chamber") {
                   const d = result.data as Record<string, unknown>;
                   const reactions = (d.reactions as Array<{ characterName: string; reaction: string }>) ?? [];
-                  for (const r of reactions) {
-                    addEchoMessage(r.characterName, r.reaction);
-                  }
+                  enqueueEchoMessages(reactions);
                 }
 
                 // Push CYOA choices to the dedicated store
@@ -1854,6 +1852,9 @@ export function useGenerate() {
                 else if (turnGameType === "uno") useUnoGameStore.getState().clearUno(params.chatId);
                 else if (turnGameType === "poker") usePokerGameStore.getState().clearPoker(params.chatId);
                 else if (turnGameType === "eightball") useEightBallGameStore.getState().clearEightBall(params.chatId);
+                else if (turnGameType === "tic-tac-toe") useTicTacToeGameStore.getState().clearTicTacToe(params.chatId);
+                else if (turnGameType === "rock-paper-scissors")
+                  useRockPaperScissorsGameStore.getState().clearRockPaperScissors(params.chatId);
                 void qc.invalidateQueries({ queryKey: turnGameKeys.state(params.chatId) });
                 break;
               }
@@ -1865,6 +1866,10 @@ export function useGenerate() {
                 usePokerGameStore.getState().setPoker(event.data as never, params.chatId);
               } else if (turnGameType === "eightball") {
                 useEightBallGameStore.getState().setEightBall(event.data as never, params.chatId);
+              } else if (turnGameType === "tic-tac-toe") {
+                useTicTacToeGameStore.getState().setTicTacToe(event.data as never, params.chatId);
+              } else if (turnGameType === "rock-paper-scissors") {
+                useRockPaperScissorsGameStore.getState().setRockPaperScissors(event.data as never, params.chatId);
               }
               break;
             }
@@ -2355,7 +2360,8 @@ export function useGenerate() {
                 if (useUIStore.getState().professorMariSuggestionsEnabled) setMariChips(params.chatId, suggestions);
               } else if (actionData.action === "plan") {
                 const plan = Array.isArray(actionData.plan) ? (actionData.plan as MariGuidedPlanStep[]) : [];
-                if (useUIStore.getState().professorMariSuggestionsEnabled && plan.length > 0) setMariPlan(params.chatId, plan);
+                if (useUIStore.getState().professorMariSuggestionsEnabled && plan.length > 0)
+                  setMariPlan(params.chatId, plan);
               } else if (actionData.action === "navigate") {
                 const panel = actionData.panel as string;
                 const tab = actionData.tab as string | null;
@@ -2611,7 +2617,10 @@ export function useGenerate() {
             unpersistedPartialMessage = created;
             persistedMessages.set(created.id, created);
           } catch (error) {
-            console.warn("[use-generate] Failed to persist stopped partial message; keeping cache-only fallback", error);
+            console.warn(
+              "[use-generate] Failed to persist stopped partial message; keeping cache-only fallback",
+              error,
+            );
             unpersistedPartialMessage = {
               id: `__partial_${params.chatId}_${Date.now()}`,
               chatId: params.chatId,
@@ -2777,7 +2786,7 @@ export function useGenerate() {
       addDebugEntry,
       addThoughtBubble,
       clearThoughtBubbles,
-      addEchoMessage,
+      enqueueEchoMessages,
       setCyoaChoices,
       clearCyoaChoices,
       setMariChips,
@@ -2812,6 +2821,7 @@ export function useGenerate() {
       clearFailedAgentTypes(chatId);
       if (isActiveChat()) clearThoughtBubbles();
       let hasError = false;
+      let imagePromptReviewRequested = false;
 
       try {
         const flushPatch = useGameStateStore.getState().flushPatch;
@@ -2836,6 +2846,11 @@ export function useGenerate() {
             agentTypes,
             streaming: useUIStore.getState().enableStreaming,
             debugMode: retryDebugMode,
+            queueImageGenerationRequests: useUIStore.getState().queueImageGenerationRequests,
+            reviewImagePromptsBeforeSend: useUIStore.getState().reviewImagePromptsBeforeSend,
+            ...(options?.illustratorPromptReviewOverride
+              ? { illustratorPromptReviewOverride: options.illustratorPromptReviewOverride }
+              : {}),
             musicPlayerEnabled: useUIStore.getState().musicPlayerEnabled,
             musicPlayerSource: useUIStore.getState().musicPlayerSource,
             lorebookKeeperBackfill: options?.lorebookKeeperBackfill === true,
@@ -2931,7 +2946,7 @@ export function useGenerate() {
                 if (result.agentType === "echo-chamber") {
                   const d = result.data as Record<string, unknown>;
                   const reactions = (d.reactions as Array<{ characterName: string; reaction: string }>) ?? [];
-                  for (const r of reactions) addEchoMessage(r.characterName, r.reaction);
+                  if (isActiveChat()) enqueueEchoMessages(reactions);
                 }
                 // CYOA re-roll: push the freshly generated choices into the store
                 // so the buttons in CyoaChoices.tsx swap in immediately.
@@ -3059,6 +3074,9 @@ export function useGenerate() {
                 else if (turnGameType === "uno") useUnoGameStore.getState().clearUno(chatId);
                 else if (turnGameType === "poker") usePokerGameStore.getState().clearPoker(chatId);
                 else if (turnGameType === "eightball") useEightBallGameStore.getState().clearEightBall(chatId);
+                else if (turnGameType === "tic-tac-toe") useTicTacToeGameStore.getState().clearTicTacToe(chatId);
+                else if (turnGameType === "rock-paper-scissors")
+                  useRockPaperScissorsGameStore.getState().clearRockPaperScissors(chatId);
                 void qc.invalidateQueries({ queryKey: turnGameKeys.state(chatId) });
                 break;
               }
@@ -3070,6 +3088,10 @@ export function useGenerate() {
                 usePokerGameStore.getState().setPoker(event.data as never, chatId);
               } else if (turnGameType === "eightball") {
                 useEightBallGameStore.getState().setEightBall(event.data as never, chatId);
+              } else if (turnGameType === "tic-tac-toe") {
+                useTicTacToeGameStore.getState().setTicTacToe(event.data as never, chatId);
+              } else if (turnGameType === "rock-paper-scissors") {
+                useRockPaperScissorsGameStore.getState().setRockPaperScissors(event.data as never, chatId);
               }
               break;
             }
@@ -3096,6 +3118,15 @@ export function useGenerate() {
               }
               break;
             }
+            case "image_prompt_review": {
+              imagePromptReviewRequested = true;
+              window.dispatchEvent(
+                new CustomEvent("marinara:image-prompt-review", {
+                  detail: event.data,
+                }),
+              );
+              break;
+            }
             case "agent_error": {
               const errData = event.data as { agentType: string; agentName?: string | null; error: string };
               hasError = true;
@@ -3119,7 +3150,7 @@ export function useGenerate() {
             }
           }
         }
-        if (!hasError) {
+        if (!hasError && !imagePromptReviewRequested) {
           if (options?.lorebookKeeperBackfill) {
             toast.success("Lorebook Keeper backfill completed");
           } else if (agentResultCount === 0) {
@@ -3159,7 +3190,7 @@ export function useGenerate() {
       addResult,
       addDebugEntry,
       addThoughtBubble,
-      addEchoMessage,
+      enqueueEchoMessages,
       enqueuePendingCardUpdate,
       enqueuePendingAgentWriteApproval,
       clearFailedAgentTypes,

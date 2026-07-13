@@ -4,6 +4,56 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+## [2.2.1]
+
+### Added
+
+- Added Tic-Tac-Toe and Rock-Paper-Scissors as one-on-one Conversation-mode table games. Tic-Tac-Toe seats you against a character on a 3×3 board with a choice of X, O, or a random mark, and detects wins and draws. Rock-Paper-Scissors plays a best-of-3/5/7 match where each round's throw stays hidden from your opponent until both of you have thrown, then reveals the result. Both join the `[tic_tac_toe]`/`[rock_paper_scissors]` Conversation command family alongside `[chess]` and `[eightball]`, with `/tictactoe` (alias `/ttt`) and `/rps` slash commands, natural-language launchers, per-chat command toggles, and setup modals for opponent and game length.
+- Added a compact, expandable **Defaults** section to Connections for Main, Agents, Illustrator, and Videos. Each category now supports an optional fallback connection; failed generations retry once through that category's fallback while user cancellations and already-visible partial text streams remain protected from duplicate output. A toast identifies the fallback connection and model whenever the engine switches over.
+- Added drag-to-resize controls for the Echo Chamber on desktop and touch devices, with responsive text wrapping and correctly oriented handles in every screen corner.
+- Added native Android notification permission and delivery support to the APK wrapper so autonomous Conversation messages can notify mobile users while the app is backgrounded (#3572).
+- Added expandable Noodle poll vote details so tapping or clicking a vote count reveals which accounts selected each option (#3566).
+
+### Changed
+
+- Moved **Title / comment** into the primary identity fields directly below **Name** in both Character and Persona Metadata, while keeping it synchronized with the matching editor-header field.
+- Changed Noodle participant selection so invited characters remain the primary cast while random-user accounts appear only occasionally as supporting activity.
+- Moved media-wide queueing and prompt-review controls into a new **Overall Generations** settings group, renamed the queue option to **Queue media generation requests**, extended it to video generation, and added a Conversation toolbar hint linking users to generation settings.
+- Moved weather particle rendering off the main UI thread where supported, capped canvas resolution and mobile particle density, and reduced background polling/animation work to improve foreground smoothness and mobile battery use (#3567).
+- Added consistent Marinara Engine app attribution to every OpenRouter request path, including text, embeddings, image generation, model discovery, and video generation.
+- Bumped release metadata to v2.2.1 across packages, the PWA manifest, README release pointer, Windows installer sources, Android APK metadata, and the home-page-visible app version.
+- Android `versionName` is `2.2.1` with `versionCode 33`.
+
+### Fixed
+
+- Fixed desktop top-bar navigation dismissing open chat tools such as Chat Settings, Gallery, Branches, Active Context, and Conversation Presence. Desktop shell panels now reflow those tools alongside the chat, while mobile navigation continues to dismiss floating chat UI.
+- Fixed Presets list metadata wrapping Regex AI/User badges above their patterns and Function badges below their names. Patterns and function names now truncate first so their badges remain beside them on one line.
+- Fixed Professor Mari's chat opening below the usable mobile viewport and hiding its composer on iPhones. The expanded chat now fills the app content area beneath the top bar and reserves the device's bottom safe area (#3569).
+- Fixed Professor Mari's structured `persona.create` action and `mari personas create` helper omitting required Conversation profile columns. Both creation paths now supply safe defaults and accept phonetic name, Convo display name, About Me, and Convo behavior values; the corresponding update helpers and command guidance were synchronized as well (#3571).
+- Hardened generation fallbacks so output already emitted through streaming callbacks is never replaced, failed toast delivery cannot cancel a working fallback, Roleplay background generation participates in Illustrator fallback routing, and Conversation selfie galleries record the connection and model that actually produced the image.
+- Fixed Present Characters tracker values crashing React when generated stats used structured `{ name, value, max, color }` objects; tracker displays now normalize those values safely (#3563).
+- Fixed autonomous group Conversation exchanges stopping at one capped or cooling-down character, sequential turns leaking other speakers, valid target replies being removed by wrong-speaker pruning, and OpenAI-compatible SSE responses losing content delivered through final message frames (#3573).
+- Fixed Roleplay chats opening at the oldest history position instead of the latest message, and updated **Show newer** and **Latest** controls to inherit the selected chroma text color.
+- Fixed Echo Chamber batches appearing all at once or too quickly by revealing queued reactions individually at randomized 10–30 second intervals, while protecting the active chat from stale delivery writes.
+- Fixed Echo Chamber corner controls pointing in the wrong vertical direction when the panel is anchored along the bottom edge.
+- Fixed image and video connections retaining or claiming the language-only **Fallback for Main** role after creation or provider changes.
+- Fixed corrected Noodle refreshes bypassing the same activity and authorship validation as the first attempt, empty refreshes being accepted without retry, persona IDs being offered as generated authors, and JSON-shaped image prompts without a usable prompt field being sent verbatim to image providers.
+- Fixed Android/Termux updates repeatedly forcing the entire dependency store to reinstall for the same stale build. The launcher now performs one rebuild, prunes unreferenced packages left by older releases, avoids irrelevant cross-platform binary downloads, and accepts the current Node 26 Termux runtime (#3540).
+- Fixed one malformed generated Noodle post, interaction, follow, or digest rejecting an otherwise valid refresh. Rows are now validated independently, while wholly malformed JSON or batches containing only invented account IDs receive one constrained retry with the exact active IDs (#3547, #3553).
+- Fixed XML agent prompt-template overrides escaping literal contract tags such as `<chat_summary>` and `<existing_entries>` while continuing to escape values inserted through macros (#3548).
+- Fixed Conversation group messages ignoring character-specific Convo display names in generation instructions, speaker parsing, sender labels, typing events, and historical base-name matching (#3550).
+- Added profile editing for directly invited Noodle characters, including display name, handle, bio, location, avatar, and banner; manual profile identity changes are preserved when the underlying character card is refreshed (#3551).
+- Fixed add-character searches in Conversation and Roleplay setup and Chat Settings ignoring card tags, descriptions, creator metadata, and title aliases (#3555).
+- Fixed Noodle's default generated-image path sending the post text and prompt-building meta-instructions directly to image providers. It now sends only the model's visual idea, character appearance, Noodle image direction, and selected image-generation style settings, with recovery for legacy or JSON-wrapped image prompts (#3554).
+- Fixed Noodle profile setup failing an entire refresh when one model-generated profile contains an overlong or malformed field. Generated profile text is safely bounded, invalid rows are skipped independently, and valid accounts from the same batch still apply (#3533).
+- Fixed Noodle forgetting the last selected persona after a browser refresh or app restart; the account choice now persists per browser and falls back safely when that persona no longer exists (#3535).
+- Fixed renamed character cards retaining their former Noodle display name. Bootstrap now refreshes entity-owned character names and avatars while preserving generated handles, bios, locations, and other Noodle profile data (#3537).
+- Fixed generated chat images being saved only to the chat gallery. Illustrator generations and retries across Roleplay/Game, Conversation command and Gallery selfies, and Conversation Call selfies now also create independent copies in every depicted character or persona gallery (#3538).
+- Restored Echo Chamber's queued Roleplay delivery: newly generated reactions now arrive one at a time with short delays, persistence races cannot reveal a whole batch, stale reveal counters are clamped, and inactive-chat retries cannot write into the visible chat's Echo panel.
+- Fixed character Advanced prompt controls being dropped from live Conversation and Game requests. System Prompts, Post-History Instructions, and Depth Prompts now cover Conversation participants plus Game party/character-GM cards, using the same shared injection path in preset assembly, direct mode assembly, and Prompt Preview.
+- Fixed Roleplay Illustrator comic and manga prompts being contradicted by an unconditional negative prompt that banned speech bubbles, captions, readable lettering, and SFX. Text suppression now remains enabled for ordinary illustrations but yields to explicit lettering requests in the final compiled prompt.
+- Fixed Roleplay Text to Speech replaying the previous assistant message whenever a new output generation failed. Autoplay now requires a successful generation with a genuinely new assistant-message revision, and failed partial outputs are never queued for automatic playback.
+
 ## [2.2.0]
 
 ### Added
@@ -39,6 +89,10 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Added 8-Ball Pool as a one-on-one Conversation-mode table game with a real 2D physics simulation: you aim and shoot for real — drag to aim with a guide line and ghost-ball preview, set power on a slider, and watch every shot play out with animated ball motion, collisions, cushion bounces, and pocket drops. Characters pick from an engine-computed shot menu (direct pots, bank shots, and safeties) in personality — daredevils take the showoff bank, tacticians play safe — and their choice is executed through the same physics with skill-based aim accuracy. Fouls (scratches and wrong-ball-first contact) give ball-in-hand with tap-to-place cue placement, slop counts, alternate breaks, and race-to-N matches with player-paced racks.
 - Added a selectable 8-ball announcer: seat any chat character as the pool-hall commentator, who calls the break, group assignment, fouls, great shots, and rack wins in their own voice — narration only, never affecting the rules.
 - 8-ball joins the `[eightball]` Conversation command family, with a `/8ball` slash command (alias `/pool`), natural-language launcher, per-chat command toggle, and a setup modal for the opponent, announcer, match length, and who breaks.
+- Added an opt-in **Lorebook context** setting to Noodle (off by default): when enabled, timeline refreshes scan recent post/reply text and active character profiles for lorebook keyword matches and include activated entries as world/lore context, reusing the same multi-character lorebook system group chats already use, with a Noodle-specific token budget that scales with the active character count.
+- Registered a **Noodle Timeline Voice & Tone** prompt override (Settings -> Generations -> Image Generation Prompt Overrides) so the tone and creative-freedom portion of Noodle's refresh prompt can be rewritten without code changes, while structured-action and output-format rules stay hardcoded outside the override so a rewrite cannot break refresh generation.
+- Noodle's opted-in chat context now includes a character's current Conversation-schedule status and activity (for example, "currently dnd (At the office)") alongside that chat's recent messages, when the chat both has **Allow Noodle references** on and a running character schedule. Scoped per chat, with no new schedule computation or cross-chat reconciliation.
+- Added an opt-in **Enhanced tone & continuity** setting to Noodle (off by default, Settings -> Timeline Writing): when enabled, each account's tone is grounded more strongly in its own Personality/Description/Backstory instead of a default upbeat voice, accounts are encouraged to react to, quote, or argue with each other's posts within the same refresh, older-post recall happens more often and favors posts relevant to currently active accounts, and the recall instruction is reworded to allow rather than discourage references. Off (the default) reproduces the prior tone and recall behavior exactly.
 
 ### Changed
 

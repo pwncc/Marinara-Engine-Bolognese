@@ -191,12 +191,18 @@ export interface GameSetupConfig {
   gameGmPromptTemplateId?: string | null;
   /** Selected animation-ready storyboard director template. */
   gameStoryboardAnimationPromptTemplateId?: string | null;
+  /** Selected provider-facing image prompt template for storyboard keyframes. */
+  gameStoryboardImagePromptTemplateId?: string | null;
   /** Selected prompt template used only for storyboard keyframe videos. */
   gameStoryboardVideoPromptTemplateId?: string | null;
   /** Send storyboard imagePrompt directly to the image compiler/provider. */
   gameStoryboardUseDirectScenePrompt?: boolean;
-  /** Unified art style prompt applied to all generated images (auto-generated at setup) */
+  /** Unified art style prompt applied to all generated images (auto-generated at setup, user-editable). */
   artStylePrompt?: string;
+  /** Original setup-generated art style, retained so user edits can be restored. */
+  generatedArtStylePrompt?: string;
+  /** Whether the campaign art style is included in generated image prompts. Defaults to true. */
+  useCampaignArtStyle?: boolean;
   /** Optional image style profile applied to generated images in this game. */
   imageStyleProfileId?: string | null;
   /** Lorebook IDs to activate for this game */

@@ -373,14 +373,22 @@ export function createNoodleStorage(db: DB) {
       avatarCrop?: NoodleAvatarCrop | null;
       bio?: string | null;
       invited?: boolean;
+      /** Keep entity-owned identity fields current without replacing generated profile copy. */
+      syncIdentity?: boolean;
     }): Promise<NoodleAccount> {
       const existing = await this.getAccountByEntity(input.kind, input.entityId);
       if (existing) {
         const updates: Record<string, unknown> = { updatedAt: now() };
-        if (!existing.displayName.trim()) updates.displayName = input.displayName || existing.handle;
-        if (!existing.bio.trim() && input.bio) updates.bio = input.bio;
-        if (!existing.avatarUrl && input.avatarUrl) updates.avatarUrl = input.avatarUrl;
-        if (input.avatarCrop !== undefined) {
+        const profileManuallyEdited = existing.settings.profileManuallyEdited === true;
+        if (input.syncIdentity && !profileManuallyEdited) {
+          updates.displayName = input.displayName.trim().slice(0, 120) || existing.handle;
+          if (input.avatarUrl !== undefined) updates.avatarUrl = input.avatarUrl;
+        } else if (!existing.displayName.trim()) {
+          updates.displayName = input.displayName || existing.handle;
+        }
+        if (!profileManuallyEdited && !existing.bio.trim() && input.bio) updates.bio = input.bio;
+        if (!input.syncIdentity && !existing.avatarUrl && input.avatarUrl) updates.avatarUrl = input.avatarUrl;
+        if (input.avatarCrop !== undefined && !profileManuallyEdited) {
           updates.settings = JSON.stringify({ ...existing.settings, avatarCrop: input.avatarCrop });
         }
         if (input.invited !== undefined) updates.invited = String(input.invited);

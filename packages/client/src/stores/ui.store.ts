@@ -477,6 +477,8 @@ interface UIState {
   gameAssetsBrowserOpen: boolean;
   /** When true, the main area shows the Noodle social timeline */
   noodleOpen: boolean;
+  /** Last persona selected inside Noodle, persisted per browser. */
+  noodleSelectedPersonaId: string | null;
   /** When true, the main area shows the full-page character library */
   characterLibraryOpen: boolean;
   /** Last selected character card inside the full-page character library */
@@ -670,6 +672,7 @@ interface UIState {
   gameNotificationSound: boolean;
   notificationSoundsOnlyWhenUnfocused: boolean;
   conversationBrowserNotifications: boolean;
+  conversationMobileNotifications: boolean;
 
   // ── Custom Conversation Prompt ──
   /** User's custom default system prompt for new conversations (null = built-in default). */
@@ -827,6 +830,7 @@ interface UIState {
   closeGameAssetsBrowser: () => void;
   openNoodle: () => void;
   closeNoodle: () => void;
+  setNoodleSelectedPersonaId: (id: string | null) => void;
 
   /** Returns true if any full-page detail editor is currently open */
   hasAnyDetailOpen: () => boolean;
@@ -918,6 +922,7 @@ interface UIState {
   setGameNotificationSound: (v: boolean) => void;
   setNotificationSoundsOnlyWhenUnfocused: (v: boolean) => void;
   setConversationBrowserNotifications: (v: boolean) => void;
+  setConversationMobileNotifications: (v: boolean) => void;
   setCustomConversationPrompt: (v: string | null) => void;
   setScheduleGenerationPreferences: (v: string) => void;
   rememberGameSetupOptions: (
@@ -1130,6 +1135,7 @@ export function pickSyncedSettings(state: UIState) {
     gameNotificationSound: state.gameNotificationSound,
     notificationSoundsOnlyWhenUnfocused: state.notificationSoundsOnlyWhenUnfocused,
     conversationBrowserNotifications: state.conversationBrowserNotifications,
+    conversationMobileNotifications: state.conversationMobileNotifications,
     customConversationPrompt: state.customConversationPrompt,
     scheduleGenerationPreferences: state.scheduleGenerationPreferences,
     impersonatePromptTemplate: state.impersonatePromptTemplate,
@@ -1191,6 +1197,7 @@ export const useUIStore = create<UIState>()(
       botBrowserOpen: false,
       gameAssetsBrowserOpen: false,
       noodleOpen: false,
+      noodleSelectedPersonaId: null,
       characterLibraryOpen: false,
       characterLibrarySelectedId: null,
       characterLibrarySort: "name-asc" as CharacterLibrarySort,
@@ -1300,6 +1307,7 @@ export const useUIStore = create<UIState>()(
       gameNotificationSound: true,
       notificationSoundsOnlyWhenUnfocused: false,
       conversationBrowserNotifications: false,
+      conversationMobileNotifications: false,
       customConversationPrompt: null,
       scheduleGenerationPreferences: "",
       learnedGameSetupOptions: DEFAULT_GAME_SETUP_LEARNED_OPTIONS,
@@ -1727,6 +1735,7 @@ export const useUIStore = create<UIState>()(
           ...(window.innerWidth < 768 && { rightPanelOpen: false }),
         }),
       closeNoodle: () => set({ noodleOpen: false }),
+      setNoodleSelectedPersonaId: (id) => set({ noodleSelectedPersonaId: id }),
 
       hasAnyDetailOpen: () => {
         const s = get();
@@ -1965,6 +1974,7 @@ export const useUIStore = create<UIState>()(
       setGameNotificationSound: (v) => set({ gameNotificationSound: v }),
       setNotificationSoundsOnlyWhenUnfocused: (v) => set({ notificationSoundsOnlyWhenUnfocused: v }),
       setConversationBrowserNotifications: (v) => set({ conversationBrowserNotifications: v }),
+      setConversationMobileNotifications: (v) => set({ conversationMobileNotifications: v }),
       setCustomConversationPrompt: (v) => set({ customConversationPrompt: v }),
       setScheduleGenerationPreferences: (v) => set({ scheduleGenerationPreferences: v }),
       rememberGameSetupOptions: (options, text) =>
@@ -2052,7 +2062,7 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: "marinara-engine-ui",
-      version: 71,
+      version: 72,
       // Debounce localStorage writes to avoid sync I/O on every state change
       storage: createJSONStorage(() => {
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -2387,6 +2397,9 @@ export const useUIStore = create<UIState>()(
         if (version <= 38 && persisted.conversationBrowserNotifications === undefined) {
           persisted.conversationBrowserNotifications = false;
         }
+        if (version <= 71 && persisted.conversationMobileNotifications === undefined) {
+          persisted.conversationMobileNotifications = false;
+        }
         // v39 -> v40: selectable Conversation message layout.
         persisted.conversationMessageStyle = normalizeConversationMessageStyle(persisted.conversationMessageStyle);
         // v40 -> v41: reconcile parallel v40 UI preference additions.
@@ -2587,6 +2600,7 @@ export const useUIStore = create<UIState>()(
         botBrowserOpen: state.botBrowserOpen,
         gameAssetsBrowserOpen: state.gameAssetsBrowserOpen,
         noodleOpen: state.noodleOpen,
+        noodleSelectedPersonaId: state.noodleSelectedPersonaId,
         characterLibraryOpen: state.characterLibraryOpen,
         characterLibrarySelectedId: state.characterLibrarySelectedId,
         characterLibrarySort: state.characterLibrarySort,
@@ -2729,6 +2743,7 @@ export const useUIStore = create<UIState>()(
         gameNotificationSound: state.gameNotificationSound,
         notificationSoundsOnlyWhenUnfocused: state.notificationSoundsOnlyWhenUnfocused,
         conversationBrowserNotifications: state.conversationBrowserNotifications,
+        conversationMobileNotifications: state.conversationMobileNotifications,
         customConversationPrompt: state.customConversationPrompt,
         scheduleGenerationPreferences: state.scheduleGenerationPreferences,
         impersonatePromptTemplate: state.impersonatePromptTemplate,

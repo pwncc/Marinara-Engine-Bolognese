@@ -2,6 +2,7 @@ import {
   GAME_GM_BUILT_IN_PROMPT_TEMPLATES,
   normalizeAgentPromptTemplateOptions,
   normalizeTextForMatch,
+  resolveGameSetupArtStylePrompt,
   type GameActiveState,
   type GameCampaignPlan,
   type GameMap,
@@ -108,10 +109,12 @@ function buildLibraryCardParts(data: any, fallbackName = "Unknown"): { name: str
   const description = cardPromptText(data.description);
   const backstory = cardPromptText(data.extensions?.backstory || data.backstory);
   const appearance = cardPromptText(data.extensions?.appearance || data.appearance);
+  const systemPrompt = cardPromptText(data.system_prompt);
   if (personality) parts.push(`Personality: ${personality}`);
   if (description) parts.push(`Description: ${description}`);
   if (backstory) parts.push(`Backstory: ${backstory}`);
   if (appearance) parts.push(`Appearance: ${appearance}`);
+  if (systemPrompt) parts.push(`Character System Instructions: ${systemPrompt}`);
   return { name, parts };
 }
 
@@ -325,7 +328,7 @@ export async function injectGameGmPromptRuntime(args: {
       args.chatMetadata.gameImageAutoGenerationEnabled !== false &&
       args.chatMetadata.gameStoryboardViewerDisplayMode !== "background" &&
       !!args.chatMetadata.gameImageConnectionId,
-    artStylePrompt: (setupConfig?.artStylePrompt as string) || undefined,
+    artStylePrompt: resolveGameSetupArtStylePrompt(setupConfig) || undefined,
     gameTime,
     weatherContext,
     playerNotes,

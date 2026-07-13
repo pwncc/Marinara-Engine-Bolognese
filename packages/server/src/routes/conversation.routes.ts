@@ -10,6 +10,7 @@ import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
+import { withConnectionFallbackProvider } from "../services/llm/connection-fallback-provider.js";
 import { CONVERSATION_SCHEDULE_DAYS, PROVIDERS, localAuthProviderBaseUrl } from "@marinara-engine/shared";
 import type { CharacterData, ConversationStatusOverride } from "@marinara-engine/shared";
 import {
@@ -27,9 +28,8 @@ import {
 import {
   checkAutonomousMessaging,
   checkCharacterExchange,
-  dailyCapForCharacter,
   getActivityState,
-  getAutonomousDailyBudget,
+  isAutonomousDailyBudgetExhausted,
   recordUserActivity,
   recordAssistantActivity,
   recordAutonomousClientPresence,
@@ -157,10 +157,9 @@ function evaluateAutonomousCandidate(
   schedule: WeekSchedule | undefined,
   meta: Record<string, unknown>,
 ): AutonomousCandidateEvaluation {
-  const budget = getAutonomousDailyBudget(meta);
-  const sent = budget.counts[characterId] ?? 0;
-  const cap = dailyCapForCharacter(schedule, meta);
-  if (sent >= cap) return { ok: false, reason: "daily_budget_exhausted" };
+  if (isAutonomousDailyBudgetExhausted(characterId, schedule, meta)) {
+    return { ok: false, reason: "daily_budget_exhausted" };
+  }
 
   const intent = resolveAutonomousIntentPayload(chatId, characterId, schedule, meta);
   if (intent.onCooldown) return { ok: false, reason: "intent_cooldown" };
@@ -196,10 +195,7 @@ function resolveLongAbsenceCandidate(
     const intent = resolveAutonomousIntentPayload(chatId, characterId, schedule, meta);
     if (intent.autonomousIntentKey !== "long_absence_check_in") continue;
 
-    const budget = getAutonomousDailyBudget(meta);
-    const sent = budget.counts[characterId] ?? 0;
-    const cap = dailyCapForCharacter(schedule, meta);
-    if (sent >= cap) {
+    if (isAutonomousDailyBudgetExhausted(characterId, schedule, meta)) {
       blockedReason = blockedReason ?? "daily_budget_exhausted";
       continue;
     }
@@ -365,12 +361,36 @@ export async function conversationRoutes(app: FastifyInstance) {
   const chars = createCharactersStorage(app.db);
   const connections = createConnectionsStorage(app.db);
 
+  async function createConversationAgentProvider(
+    conn: NonNullable<Awaited<ReturnType<typeof connections.getWithKey>>>,
+    baseUrl: string,
+  ) {
+    const fallbackConnection = await connections.getFallbackForAgents();
+    return withConnectionFallbackProvider({
+      primary: createLLMProvider(
+        conn.provider,
+        baseUrl,
+        conn.apiKey,
+        conn.maxContext,
+        conn.openrouterProvider,
+        conn.maxTokensOverride,
+      ),
+      primaryConnectionId: conn.id,
+      fallbackConnection,
+      fallbackBaseUrl: fallbackConnection ? resolveBaseUrl(fallbackConnection) : "",
+      category: "agents",
+    });
+  }
+
   async function resolveScheduleGenerationContext(chatId: string, characterId: string) {
     const chat = await chats.getById(chatId);
     if (!chat) return { errorStatus: 404 as const, error: "Chat not found" };
     if (chat.mode !== "conversation") return { errorStatus: 400 as const, error: "Not a conversation chat" };
 
-    const { conn, error: connectionError } = await resolveConversationScheduleConnection(connections, chat.connectionId);
+    const { conn, error: connectionError } = await resolveConversationScheduleConnection(
+      connections,
+      chat.connectionId,
+    );
     if (!conn) return { errorStatus: 400 as const, error: connectionError ?? "No connection configured" };
     const baseUrl = resolveBaseUrl(conn);
     if (!baseUrl) return { errorStatus: 400 as const, error: "No base URL" };
@@ -378,14 +398,7 @@ export async function conversationRoutes(app: FastifyInstance) {
     const charRow = await chars.getById(characterId);
     if (!charRow) return { errorStatus: 404 as const, error: "Character not found" };
     const charData = JSON.parse(charRow.data as string) as CharacterData;
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createConversationAgentProvider(conn, baseUrl);
     return { chat, charData, provider, model: conn.model ?? "" };
   }
 
@@ -398,8 +411,10 @@ export async function conversationRoutes(app: FastifyInstance) {
       routineSummary: null,
       routineSummaryGeneratedAt: null,
     };
-    if (typeof existing.idleResponseDelayMinutes === "number") merged.idleResponseDelayMinutes = existing.idleResponseDelayMinutes;
-    if (typeof existing.dndResponseDelayMinutes === "number") merged.dndResponseDelayMinutes = existing.dndResponseDelayMinutes;
+    if (typeof existing.idleResponseDelayMinutes === "number")
+      merged.idleResponseDelayMinutes = existing.idleResponseDelayMinutes;
+    if (typeof existing.dndResponseDelayMinutes === "number")
+      merged.dndResponseDelayMinutes = existing.dndResponseDelayMinutes;
     return preserveAutonomousScheduleControls(merged, existing);
   }
 
@@ -461,12 +476,17 @@ export async function conversationRoutes(app: FastifyInstance) {
         charData.description ?? "",
         charData.personality ?? "",
         guidance,
-        req.body.schedule ? `Current draft schedule:\n${summarizePreviousSchedule(req.body.schedule).join("\n")}` : undefined,
+        req.body.schedule
+          ? `Current draft schedule:\n${summarizePreviousSchedule(req.body.schedule).join("\n")}`
+          : undefined,
         {
           draftMode: parseWeekScheduleDraftMode(req.body.draftMode),
         },
       );
-      const fullSchedule = preserveDraftScheduleFields({ ...schedule, weekStart: getMonday().toISOString() }, req.body.schedule);
+      const fullSchedule = preserveDraftScheduleFields(
+        { ...schedule, weekStart: getMonday().toISOString() },
+        req.body.schedule,
+      );
       return reply.send({ schedule: fullSchedule });
     } catch (error) {
       logger.error(error instanceof Error ? error : undefined, "[schedule] Draft generation failed");
@@ -540,14 +560,7 @@ export async function conversationRoutes(app: FastifyInstance) {
           ? JSON.parse(chat.characterIds)
           : chat.characterIds;
 
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createConversationAgentProvider(conn, baseUrl);
     const model = conn.model ?? "";
     const mondayStr = getMonday().toISOString();
 
@@ -936,13 +949,17 @@ export async function conversationRoutes(app: FastifyInstance) {
     if (result.reason === "generation_in_progress") return reply.send(result);
 
     if (result.shouldTrigger) {
-      const characterId = result.characterIds[0];
-      if (characterId) {
+      let blockedReason: "daily_budget_exhausted" | "intent_cooldown" | null = null;
+      for (const characterId of result.characterIds) {
         const evaluation = evaluateAutonomousCandidate(chatId, characterId, autonomySchedules[characterId], meta);
-        if (!evaluation.ok) return reply.send(blockedAutonomousResponse(evaluation.reason));
+        if (!evaluation.ok) {
+          blockedReason = blockedReason ?? evaluation.reason;
+          continue;
+        }
         const generationStartedAt = markGenerationInProgress(chatId);
-        return reply.send({ ...result, generationStartedAt, ...evaluation.intent });
+        return reply.send({ ...result, characterIds: [characterId], generationStartedAt, ...evaluation.intent });
       }
+      if (blockedReason) return reply.send(blockedAutonomousResponse(blockedReason));
     }
 
     const longAbsence = resolveLongAbsenceCandidate(chatId, filteredSchedules, statusOverrides, meta);
@@ -975,29 +992,29 @@ export async function conversationRoutes(app: FastifyInstance) {
         // Check if the last message (or consecutive last messages) are all from the user
         const last = messages[messages.length - 1]!;
         if (last.role === "user") {
-          const catchUpCharacterId = onlineCharIds[0];
-          if (!catchUpCharacterId) {
-            return reply.send(result);
+          let blockedReason: "daily_budget_exhausted" | "intent_cooldown" | null = null;
+          for (const catchUpCharacterId of onlineCharIds) {
+            const evaluation = evaluateAutonomousCandidate(
+              chatId,
+              catchUpCharacterId,
+              autonomySchedules[catchUpCharacterId],
+              meta,
+            );
+            if (!evaluation.ok) {
+              blockedReason = blockedReason ?? evaluation.reason;
+              continue;
+            }
+            const generationStartedAt = markGenerationInProgress(chatId);
+            return reply.send({
+              shouldTrigger: true,
+              characterIds: [catchUpCharacterId],
+              reason: "user_inactivity",
+              inactivityMs: 0,
+              generationStartedAt,
+              ...evaluation.intent,
+            });
           }
-
-          const evaluation = evaluateAutonomousCandidate(
-            chatId,
-            catchUpCharacterId,
-            autonomySchedules[catchUpCharacterId],
-            meta,
-          );
-          if (!evaluation.ok) return reply.send(blockedAutonomousResponse(evaluation.reason));
-
-          // Character is online but hasn't responded — trigger catch-up
-          const generationStartedAt = markGenerationInProgress(chatId);
-          return reply.send({
-            shouldTrigger: true,
-            characterIds: [catchUpCharacterId],
-            reason: "user_inactivity",
-            inactivityMs: 0,
-            generationStartedAt,
-            ...evaluation.intent,
-          });
+          if (blockedReason) return reply.send(blockedAutonomousResponse(blockedReason));
         }
       }
     }
@@ -1082,22 +1099,19 @@ export async function conversationRoutes(app: FastifyInstance) {
 
     const result = checkCharacterExchange(chatId, lastSpeakerCharId, filteredSchedules, statusOverrides);
     if (result.shouldTrigger) {
-      const characterId = result.characterIds[0];
-      if (characterId) {
-        const budget = getAutonomousDailyBudget(meta);
-        const sent = budget.counts[characterId] ?? 0;
-        const cap = dailyCapForCharacter(schedules[characterId], meta);
-        if (sent >= cap) {
-          return reply.send({
-            shouldTrigger: false,
-            characterIds: [],
-            reason: "daily_budget_exhausted",
-            inactivityMs: 0,
-          });
-        }
+      const allowedCharacterId = result.characterIds.find(
+        (characterId) => !isAutonomousDailyBudgetExhausted(characterId, schedules[characterId], meta),
+      );
+      if (!allowedCharacterId) {
+        return reply.send({
+          shouldTrigger: false,
+          characterIds: [],
+          reason: "daily_budget_exhausted",
+          inactivityMs: 0,
+        });
       }
       const generationStartedAt = markGenerationInProgress(chatId);
-      return reply.send({ ...result, generationStartedAt });
+      return reply.send({ ...result, characterIds: [allowedCharacterId], generationStartedAt });
     }
     return reply.send(result);
   });

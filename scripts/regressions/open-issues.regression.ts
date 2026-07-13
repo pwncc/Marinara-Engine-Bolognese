@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Chat, Message } from "../../packages/shared/src/types/chat.js";
 import {
   parseGroupedSpeakerSegments,
@@ -17,6 +20,10 @@ import { arePresetChoiceSelectionsComplete } from "../../packages/client/src/lib
 import { shouldExecuteQuickPostAsCommand } from "../../packages/client/src/lib/slash-commands.js";
 import { getAvatarCropStyle } from "../../packages/client/src/lib/utils.js";
 import { getApiErrorMessage } from "../../packages/client/src/lib/api-client.js";
+import {
+  characterMatchesSearch,
+  parseCharacterDisplayData,
+} from "../../packages/client/src/lib/character-display.js";
 import { DEFAULT_GENERATION_PARAMS } from "../../packages/shared/src/constants/defaults.js";
 import { mergeNoodleCustomEmojiMap } from "../../packages/client/src/hooks/use-noodle-custom-emojis.js";
 import {
@@ -48,11 +55,92 @@ import {
 } from "../../packages/client/src/lib/emoji-shortcodes.js";
 import { unoEngine } from "../../packages/shared/src/features/turn-games/uno/engine.js";
 import { DEFAULT_UNO_CONFIG, type UnoState } from "../../packages/shared/src/features/turn-games/uno/types.js";
+import { persistGeneratedImageToEntityGalleries } from "../../packages/server/src/services/image/generated-image-entity-gallery.js";
+import { runImageGenerationRequest } from "../../packages/server/src/services/image/image-generation-queue.js";
+import {
+  parseIllustratorPromptReviewOverride,
+  resolveIllustratorPromptSubmission,
+} from "../../packages/server/src/services/image/illustrator-prompt-review.js";
+import { resolveReviewedImagePromptSubmission } from "../../packages/server/src/services/image/image-prompt-review.js";
+import { resolveSceneVideoPrompt } from "../../packages/server/src/services/video/scene-video-prompt-review.js";
+import { buildPersonaCreateRow } from "../../packages/server/src/services/mari-db/mari-db.service.js";
+import {
+  checkAutonomousMessaging,
+  clearChatActivity,
+  initializeActivityFromMessages,
+  isAutonomousDailyBudgetExhausted,
+} from "../../packages/server/src/services/conversation/autonomous.service.js";
+import type { WeekSchedule } from "../../packages/server/src/services/conversation/schedule.service.js";
+
+const minimalProfessorMariPersona = buildPersonaCreateRow(
+  { name: "Minimal helper persona" },
+  "persona-minimal",
+  "2026-07-13T00:00:00.000Z",
+);
+assert.equal(minimalProfessorMariPersona.phoneticName, "");
+assert.equal(minimalProfessorMariPersona.convoDisplayName, "");
+assert.equal(minimalProfessorMariPersona.aboutMe, "");
+assert.equal(minimalProfessorMariPersona.convoBehavior, "");
+
+const completeProfessorMariPersona = buildPersonaCreateRow(
+  {
+    name: "Complete helper persona",
+    phoneticName: "Professor Mah-ree",
+    convoDisplayName: "Prof. Mari",
+    aboutMe: "I help people build worlds.",
+    convoBehavior: "Speak warmly and precisely.",
+  },
+  "persona-complete",
+  "2026-07-13T00:00:00.000Z",
+);
+assert.equal(completeProfessorMariPersona.phoneticName, "Professor Mah-ree");
+assert.equal(completeProfessorMariPersona.convoDisplayName, "Prof. Mari");
+assert.equal(completeProfessorMariPersona.aboutMe, "I help people build worlds.");
+assert.deepEqual(completeProfessorMariPersona.convoBehavior, {
+  instruction: "Speak warmly and precisely.",
+  insertionStrategy: "constant_after",
+});
 
 assert.equal(resolveInitialGameGmConnectionId(undefined, "chat-connection"), "chat-connection");
 assert.equal(resolveInitialGameGmConnectionId("explicit-connection", "chat-connection"), "explicit-connection");
 assert.equal(resolveInitialGameGmConnectionId(undefined, null), null);
 assert.equal(DEFAULT_GENERATION_PARAMS.reasoningEffort, "maximum");
+
+const autonomousSchedule = (talkativeness: number, cap: number): WeekSchedule => ({
+  weekStart: "2026-07-13",
+  days: {},
+  inactivityThresholdMinutes: 1,
+  autonomousDailyCapOverride: cap,
+  talkativeness,
+});
+const autonomousChatId = "regression-autonomous-candidates";
+initializeActivityFromMessages(autonomousChatId, [
+  { role: "user", createdAt: new Date(Date.now() - 5 * 60_000).toISOString() },
+]);
+const autonomousCandidates = checkAutonomousMessaging(
+  autonomousChatId,
+  {
+    capped: autonomousSchedule(90, 1),
+    fallback: autonomousSchedule(70, 3),
+  },
+  true,
+);
+assert.deepEqual(autonomousCandidates.characterIds, ["capped", "fallback"]);
+const today = new Date();
+const dateKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+assert.equal(
+  isAutonomousDailyBudgetExhausted("capped", autonomousSchedule(90, 1), {
+    autonomousDailyBudget: { date: dateKey, counts: { capped: 1 } },
+  }),
+  true,
+);
+assert.equal(
+  isAutonomousDailyBudgetExhausted("fallback", autonomousSchedule(70, 3), {
+    autonomousDailyBudget: { date: dateKey, counts: { fallback: 1 } },
+  }),
+  false,
+);
+clearChatActivity(autonomousChatId);
 assert.equal(
   getApiErrorMessage(
     { formErrors: [], fieldErrors: { handle: ["Handle must contain at most 40 characters."] } },
@@ -61,6 +149,25 @@ assert.equal(
   "Handle must contain at most 40 characters.",
 );
 assert.equal(getApiErrorMessage({ code: "USER_NOT_FOUND", requestId: "abc-123" }, "Request failed"), "Request failed");
+
+const searchableCharacter = parseCharacterDisplayData({
+  data: JSON.stringify({
+    name: "Il Dottore",
+    description: "A Fatui researcher from Snezhnaya.",
+    creator: "Pasta Devs",
+    tags: ["scientist", "villain"],
+  }),
+  comment: "Modern AU version",
+});
+assert.equal(characterMatchesSearch(searchableCharacter, "scientist"), true);
+assert.equal(characterMatchesSearch(searchableCharacter, "modern au"), true);
+assert.equal(characterMatchesSearch(searchableCharacter, "snezhnaya"), true);
+assert.equal(characterMatchesSearch(searchableCharacter, "friendly bard"), false);
+
+const termuxLauncher = readFileSync(new URL("../../start-termux.sh", import.meta.url), "utf8");
+assert.doesNotMatch(termuxLauncher, /run_pnpm install --force/u);
+assert.match(termuxLauncher, /run_pnpm store prune/u);
+assert.match(termuxLauncher, /TERMUX_REBUILD_REQUIRED/u);
 
 assert.equal(stripLeadingMessageTimestamps("[11.07 15:53] Character: Hello!"), "Character: Hello!");
 assert.equal(stripLeadingMessageTimestamps("[11.07.2026 15:53] Character: Hello!"), "Character: Hello!");
@@ -240,6 +347,106 @@ assert.equal(findReplayableGameSessionChat(replaySessionChats, 1)?.id, "canonica
 assert.equal(findReplayableGameSessionChat(replaySessionChats, 2)?.id, "legacy-only-branch");
 assert.equal(findReplayableGameSessionChat(replaySessionChats, 3), null);
 
+assert.equal(
+  resolveSceneVideoPrompt({
+    generatedPrompt: "Generated Gallery animation prompt",
+    promptOverride: "  Reviewed Gallery animation prompt  ",
+    maxPromptLength: null,
+  }),
+  "Reviewed Gallery animation prompt",
+);
+assert.equal(
+  resolveSceneVideoPrompt({
+    generatedPrompt: "Generated Gallery animation prompt",
+    maxPromptLength: null,
+  }),
+  "Generated Gallery animation prompt",
+);
+assert.throws(
+  () =>
+    resolveSceneVideoPrompt({
+      generatedPrompt: "Generated prompt",
+      promptOverride: "Reviewed prompt exceeds provider limit",
+      maxPromptLength: 12,
+    }),
+  /at most 12 characters/u,
+);
+assert.deepEqual(
+  resolveIllustratorPromptSubmission({
+    generatedPrompt: "Generated compiled illustration prompt",
+    generatedNegativePrompt: "Generated negative prompt",
+    reviewOverride: {
+      prompt: "  Reviewed illustration prompt  ",
+      negativePrompt: "  Reviewed negative prompt  ",
+    },
+  }),
+  {
+    prompt: "Reviewed illustration prompt",
+    negativePrompt: "Reviewed negative prompt",
+  },
+);
+assert.deepEqual(
+  parseIllustratorPromptReviewOverride({
+    resultData: { shouldGenerate: true, prompt: "Agent prompt" },
+    prompt: " Reviewed provider prompt ",
+  }),
+  {
+    resultData: { shouldGenerate: true, prompt: "Agent prompt" },
+    prompt: "Reviewed provider prompt",
+  },
+);
+assert.equal(parseIllustratorPromptReviewOverride({ resultData: {}, prompt: "   " }), null);
+assert.deepEqual(
+  resolveReviewedImagePromptSubmission({
+    generatedPrompt: "Compiled selfie prompt",
+    generatedNegativePrompt: "Compiled selfie negative",
+    promptOverride: " Reviewed selfie prompt ",
+  }),
+  {
+    prompt: "Reviewed selfie prompt",
+    negativePrompt: "Compiled selfie negative",
+  },
+);
+assert.deepEqual(
+  resolveReviewedImagePromptSubmission({
+    generatedPrompt: "Compiled selfie prompt",
+    generatedNegativePrompt: "Compiled selfie negative",
+    promptOverride: "Reviewed selfie prompt",
+    negativePromptOverride: "",
+  }),
+  {
+    prompt: "Reviewed selfie prompt",
+    negativePrompt: "",
+  },
+);
+
+const chatAreaPromptReviewSource = readFileSync(
+  new URL("../../packages/client/src/components/chat/ChatArea.tsx", import.meta.url),
+  "utf8",
+);
+const gameSurfacePromptReviewSource = readFileSync(
+  new URL("../../packages/client/src/components/game/GameSurface.tsx", import.meta.url),
+  "utf8",
+);
+const imagePromptReviewModalSource = readFileSync(
+  new URL("../../packages/client/src/components/ui/ImagePromptReviewModal.tsx", import.meta.url),
+  "utf8",
+);
+const retryAgentsPromptReviewSource = readFileSync(
+  new URL("../../packages/server/src/routes/generate/retry-agents-route.ts", import.meta.url),
+  "utf8",
+);
+assert.match(chatAreaPromptReviewSource, /MEDIA_PROMPT_PREVIEW_TIMEOUT_MS/);
+assert.match(chatAreaPromptReviewSource, /confirmRoleplayVideoPromptReview/);
+assert.match(chatAreaPromptReviewSource, /confirmConversationSelfiePromptReview/);
+assert.match(gameSurfacePromptReviewSource, /if \(imagePromptReviewResolveRef\.current\)/);
+assert.match(gameSurfacePromptReviewSource, /Video prompt preview timed out\. Continuing with the default prompt\./);
+assert.match(
+  imagePromptReviewModalSource,
+  /item\.negativePrompt !== undefined \|\| negativePrompt \? \{ negativePrompt \} : \{\}/,
+);
+assert.match(retryAgentsPromptReviewSource, /\[debug\/retry-agents\/illustrator\] final prompt/);
+
 const sharedGameSetup = formatGameSetupShareText({
   gameName: "Tower Run",
   config: {
@@ -295,7 +502,7 @@ const sharedGameSetup = formatGameSetupShareText({
     personaName: "Player Persona",
   },
 });
-assert.match(sharedGameSetup, /Presentation: Anime Episode/u);
+assert.match(sharedGameSetup, /Presentation: Storyboard Optimized/u);
 assert.match(sharedGameSetup, /Temperature: 1\.1/u);
 assert.match(sharedGameSetup, /Max Tokens: 16384/u);
 assert.match(sharedGameSetup, /gpt-5\.6-sol/iu);
@@ -453,5 +660,138 @@ assert.equal(
 assert.equal(characterAssignedDuplicate.vectorQueryDepth, characterAssignedLorebook.vectorQueryDepth);
 assert.equal(characterAssignedDuplicate.vectorScoreThreshold, characterAssignedLorebook.vectorScoreThreshold);
 assert.equal(characterAssignedDuplicate.vectorMaxResults, characterAssignedLorebook.vectorMaxResults);
+
+const entityGalleryRoot = mkdtempSync(join(tmpdir(), "marinara-generated-entity-gallery-"));
+try {
+  const sourceDir = join(entityGalleryRoot, "chat-id");
+  mkdirSync(sourceDir, { recursive: true });
+  writeFileSync(join(sourceDir, "generated.png"), Buffer.from("generated-image"));
+  const characterRows: Array<Record<string, unknown>> = [];
+  const personaRows: Array<Record<string, unknown>> = [];
+  const persisted = await persistGeneratedImageToEntityGalleries({
+    sourceFilePath: "chat-id/generated.png",
+    characterIds: ["character-1", "character-1"],
+    personaIds: ["persona-1"],
+    characterGallery: {
+      create: async (input) => {
+        characterRows.push(input as unknown as Record<string, unknown>);
+        return input;
+      },
+    },
+    personaGallery: {
+      create: async (input) => {
+        personaRows.push(input as unknown as Record<string, unknown>);
+        return input;
+      },
+    },
+    prompt: "A generated scene with both identities.",
+    provider: "image_generation",
+    model: "regression-image-model",
+    width: 1024,
+    height: 1024,
+    galleryRoot: entityGalleryRoot,
+  });
+  assert.deepEqual(persisted, { characterCount: 1, personaCount: 1 });
+  assert.equal(characterRows.length, 1);
+  assert.equal(personaRows.length, 1);
+  const characterFile = join(entityGalleryRoot, String(characterRows[0]!.filePath));
+  const personaFile = join(entityGalleryRoot, String(personaRows[0]!.filePath));
+  assert.equal(readFileSync(characterFile, "utf8"), "generated-image");
+  assert.equal(readFileSync(personaFile, "utf8"), "generated-image");
+  unlinkSync(characterFile);
+  assert.equal(existsSync(join(sourceDir, "generated.png")), true);
+  assert.equal(existsSync(personaFile), true);
+} finally {
+  rmSync(entityGalleryRoot, { recursive: true, force: true });
+}
+
+const nextEventLoopTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
+const queuedImageEvents: string[] = [];
+let releaseFirstQueuedImage: () => void = () => undefined;
+const firstQueuedImageGate = new Promise<void>((resolve) => {
+  releaseFirstQueuedImage = resolve;
+});
+const firstQueuedImage = runImageGenerationRequest({
+  connectionKey: "regression-queued-connection",
+  queue: true,
+  task: async () => {
+    queuedImageEvents.push("first:start");
+    await firstQueuedImageGate;
+    queuedImageEvents.push("first:end");
+    return "first";
+  },
+});
+const secondQueuedImage = runImageGenerationRequest({
+  connectionKey: "regression-queued-connection",
+  queue: true,
+  task: async () => {
+    queuedImageEvents.push("second:start");
+    return "second";
+  },
+});
+await nextEventLoopTurn();
+assert.deepEqual(queuedImageEvents, ["first:start"]);
+releaseFirstQueuedImage();
+assert.deepEqual(await Promise.all([firstQueuedImage, secondQueuedImage]), ["first", "second"]);
+assert.deepEqual(queuedImageEvents, ["first:start", "first:end", "second:start"]);
+
+let activeUnqueuedImages = 0;
+let maxActiveUnqueuedImages = 0;
+let releaseUnqueuedImages: () => void = () => undefined;
+const unqueuedImageGate = new Promise<void>((resolve) => {
+  releaseUnqueuedImages = resolve;
+});
+const runUnqueuedImage = () =>
+  runImageGenerationRequest({
+    connectionKey: "regression-unqueued-connection",
+    queue: false,
+    task: async () => {
+      activeUnqueuedImages += 1;
+      maxActiveUnqueuedImages = Math.max(maxActiveUnqueuedImages, activeUnqueuedImages);
+      await unqueuedImageGate;
+      activeUnqueuedImages -= 1;
+    },
+  });
+const unqueuedImages = [runUnqueuedImage(), runUnqueuedImage()];
+await nextEventLoopTurn();
+assert.equal(maxActiveUnqueuedImages, 2);
+releaseUnqueuedImages();
+await Promise.all(unqueuedImages);
+
+const failedQueuedImage = runImageGenerationRequest({
+  connectionKey: "regression-failed-connection",
+  queue: true,
+  task: async () => {
+    throw new Error("expected queued image failure");
+  },
+});
+const recoveredQueuedImage = runImageGenerationRequest({
+  connectionKey: "regression-failed-connection",
+  queue: true,
+  task: async () => "recovered",
+});
+await assert.rejects(failedQueuedImage, /expected queued image failure/u);
+assert.equal(await recoveredQueuedImage, "recovered");
+
+let releaseBlockingQueuedImage: () => void = () => undefined;
+const blockingQueuedImageGate = new Promise<void>((resolve) => {
+  releaseBlockingQueuedImage = resolve;
+});
+const blockingQueuedImage = runImageGenerationRequest({
+  connectionKey: "regression-aborted-connection",
+  queue: true,
+  task: async () => blockingQueuedImageGate,
+});
+const queuedAbortController = new AbortController();
+const abortedQueuedImage = runImageGenerationRequest({
+  connectionKey: "regression-aborted-connection",
+  queue: true,
+  signal: queuedAbortController.signal,
+  task: async () => "should-not-run",
+});
+queuedAbortController.abort(new Error("expected queued abort"));
+await assert.rejects(abortedQueuedImage, /expected queued abort/u);
+releaseBlockingQueuedImage();
+await blockingQueuedImage;
 
 console.info("Open-issue regressions passed.");

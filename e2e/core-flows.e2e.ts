@@ -14,6 +14,7 @@ function collectUnexpectedErrors(page: Page) {
 
 async function prepareFreshClient(page: Page) {
   await page.addInitScript(() => {
+    if (localStorage.getItem("marinara-engine-ui")) return;
     localStorage.setItem(
       "marinara-engine-ui",
       JSON.stringify({
@@ -129,6 +130,56 @@ test("provider concurrency errors appear in generation toasts", async ({ page },
       page.getByText(
         "The provider's concurrency limit was reached. Wait for another generation to finish, then try again. Provider message: Provider concurrency limit exceeded for this account",
       ),
+    ).toBeVisible();
+  } finally {
+    await page.request.delete(`/api/chats/${chat.id}`);
+  }
+});
+
+test("generation fallbacks identify the replacement connection in a toast", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("desktop"), "Fallback toast regression is covered on desktop.");
+
+  const chatResponse = await page.request.post("/api/chats", {
+    data: {
+      name: "Fallback Toast Smoke",
+      mode: "roleplay",
+      characterIds: [],
+      connectionId: "fallback-toast-test-connection",
+    },
+  });
+  expect(chatResponse.ok()).toBeTruthy();
+  const chat = (await chatResponse.json()) as { id: string };
+
+  try {
+    await page.route("**/api/generate", async (route) => {
+      const events = [
+        {
+          type: "fallback_used",
+          data: {
+            category: "main",
+            connectionId: "backup-api",
+            connectionName: "Backup API",
+            model: "fallback-model",
+          },
+        },
+        { type: "token", data: "Fallback response." },
+        { type: "done", data: {} },
+      ];
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+      });
+    });
+    await page.addInitScript((chatId) => {
+      localStorage.setItem("marinara-active-chat-id", chatId);
+    }, chat.id);
+    await page.goto("/");
+    await page.locator("textarea.mari-chat-input-textarea").fill("Use the fallback if necessary");
+    await page.locator("button.mari-chat-send-btn").click();
+    await expect(page.getByText("Main switched to Backup API (fallback-model).")).toBeVisible();
+    await expect(
+      page.getByText("The primary generation failed, so Marinara retried with your configured fallback."),
     ).toBeVisible();
   } finally {
     await page.request.delete(`/api/chats/${chat.id}`);
@@ -650,6 +701,39 @@ test("home shell and primary topbar panels open without client errors", async ({
   expect(errors).toEqual([]);
 });
 
+test("Professor Mari chat fills the mobile home viewport and keeps its composer visible", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("mobile"), "Professor Mari mobile viewport regression.");
+  await page.goto("/");
+
+  await page
+    .locator('[data-component="HomeProfessorMariChat.MariPanel"]')
+    .getByRole("button", { name: "Ask Professor Mari" })
+    .click();
+
+  const topBar = page.locator('[data-component="TopBar"]');
+  const window = page.locator('[data-component="HomeProfessorMariChat.Window"]');
+  const composer = window.getByPlaceholder("Ask Professor Mari...");
+  await expect(window).toBeVisible();
+  await expect(composer).toBeVisible();
+  await expect
+    .poll(async () => {
+      const [topBarBox, windowBox, composerBox] = await Promise.all([
+        topBar.boundingBox(),
+        window.boundingBox(),
+        composer.boundingBox(),
+      ]);
+      const viewport = page.viewportSize();
+      if (!topBarBox || !windowBox || !composerBox || !viewport) return false;
+      const contentTop = topBarBox.y + topBarBox.height;
+      return (
+        Math.abs(windowBox.y - contentTop) <= 1 &&
+        Math.abs(windowBox.y + windowBox.height - viewport.height) <= 1 &&
+        composerBox.y + composerBox.height <= viewport.height + 1
+      );
+    })
+    .toBe(true);
+});
+
 test("Lorebook Save keeps Overview stable while the updated detail cache settles", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name.includes("mobile"), "Desktop editor regression");
 
@@ -1049,6 +1133,50 @@ test("Noodle settings persist through refetch and reload", async ({ page }, test
         refreshesPerDay: initial.settings.refreshesPerDay,
       },
     });
+  }
+});
+
+test("Noodle restores the last selected persona after reload", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("desktop"), "Noodle persona persistence is covered on desktop.");
+
+  const createdPersonaIds: string[] = [];
+  try {
+    for (const name of ["Noodle Persona One", "Noodle Persona Two"]) {
+      const response = await page.request.post("/api/characters/personas", {
+        data: { name, description: "Temporary Noodle account persistence regression persona." },
+      });
+      expect(response.ok()).toBe(true);
+      createdPersonaIds.push(((await response.json()) as { id: string }).id);
+    }
+    const selectedPersonaId = createdPersonaIds[1]!;
+    expect((await page.request.get("/api/noodle")).ok()).toBe(true);
+
+    await page.goto("/");
+    await page.locator('[data-tour="noodle-tab"]').click();
+    const noodle = page.locator('[data-component="NoodleView"]');
+    const accountSwitcher = noodle.locator('[data-component="NoodleView.AccountSwitcher"]');
+    await accountSwitcher.click();
+    await noodle.locator(`[data-noodle-persona-id="${selectedPersonaId}"]`).click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = localStorage.getItem("marinara-engine-ui");
+          if (!raw) return null;
+          return (JSON.parse(raw) as { state?: { noodleSelectedPersonaId?: string | null } }).state
+            ?.noodleSelectedPersonaId ?? null;
+        }),
+      )
+      .toBe(selectedPersonaId);
+
+    await page.reload();
+    await page.locator('[data-tour="noodle-tab"]').click();
+    await expect(noodle).toBeVisible();
+    await expect(accountSwitcher).toContainText("Noodle Persona Two");
+  } finally {
+    for (const personaId of createdPersonaIds) {
+      await page.request.delete(`/api/characters/personas/${personaId}`, { timeout: 5_000 }).catch(() => undefined);
+    }
   }
 });
 

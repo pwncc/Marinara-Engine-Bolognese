@@ -101,6 +101,7 @@ import {
   useUpdateNoodlePost,
   useUpdateNoodleSettings,
 } from "../../hooks/use-noodle";
+import { useUIStore } from "../../stores/ui.store";
 
 type RawCharacter = { id?: unknown; data?: unknown; avatarPath?: unknown };
 type RawCharacterGroup = { id?: unknown; name?: unknown; description?: unknown; characterIds?: unknown };
@@ -534,30 +535,36 @@ function NoodlePostContent({
 function NoodlePollCard({
   poll,
   votes,
+  accountById,
   selectedOptionId,
   disabled,
   pending,
   onVote,
+  onOpenProfile,
 }: {
   poll: NoodlePoll;
   votes: NoodleInteraction[];
+  accountById: Map<string, NoodleAccount>;
   selectedOptionId: string | null;
   disabled: boolean;
   pending: boolean;
   onVote: (optionId: string) => void;
+  onOpenProfile: (account: NoodleAccount) => void;
 }) {
   const totalVotes = votes.length;
+  const [showVoters, setShowVoters] = useState(false);
   return (
     <section className="mt-3" aria-label={`Poll: ${poll.question}`} data-noodle-poll>
       <h3 className="text-sm font-bold leading-5">{poll.question}</h3>
       <div className="mt-2 space-y-2">
         {poll.options.map((option) => {
-          const optionVotes = votes.filter((vote) => vote.content === option.id).length;
+          const matchingVotes = votes.filter((vote) => vote.content === option.id);
+          const optionVotes = matchingVotes.length;
           const percentage = totalVotes > 0 ? Math.round((optionVotes / totalVotes) * 100) : 0;
           const selected = selectedOptionId === option.id;
           return (
-            <button
-              key={option.id}
+            <Fragment key={option.id}>
+              <button
               type="button"
               onClick={() => onVote(option.id)}
               disabled={disabled || pending}
@@ -581,15 +588,44 @@ function NoodlePollCard({
                 <span className="min-w-0 flex-1 break-words">{option.label}</span>
                 <span className="shrink-0 text-[var(--muted-foreground)]">{percentage}%</span>
               </span>
-            </button>
+              </button>
+              {showVoters && optionVotes > 0 && (
+                <div className="flex flex-wrap gap-1 px-1" aria-label={`Voters for ${option.label}`}>
+                  {matchingVotes.map((vote) => {
+                    const voterAccount = accountById.get(vote.actorAccountId) ?? null;
+                    const voter = voterAccount ?? vote.actorSnapshot;
+                    return voter ? (
+                      <button
+                        key={vote.id}
+                        type="button"
+                        onClick={() => {
+                          if (voterAccount) onOpenProfile(voterAccount);
+                        }}
+                        disabled={!voterAccount}
+                        className="inline-flex min-h-9 max-w-full items-center gap-1.5 rounded-full bg-[var(--noodle-blue)]/8 pr-2 text-[0.6875rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--noodle-blue)]/15 hover:text-[var(--foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--noodle-blue)]/70 disabled:cursor-default"
+                      >
+                        <Avatar account={voter} size="sm" />
+                        <span className="max-w-32 truncate">@{voter.handle}</span>
+                      </button>
+                    ) : null;
+                  })}
+                </div>
+              )}
+            </Fragment>
           );
         })}
       </div>
-      <p className="mt-2 text-[0.68rem] text-[var(--muted-foreground)]">
+      <button
+        type="button"
+        onClick={() => setShowVoters((visible) => !visible)}
+        aria-expanded={showVoters}
+        className="mt-2 rounded-sm text-[0.68rem] text-[var(--muted-foreground)] transition-colors hover:text-[var(--noodle-blue)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--noodle-blue)]/70"
+      >
         {totalVotes} {totalVotes === 1 ? "vote" : "votes"}
         {selectedOptionId ? " · You voted" : ""}
         {pending ? " · Saving…" : ""}
-      </p>
+        {totalVotes > 0 ? (showVoters ? " · Hide voters" : " · View voters") : ""}
+      </button>
     </section>
   );
 }
@@ -846,6 +882,8 @@ function NoodleToolPopover({
 }
 
 export function NoodleView() {
+  const selectedPersonaId = useUIStore((state) => state.noodleSelectedPersonaId) ?? "";
+  const setSelectedPersonaId = useUIStore((state) => state.setNoodleSelectedPersonaId);
   const { data, isLoading } = useNoodle();
   const { data: activePersona } = useActivePersona();
   const { data: personasRaw } = usePersonas();
@@ -917,7 +955,6 @@ export function NoodleView() {
     [allConnections],
   );
 
-  const [selectedPersonaId, setSelectedPersonaId] = useState("");
   const [composer, setComposer] = useState("");
   const [composerHasText, setComposerHasText] = useState(false);
   const [activeMention, setActiveMention] = useState<ActiveComposerMention | null>(null);
@@ -1044,14 +1081,20 @@ export function NoodleView() {
   );
   const noodleCustomEmojiMap = useNoodleCustomEmojiMap(viewedProfileAccount);
   const viewingOwnProfile = Boolean(personaAccount && viewedProfileAccount?.id === personaAccount.id);
+  const canEditViewedProfile = Boolean(
+    viewingOwnProfile || (viewedProfileAccount?.kind === "character" && viewedProfileAccount.invited),
+  );
 
   useEffect(() => {
+    // Do not erase the persisted choice while the account/persona queries are
+    // still empty during initial hydration.
+    if (!data || personas === null) return;
     if (selectedPersonaId && personaAccounts.some((account) => account.entityId === selectedPersonaId)) return;
     const activeId = readString((activePersona as RawPersona | null)?.id);
     const activeAccount = personaAccounts.find((account) => account.entityId === activeId);
     const nextPersonaId = activeAccount?.entityId ?? sortedPersonaAccounts[0]?.entityId ?? "";
     if (selectedPersonaId !== nextPersonaId) setSelectedPersonaId(nextPersonaId);
-  }, [activePersona, personaAccounts, selectedPersonaId, sortedPersonaAccounts]);
+  }, [activePersona, data, personaAccounts, personas, selectedPersonaId, setSelectedPersonaId, sortedPersonaAccounts]);
 
   useEffect(() => {
     if (accountSwitcherOpen) setPersonaAccountLimit(NOODLE_PERSONA_SWITCHER_PAGE_SIZE);
@@ -1074,15 +1117,15 @@ export function NoodleView() {
   }, [settings?.imageGenerationPrompt]);
 
   useEffect(() => {
-    if (!personaAccount) return;
-    setProfileHandle(personaAccount.handle);
-    setProfileName(personaAccount.displayName);
-    setProfileBio(personaAccount.bio);
-    setProfileAvatarUrl(personaAccount.avatarUrl ?? "");
-    setProfileBannerUrl(readAccountSetting(personaAccount, "bannerUrl"));
-    setProfileLocation(readAccountSetting(personaAccount, "location"));
+    if (!viewedProfileAccount) return;
+    setProfileHandle(viewedProfileAccount.handle);
+    setProfileName(viewedProfileAccount.displayName);
+    setProfileBio(viewedProfileAccount.bio);
+    setProfileAvatarUrl(viewedProfileAccount.avatarUrl ?? "");
+    setProfileBannerUrl(readAccountSetting(viewedProfileAccount, "bannerUrl"));
+    setProfileLocation(readAccountSetting(viewedProfileAccount, "location"));
     setProfileEditing(false);
-  }, [personaAccount]);
+  }, [viewedProfileAccount]);
 
   useEffect(() => {
     setInviteCharacterLimit(NOODLE_INVITE_PAGE_SIZE);
@@ -1125,16 +1168,16 @@ export function NoodleView() {
   };
 
   const saveProfile = () => {
-    if (!personaAccount) return;
+    if (!viewedProfileAccount || !canEditViewedProfile) return;
     const normalizedHandle = profileHandle.trim().replace(/^@+/, "");
     const nextSettings = {
-      ...personaAccount.settings,
+      ...viewedProfileAccount.settings,
       bannerUrl: profileBannerUrl.trim(),
       location: profileLocation.trim(),
     };
     updateAccount.mutate(
       {
-        id: personaAccount.id,
+        id: viewedProfileAccount.id,
         handle: normalizedHandle,
         displayName: profileName.trim(),
         bio: profileBio,
@@ -1168,14 +1211,14 @@ export function NoodleView() {
           if (target === "avatar") setProfileAvatarUrl(image.url);
           else setProfileBannerUrl(image.url);
 
-          if (!personaAccount) return;
+          if (!viewedProfileAccount || !canEditViewedProfile) return;
           updateAccount.mutate(
             target === "avatar"
-              ? { id: personaAccount.id, avatarUrl: image.url }
+              ? { id: viewedProfileAccount.id, avatarUrl: image.url }
               : {
-                  id: personaAccount.id,
+                  id: viewedProfileAccount.id,
                   settings: {
-                    ...personaAccount.settings,
+                    ...viewedProfileAccount.settings,
                     bannerUrl: image.url,
                   },
                 },
@@ -1415,13 +1458,15 @@ export function NoodleView() {
           ? resetNoodleTimeline.isPending
           : false;
   const normalizedProfileHandle = profileHandle.trim().replace(/^@+/, "");
-  const isEditingOwnProfile = viewingOwnProfile && profileEditing;
-  const profileDisplayName = viewingOwnProfile
+  const isEditingProfile = canEditViewedProfile && profileEditing;
+  const profileDisplayName = canEditViewedProfile
     ? profileName.trim() || viewedProfileAccount?.displayName || "Noodle Account"
     : viewedProfileAccount?.displayName || "Noodle Account";
-  const profileDisplayHandle = viewingOwnProfile ? normalizedProfileHandle : (viewedProfileAccount?.handle ?? "noodle");
-  const profileBioPreview = viewingOwnProfile ? profileBio.trim() : (viewedProfileAccount?.bio.trim() ?? "");
-  const profileAvatarPreview = viewingOwnProfile
+  const profileDisplayHandle = canEditViewedProfile
+    ? normalizedProfileHandle
+    : (viewedProfileAccount?.handle ?? "noodle");
+  const profileBioPreview = canEditViewedProfile ? profileBio.trim() : (viewedProfileAccount?.bio.trim() ?? "");
+  const profileAvatarPreview = canEditViewedProfile
     ? profileAvatarUrl.trim() || null
     : (viewedProfileAccount?.avatarUrl ?? null);
   const profileAvatarCropPreview =
@@ -1433,13 +1478,13 @@ export function NoodleView() {
     avatarUrl: profileAvatarPreview,
     avatarCrop: profileAvatarCropPreview,
   };
-  const profileBannerPreview = viewingOwnProfile
+  const profileBannerPreview = canEditViewedProfile
     ? profileBannerUrl.trim()
     : readAccountSetting(viewedProfileAccount, "bannerUrl");
-  const profileLocationPreview = viewingOwnProfile
+  const profileLocationPreview = canEditViewedProfile
     ? profileLocation.trim()
     : readAccountSetting(viewedProfileAccount, "location");
-  const canSaveProfile = Boolean(viewingOwnProfile && profileName.trim() && normalizedProfileHandle);
+  const canSaveProfile = Boolean(canEditViewedProfile && profileName.trim() && normalizedProfileHandle);
   const rawPostSearch = postSearch.trim();
   const normalizedPostSearch = rawPostSearch.toLowerCase();
   const isAccountSearch = rawPostSearch.includes("@");
@@ -3027,6 +3072,36 @@ export function NoodleView() {
           </Section>
 
           <Section
+            title="Timeline Writing"
+            help="Tunes how the refresh writer approaches tone and long-term memory. Off by default; existing timelines keep their current behavior until you turn this on."
+          >
+            <div className="space-y-3">
+              <ToggleSetting
+                label="Enhanced tone & continuity"
+                help="When on: each account's voice is grounded more strongly in its own personality instead of a default upbeat tone, accounts are encouraged to react to each other's posts in the same refresh, and older-post recall happens more often and favors posts relevant to currently active accounts. When off, refreshes use the original tone and recall behavior. The Noodle Timeline Voice & Tone prompt override (Settings -> Generations -> Image Generation Prompt Overrides) still lets you rewrite the tone text directly regardless of this toggle."
+                checked={settings.enableEnhancedTimelineWriting}
+                disabled={updateSettings.isPending}
+                onChange={(checked) => saveSettings({ enableEnhancedTimelineWriting: checked })}
+              />
+            </div>
+          </Section>
+
+          <Section
+            title="World / Lore"
+            help="Lets Noodle refreshes pull matching lorebook entries into the timeline prompt, the same lorebook system used by chat generation."
+          >
+            <div className="space-y-3">
+              <ToggleSetting
+                label="Lorebook context"
+                help="Scans recent Noodle activity and character profiles for lorebook keyword matches and includes them as world/lore context. Off by default; existing timelines are unaffected until you turn this on."
+                checked={settings.enableLorebookContext}
+                disabled={updateSettings.isPending}
+                onChange={(checked) => saveSettings({ enableLorebookContext: checked })}
+              />
+            </div>
+          </Section>
+
+          <Section
             title="Carryover"
             help="Controls whether recent Noodle activity is appended to chat, roleplay, or game context."
           >
@@ -3412,10 +3487,12 @@ export function NoodleView() {
               <NoodlePollCard
                 poll={poll}
                 votes={pollVotes}
+                accountById={accountById}
                 selectedOptionId={personaPollVote}
                 disabled={!personaAccount}
                 pending={pollVotePending}
                 onVote={(optionId) => voteInPoll(post, optionId, personaPollVote)}
+                onOpenProfile={openProfile}
               />
             )}
             {post.imageUrl ? (
@@ -4232,6 +4309,7 @@ export function NoodleView() {
                           return (
                             <button
                               key={account.id}
+                              data-noodle-persona-id={account.entityId}
                               type="button"
                               onClick={() => {
                                 setSelectedPersonaId(account.entityId);
@@ -4265,6 +4343,7 @@ export function NoodleView() {
                   </div>
                 )}
                 <button
+                  data-component="NoodleView.MobileAccountSwitcher"
                   type="button"
                   onClick={() => setMobileAccountSwitcherOpen((current) => !current)}
                   aria-expanded={mobileAccountSwitcherOpen}
@@ -4375,6 +4454,7 @@ export function NoodleView() {
                           return (
                             <button
                               key={account.id}
+                              data-noodle-persona-id={account.entityId}
                               type="button"
                               onClick={() => {
                                 setSelectedPersonaId(account.entityId);
@@ -4418,6 +4498,7 @@ export function NoodleView() {
                   </div>
                 )}
                 <button
+                  data-component="NoodleView.AccountSwitcher"
                   type="button"
                   onClick={() => setAccountSwitcherOpen((current) => !current)}
                   className="flex min-h-16 w-full items-center gap-3 rounded-full px-3 text-left transition-colors hover:bg-[var(--accent)]"
@@ -4779,14 +4860,14 @@ export function NoodleView() {
                   <button
                     type="button"
                     onClick={() => {
-                      if (viewingOwnProfile) bannerFileRef.current?.click();
+                      if (canEditViewedProfile) bannerFileRef.current?.click();
                     }}
-                    disabled={!viewingOwnProfile || profileUploadTarget === "banner"}
+                    disabled={!canEditViewedProfile || profileUploadTarget === "banner"}
                     className={cn(
                       "relative block h-40 w-full overflow-hidden bg-[var(--noodle-blue)]/15 text-left disabled:cursor-default",
                       profileUploadTarget === "banner" && "cursor-wait opacity-80",
                     )}
-                    title={viewingOwnProfile ? "Upload banner" : undefined}
+                    title={canEditViewedProfile ? "Upload banner" : undefined}
                   >
                     {profileBannerPreview ? (
                       <img src={profileBannerPreview} alt="" className="h-full w-full object-cover" />
@@ -4814,14 +4895,14 @@ export function NoodleView() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (viewingOwnProfile) avatarFileRef.current?.click();
+                          if (canEditViewedProfile) avatarFileRef.current?.click();
                         }}
-                        disabled={!viewingOwnProfile || profileUploadTarget === "avatar"}
+                        disabled={!canEditViewedProfile || profileUploadTarget === "avatar"}
                         className={cn(
                           "relative rounded-full bg-[var(--background)] p-1 text-left disabled:cursor-default",
                           profileUploadTarget === "avatar" && "cursor-wait opacity-80",
                         )}
-                        title={viewingOwnProfile ? "Upload avatar" : undefined}
+                        title={canEditViewedProfile ? "Upload avatar" : undefined}
                       >
                         <Avatar account={profilePreviewAccount} size="lg" />
                         {profileUploadTarget === "avatar" && (
@@ -4837,17 +4918,17 @@ export function NoodleView() {
                         className="hidden"
                         onChange={(event) => handleProfileImageFile("avatar", event)}
                       />
-                      {viewingOwnProfile ? (
+                      {canEditViewedProfile ? (
                         <button
                           type="button"
                           onClick={() => {
-                            if (isEditingOwnProfile) saveProfile();
+                            if (isEditingProfile) saveProfile();
                             else setProfileEditing(true);
                           }}
-                          disabled={isEditingOwnProfile ? !canSaveProfile || updateAccount.isPending : !personaAccount}
+                          disabled={isEditingProfile ? !canSaveProfile || updateAccount.isPending : !viewedProfileAccount}
                           className="mb-1 h-9 rounded-full bg-[var(--noodle-blue)] px-5 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          {isEditingOwnProfile ? (updateAccount.isPending ? "Saving" : "Save") : "Edit Profile"}
+                          {isEditingProfile ? (updateAccount.isPending ? "Saving" : "Save") : "Edit Profile"}
                         </button>
                       ) : canFollowViewedProfile && viewedProfileAccount ? (
                         <button
@@ -4866,7 +4947,7 @@ export function NoodleView() {
                       ) : null}
                     </div>
 
-                    {isEditingOwnProfile ? (
+                    {isEditingProfile ? (
                       <div className="mt-3 space-y-3">
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                           <label className="block space-y-1.5">

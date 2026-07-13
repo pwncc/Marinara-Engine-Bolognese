@@ -19,6 +19,7 @@ import { createGameStateStorage } from "../services/storage/game-state.storage.j
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
 import { createAgentsStorage } from "../services/storage/agents.storage.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
+import { withConnectionFallbackProvider } from "../services/llm/connection-fallback-provider.js";
 import { extractLeadingThinkingBlocks } from "../services/llm/inline-thinking.js";
 import { type ChatCompletionResult, type ChatMessage, type ChatOptions } from "../services/llm/base-provider.js";
 import { isDiceNotation, rollDice } from "../services/game/dice.service.js";
@@ -101,15 +102,18 @@ import {
   generationParametersSchema,
   VIDEO_GENERATION_SETTINGS_KEY,
   GAME_STORYBOARD_ANIMATION_PROMPT_TEMPLATE_ID,
+  GAME_STORYBOARD_ANIMATION_PROMPT_TEMPLATES,
   GAME_STORYBOARD_ANIMATION_DURATION_SECONDS_DEFAULT,
   GAME_STORYBOARD_ANIMATION_DURATION_SECONDS_MAX,
   GAME_STORYBOARD_ANIMATION_DURATION_SECONDS_MIN,
   GAME_STORYBOARD_BUILT_IN_PROMPT_TEMPLATES,
   GAME_STORYBOARD_ILLUSTRATION_PROMPT_TEMPLATE_ID,
+  GAME_STORYBOARD_ILLUSTRATION_PROMPT_TEMPLATES,
   GAME_STORYBOARD_KEYFRAME_COUNT_DEFAULT,
   GAME_STORYBOARD_KEYFRAME_COUNT_MAX,
   GAME_STORYBOARD_KEYFRAME_COUNT_MIN,
   normalizeVideoGenerationUserSettings,
+  getGameStoryboardPromptTemplateKind,
   normalizeAgentPromptTemplateOptions,
   isClaudeAdaptiveOnlyNoSamplingModel,
   localAuthProviderBaseUrl,
@@ -122,9 +126,10 @@ import {
   parseTrackerFieldLocks,
   parseTrackerHiddenFields,
   normalizeRpgStatPools,
+  resolveGameSetupArtStylePrompt,
   type RPGStatsConfig,
 } from "@marinara-engine/shared";
-import { mergeCustomParameters, parseGameStateRow } from "./generate/generate-route-utils.js";
+import { mergeCustomParameters, parseGameStateRow, resolveBaseUrl } from "./generate/generate-route-utils.js";
 import {
   fitMessagesToModelAccessContext,
   mergeModelContextLimit,
@@ -184,6 +189,10 @@ import {
 import { resolveGameVideoRuntime, type GameVideoRuntime } from "../services/video/game-video-runtime.js";
 import { resolveConnectionImageDefaults } from "../services/image/image-generation-defaults.js";
 import {
+  resolveImageConnectionFallback,
+  resolveVideoConnectionFallback,
+} from "../services/generation/media-connection-fallback.js";
+import {
   loadImageGenerationUserSettings,
   type ImageGenerationSize,
 } from "../services/image/image-generation-settings.js";
@@ -208,6 +217,7 @@ import {
   type SceneVideoPromptLimits,
 } from "../services/video/prompt-context.js";
 import { loadGameVideoPrompt } from "../services/video/game-video-prompt.js";
+import { resolveSceneVideoPrompt, SceneVideoPromptReviewError } from "../services/video/scene-video-prompt-review.js";
 import { now } from "../utils/id-generator.js";
 import { DATA_DIR } from "../utils/data-dir.js";
 import { assertInsideDir } from "../utils/security.js";
@@ -911,14 +921,7 @@ async function summarizeIllustrationFromNarration(args: {
       args.chat.connectionId,
     );
     const parameters = resolveStoredGameGenerationParameters(args.meta, defaultGenerationParameters);
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(args.connections, conn, baseUrl);
     const messages = await buildIllustrationNarrationSummaryMessages({
       promptOverridesStorage: args.promptOverridesStorage,
       illustration: args.illustration,
@@ -930,7 +933,7 @@ async function summarizeIllustrationFromNarration(args: {
       genre: (args.setupConfig?.genre as string | undefined) ?? null,
       setting: (args.setupConfig?.setting as string | undefined) ?? null,
       worldOverview: (args.meta.gameWorldOverview as string | undefined) ?? null,
-      artStyle: (args.setupConfig?.artStylePrompt as string | undefined) ?? null,
+      artStyle: resolveGameSetupArtStylePrompt(args.setupConfig) || null,
       imagePromptInstructions:
         typeof args.meta.gameImagePromptInstructions === "string" ? args.meta.gameImagePromptInstructions : null,
     });
@@ -1060,8 +1063,8 @@ async function buildDynamicGameImagePromptMessages(args: {
     `Asset kind: ${gameDynamicImagePromptKindLabel(args.request.kind)}`,
     args.setupConfig?.genre ? `Genre: ${compactDynamicPromptLine(args.setupConfig.genre, 120)}` : "",
     args.setupConfig?.setting ? `Setting: ${compactDynamicPromptLine(args.setupConfig.setting, 240)}` : "",
-    args.setupConfig?.artStylePrompt
-      ? `Art style: ${compactDynamicPromptLine(args.setupConfig.artStylePrompt, 500)}`
+    resolveGameSetupArtStylePrompt(args.setupConfig)
+      ? `Art style: ${compactDynamicPromptLine(resolveGameSetupArtStylePrompt(args.setupConfig), 500)}`
       : "",
     typeof args.meta.gameActiveState === "string"
       ? `Game state: ${compactDynamicPromptLine(args.meta.gameActiveState, 80)}`
@@ -1146,14 +1149,7 @@ async function createDynamicGameImagePromptGenerator(args: {
       args.chat.connectionId,
     );
     const parameters = resolveStoredGameGenerationParameters(args.meta, defaultGenerationParameters);
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(args.connections, conn, baseUrl);
 
     return async (request) => {
       const messages = await buildDynamicGameImagePromptMessages({
@@ -1541,9 +1537,12 @@ const gameSetupConfigSchema = z.object({
     .optional(),
   gameGmPromptTemplateId: z.string().max(200).nullable().optional(),
   gameStoryboardAnimationPromptTemplateId: z.string().max(200).nullable().optional(),
+  gameStoryboardImagePromptTemplateId: z.string().max(200).nullable().optional(),
   gameStoryboardVideoPromptTemplateId: z.string().max(200).nullable().optional(),
   gameStoryboardUseDirectScenePrompt: z.boolean().optional(),
   artStylePrompt: z.string().max(500).optional(),
+  generatedArtStylePrompt: z.string().max(500).optional(),
+  useCampaignArtStyle: z.boolean().optional(),
   imageStyleProfileId: z.string().nullable().optional(),
   activeLorebookIds: z.array(z.string()).optional(),
   enableCustomWidgets: z.boolean().optional(),
@@ -2595,6 +2594,32 @@ async function resolveConnection(
   if (!baseUrl) throw new Error("No base URL configured for this connection");
 
   return { conn, baseUrl, defaultGenerationParameters: parseStoredGenerationParameters(conn.defaultParameters) };
+}
+
+async function createGameMainProvider(
+  connections: ReturnType<typeof createConnectionsStorage>,
+  conn: Awaited<ReturnType<ReturnType<typeof createConnectionsStorage>["getWithKey"]>>,
+  baseUrl: string,
+) {
+  if (!conn) throw new Error("API connection not found");
+  const primary = createLLMProvider(
+    conn.provider,
+    baseUrl,
+    conn.apiKey,
+    conn.maxContext,
+    conn.openrouterProvider,
+    conn.maxTokensOverride,
+    conn.claudeFastMode === "true",
+    conn.treatAsLocalEndpoint === "true",
+  );
+  const fallbackConnection = await connections.getFallbackForMain();
+  return withConnectionFallbackProvider({
+    primary,
+    primaryConnectionId: conn.id,
+    fallbackConnection,
+    fallbackBaseUrl: fallbackConnection ? resolveBaseUrl(fallbackConnection) : "",
+    category: "main",
+  });
 }
 
 type StoredGenerationParameters = Partial<GenerationParameters>;
@@ -3722,14 +3747,7 @@ async function runGameLorebookKeeperAfterConclusion(args: {
       chat.connectionId,
     );
     const generationParameters = resolveStoredGameGenerationParameters(meta, defaultGenerationParameters);
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(connections, conn, baseUrl);
     const streaming = args.streaming ?? true;
     const options = gameGenOptions(
       conn.model,
@@ -4039,35 +4057,38 @@ function normalizePortraitAppearancePart(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function addPortraitAppearancePart(parts: string[], value: unknown, label?: string): void {
+function addPortraitAppearancePart(parts: string[], seenValues: Set<string>, value: unknown, label?: string): void {
   const trimmed = optionalTrimmedString(value);
   if (!trimmed) return;
 
+  const normalizedValue = normalizePortraitAppearancePart(trimmed);
+  if (!normalizedValue || seenValues.has(normalizedValue)) return;
+  seenValues.add(normalizedValue);
+
   const part = label ? `${label}: ${trimmed}` : trimmed;
-  const normalized = normalizePortraitAppearancePart(part);
-  if (!normalized || parts.some((existing) => normalizePortraitAppearancePart(existing) === normalized)) return;
   parts.push(part);
 }
 
-function addPortraitAppearanceNotes(parts: string[], notes: unknown): void {
+function addPortraitAppearanceNotes(parts: string[], seenValues: Set<string>, notes: unknown): void {
   if (!Array.isArray(notes)) return;
 
   const noteText = notes
     .map((note) => optionalTrimmedString(note))
     .filter((note): note is string => Boolean(note))
     .join("; ");
-  addPortraitAppearancePart(parts, noteText, "Notable details");
+  addPortraitAppearancePart(parts, seenValues, noteText, "Notable details");
 }
 
 function addPresentCharacterPortraitAppearance(
   parts: string[],
+  seenValues: Set<string>,
   presentCharacter: Record<string, unknown> | null,
 ): void {
   if (!presentCharacter) return;
 
-  addPortraitAppearancePart(parts, presentCharacter.appearance);
-  addPortraitAppearancePart(parts, presentCharacter.outfit, "Current outfit");
-  addPortraitAppearancePart(parts, presentCharacter.mood, "Current expression or mood");
+  addPortraitAppearancePart(parts, seenValues, presentCharacter.appearance);
+  addPortraitAppearancePart(parts, seenValues, presentCharacter.outfit, "Current outfit");
+  addPortraitAppearancePart(parts, seenValues, presentCharacter.mood, "Current expression or mood");
 }
 
 function findNpcRecordByName(npcs: GameNpc[], name: string): GameNpc | null {
@@ -4086,29 +4107,30 @@ function findRecordByName(records: Array<Record<string, unknown>>, name: string)
   );
 }
 
-function resolveNpcPortraitAppearance(
+export function resolveNpcPortraitAppearance(
   npc: { description?: string | null },
   metadataNpc: GameNpc | null,
   presentCharacter: Record<string, unknown> | null,
 ): string {
   const parts: string[] = [];
+  const seenValues = new Set<string>();
   const metadataDescriptionIsCanonical =
     metadataNpc?.descriptionSource === "model" ||
     metadataNpc?.descriptionSource === "library" ||
     metadataNpc?.descriptionSource === "user";
 
   if (metadataDescriptionIsCanonical) {
-    addPortraitAppearancePart(parts, metadataNpc?.description, "Canonical NPC profile");
+    addPortraitAppearancePart(parts, seenValues, metadataNpc?.description, "Canonical NPC profile");
   }
 
-  addPortraitAppearancePart(parts, npc.description);
+  addPortraitAppearancePart(parts, seenValues, npc.description);
 
   if (!metadataDescriptionIsCanonical) {
-    addPortraitAppearancePart(parts, metadataNpc?.description);
+    addPortraitAppearancePart(parts, seenValues, metadataNpc?.description);
   }
 
-  addPresentCharacterPortraitAppearance(parts, presentCharacter);
-  addPortraitAppearanceNotes(parts, metadataNpc?.notes);
+  addPresentCharacterPortraitAppearance(parts, seenValues, presentCharacter);
+  addPortraitAppearanceNotes(parts, seenValues, metadataNpc?.notes);
 
   return parts.join(" ");
 }
@@ -5167,8 +5189,8 @@ function buildStoryboardGameContextBlock(args: {
     readTrimmedString(args.meta.gameWorldOverview)
       ? `World: ${compactStoryboardText(args.meta.gameWorldOverview, 1200)}`
       : "",
-    readTrimmedString(args.setupConfig?.artStylePrompt)
-      ? `Art style: ${compactStoryboardText(args.setupConfig?.artStylePrompt, 1000)}`
+    resolveGameSetupArtStylePrompt(args.setupConfig)
+      ? `Art style: ${compactStoryboardText(resolveGameSetupArtStylePrompt(args.setupConfig), 1000)}`
       : "",
     readTrimmedString(args.meta.gameImagePromptInstructions)
       ? `User image instructions: ${compactStoryboardText(args.meta.gameImagePromptInstructions, 1200)}`
@@ -5235,9 +5257,16 @@ async function loadStoryboardIllustratorSystemPrompt(args: {
   generateVideos: boolean;
   ctx: GameStoryboardIllustratorCtx;
 }): Promise<string> {
+  const kind = args.generateVideos ? "animation" : "illustration";
+  const selectedAnimationTemplateId = readTrimmedString(args.meta.gameStoryboardAnimationPromptTemplateId);
+  const builtInTemplates = args.generateVideos
+    ? GAME_STORYBOARD_ANIMATION_PROMPT_TEMPLATES
+    : GAME_STORYBOARD_ILLUSTRATION_PROMPT_TEMPLATES;
   const options = [
-    ...GAME_STORYBOARD_BUILT_IN_PROMPT_TEMPLATES,
-    ...normalizeGameStoryboardPromptTemplates(args.meta.gameStoryboardPromptTemplates),
+    ...builtInTemplates,
+    ...normalizeGameStoryboardPromptTemplates(args.meta.gameStoryboardPromptTemplates).filter(
+      (template) => getGameStoryboardPromptTemplateKind(template, selectedAnimationTemplateId) === kind,
+    ),
   ];
   const templateId = resolveGameStoryboardPromptTemplateId({
     meta: args.meta,
@@ -5249,7 +5278,7 @@ async function loadStoryboardIllustratorSystemPrompt(args: {
     : GAME_STORYBOARD_ILLUSTRATION_PROMPT_TEMPLATE_ID;
   const selectedTemplate =
     options.find((template) => template.id === templateId) ??
-    GAME_STORYBOARD_BUILT_IN_PROMPT_TEMPLATES.find((template) => template.id === fallbackTemplateId);
+    builtInTemplates.find((template) => template.id === fallbackTemplateId);
   if (!selectedTemplate?.promptTemplate.trim()) {
     return loadPrompt(args.promptOverridesStorage, GAME_STORYBOARD_ILLUSTRATION_DIRECTOR, args.ctx);
   }
@@ -5515,9 +5544,12 @@ export async function gameRoutes(app: FastifyInstance) {
 
     // Persist LLM-generated art style into the setup config for consistent image generation.
     if (setupData.artStylePrompt && typeof setupData.artStylePrompt === "string") {
+      const generatedArtStylePrompt = setupData.artStylePrompt.trim().slice(0, 500);
       const cfgCopy = {
         ...(updates.gameSetupConfig as Record<string, unknown>),
-        artStylePrompt: setupData.artStylePrompt,
+        artStylePrompt: generatedArtStylePrompt,
+        generatedArtStylePrompt,
+        useCampaignArtStyle: true,
       };
       updates.gameSetupConfig = cfgCopy;
     }
@@ -5982,6 +6014,7 @@ export async function gameRoutes(app: FastifyInstance) {
       gameStoryboardKeyframeCount: storyboardKeyframeCount,
       gameGmPromptTemplateId: setupConfig.gameGmPromptTemplateId || null,
       gameStoryboardAnimationPromptTemplateId: setupConfig.gameStoryboardAnimationPromptTemplateId || null,
+      gameStoryboardImagePromptTemplateId: setupConfig.gameStoryboardImagePromptTemplateId || null,
       gameStoryboardVideoPromptTemplateId: setupConfig.gameStoryboardVideoPromptTemplateId || null,
       gameStoryboardUseDirectScenePrompt: setupConfig.gameStoryboardUseDirectScenePrompt === true,
       gameLastSceneVideoId: null,
@@ -6051,14 +6084,7 @@ export async function gameRoutes(app: FastifyInstance) {
       connectionId,
       chat.connectionId,
     );
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(connections, conn, baseUrl);
     const setupGenerationParameters = resolveStoredGameGenerationParameters(meta, defaultGenerationParameters);
 
     let gmCharacterCard: string | null = null;
@@ -6701,14 +6727,7 @@ export async function gameRoutes(app: FastifyInstance) {
       if (summaries.length > 0) {
         try {
           const { conn, baseUrl } = await resolveConnection(connections, connectionId, newChat.connectionId);
-          const provider = createLLMProvider(
-            conn.provider,
-            baseUrl,
-            conn.apiKey!,
-            conn.maxContext,
-            conn.openrouterProvider,
-            conn.maxTokensOverride,
-          );
+          const provider = await createGameMainProvider(connections, conn, baseUrl);
 
           const recapMessages: ChatMessage[] = [
             { role: "system", content: buildRecapPrompt(summaries, latestSessionEndingBeat) },
@@ -6886,14 +6905,7 @@ export async function gameRoutes(app: FastifyInstance) {
         maxContext: conn.maxContext,
         parameters: conclusionGenerationParameters,
       });
-      const provider = createLLMProvider(
-        conn.provider,
-        baseUrl,
-        conn.apiKey!,
-        conn.maxContext,
-        conn.openrouterProvider,
-        conn.maxTokensOverride,
-      );
+      const provider = await createGameMainProvider(connections, conn, baseUrl);
 
       const conclusionAbort = createResponseAbortTracker(reply, GAME_GENERATION_TIMEOUT_MS, "Game session conclusion");
       const conclusionOptions = gameGenOptions(
@@ -7438,14 +7450,7 @@ export async function gameRoutes(app: FastifyInstance) {
       maxContext: conn.maxContext,
       parameters: conclusionGenerationParameters,
     });
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(connections, conn, baseUrl);
     const conclusionAbort = createResponseAbortTracker(
       reply,
       GAME_GENERATION_TIMEOUT_MS,
@@ -7696,14 +7701,7 @@ export async function gameRoutes(app: FastifyInstance) {
       currentMeta,
       defaultGenerationParameters,
     );
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(connections, conn, baseUrl);
     const progressionAbort = createResponseAbortTracker(
       reply,
       GAME_GENERATION_TIMEOUT_MS,
@@ -8026,13 +8024,7 @@ export async function gameRoutes(app: FastifyInstance) {
           input.connectionId,
           chat.connectionId,
         );
-        const provider = createLLMProvider(
-          conn.provider,
-          baseUrl,
-          conn.apiKey!,
-          conn.maxContext,
-          conn.openrouterProvider,
-        );
+        const provider = await createGameMainProvider(connections, conn, baseUrl);
         const generationParameters = resolveStoredGameGenerationParameters(meta, defaultGenerationParameters);
         const latestState = await stateStore.getLatest(input.chatId);
         const recentMessages = applyGameSegmentEditsForPrompt(await chats.listMessages(input.chatId), meta);
@@ -8450,14 +8442,7 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!chat) throw new Error("Chat not found");
 
     const { conn, baseUrl } = await resolveConnection(connections, connectionId, chat.connectionId);
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(connections, conn, baseUrl);
 
     const messages: ChatMessage[] = [
       { role: "system", content: buildMapGenerationPrompt(locationType, mapContext) },
@@ -9187,14 +9172,7 @@ export async function gameRoutes(app: FastifyInstance) {
       { role: "user", content: userPrompt },
     ];
 
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(connections, conn, baseUrl);
     const partyTurnAbortSignal = createResponseAbortSignal(reply, GAME_GENERATION_TIMEOUT_MS, "Game party turn");
     const result = await runGameChatComplete(
       provider,
@@ -9446,7 +9424,7 @@ export async function gameRoutes(app: FastifyInstance) {
     const enableAutoBackgroundGen = enableAutoGen && !storyboardBackgroundVisualEnabled;
     const imgConnId = await resolveGameImageConnectionId(meta, agents);
     const setupCfgForScene = meta.gameSetupConfig as Record<string, unknown> | null;
-    const artStyleForScene = (setupCfgForScene?.artStylePrompt as string) || "";
+    const artStyleForScene = resolveGameSetupArtStylePrompt(setupCfgForScene);
     const latestSceneState = await createGameStateStorage(app.db)
       .getLatest(input.chatId)
       .catch(() => null);
@@ -9501,14 +9479,7 @@ export async function gameRoutes(app: FastifyInstance) {
       debugLog("[debug/game/scene-analysis:connection] user prompt:\n%s", userPrompt);
     }
 
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(connections, conn, baseUrl);
     logger.debug(
       "[game/scene-wrap] chatId=%s, model=%s, narration=%d chars, streaming=%s",
       input.chatId,
@@ -9850,6 +9821,9 @@ export async function gameRoutes(app: FastifyInstance) {
     galleryImageId: z.string().max(200).optional(),
     durationSeconds: z.number().int().min(1).max(60).optional(),
     aspectRatio: z.enum(["16:9", "9:16"]).optional(),
+    promptOverride: z.string().trim().min(1).max(20_000).optional(),
+    previewOnly: z.boolean().optional().default(false),
+    queueMediaGenerationRequests: z.boolean().optional().default(true),
     debugMode: z.boolean().optional().default(false),
   });
 
@@ -9887,6 +9861,9 @@ export async function gameRoutes(app: FastifyInstance) {
       .optional(),
     aspectRatio: z.enum(["16:9", "9:16"]).optional().default("16:9"),
     generateVideos: z.boolean().optional(),
+    previewOnly: z.boolean().optional().default(false),
+    plannedStoryboard: z.unknown().optional(),
+    promptOverrides: imagePromptOverrideSchema,
     debugMode: z.boolean().optional().default(false),
   });
 
@@ -9996,14 +9973,7 @@ export async function gameRoutes(app: FastifyInstance) {
         chat.connectionId,
       );
       const parameters = resolveStoredGameGenerationParameters(meta, defaultGenerationParameters);
-      const provider = createLLMProvider(
-        conn.provider,
-        baseUrl,
-        conn.apiKey!,
-        conn.maxContext,
-        conn.openrouterProvider,
-        conn.maxTokensOverride,
-      );
+      const provider = await createGameMainProvider(connections, conn, baseUrl);
 
       const setupCfg = (meta.gameSetupConfig as Record<string, unknown> | null) ?? null;
       const latestState = await createGameStateStorage(app.db)
@@ -10052,51 +10022,192 @@ export async function gameRoutes(app: FastifyInstance) {
 
       let illustratorErrorMessage: string | null = null;
       let plan: PlannedStoryboard;
-      try {
-        const directorResult = await runGameChatComplete(
-          provider,
-          illustratorMessages.messages,
-          gameGenOptions(
-            conn.model ?? "",
-            {
-              stream: false,
-              maxTokens: structuredCharacterPrompts ? 3600 : 2200,
-              responseFormat: { type: "json_object" },
-              signal: storyboardAbortSignal,
-            },
-            parameters,
-            conn.provider,
+      const storyboardPlanSanitizerOptions = {
+        sourceNarration,
+        sections: sourceSections,
+        keyframeCount: storyboardKeyframeCount,
+        durationSeconds: storyboardDurationSeconds,
+        aspectRatio: input.aspectRatio,
+        allowedCharacterNames: storyboardCharacterContext.allowedCharacterNames,
+        maxVisibleCharacters: storyboardMaxVisibleCharacters,
+      } as const;
+      if (input.plannedStoryboard !== undefined) {
+        plan = sanitizeStoryboardPlan(input.plannedStoryboard, storyboardPlanSanitizerOptions);
+        if (debugLogsEnabled) {
+          debugLog("[debug/game/storyboard-illustrator] using reviewed client storyboard plan");
+        }
+      } else {
+        try {
+          const directorResult = await runGameChatComplete(
+            provider,
+            illustratorMessages.messages,
+            gameGenOptions(
+              conn.model ?? "",
+              {
+                stream: false,
+                maxTokens: structuredCharacterPrompts ? 3600 : 2200,
+                responseFormat: { type: "json_object" },
+                signal: storyboardAbortSignal,
+              },
+              parameters,
+              conn.provider,
+            ),
+            "Game storyboard illustrator",
+            GAME_STORYBOARD_ILLUSTRATOR_TIMEOUT_MS,
+          );
+          const extraction = extractLeadingThinkingBlocks(directorResult.content || "", parameters?.customThinkingTags);
+          const rawPlan = extraction.content.trim();
+          if (debugLogsEnabled) debugLog("[debug/game/storyboard-illustrator] raw response:\n%s", rawPlan);
+          plan = sanitizeStoryboardPlan(parseJSON(rawPlan), storyboardPlanSanitizerOptions);
+        } catch (err) {
+          illustratorErrorMessage =
+            err instanceof Error
+              ? `${err.message}; used fallback storyboard planner.`
+              : "Used fallback storyboard planner.";
+          logger.warn(err, "[game/storyboard] Storyboard Illustrator failed; using fallback storyboard planner");
+          plan = fallbackStoryboardPlan({
+            sourceNarration,
+            sections: sourceSections,
+            keyframeCount: storyboardKeyframeCount,
+            durationSeconds: storyboardDurationSeconds,
+            aspectRatio: input.aspectRatio,
+            allowedCharacterNames: storyboardCharacterContext.allowedCharacterNames,
+            maxVisibleCharacters: storyboardMaxVisibleCharacters,
+          });
+        }
+      }
+
+      const imgModel = imgConn.model || "";
+      const imgBaseUrl = imgConn.baseUrl || "https://image.pollinations.ai";
+      const imgApiKey = imgConn.apiKey || "";
+      const imgSource = (imgConn as any).imageGenerationSource || imgModel;
+      const imgComfyWorkflow = imgConn.comfyuiWorkflow || undefined;
+      const imgServiceHint = imgConn.imageService || imgSource;
+      const imgEndpointId = imgConn.imageEndpointId || undefined;
+      const imgDefaults = resolveConnectionImageDefaults(imgConn);
+      const imgFallback = await resolveImageConnectionFallback(connections, imgConn.id);
+      const imageSettings = await loadImageGenerationUserSettings(app.db);
+      const backgroundSize: ImageGenerationSize = imageSettings.background;
+      const styleProfiles = imageSettings.styleProfiles;
+      const genre = (setupCfg?.genre as string) || "";
+      const setting = (setupCfg?.setting as string) || "";
+      const artStyle = resolveGameSetupArtStylePrompt(setupCfg);
+      const styleProfileId =
+        ((setupCfg?.imageStyleProfileId as string | undefined) ?? (meta.imageStyleProfileId as string | undefined)) ||
+        null;
+      const imagePromptInstructions =
+        typeof meta.gameImagePromptInstructions === "string"
+          ? meta.gameImagePromptInstructions.trim().slice(0, 5000)
+          : "";
+      const useAvatarReferences = meta.gameImageUseAvatarReferences !== false;
+      const includeCharacterAppearance = meta.gameImageIncludeCharacterAppearance !== false;
+      const { charReferenceByName, charAvatarByName, charDescriptionByName } = storyboardCharacterContext;
+      const storyboardPromptOverrideById = new Map(
+        (input.promptOverrides ?? []).map((item) => [
+          item.id,
+          { prompt: item.prompt.trim(), negativePrompt: item.negativePrompt?.trim() || undefined },
+        ]),
+      );
+
+      const buildStoryboardFrameIllustration = (frameIndex: number, slugPrefix: string) => {
+        const plannedFrame = reconcileStoryboardFrameForRendering({
+          frame: plan.keyframes[frameIndex] ?? plan.keyframes[0]!,
+          allowedCharacterNames: storyboardCharacterContext.allowedCharacterNames,
+          sourceNarration,
+          maxVisibleCharacters: storyboardMaxVisibleCharacters,
+        });
+        const characterPrompts = structuredCharacterPrompts
+          ? resolveStoryboardCharacterPromptsForImage({
+              prompts: plannedFrame.characterPrompts,
+              characters: plannedFrame.characters,
+              characterDescriptions: charDescriptionByName,
+              includeCharacterAppearance,
+            })
+          : [];
+        const illustration: SceneIllustrationRequest = {
+          title: plannedFrame.title,
+          prompt: plannedFrame.imagePrompt || plannedFrame.mangaPanelPrompt || plannedFrame.narrationBeat,
+          reason: plannedFrame.narrationBeat || `Storyboard keyframe ${frameIndex + 1}`,
+          characters: plannedFrame.characters,
+          characterPrompts,
+          slug: storyboardSlug(
+            `${slugPrefix}-${frameIndex + 1}-${plannedFrame.title}`,
+            `storyboard-${frameIndex + 1}`,
           ),
-          "Game storyboard illustrator",
-          GAME_STORYBOARD_ILLUSTRATOR_TIMEOUT_MS,
+        };
+        const illustrationAssets = collectIllustrationCharacterAssets({
+          illustration,
+          characterNames: plannedFrame.characters,
+          trackedNpcs: storyboardCharacterContext.trackedNpcs,
+          gameNpcs: (meta.gameNpcs as GameNpc[]) ?? [],
+          charReferenceByName,
+          charAvatarByName,
+          charDescriptionByName,
+          includeReferenceImages: useAvatarReferences,
+          includeCharacterDescriptions: includeCharacterAppearance,
+          maxReferenceImages: storyboardReferenceImageLimit,
+        });
+        return { plannedFrame, characterPrompts, illustration, illustrationAssets };
+      };
+
+      if (input.previewOnly) {
+        const items = await Promise.all(
+          plan.keyframes.map(async (_frame, frameIndex) => {
+            const { plannedFrame, illustration, illustrationAssets } = buildStoryboardFrameIllustration(
+              frameIndex,
+              "storyboard-preview",
+            );
+            const compiled = await buildSceneIllustrationProviderPrompt({
+              chatId: input.chatId,
+              title: illustration.title,
+              prompt: illustration.prompt,
+              reason: illustration.reason,
+              characters: illustration.characters,
+              characterDescriptions: illustrationAssets.characterDescriptions,
+              slug: illustration.slug,
+              genre,
+              setting,
+              artStyle,
+              imagePromptInstructions,
+              referenceImages: illustrationAssets.referenceImages,
+              characterPrompts: illustration.characterPrompts,
+              imgSource,
+              imgModel,
+              imgBaseUrl,
+              imgApiKey,
+              imgService: imgServiceHint,
+              imgEndpointId,
+              imgComfyWorkflow,
+              imgDefaults,
+              styleProfiles,
+              styleProfileId,
+              promptOverridesStorage,
+              size: backgroundSize,
+              useDirectScenePrompt: meta.gameStoryboardUseDirectScenePrompt === true,
+              storyboardImagePromptTemplateId: readTrimmedString(meta.gameStoryboardImagePromptTemplateId),
+              storyboardImagePromptTemplates: meta.gameStoryboardImagePromptTemplates,
+              preserveFullScenePrompt: true,
+            });
+            if (debugLogsEnabled) {
+              debugLog(
+                "[debug/game/storyboard-image-preview] frame=%d prompt:\n%s\nnegativePrompt:\n%s",
+                frameIndex + 1,
+                compiled.prompt,
+                compiled.negativePrompt,
+              );
+            }
+            return {
+              id: `storyboard:${frameIndex}`,
+              kind: "illustration" as const,
+              title: `Keyframe ${frameIndex + 1}: ${plannedFrame.title}`,
+              prompt: compiled.prompt,
+              negativePrompt: compiled.negativePrompt,
+              width: backgroundSize.width,
+              height: backgroundSize.height,
+            };
+          }),
         );
-        const extraction = extractLeadingThinkingBlocks(directorResult.content || "", parameters?.customThinkingTags);
-        const rawPlan = extraction.content.trim();
-        if (debugLogsEnabled) debugLog("[debug/game/storyboard-illustrator] raw response:\n%s", rawPlan);
-        plan = sanitizeStoryboardPlan(parseJSON(rawPlan), {
-          sourceNarration,
-          sections: sourceSections,
-          keyframeCount: storyboardKeyframeCount,
-          durationSeconds: storyboardDurationSeconds,
-          aspectRatio: input.aspectRatio,
-          allowedCharacterNames: storyboardCharacterContext.allowedCharacterNames,
-          maxVisibleCharacters: storyboardMaxVisibleCharacters,
-        });
-      } catch (err) {
-        illustratorErrorMessage =
-          err instanceof Error
-            ? `${err.message}; used fallback storyboard planner.`
-            : "Used fallback storyboard planner.";
-        logger.warn(err, "[game/storyboard] Storyboard Illustrator failed; using fallback storyboard planner");
-        plan = fallbackStoryboardPlan({
-          sourceNarration,
-          sections: sourceSections,
-          keyframeCount: storyboardKeyframeCount,
-          durationSeconds: storyboardDurationSeconds,
-          aspectRatio: input.aspectRatio,
-          allowedCharacterNames: storyboardCharacterContext.allowedCharacterNames,
-          maxVisibleCharacters: storyboardMaxVisibleCharacters,
-        });
+        return { items, plannedStoryboard: plan };
       }
 
       const allMessages = await chats.listMessages(input.chatId);
@@ -10143,37 +10254,14 @@ export async function gameRoutes(app: FastifyInstance) {
         })),
       );
 
-      const imgModel = imgConn.model || "";
-      const imgBaseUrl = imgConn.baseUrl || "https://image.pollinations.ai";
-      const imgApiKey = imgConn.apiKey || "";
-      const imgSource = (imgConn as any).imageGenerationSource || imgModel;
-      const imgComfyWorkflow = imgConn.comfyuiWorkflow || undefined;
-      const imgServiceHint = imgConn.imageService || imgSource;
-      const imgEndpointId = imgConn.imageEndpointId || undefined;
-      const imgDefaults = resolveConnectionImageDefaults(imgConn);
-      const imageSettings = await loadImageGenerationUserSettings(app.db);
-      const backgroundSize: ImageGenerationSize = imageSettings.background;
-      const styleProfiles = imageSettings.styleProfiles;
-      const genre = (setupCfg?.genre as string) || "";
-      const setting = (setupCfg?.setting as string) || "";
-      const artStyle = (setupCfg?.artStylePrompt as string) || "";
-      const styleProfileId =
-        ((setupCfg?.imageStyleProfileId as string | undefined) ?? (meta.imageStyleProfileId as string | undefined)) ||
-        null;
-      const imagePromptInstructions =
-        typeof meta.gameImagePromptInstructions === "string"
-          ? meta.gameImagePromptInstructions.trim().slice(0, 5000)
-          : "";
-      const useAvatarReferences = meta.gameImageUseAvatarReferences !== false;
-      const includeCharacterAppearance = meta.gameImageIncludeCharacterAppearance !== false;
-      const { charReferenceByName, charAvatarByName, charDescriptionByName } = storyboardCharacterContext;
-
       let videoRuntime: GameVideoRuntime | null = null;
+      let videoFallback: Awaited<ReturnType<typeof resolveVideoConnectionFallback>> = undefined;
       if (generateStoryboardVideos) {
         const videoConnectionId = await resolveGameVideoConnectionId(meta, connections);
         const videoConn = videoConnectionId ? await connections.getWithKey(videoConnectionId) : null;
         if (videoConn?.provider === "video_generation") {
           videoRuntime = resolveGameVideoRuntime(videoConn);
+          videoFallback = await resolveVideoConnectionFallback(connections, videoConn.id);
         }
       }
 
@@ -10195,47 +10283,12 @@ export async function gameRoutes(app: FastifyInstance) {
           return { generatedImage: false, generatedVideo: false, imageFailure: true, videoFailure: false };
         }
         await storyboards.updateKeyframe(frame.id, { status: "rendering_image", error: null });
-        const plannedFrame = reconcileStoryboardFrameForRendering({
-          frame: plan.keyframes[frame.index] ?? plan.keyframes[0]!,
-          allowedCharacterNames: storyboardCharacterContext.allowedCharacterNames,
-          sourceNarration,
-          maxVisibleCharacters: storyboardMaxVisibleCharacters,
-        });
+        const { plannedFrame, characterPrompts, illustration, illustrationAssets } =
+          buildStoryboardFrameIllustration(frame.index, storyboardRow.id.slice(0, 8));
         await storyboards.updateKeyframe(frame.id, {
           imagePrompt: plannedFrame.imagePrompt,
           mangaPanelPrompt: plannedFrame.mangaPanelPrompt,
           characters: JSON.stringify(plannedFrame.characters),
-        });
-        const characterPrompts = structuredCharacterPrompts
-          ? resolveStoryboardCharacterPromptsForImage({
-              prompts: plannedFrame.characterPrompts,
-              characters: plannedFrame.characters,
-              characterDescriptions: charDescriptionByName,
-              includeCharacterAppearance,
-            })
-          : [];
-        const illustration: SceneIllustrationRequest = {
-          title: plannedFrame.title,
-          prompt: plannedFrame.imagePrompt || plannedFrame.mangaPanelPrompt || plannedFrame.narrationBeat,
-          reason: plannedFrame.narrationBeat || `Storyboard keyframe ${frame.index + 1}`,
-          characters: plannedFrame.characters,
-          characterPrompts,
-          slug: storyboardSlug(
-            `${storyboardRow.id.slice(0, 8)}-${frame.index + 1}-${plannedFrame.title}`,
-            `storyboard-${frame.index + 1}`,
-          ),
-        };
-        const illustrationAssets = collectIllustrationCharacterAssets({
-          illustration,
-          characterNames: plannedFrame.characters,
-          trackedNpcs: storyboardCharacterContext.trackedNpcs,
-          gameNpcs: (meta.gameNpcs as GameNpc[]) ?? [],
-          charReferenceByName,
-          charAvatarByName,
-          charDescriptionByName,
-          includeReferenceImages: useAvatarReferences,
-          includeCharacterDescriptions: includeCharacterAppearance,
-          maxReferenceImages: storyboardReferenceImageLimit,
         });
         if (debugLogsEnabled) {
           debugLog(
@@ -10257,6 +10310,7 @@ export async function gameRoutes(app: FastifyInstance) {
           }
         }
         let sentIllustrationPrompt: string | null = null;
+        const promptOverride = storyboardPromptOverrideById.get(`storyboard:${frame.index}`);
         try {
           const tag = await generateSceneIllustration({
             chatId: input.chatId,
@@ -10280,12 +10334,17 @@ export async function gameRoutes(app: FastifyInstance) {
             imgEndpointId,
             imgComfyWorkflow,
             imgDefaults,
+            imgFallback,
             styleProfiles,
             styleProfileId,
             debugLog: debugLogsEnabled ? debugLog : undefined,
             promptOverridesStorage,
             size: backgroundSize,
+            promptOverride: promptOverride?.prompt,
+            negativePromptOverride: promptOverride?.negativePrompt,
             useDirectScenePrompt: meta.gameStoryboardUseDirectScenePrompt === true,
+            storyboardImagePromptTemplateId: readTrimmedString(meta.gameStoryboardImagePromptTemplateId),
+            storyboardImagePromptTemplates: meta.gameStoryboardImagePromptTemplates,
             preserveFullScenePrompt: true,
             onCompiledPrompt: (compiled) => {
               sentIllustrationPrompt = compiled.prompt;
@@ -10346,6 +10405,7 @@ export async function gameRoutes(app: FastifyInstance) {
                   resolution: videoRuntime.resolution,
                   referenceImage,
                   publicReferenceUpload: videoRuntime.publicReferenceUpload,
+                  fallback: videoFallback,
                   signal: backgroundSignal,
                 },
               );
@@ -10517,11 +10577,6 @@ export async function gameRoutes(app: FastifyInstance) {
 
   app.post("/generate-scene-video", async (req, reply) => {
     const input = generateSceneVideoSchema.parse(req.body);
-    const sceneVideoAbortSignal = createResponseAbortSignal(
-      reply,
-      GAME_SCENE_VIDEO_GENERATION_TIMEOUT_MS,
-      "Game scene video generation",
-    );
     const requestDebug = input.debugMode === true;
     const debugOverrideEnabled = requestDebug || isDebugAgentsEnabled();
     const debugLogsEnabled = debugOverrideEnabled || logger.isLevelEnabled("debug");
@@ -10653,14 +10708,43 @@ export async function gameRoutes(app: FastifyInstance) {
           : "preserve any visible characters from the reference image",
         settingLine: buildOmniSettingLine(setupConfig, latestState, meta, promptLimits.artStyle),
         artStyleLine:
-          compactVideoPromptText(setupConfig?.artStylePrompt, promptLimits.artStyle) ||
+          compactVideoPromptText(resolveGameSetupArtStylePrompt(setupConfig), promptLimits.artStyle) ||
           "match the supplied illustration",
         durationSeconds,
         aspectRatio,
         sourceIllustrationLine: `Use ${sourceDescription} as the first frame/reference image.`,
       },
     });
-    const prompt = limitSceneVideoPromptForProvider(promptDraft, promptLimits.finalPrompt);
+    let prompt: string;
+    try {
+      prompt = resolveSceneVideoPrompt({
+        generatedPrompt: promptDraft,
+        promptOverride: input.promptOverride,
+        maxPromptLength: promptLimits.finalPrompt,
+      });
+    } catch (err) {
+      if (err instanceof SceneVideoPromptReviewError) {
+        return reply.status(err.statusCode).send({ error: err.message });
+      }
+      throw err;
+    }
+
+    if (input.previewOnly) {
+      return {
+        prompt,
+        durationSeconds,
+        aspectRatio,
+        resolution: resolution ?? null,
+        maxPromptLength: promptLimits.finalPrompt,
+      };
+    }
+
+    const sceneVideoAbortSignal = createResponseAbortSignal(
+      reply,
+      GAME_SCENE_VIDEO_GENERATION_TIMEOUT_MS,
+      "Game scene video generation",
+    );
+    const videoFallback = await resolveVideoConnectionFallback(connections, videoConn.id);
 
     logger.info(
       "[game/generate-scene-video] request: chatId=%s connection=%s source=%s model=%s duration=%d aspect=%s illustration=%s",
@@ -10687,6 +10771,9 @@ export async function gameRoutes(app: FastifyInstance) {
         resolution,
         referenceImage,
         publicReferenceUpload,
+        queue: input.queueMediaGenerationRequests,
+        connectionKey: videoConnectionId,
+        fallback: videoFallback,
         signal: sceneVideoAbortSignal,
       });
       const filePath = await saveVideoToDisk(input.chatId, generated.base64);
@@ -10766,7 +10853,7 @@ export async function gameRoutes(app: FastifyInstance) {
     const setupCfg = meta.gameSetupConfig as Record<string, unknown> | null;
     const genre = (setupCfg?.genre as string) || "";
     const setting = (setupCfg?.setting as string) || "";
-    const artStyle = (setupCfg?.artStylePrompt as string) || "";
+    const artStyle = resolveGameSetupArtStylePrompt(setupCfg);
     const styleProfileId =
       ((setupCfg?.imageStyleProfileId as string | undefined) ?? (meta.imageStyleProfileId as string | undefined)) ||
       null;
@@ -11132,11 +11219,12 @@ export async function gameRoutes(app: FastifyInstance) {
       const imgServiceHint = imgConn.imageService || imgSource;
       const imgEndpointId = imgConn.imageEndpointId || undefined;
       const imgDefaults = resolveConnectionImageDefaults(imgConn);
+      const imgFallback = await resolveImageConnectionFallback(connections, imgConn.id);
 
       const setupCfg = meta.gameSetupConfig as Record<string, unknown> | null;
       const genre = (setupCfg?.genre as string) || "";
       const setting = (setupCfg?.setting as string) || "";
-      const artStyle = (setupCfg?.artStylePrompt as string) || "";
+      const artStyle = resolveGameSetupArtStylePrompt(setupCfg);
       const styleProfileId =
         ((setupCfg?.imageStyleProfileId as string | undefined) ?? (meta.imageStyleProfileId as string | undefined)) ||
         null;
@@ -11203,6 +11291,7 @@ export async function gameRoutes(app: FastifyInstance) {
           imgEndpointId,
           imgComfyWorkflow,
           imgDefaults,
+          imgFallback,
           styleProfiles,
           styleProfileId,
           debugLog: debugLogsEnabled ? debugLog : undefined,
@@ -11321,6 +11410,7 @@ export async function gameRoutes(app: FastifyInstance) {
             imgEndpointId,
             imgComfyWorkflow,
             imgDefaults,
+            imgFallback,
             styleProfiles,
             styleProfileId,
             debugLog: debugLogsEnabled ? debugLog : undefined,
@@ -11440,6 +11530,7 @@ export async function gameRoutes(app: FastifyInstance) {
                 imgEndpointId,
                 imgComfyWorkflow,
                 imgDefaults,
+                imgFallback,
                 styleProfiles,
                 styleProfileId,
                 debugLog: debugLogsEnabled ? debugLog : undefined,
