@@ -65,6 +65,32 @@ export function useNoodle(enabled = true) {
   });
 }
 
+export function useLoadOlderNoodlePosts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (before: string) =>
+      api.get<{ posts: NoodlePost[]; interactions: NoodleInteraction[]; hasMore: boolean }>(
+        `/noodle/posts?before=${encodeURIComponent(before)}&limit=40`,
+      ),
+    onSuccess: (page) => {
+      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) => {
+        if (!current) return current;
+        const existingPostIds = new Set(current.posts.map((post) => post.id));
+        const existingInteractionIds = new Set(current.interactions.map((interaction) => interaction.id));
+        return {
+          ...current,
+          posts: [...current.posts, ...page.posts.filter((post) => !existingPostIds.has(post.id))],
+          interactions: [
+            ...current.interactions,
+            ...page.interactions.filter((interaction) => !existingInteractionIds.has(interaction.id)),
+          ],
+          hasOlderHistory: page.hasMore,
+        };
+      });
+    },
+  });
+}
+
 export function useUpdateNoodleSettings() {
   const qc = useQueryClient();
   return useMutation({

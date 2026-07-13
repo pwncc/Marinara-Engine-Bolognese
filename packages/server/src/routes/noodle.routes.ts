@@ -2113,6 +2113,24 @@ export async function noodleRoutes(app: FastifyInstance) {
     return bootstrapVisibleNoodle(noodle, characters);
   });
 
+  // Cursor pagination for history older than the bootstrap's fixed-size
+  // window (bootstrap() only ever returns the newest 160 posts). Returns raw
+  // posts, unfiltered by account visibility, matching bootstrap's existing
+  // convention — the client applies the same private-account feed filter it
+  // already uses for the initial page.
+  app.get("/posts", async (req, reply) => {
+    const query = req.query as Record<string, unknown>;
+    const before = typeof query.before === "string" ? query.before : null;
+    if (!before) return reply.code(400).send({ error: "before is required" });
+    const requestedLimit = typeof query.limit === "string" ? Number.parseInt(query.limit, 10) : 40;
+    const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(100, requestedLimit)) : 40;
+    const rows = await noodle.listPostsBefore(before, { limit: limit + 1 });
+    const hasMore = rows.length > limit;
+    const posts = hasMore ? rows.slice(0, limit) : rows;
+    const interactions = await noodle.listInteractions(posts.map((post) => post.id));
+    return { posts, interactions, hasMore };
+  });
+
   app.put("/settings", async (req, reply) => {
     const parsed = noodleSettingsUpdateSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });

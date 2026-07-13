@@ -174,4 +174,5 @@ export interface NoodleBootstrap {
   digests: NoodleDigestEntry[];
   subscriptions: NoodleAccountSubscription[];
   postUnlocks: NoodlePostUnlock[];
+  hasOlderHistory: boolean;
 }

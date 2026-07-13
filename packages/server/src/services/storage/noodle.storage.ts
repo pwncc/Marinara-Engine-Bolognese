@@ -611,13 +611,25 @@ export function createNoodleStorage(db: DB) {
       return rows[0] ? mapPost(rows[0]) : null;
     },
 
-    async listPostsBefore(before: string): Promise<NoodlePost[]> {
-      const rows = await db
+    async listPostsBefore(before: string, options: { limit?: number } = {}): Promise<NoodlePost[]> {
+      const query = db
         .select()
         .from(noodlePosts)
         .where(lt(noodlePosts.createdAt, before))
         .orderBy(desc(noodlePosts.createdAt));
+      const rows = options.limit
+        ? await query.limit(Math.max(1, Math.min(200, Math.floor(options.limit))))
+        : await query;
       return rows.map(mapPost);
+    },
+
+    async hasPostsBefore(before: string): Promise<boolean> {
+      const rows = await db
+        .select({ id: noodlePosts.id })
+        .from(noodlePosts)
+        .where(lt(noodlePosts.createdAt, before))
+        .limit(1);
+      return rows.length > 0;
     },
 
     async createPost(
@@ -1157,6 +1169,8 @@ export function createNoodleStorage(db: DB) {
         await this.ensureRefreshSchedule(new Date(), settings),
         new Date(),
       );
+      const oldestLoadedPost = posts[posts.length - 1];
+      const hasOlderHistory = oldestLoadedPost ? await this.hasPostsBefore(oldestLoadedPost.createdAt) : false;
       return {
         settings,
         scheduler,
@@ -1166,6 +1180,7 @@ export function createNoodleStorage(db: DB) {
         digests: await this.listDigests({ limit: 80 }),
         subscriptions: await this.listSubscriptions(),
         postUnlocks: await this.listPostUnlocks(),
+        hasOlderHistory,
       };
     },
   };

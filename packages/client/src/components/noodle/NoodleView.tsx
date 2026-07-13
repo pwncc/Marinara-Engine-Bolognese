@@ -95,6 +95,7 @@ import {
   useDeleteNoodlePost,
   useInviteNoodleCharacter,
   useInviteNoodleCharacters,
+  useLoadOlderNoodlePosts,
   useNoodle,
   useNoodlerHub,
   useRefreshNoodle,
@@ -945,6 +946,7 @@ export function NoodleView() {
   const createPrivateAccount = useCreatePrivateNoodleAccount();
   const deletePrivateAccount = useDeletePrivateNoodleAccount();
   const retryPrivateIdentity = useRetryPrivateIdentityGeneration();
+  const loadOlderPosts = useLoadOlderNoodlePosts();
   const subscribeAccount = useSubscribeNoodleAccount();
   const unsubscribeAccount = useUnsubscribeNoodleAccount();
   const unlockPost = useUnlockNoodlePost();
@@ -1116,6 +1118,13 @@ export function NoodleView() {
   );
   const hasMorePersonaAccounts = visiblePersonaAccounts.length < sortedPersonaAccounts.length;
   const posts = useMemo(() => data?.posts ?? [], [data?.posts]);
+  const oldestLoadedPostCreatedAt = useMemo(() => {
+    let oldest: string | null = null;
+    for (const post of posts) {
+      if (!oldest || post.createdAt < oldest) oldest = post.createdAt;
+    }
+    return oldest;
+  }, [posts]);
   const interactions = useMemo(() => data?.interactions ?? [], [data?.interactions]);
   const subscriptions = useMemo(() => data?.subscriptions ?? [], [data?.subscriptions]);
   const postUnlocks = useMemo(() => data?.postUnlocks ?? [], [data?.postUnlocks]);
@@ -6009,6 +6018,23 @@ export function NoodleView() {
                 renderPostGrid(timelinePosts)
               ) : (
                 timelinePosts.map(renderPostArticle)
+              )}
+              {!normalizedPostSearch && data?.hasOlderHistory && oldestLoadedPostCreatedAt && (
+                <div className="flex justify-center border-t border-[var(--noodle-divider)] p-4">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      loadOlderPosts.mutate(oldestLoadedPostCreatedAt, {
+                        onError: (error) =>
+                          toast.error(error instanceof Error ? error.message : "Could not load older posts."),
+                      })
+                    }
+                    disabled={loadOlderPosts.isPending}
+                    className="h-9 rounded-full border border-[var(--noodle-divider)] px-4 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {loadOlderPosts.isPending ? "Loading…" : "Load older posts"}
+                  </button>
+                </div>
               )}
             </div>
           </main>
