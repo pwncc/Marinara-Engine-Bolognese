@@ -4,6 +4,13 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+## [2.2.2]
+
+### Changed
+
+- Began the v2.2.2 development cycle and synchronized version metadata across packages, the PWA manifest, Windows installer sources, Android APK metadata, and shared update checks.
+- Android `versionName` is `2.2.2` with `versionCode 34`.
+
 ## [2.2.1]
 
 ### Added
