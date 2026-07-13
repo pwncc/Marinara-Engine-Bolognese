@@ -247,6 +247,9 @@ export const noodleRefreshSchema = z.object({
   connectionId: z.string().min(1).optional(),
   debugMode: z.boolean().optional(),
   reviewImagePromptsBeforeSend: z.boolean().optional(),
+  // Manual, single-account refresh for a NoodleR (private) account, which is
+  // otherwise excluded from the normal automatic participant selection.
+  targetAccountId: z.string().min(1).optional(),
 });
 
 export const noodleRescheduleRefreshSchema = z.object({

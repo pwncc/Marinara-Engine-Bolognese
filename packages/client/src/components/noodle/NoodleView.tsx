@@ -5101,7 +5101,15 @@ export function NoodleView() {
                         ) : (
                           <button
                             type="button"
-                            onClick={() => createPrivateAccount.mutate(viewedProfileAccount.id)}
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  `Create a private NoodleR account for ${viewedProfileAccount.displayName}? It stays hidden from the main feed, search, and suggestions — only reachable from this profile.`,
+                                )
+                              ) {
+                                createPrivateAccount.mutate(viewedProfileAccount.id);
+                              }
+                            }}
                             disabled={createPrivateAccount.isPending}
                             className="mb-1 h-9 rounded-full border border-[var(--noodle-divider)] px-5 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
                             title="Create a private NoodleR account linked to this profile"
@@ -5189,6 +5197,26 @@ export function NoodleView() {
                       </div>
                     )}
                   </div>
+                  {viewedProfileAccount?.visibility === "private" && viewedProfileAccount.kind === "character" && (
+                    <div className="flex items-center justify-between gap-3 border-t border-[var(--noodle-divider)] p-4">
+                      <p className="text-xs text-[var(--muted-foreground)]">
+                        This character's NoodleR account never posts automatically. Generate one post at a time.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          refreshNoodle.mutate(
+                            { targetAccountId: viewedProfileAccount.id },
+                            { onError: (error) => toast.error(error instanceof Error ? error.message : "Could not generate a NoodleR post.") },
+                          )
+                        }
+                        disabled={refreshNoodle.isPending}
+                        className="h-8 shrink-0 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {refreshNoodle.isPending ? "Generating…" : "Generate a post"}
+                      </button>
+                    </div>
+                  )}
                   {viewingOwnPrivateAccount && (
                     <div className="border-t border-[var(--noodle-divider)] p-4">
                       <textarea

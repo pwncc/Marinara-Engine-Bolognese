@@ -1307,6 +1307,7 @@ export async function noodleRoutes(app: FastifyInstance) {
       content: `${account.displayName} posted on Noodle: ${post.content}`,
       sourcePostId: post.id,
     });
+    if (!digest) return post;
     return (await noodle.updatePostMedia(post.id, { metadata: { activityDigestId: digest.id } })) ?? post;
   });
 
@@ -1604,6 +1605,12 @@ export async function noodleRoutes(app: FastifyInstance) {
     if (!connectionId) return reply.code(400).send({ error: "Select a Noodle generation connection first." });
     const conn = await connections.getWithKey(connectionId);
     if (!conn) return reply.code(404).send({ error: "Noodle generation connection not found" });
+    const targetPrivateAccount = parsed.data.targetAccountId
+      ? await noodle.getAccountById(parsed.data.targetAccountId)
+      : null;
+    if (parsed.data.targetAccountId && targetPrivateAccount?.visibility !== "private") {
+      return reply.code(404).send({ error: "Private Noodle account not found." });
+    }
     const imageCaptioning = await resolveImageCaptioningRuntime({
       chatMeta: {
         imageCaptioningEnabled: settings.imageCaptioningEnabled,
@@ -1643,59 +1650,84 @@ export async function noodleRoutes(app: FastifyInstance) {
       await ensurePersonaAccounts(noodle, characters);
       await ensureProfessorMariAccount(noodle, characters);
       const personaAccount = await resolvePersonaAccount(noodle, characters, parsed.data.personaId);
-      const selectedGroupCharacterIds = await ensureSelectedGroupCharacterAccounts(
-        noodle,
-        characters,
-        settings.invitedCharacterGroupIds,
-      );
-      if (settings.allowRandomUsers) await ensureRandomUserAccounts(noodle);
-      const eligibleAccounts = await noodle.listAccounts();
-      const eligibleCharacterAccounts = eligibleAccounts.filter(
-        (account) =>
-          account.kind === "character" && (account.invited || selectedGroupCharacterIds.has(account.entityId)),
-      );
-      await generateMissingNoodleProfiles({
-        noodle,
-        characters,
-        characterGallery,
-        accounts: eligibleCharacterAccounts,
-        provider,
-        connection: conn,
-        debugMode,
-      });
-      const participantAccounts = await noodle.listAccounts();
-      const selectionCutoff = sinceHoursIso(48);
-      const [recentCreatedSelectionPosts, recentPersonaSelectionReplies] = await Promise.all([
-        noodle.listPosts({ since: selectionCutoff, limit: 200 }),
-        personaAccount ? noodle.listRepliesByActorSince(personaAccount.id, selectionCutoff, 200) : Promise.resolve([]),
-      ]);
-      const personaSelectionPostIds = Array.from(
-        new Set(recentPersonaSelectionReplies.map((interaction) => interaction.postId)),
-      );
-      const personaSelectionPosts = (
-        await Promise.all(personaSelectionPostIds.map((postId) => noodle.getPostById(postId)))
-      ).filter((post): post is NoodlePost => Boolean(post));
-      const recentSelectionPosts = [
-        ...new Map([...recentCreatedSelectionPosts, ...personaSelectionPosts].map((post) => [post.id, post])).values(),
-      ];
-      const [recentSelectionInteractions, recentCompletedRuns] = await Promise.all([
-        noodle.listInteractions(recentSelectionPosts.map((post) => post.id)),
-        noodle.listRefreshRuns({ status: "completed", limit: 1 }),
-      ]);
-      const priorityAccountIds = collectNoodlePriorityAccountIds({
-        accounts: participantAccounts,
-        posts: recentSelectionPosts,
-        interactions: recentSelectionInteractions,
-        personaAccount,
-      });
-      const selectedParticipants = chooseNoodleParticipantAccounts({
-        accounts: participantAccounts,
-        settings,
-        selectedGroupCharacterIds,
-        followedAccountIds: new Set(parseStringArray(personaAccount?.settings.followingAccountIds)),
-        recentlyActiveAccountIds: new Set(recentCompletedRuns[0]?.activeAccountIds ?? []),
-        priorityAccountIds,
-      });
+      let selectedGroupCharacterIds: Set<string>;
+      let selectedParticipants: NoodleAccount[];
+      if (targetPrivateAccount) {
+        // Manual single-account refresh for a NoodleR account: skip the normal
+        // participant pool entirely so this never mixes a private account's
+        // generation into the same prompt/batch as public accounts.
+        selectedGroupCharacterIds = new Set<string>();
+        if (targetPrivateAccount.kind === "character" && !targetPrivateAccount.bio.trim()) {
+          await generateMissingNoodleProfiles({
+            noodle,
+            characters,
+            characterGallery,
+            accounts: [targetPrivateAccount],
+            provider,
+            connection: conn,
+            debugMode,
+          });
+        }
+        selectedParticipants = [(await noodle.getAccountById(targetPrivateAccount.id)) ?? targetPrivateAccount];
+      } else {
+        selectedGroupCharacterIds = await ensureSelectedGroupCharacterAccounts(
+          noodle,
+          characters,
+          settings.invitedCharacterGroupIds,
+        );
+        if (settings.allowRandomUsers) await ensureRandomUserAccounts(noodle);
+        const eligibleAccounts = await noodle.listAccounts();
+        const eligibleCharacterAccounts = eligibleAccounts.filter(
+          (account) =>
+            account.kind === "character" && (account.invited || selectedGroupCharacterIds.has(account.entityId)),
+        );
+        await generateMissingNoodleProfiles({
+          noodle,
+          characters,
+          characterGallery,
+          accounts: eligibleCharacterAccounts,
+          provider,
+          connection: conn,
+          debugMode,
+        });
+        const participantAccounts = await noodle.listAccounts();
+        const selectionCutoff = sinceHoursIso(48);
+        const [recentCreatedSelectionPosts, recentPersonaSelectionReplies] = await Promise.all([
+          noodle.listPosts({ since: selectionCutoff, limit: 200 }),
+          personaAccount
+            ? noodle.listRepliesByActorSince(personaAccount.id, selectionCutoff, 200)
+            : Promise.resolve([]),
+        ]);
+        const personaSelectionPostIds = Array.from(
+          new Set(recentPersonaSelectionReplies.map((interaction) => interaction.postId)),
+        );
+        const personaSelectionPosts = (
+          await Promise.all(personaSelectionPostIds.map((postId) => noodle.getPostById(postId)))
+        ).filter((post): post is NoodlePost => Boolean(post));
+        const recentSelectionPosts = [
+          ...new Map(
+            [...recentCreatedSelectionPosts, ...personaSelectionPosts].map((post) => [post.id, post]),
+          ).values(),
+        ];
+        const [recentSelectionInteractions, recentCompletedRuns] = await Promise.all([
+          noodle.listInteractions(recentSelectionPosts.map((post) => post.id)),
+          noodle.listRefreshRuns({ status: "completed", limit: 1 }),
+        ]);
+        const priorityAccountIds = collectNoodlePriorityAccountIds({
+          accounts: participantAccounts,
+          posts: recentSelectionPosts,
+          interactions: recentSelectionInteractions,
+          personaAccount,
+        });
+        selectedParticipants = chooseNoodleParticipantAccounts({
+          accounts: participantAccounts,
+          settings,
+          selectedGroupCharacterIds,
+          followedAccountIds: new Set(parseStringArray(personaAccount?.settings.followingAccountIds)),
+          recentlyActiveAccountIds: new Set(recentCompletedRuns[0]?.activeAccountIds ?? []),
+          priorityAccountIds,
+        });
+      }
       if (selectedParticipants.length === 0) {
         return reply
           .code(400)
@@ -1896,7 +1928,7 @@ export async function noodleRoutes(app: FastifyInstance) {
           sourceRunId: runId,
           sourcePostId: post.id,
         });
-        await noodle.updatePostMedia(post.id, { metadata: { activityDigestId: digest.id } });
+        if (digest) await noodle.updatePostMedia(post.id, { metadata: { activityDigestId: digest.id } });
       }
 
       const quotas: Record<NoodleInteractionType, number> = {

@@ -305,7 +305,7 @@ export function useDeleteNoodleInteraction() {
 export function useRefreshNoodle() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { personaId?: string; connectionId?: string }) =>
+    mutationFn: (input: { personaId?: string; connectionId?: string; targetAccountId?: string }) =>
       api.post<NoodleRefreshResult>("/noodle/refresh", {
         ...input,
         debugMode: useUIStore.getState().debugMode,

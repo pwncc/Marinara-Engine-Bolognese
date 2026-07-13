@@ -834,9 +834,19 @@ export function createNoodleStorage(db: DB) {
       sourceRunId?: string | null;
       sourcePostId?: string | null;
       sourceInteractionId?: string | null;
-    }): Promise<NoodleDigestEntry> {
+    }): Promise<NoodleDigestEntry | null> {
       const id = newId();
       const uniqueAccountIds = Array.from(new Set(input.accountIds.filter(Boolean)));
+      // NoodleR (private) activity must never surface in the shared activity
+      // digest — it feeds both the notification tray and chat/roleplay carryover
+      // context, either of which would leak a "secret" account's existence.
+      if (uniqueAccountIds.length > 0) {
+        const involvedAccounts = await db
+          .select()
+          .from(noodleAccounts)
+          .where(inArray(noodleAccounts.id, uniqueAccountIds));
+        if (involvedAccounts.some((row) => row.visibility === "private")) return null;
+      }
       await db.transaction(async (tx) => {
         if (input.sourceInteractionId) {
           await tx
