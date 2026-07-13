@@ -609,14 +609,30 @@ function NoodleLogo({ className }: { className?: string }) {
 function NoodlerBadge({ className }: { className?: string }) {
   return (
     <span
-      title="NoodleR"
-      aria-label="NoodleR"
+      title="Has a NoodleR page"
+      aria-label="Has a NoodleR page"
       className={cn(
         "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 text-[var(--noodle-blue)]",
         className,
       )}
     >
       <Lock size={10} strokeWidth={2.6} />
+    </span>
+  );
+}
+
+function NoodlerPrivateBadge({ className }: { className?: string }) {
+  return (
+    <span
+      title="Private NoodleR account"
+      aria-label="Private NoodleR account"
+      className={cn(
+        "inline-flex shrink-0 items-center gap-0.5 rounded-full bg-[var(--noodle-blue)] px-1.5 py-0.5 text-[0.6rem] font-black leading-none text-zinc-950",
+        className,
+      )}
+    >
+      <Lock size={9} strokeWidth={3} />
+      NoodleR
     </span>
   );
 }
@@ -4077,7 +4093,7 @@ export function NoodleView() {
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-1.5">
               <span className="block truncate text-sm font-bold">{account.displayName}</span>
-              <NoodlerBadge />
+              <NoodlerPrivateBadge />
             </span>
             <span className="block truncate text-sm text-[var(--muted-foreground)]">@{account.handle}</span>
             {account.bio.trim() && (
@@ -5447,8 +5463,11 @@ export function NoodleView() {
                       <div className="mt-3">
                         <h3 className="flex items-center gap-1.5 text-xl font-bold leading-tight">
                           {profilePreviewAccount.displayName}
-                          {(viewedProfileAccount?.visibility === "private" ||
-                            Boolean(viewedProfileAccount?.linkedAccountId)) && <NoodlerBadge />}
+                          {viewedProfileAccount?.visibility === "private" ? (
+                            <NoodlerPrivateBadge />
+                          ) : (
+                            Boolean(viewedProfileAccount?.linkedAccountId) && <NoodlerBadge />
+                          )}
                         </h3>
                         <p className="text-sm text-[var(--muted-foreground)]">@{profileDisplayHandle || "noodle"}</p>
                         {profileBioPreview && (

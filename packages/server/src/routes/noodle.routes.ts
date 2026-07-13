@@ -876,7 +876,7 @@ async function buildRefreshPrompt(input: {
       "# Active Noodle Accounts",
       activeAccountList || "No active accounts.",
       "",
-      "# User Persona",
+      "# User Persona (the private reader viewing this timeline — never the author of generated posts)",
       personaContext,
       "",
       "# Character Profiles",
@@ -945,6 +945,7 @@ async function buildRefreshPrompt(input: {
               ? `user direction: ${input.privatePostGuide.prompt.trim()}`
               : "user direction: no extra direction supplied",
             "Follow the guide over generic timeline variety. Return exactly one post and no extra creator posts.",
+            "The theme and user direction above describe who this account's author is and looks like for this post. They override anything else in this prompt, including this account's own Character Profile entry if it conflicts, and must never be replaced with or blended with the User Persona's identity, appearance, or description — the User Persona is the private, unrelated reader viewing this account, not the author.",
           ]
         : []),
     ].join("\n");
