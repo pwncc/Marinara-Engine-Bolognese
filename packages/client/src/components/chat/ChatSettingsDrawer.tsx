@@ -7862,7 +7862,7 @@ export function ChatSettingsDrawer({
                     </div>
                     <AgentSettingsToggle
                       label="Automatic Storyboard Illustrations"
-                      description="Automatically create still keyframe illustrations after completed GM turns. Automatic runs cannot pause for prompt review; use Create storyboard to review prompts first."
+                      description="Automatically create still keyframe illustrations after completed GM turns. Automatic runs cannot pause for prompt review; use Storyboard turn to review prompts first."
                       enabled={gameStoryboardAutoIllustrationsEnabled}
                       onToggle={() => {
                         const nextEnabled = !gameStoryboardAutoIllustrationsEnabled;
