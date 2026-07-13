@@ -5718,6 +5718,10 @@ export function NoodleView() {
                                   <option value="hinted">Hinted</option>
                                   <option value="secret">Secret</option>
                                 </select>
+                                <p className="text-[11px] leading-4 text-[var(--muted-foreground)]">
+                                  "Secret" filters the linked name out of generated posts/images — it's AI-generated
+                                  content moderation, not a hard guarantee it can never slip through.
+                                </p>
                               </label>
                               <label className="block space-y-1.5">
                                 <span className={labelClass}>Stage name</span>
@@ -6247,6 +6251,10 @@ export function NoodleView() {
                 <option value="hinted">Hinted</option>
                 <option value="secret">Secret</option>
               </select>
+              <p className="text-[11px] leading-4 text-[var(--muted-foreground)]">
+                "Secret" filters the linked name out of generated posts/images — it's AI-generated content
+                moderation, not a hard guarantee it can never slip through.
+              </p>
             </label>
             <label className="block space-y-1.5">
               <span className={labelClass}>Stage name</span>

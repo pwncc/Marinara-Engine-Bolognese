@@ -419,6 +419,26 @@ export function sanitizePrivateNoodlerImageIdea(
     .trim();
 }
 
+// Deterministic backstop for private-account post *text* (the image-prompt
+// sanitizer above only ever covered the drafted image idea, not the saved
+// post body). This is a literal-name blocklist, not a semantic guarantee —
+// an LLM can still paraphrase around it — but it catches the common failure
+// mode of the model writing the linked public identity's name directly into
+// a "secret"/"hinted" private post.
+export function enforceNoodlerIdentityBlocklist(
+  content: string,
+  context: NoodleLinkedAuthorContext,
+  profile: NoodlePrivateStageProfile,
+): { sanitized: string; redactionsApplied: boolean } {
+  if (profile.identityDisclosure === "open" || !context.publicName.trim()) {
+    return { sanitized: content, redactionsApplied: false };
+  }
+  const replacement = profile.stageName || "the private creator";
+  const pattern = new RegExp(`\\b${escapeRegExp(context.publicName.trim())}\\b`, "giu");
+  const redactionsApplied = pattern.test(content);
+  return { sanitized: redactionsApplied ? content.replace(pattern, replacement) : content, redactionsApplied };
+}
+
 function galleryImageUrl(filePath: string, fallbackChatId: string) {
   const filename = basename(filePath.replace(/\\/g, "/"));
   return `/api/gallery/file/${encodeURIComponent(fallbackChatId)}/${encodeURIComponent(filename)}`;
@@ -2953,7 +2973,17 @@ export async function noodleRoutes(app: FastifyInstance) {
           logger.warn("[noodle] Ignoring generated post attributed to persona %s", account.entityId);
           continue;
         }
-        const postContent = privatePostGuide?.includeText === false ? "Shared an image." : generatedPost.content;
+        let postContent = privatePostGuide?.includeText === false ? "Shared an image." : generatedPost.content;
+        let identityRedactionApplied = false;
+        if (account.visibility === "private") {
+          const stageProfile = parsePrivateStageProfile(account);
+          const linkedContext = await resolveNoodleLinkedAuthorContext({ account, characters });
+          if (linkedContext) {
+            const result = enforceNoodlerIdentityBlocklist(postContent, linkedContext, stageProfile);
+            postContent = result.sanitized;
+            identityRedactionApplied = result.redactionsApplied;
+          }
+        }
         const imagePrompt =
           privatePostGuide?.includeImage === false
             ? null
@@ -3046,6 +3076,7 @@ export async function noodleRoutes(app: FastifyInstance) {
             ...mediaMetadata,
             ...mentionedAccountMetadata(mentionedAccounts),
             ...(poll ? { poll } : {}),
+            ...(identityRedactionApplied ? { identityRedactionApplied: true } : {}),
           },
         });
         if (!post) continue;
