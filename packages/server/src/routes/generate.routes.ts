@@ -5501,7 +5501,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   stripTargetPrefix();
                   continue;
                 }
-                const paragraphBreak = fullResponse.search(/\n\s*\n/);
+                const paragraphBreak = fullResponse.search(/\n(?:\s*\n)?/);
                 if (paragraphBreak < 0) {
                   logger.warn(
                     {
@@ -5877,7 +5877,9 @@ export async function generateRoutes(app: FastifyInstance) {
             return groupTurnPromptEnabled ? `Respond ONLY as ${charName}.` : null;
           }
           if (groupResponseOrder !== "manual") {
-            const otherNames = charInfo.filter((character) => character.id !== charId).map((character) => character.name);
+            const otherNames = charInfo
+              .filter((character) => character.id !== charId)
+              .map((character) => character.name);
             return [
               `Respond ONLY as ${charName}.`,
               `Your entire answer is ${charName}'s next message only.`,
@@ -5934,7 +5936,10 @@ export async function generateRoutes(app: FastifyInstance) {
               messagesWithInstruction,
               ci === respondingCharIds.length - 1,
             );
-            if (!genResult) break; // aborted
+            if (!genResult) {
+              if (abortController.signal.aborted) break;
+              continue;
+            }
             firstSavedMsg ??= genResult.savedMsg;
             lastSavedMsg = genResult.savedMsg;
             recordExpressionTarget(genResult.savedMsg, charId);

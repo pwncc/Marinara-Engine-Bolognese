@@ -99,6 +99,8 @@ export async function generateVideo(
   serviceHint: string,
   request: VideoGenerationRequest,
 ): Promise<VideoGenerationResult> {
+  // The request deadline begins when the queued task starts; queue wait time is
+  // governed separately by the shared media-generation queue.
   return runMediaGenerationRequest({
     connectionKey: request.connectionKey ?? `${serviceHint || source}:${baseUrl}`,
     queue: request.queue === true,
@@ -162,10 +164,11 @@ async function generateVideoUnqueued(
     } catch (noticeError) {
       logger.warn(noticeError, "[video-fallback] Failed to report fallback activation");
     }
-    return generateVideoUnqueued(fallback.source, fallback.baseUrl, fallback.apiKey, fallback.serviceHint, {
+    return generateVideo(fallback.source, fallback.baseUrl, fallback.apiKey, fallback.serviceHint, {
       ...request,
       fallback: undefined,
       model: fallback.model,
+      connectionKey: fallback.connectionId,
     });
   }
 }

@@ -57,7 +57,9 @@ export async function requestNativeNotificationPermission(): Promise<NativeNotif
     const handlePermission = (event: Event) => {
       finish(normalizeNativePermission((event as CustomEvent<string>).detail));
     };
-    const timeoutId = window.setTimeout(() => finish(getNativeNotificationPermission()), 30_000);
+    // Resolve a slow bridge request for the current caller, but leave the one-shot
+    // listener installed so a late Android result is still consumed and cleaned up.
+    const timeoutId = window.setTimeout(() => resolve(getNativeNotificationPermission()), 30_000);
     window.addEventListener("marinara:native-notification-permission", handlePermission, { once: true });
     bridge.requestNotificationPermission?.();
   });

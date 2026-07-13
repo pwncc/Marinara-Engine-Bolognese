@@ -154,20 +154,25 @@ export function ConversationSoundSetting() {
       setConversationMobileNotifications(false);
       return;
     }
-    void requestNativeNotificationPermission().then((permission) => {
-      setNativePermission(permission);
-      if (permission === "granted") {
-        setConversationMobileNotifications(true);
-        toast.success("Mobile notifications enabled for background replies.");
-        return;
-      }
-      setConversationMobileNotifications(false);
-      toast.error(
-        permission === "unsupported"
-          ? "Mobile notifications require the Marinara Android app."
-          : "Android notification permission was not granted.",
-      );
-    });
+    void requestNativeNotificationPermission()
+      .then((permission) => {
+        setNativePermission(permission);
+        if (permission === "granted") {
+          setConversationMobileNotifications(true);
+          toast.success("Mobile notifications enabled for background replies.");
+          return;
+        }
+        setConversationMobileNotifications(false);
+        toast.error(
+          permission === "unsupported"
+            ? "Mobile notifications require the Marinara Android app."
+            : "Android notification permission was not granted.",
+        );
+      })
+      .catch(() => {
+        setConversationMobileNotifications(false);
+        toast.error("Android notification permission could not be requested.");
+      });
   };
 
   return (

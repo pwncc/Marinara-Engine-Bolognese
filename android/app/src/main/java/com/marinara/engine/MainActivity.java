@@ -56,6 +56,8 @@ public class MainActivity extends Activity {
     private static final int UNKNOWN_APP_SOURCES_REQUEST = 1003;
     private static final int TERMUX_INSTALL_STATUS_REQUEST = 1004;
     private static final int NOTIFICATION_PERMISSION_REQUEST = 1005;
+    private static final String NOTIFICATION_PERMISSION_PREFS = "marinara_notification_permission";
+    private static final String NOTIFICATION_PERMISSION_REQUESTED = "requested";
     private static final String MESSAGE_NOTIFICATION_CHANNEL_ID = "marinara_messages";
     private static final String TERMUX_PACKAGE = "com.termux";
     private static final String TERMUX_RUN_COMMAND_PERMISSION = "com.termux.permission.RUN_COMMAND";
@@ -683,6 +685,10 @@ public class MainActivity extends Activity {
                     dispatchNotificationPermissionStatus("granted");
                     return;
                 }
+                getSharedPreferences(NOTIFICATION_PERMISSION_PREFS, MODE_PRIVATE)
+                        .edit()
+                        .putBoolean(NOTIFICATION_PERMISSION_REQUESTED, true)
+                        .apply();
                 requestPermissions(
                         new String[]{Manifest.permission.POST_NOTIFICATIONS},
                         NOTIFICATION_PERMISSION_REQUEST
@@ -736,7 +742,9 @@ public class MainActivity extends Activity {
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
             return "granted";
         }
-        return shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) ? "denied" : "default";
+        boolean requested = getSharedPreferences(NOTIFICATION_PERMISSION_PREFS, MODE_PRIVATE)
+                .getBoolean(NOTIFICATION_PERMISSION_REQUESTED, false);
+        return requested ? "denied" : "default";
     }
 
     private void dispatchNotificationPermissionStatus(String status) {
