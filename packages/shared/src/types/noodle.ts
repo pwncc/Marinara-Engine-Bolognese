@@ -4,9 +4,12 @@
 import type { LegacyPersonaAvatarCrop, PersonaAvatarCrop } from "./persona.js";
 
 export type NoodleAccountKind = "persona" | "character" | "random_user";
+export type NoodleAccountVisibility = "public" | "private";
 export type NoodleInteractionType = "like" | "repost" | "reply" | "vote";
 export type NoodlePostSource = "manual" | "generated";
+export type NoodlePostAccess = "public" | "subscriber" | "ppv";
 export type NoodleTheme = "system" | "light" | "dark";
+export type NoodleLayout = "timeline" | "grid";
 export type NoodleCarryoverMode = "off" | "conversation" | "roleplay" | "game" | "all";
 export type NoodleCarryoverTarget = "conversation" | "roleplay" | "game";
 export type NoodleParticipantSelectionMode = "all" | "random_range" | "exact";
@@ -48,6 +51,7 @@ export interface NoodleSettings {
   carryoverMaxItems: number;
   theme: NoodleTheme;
   generationConnectionId: string | null;
+  layout: NoodleLayout;
 }
 
 export interface NoodleAccount {
@@ -61,6 +65,8 @@ export interface NoodleAccount {
   avatarCrop: NoodleAvatarCrop | null;
   invited: boolean;
   settings: Record<string, unknown>;
+  visibility: NoodleAccountVisibility;
+  linkedAccountId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -84,10 +90,25 @@ export interface NoodlePost {
   parentPostId: string | null;
   quotePostId: string | null;
   source: NoodlePostSource;
+  access: NoodlePostAccess;
   metadata: Record<string, unknown>;
   authorSnapshot: NoodleAuthorSnapshot | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface NoodleAccountSubscription {
+  id: string;
+  subscriberAccountId: string;
+  creatorAccountId: string;
+  createdAt: string;
+}
+
+export interface NoodlePostUnlock {
+  id: string;
+  accountId: string;
+  postId: string;
+  createdAt: string;
 }
 
 export interface NoodleInteraction {
@@ -149,4 +170,6 @@ export interface NoodleBootstrap {
   posts: NoodlePost[];
   interactions: NoodleInteraction[];
   digests: NoodleDigestEntry[];
+  subscriptions: NoodleAccountSubscription[];
+  postUnlocks: NoodlePostUnlock[];
 }

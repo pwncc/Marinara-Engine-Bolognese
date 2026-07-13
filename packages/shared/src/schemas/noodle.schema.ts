@@ -5,10 +5,12 @@ import { z } from "zod";
 
 export const noodleAccountKindSchema = z.enum(["persona", "character", "random_user"]);
 export const noodleInteractionTypeSchema = z.enum(["like", "repost", "reply", "vote"]);
+export const noodlePostAccessSchema = z.enum(["public", "subscriber", "ppv"]);
 export const noodleParticipantSelectionModeSchema = z.enum(["all", "random_range", "exact"]);
 export const noodleCarryoverModeSchema = z.enum(["off", "conversation", "roleplay", "game", "all"]);
 export const noodleCarryoverTargetSchema = z.enum(["conversation", "roleplay", "game"]);
 export const noodleThemeSchema = z.enum(["system", "light", "dark"]);
+export const noodleLayoutSchema = z.enum(["timeline", "grid"]);
 
 export const DEFAULT_NOODLE_SETTINGS = {
   refreshesPerDay: 2,
@@ -37,6 +39,7 @@ export const DEFAULT_NOODLE_SETTINGS = {
   carryoverMaxItems: 8,
   theme: "system",
   generationConnectionId: null,
+  layout: "timeline",
 } as const;
 
 export const noodleSettingsSchema = z.object({
@@ -82,6 +85,7 @@ export const noodleSettingsSchema = z.object({
   carryoverMaxItems: z.number().int().min(1).max(50).default(DEFAULT_NOODLE_SETTINGS.carryoverMaxItems),
   theme: noodleThemeSchema.default(DEFAULT_NOODLE_SETTINGS.theme),
   generationConnectionId: z.string().min(1).nullable().default(DEFAULT_NOODLE_SETTINGS.generationConnectionId),
+  layout: noodleLayoutSchema.default(DEFAULT_NOODLE_SETTINGS.layout),
 });
 
 export const noodleSettingsUpdateSchema = noodleSettingsSchema.partial();
@@ -140,12 +144,16 @@ export const noodlePollSchema = z.object({
 export const noodleCreatePostSchema = z.object({
   authorKind: noodleAccountKindSchema,
   authorEntityId: z.string().min(1),
+  // Overrides authorKind/authorEntityId resolution — needed to post as a private
+  // (NoodleR) account, which shares kind+entityId with its linked public account.
+  authorAccountId: z.string().min(1).optional(),
   content: z.string().min(1).max(4000),
   imageUrl: z.string().max(2000).nullable().optional(),
   imagePrompt: z.string().max(2000).nullable().optional(),
   parentPostId: z.string().min(1).nullable().optional(),
   quotePostId: z.string().min(1).nullable().optional(),
   poll: noodlePollInputSchema.nullable().optional(),
+  access: noodlePostAccessSchema.optional(),
 });
 
 export const noodlePostUpdateSchema = z.object({
@@ -213,6 +221,16 @@ export const noodleRemoveInteractionSchema = z
 
 export const noodleInteractionOwnerSchema = z.object({
   personaId: z.string().min(1),
+});
+
+export const noodleSubscribeSchema = z.object({
+  subscriberKind: noodleAccountKindSchema,
+  subscriberEntityId: z.string().min(1),
+});
+
+export const noodleUnlockPostSchema = z.object({
+  actorKind: noodleAccountKindSchema,
+  actorEntityId: z.string().min(1),
 });
 
 export const noodleInteractionUpdateSchema = noodleInteractionOwnerSchema
@@ -340,6 +358,8 @@ export type NoodlePollInput = z.infer<typeof noodlePollInputSchema>;
 export type NoodlePollData = z.infer<typeof noodlePollSchema>;
 export type NoodleCreatePostInput = z.infer<typeof noodleCreatePostSchema>;
 export type NoodlePostUpdateInput = z.infer<typeof noodlePostUpdateSchema>;
+export type NoodleSubscribeInput = z.infer<typeof noodleSubscribeSchema>;
+export type NoodleUnlockPostInput = z.infer<typeof noodleUnlockPostSchema>;
 export type NoodleCreateInteractionInput = z.infer<typeof noodleCreateInteractionSchema>;
 export type NoodleRemoveInteractionInput = z.infer<typeof noodleRemoveInteractionSchema>;
 export type NoodleInteractionOwnerInput = z.infer<typeof noodleInteractionOwnerSchema>;

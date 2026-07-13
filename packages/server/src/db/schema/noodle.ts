@@ -4,19 +4,27 @@
 import { sql } from "drizzle-orm";
 import { sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-export const noodleAccounts = sqliteTable("noodle_accounts", {
-  id: text("id").primaryKey(),
-  kind: text("kind").notNull(),
-  entityId: text("entity_id").notNull(),
-  handle: text("handle").notNull(),
-  displayName: text("display_name").notNull(),
-  bio: text("bio").notNull().default(""),
-  avatarUrl: text("avatar_url"),
-  invited: text("invited").notNull().default("false"),
-  settings: text("settings").notNull().default("{}"),
-  createdAt: text("created_at").notNull(),
-  updatedAt: text("updated_at").notNull(),
-});
+export const noodleAccounts = sqliteTable(
+  "noodle_accounts",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(),
+    entityId: text("entity_id").notNull(),
+    handle: text("handle").notNull(),
+    displayName: text("display_name").notNull(),
+    bio: text("bio").notNull().default(""),
+    avatarUrl: text("avatar_url"),
+    invited: text("invited").notNull().default("false"),
+    settings: text("settings").notNull().default("{}"),
+    visibility: text("visibility").notNull().default("public"),
+    linkedAccountId: text("linked_account_id"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    uniqLinkedAccount: uniqueIndex("uniq_noodle_accounts_linked_account").on(table.linkedAccountId),
+  }),
+);
 
 export const noodlePosts = sqliteTable("noodle_posts", {
   id: text("id").primaryKey(),
@@ -27,11 +35,41 @@ export const noodlePosts = sqliteTable("noodle_posts", {
   parentPostId: text("parent_post_id"),
   quotePostId: text("quote_post_id"),
   source: text("source").notNull().default("manual"),
+  access: text("access").notNull().default("public"),
   metadata: text("metadata").notNull().default("{}"),
   authorSnapshot: text("author_snapshot").notNull().default("{}"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
+
+export const noodleAccountSubscriptions = sqliteTable(
+  "noodle_account_subscriptions",
+  {
+    id: text("id").primaryKey(),
+    subscriberAccountId: text("subscriber_account_id").notNull(),
+    creatorAccountId: text("creator_account_id").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    uniqSubscription: uniqueIndex("uniq_noodle_account_subscriptions").on(
+      table.subscriberAccountId,
+      table.creatorAccountId,
+    ),
+  }),
+);
+
+export const noodlePostUnlocks = sqliteTable(
+  "noodle_post_unlocks",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id").notNull(),
+    postId: text("post_id").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    uniqUnlock: uniqueIndex("uniq_noodle_post_unlocks").on(table.accountId, table.postId),
+  }),
+);
 
 export const noodleInteractions = sqliteTable(
   "noodle_interactions",

@@ -57,6 +57,7 @@ import {
   type NoodleInteraction,
   type NoodleInteractionType,
   type NoodlePost,
+  type NoodlePostAccess,
   type NoodlePoll,
   type NoodlePollInput,
   type NoodleRefreshSchedulerStatus,
@@ -86,6 +87,7 @@ import {
   useConfirmNoodleImagePrompts,
   useCreateNoodleInteraction,
   useCreateNoodlePost,
+  useCreatePrivateNoodleAccount,
   useDeleteNoodleInteraction,
   useDeleteNoodlePost,
   useInviteNoodleCharacter,
@@ -96,6 +98,9 @@ import {
   useRemoveNoodleInteraction,
   useRescheduleNoodleRefresh,
   useResetNoodleTimeline,
+  useSubscribeNoodleAccount,
+  useUnlockNoodlePost,
+  useUnsubscribeNoodleAccount,
   useUpdateNoodleAccount,
   useUpdateNoodleInteraction,
   useUpdateNoodlePost,
@@ -871,6 +876,10 @@ export function NoodleView() {
   const refreshNoodle = useRefreshNoodle();
   const confirmNoodleImagePrompts = useConfirmNoodleImagePrompts();
   const resetNoodleTimeline = useResetNoodleTimeline();
+  const createPrivateAccount = useCreatePrivateNoodleAccount();
+  const subscribeAccount = useSubscribeNoodleAccount();
+  const unsubscribeAccount = useUnsubscribeNoodleAccount();
+  const unlockPost = useUnlockNoodlePost();
   const uploadGlobalImages = useUploadGlobalGalleryImages();
   const prefersReducedMotion = useReducedMotion();
   const imageFileRef = useRef<HTMLInputElement | null>(null);
@@ -972,6 +981,10 @@ export function NoodleView() {
   const [activeComposerTool, setActiveComposerTool] = useState<ComposerTool | null>(null);
   const [mediaPickerTab, setMediaPickerTab] = useState<ConversationMediaPickerTabId>("emoji");
   const [attachedImageUrl, setAttachedImageUrl] = useState("");
+  const [composerAccess, setComposerAccess] = useState<NoodlePostAccess>("public");
+  const [privateComposerText, setPrivateComposerText] = useState("");
+  const [privateComposerImageUrl, setPrivateComposerImageUrl] = useState("");
+  const [privateComposerAccess, setPrivateComposerAccess] = useState<NoodlePostAccess>("subscriber");
   const [imageUrlDraft, setImageUrlDraft] = useState("");
   const [imageGenerationPromptDraft, setImageGenerationPromptDraft] = useState("");
   const [pollQuestion, setPollQuestion] = useState("");
@@ -999,7 +1012,10 @@ export function NoodleView() {
   const personaAccounts = useMemo(
     () =>
       accounts.filter(
-        (account) => account.kind === "persona" && (personas === null || livePersonaIds.has(account.entityId)),
+        (account) =>
+          account.kind === "persona" &&
+          account.visibility !== "private" &&
+          (personas === null || livePersonaIds.has(account.entityId)),
       ),
     [accounts, livePersonaIds, personas],
   );
@@ -1019,12 +1035,21 @@ export function NoodleView() {
   const hasMorePersonaAccounts = visiblePersonaAccounts.length < sortedPersonaAccounts.length;
   const posts = useMemo(() => data?.posts ?? [], [data?.posts]);
   const interactions = useMemo(() => data?.interactions ?? [], [data?.interactions]);
+  const subscriptions = useMemo(() => data?.subscriptions ?? [], [data?.subscriptions]);
+  const postUnlocks = useMemo(() => data?.postUnlocks ?? [], [data?.postUnlocks]);
   const settings = data?.settings;
   const scheduler = data?.scheduler;
   const accountById = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const accountByHandle = useMemo(
     () => new Map(accounts.map((account) => [account.handle.toLowerCase(), account])),
     [accounts],
+  );
+  // NoodleR private accounts never appear in the main feed, switcher, or search —
+  // they're only reachable via a direct link from their linked public profile.
+  const feedVisibleAccounts = useMemo(() => accounts.filter((account) => account.visibility !== "private"), [accounts]);
+  const feedVisiblePosts = useMemo(
+    () => posts.filter((post) => accountById.get(post.authorAccountId)?.visibility !== "private"),
+    [accountById, posts],
   );
   const postById = useMemo(() => new Map(posts.map((post) => [post.id, post])), [posts]);
   const interactionById = useMemo(
@@ -1046,6 +1071,52 @@ export function NoodleView() {
   );
   const noodleCustomEmojiMap = useNoodleCustomEmojiMap(viewedProfileAccount);
   const viewingOwnProfile = Boolean(personaAccount && viewedProfileAccount?.id === personaAccount.id);
+  const viewingOwnPrivateAccount = Boolean(
+    personaAccount &&
+      viewedProfileAccount?.visibility === "private" &&
+      personaAccount.linkedAccountId === viewedProfileAccount.id,
+  );
+  const subscribedCreatorIds = useMemo(() => {
+    if (!personaAccount) return new Set<string>();
+    return new Set(
+      subscriptions
+        .filter((subscription) => subscription.subscriberAccountId === personaAccount.id)
+        .map((subscription) => subscription.creatorAccountId),
+    );
+  }, [personaAccount, subscriptions]);
+  const unlockedPostIds = useMemo(() => {
+    if (!personaAccount) return new Set<string>();
+    return new Set(
+      postUnlocks.filter((unlock) => unlock.accountId === personaAccount.id).map((unlock) => unlock.postId),
+    );
+  }, [personaAccount, postUnlocks]);
+  const canRevealPostAccess = (post: NoodlePost) => {
+    if (post.access === "public") return true;
+    if (post.authorAccountId === personaAccount?.id) return true;
+    if (subscribedCreatorIds.has(post.authorAccountId)) return true;
+    if (post.access === "ppv" && unlockedPostIds.has(post.id)) return true;
+    return false;
+  };
+  const toggleSubscription = (creatorAccountId: string) => {
+    if (!personaAccount) return;
+    if (subscribedCreatorIds.has(creatorAccountId)) {
+      unsubscribeAccount.mutate({
+        creatorAccountId,
+        subscriberKind: "persona",
+        subscriberEntityId: personaAccount.entityId,
+      });
+    } else {
+      subscribeAccount.mutate({
+        creatorAccountId,
+        subscriberKind: "persona",
+        subscriberEntityId: personaAccount.entityId,
+      });
+    }
+  };
+  const unlockAccessPost = (post: NoodlePost) => {
+    if (!personaAccount) return;
+    unlockPost.mutate({ postId: post.id, actorKind: "persona", actorEntityId: personaAccount.entityId });
+  };
 
   useEffect(() => {
     // Do not erase the persisted choice while the account/persona queries are
@@ -1467,7 +1538,9 @@ export function NoodleView() {
       accounts
         .filter(
           (account) =>
-            account.kind === "character" && (account.invited || folderInvitedCharacterIds.has(account.entityId)),
+            account.kind === "character" &&
+            account.visibility !== "private" &&
+            (account.invited || folderInvitedCharacterIds.has(account.entityId)),
         )
         .sort(sortAccountsByDisplayName),
     [accounts, folderInvitedCharacterIds],
@@ -1549,8 +1622,8 @@ export function NoodleView() {
   const baseTimelinePosts = useMemo(() => {
     const visiblePosts =
       timelineTab === "following"
-        ? posts.filter((post) => followedCharacterAccountIds.has(post.authorAccountId))
-        : posts;
+        ? feedVisiblePosts.filter((post) => followedCharacterAccountIds.has(post.authorAccountId))
+        : feedVisiblePosts;
     return visiblePosts.slice().sort((left, right) => {
       const leftActivityAt = Math.max(
         new Date(left.createdAt).getTime() || 0,
@@ -1562,7 +1635,7 @@ export function NoodleView() {
       );
       return rightActivityAt - leftActivityAt;
     });
-  }, [followedCharacterAccountIds, latestExternalReplyToPersonaCommentAtByPostId, posts, timelineTab]);
+  }, [feedVisiblePosts, followedCharacterAccountIds, latestExternalReplyToPersonaCommentAtByPostId, timelineTab]);
   const timelinePosts = useMemo(() => {
     if (!normalizedPostSearch || isAccountSearch) return baseTimelinePosts;
     return baseTimelinePosts.filter((post) => {
@@ -1575,7 +1648,7 @@ export function NoodleView() {
   const accountSearchResults = useMemo(() => {
     if (!isAccountSearch) return [];
     const exactHandle = accountSearchTerm;
-    return accounts
+    return feedVisibleAccounts
       .filter((account) => accountMatchesSearch(account, exactHandle))
       .sort((left, right) => {
         const leftExact = left.handle.toLowerCase() === exactHandle;
@@ -1587,7 +1660,7 @@ export function NoodleView() {
         return sortAccountsByDisplayName(left, right);
       })
       .slice(0, 50);
-  }, [accountSearchTerm, accounts, isAccountSearch]);
+  }, [accountSearchTerm, feedVisibleAccounts, isAccountSearch]);
   const profilePosts = useMemo(
     () => (viewedProfileAccount ? posts.filter((post) => post.authorAccountId === viewedProfileAccount.id) : []),
     [posts, viewedProfileAccount],
@@ -2008,6 +2081,7 @@ export function NoodleView() {
         content,
         imageUrl: attachedImageUrl.trim() || null,
         poll: draftPoll,
+        access: attachedImageUrl.trim() ? composerAccess : "public",
       },
       {
         onSuccess: () => {
@@ -2019,6 +2093,7 @@ export function NoodleView() {
           setComposerHasText(false);
           setActiveMention(null);
           setAttachedImageUrl("");
+          setComposerAccess("public");
           setDraftPoll(null);
           setPollQuestion("");
           setPollOptions(["", ""]);
@@ -2026,6 +2101,30 @@ export function NoodleView() {
           setComposeOpen(false);
         },
         onError: (error) => toast.error(error instanceof Error ? error.message : "Could not post to Noodle."),
+      },
+    );
+  };
+
+  const submitPrivatePost = () => {
+    if (!personaAccount || !viewedProfileAccount || !viewingOwnPrivateAccount) return;
+    const content = privateComposerText.trim() || "Shared an image.";
+    if (!content && !privateComposerImageUrl.trim()) return;
+    createPost.mutate(
+      {
+        authorKind: "persona",
+        authorEntityId: personaAccount.entityId,
+        authorAccountId: viewedProfileAccount.id,
+        content,
+        imageUrl: privateComposerImageUrl.trim() || null,
+        access: privateComposerImageUrl.trim() ? privateComposerAccess : "public",
+      },
+      {
+        onSuccess: () => {
+          setPrivateComposerText("");
+          setPrivateComposerImageUrl("");
+          setPrivateComposerAccess("subscriber");
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not post to NoodleR."),
       },
     );
   };
@@ -3031,6 +3130,22 @@ export function NoodleView() {
             </div>
           </Section>
 
+          <Section title="Appearance" help="Controls how the timeline and profiles render posts.">
+            <label className="block space-y-1.5">
+              <FieldLabel help="Timeline shows posts as Twitter-style cards. Grid shows an image-first, Instagram-style grid on the main feed and on profile tabs (posts without an image are skipped in Grid).">
+                Feed layout
+              </FieldLabel>
+              <select
+                value={settings.layout}
+                onChange={(event) => saveSettings({ layout: event.target.value as NoodleSettingsUpdateInput["layout"] })}
+                className={fieldClass}
+              >
+                <option value="timeline">Timeline</option>
+                <option value="grid">Grid</option>
+              </select>
+            </label>
+          </Section>
+
           <Section
             title="Carryover"
             help="Controls whether recent Noodle activity is appended to chat, roleplay, or game context."
@@ -3423,7 +3538,7 @@ export function NoodleView() {
                 onVote={(optionId) => voteInPoll(post, optionId, personaPollVote)}
               />
             )}
-            {post.imageUrl ? (
+            {post.imageUrl && canRevealPostAccess(post) ? (
               <button
                 type="button"
                 onClick={() =>
@@ -3439,6 +3554,33 @@ export function NoodleView() {
                   className="max-h-96 w-full object-cover"
                 />
               </button>
+            ) : post.imageUrl ? (
+              <div className="relative mt-3 flex h-52 w-full items-center justify-center overflow-hidden rounded-xl">
+                <img src={post.imageUrl} alt="" className="h-full w-full object-cover blur-2xl" />
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/45 text-center text-white">
+                  <span className="text-xs font-semibold">
+                    {post.access === "subscriber" ? "Subscribers only" : "Pay-per-post"}
+                  </span>
+                  {post.access === "ppv" && (
+                    <button
+                      type="button"
+                      onClick={() => unlockAccessPost(post)}
+                      disabled={unlockPost.isPending}
+                      className="h-8 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Unlock
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => toggleSubscription(post.authorAccountId)}
+                    disabled={subscribeAccount.isPending}
+                    className="h-8 rounded-full border border-white/60 px-4 text-xs font-bold text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Subscribe
+                  </button>
+                </div>
+              </div>
             ) : post.imagePrompt ? (
               <div className="mt-3 rounded-xl border border-[var(--noodle-blue)]/35 bg-[var(--noodle-blue)]/10 p-3 text-xs leading-5">
                 <span className="mb-1 flex items-center gap-1.5 font-semibold text-[var(--noodle-blue)]">
@@ -3685,6 +3827,51 @@ export function NoodleView() {
       </article>
     );
   };
+
+  const renderPostGridTile = (post: NoodlePost) => {
+    const author = accountById.get(post.authorAccountId) ?? post.authorSnapshot;
+    const revealed = canRevealPostAccess(post);
+    return (
+      <button
+        key={post.id}
+        type="button"
+        data-noodle-post-id={post.id}
+        onClick={() =>
+          revealed
+            ? setImageLightbox(createNoodleLightboxImage(post.id, post.imageUrl!, post.imagePrompt ?? ""))
+            : toggleSubscription(post.authorAccountId)
+        }
+        className="group relative aspect-square overflow-hidden bg-[var(--accent)]"
+        title={
+          revealed
+            ? post.content || author?.displayName || "Noodle post"
+            : post.access === "subscriber"
+              ? "Subscribers only"
+              : "Pay-per-post"
+        }
+      >
+        <img
+          src={post.imageUrl!}
+          alt={post.content || `Image posted by ${author?.displayName ?? "Noodle user"}`}
+          className={cn(
+            "h-full w-full object-cover transition-transform group-hover:scale-105",
+            !revealed && "blur-xl",
+          )}
+        />
+        {!revealed && (
+          <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-[0.65rem] font-semibold text-white">
+            {post.access === "subscriber" ? "Subscribers only" : "Pay-per-post"}
+          </span>
+        )}
+      </button>
+    );
+  };
+
+  const renderPostGrid = (postsToRender: NoodlePost[]) => (
+    <div className="grid grid-cols-3 gap-0.5">
+      {postsToRender.filter((post) => Boolean(post.imageUrl)).map(renderPostGridTile)}
+    </div>
+  );
 
   const renderAccountRow = (account: NoodleAccount, options?: { showFollowButton?: boolean }) => {
     const followable = canFollowAccount(account);
@@ -4557,6 +4744,18 @@ export function NoodleView() {
                               <X size={14} />
                             </button>
                           </div>
+                          <div className="flex items-center gap-2 border-t border-[var(--noodle-divider)] px-3 py-2">
+                            <span className="text-[0.7rem] font-semibold text-[var(--muted-foreground)]">Access</span>
+                            <select
+                              value={composerAccess}
+                              onChange={(event) => setComposerAccess(event.target.value as NoodlePostAccess)}
+                              className="h-7 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs"
+                            >
+                              <option value="public">Public</option>
+                              <option value="subscriber">Subscribers only</option>
+                              <option value="ppv">Pay-per-post</option>
+                            </select>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -4858,6 +5057,20 @@ export function NoodleView() {
                         >
                           {isEditingOwnProfile ? (updateAccount.isPending ? "Saving" : "Save") : "Edit Profile"}
                         </button>
+                      ) : viewedProfileAccount?.visibility === "private" ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleSubscription(viewedProfileAccount.id)}
+                          disabled={subscribeAccount.isPending || unsubscribeAccount.isPending}
+                          className={cn(
+                            "mb-1 h-9 rounded-full px-5 text-xs font-bold transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50",
+                            subscribedCreatorIds.has(viewedProfileAccount.id)
+                              ? "border border-[var(--noodle-divider)] text-[var(--foreground)]"
+                              : "bg-[var(--foreground)] text-[var(--background)]",
+                          )}
+                        >
+                          {subscribedCreatorIds.has(viewedProfileAccount.id) ? "Subscribed" : "Subscribe"}
+                        </button>
                       ) : canFollowViewedProfile && viewedProfileAccount ? (
                         <button
                           type="button"
@@ -4873,6 +5086,29 @@ export function NoodleView() {
                           {viewedProfileFollowed ? "Following" : "Follow"}
                         </button>
                       ) : null}
+                      {viewedProfileAccount &&
+                        viewedProfileAccount.visibility === "public" &&
+                        (viewedProfileAccount.kind === "persona" || viewedProfileAccount.kind === "character") &&
+                        (viewedProfileAccount.linkedAccountId ? (
+                          <button
+                            type="button"
+                            onClick={() => setViewedProfileAccountId(viewedProfileAccount.linkedAccountId)}
+                            className="mb-1 h-9 rounded-full border border-[var(--noodle-divider)] px-5 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)]"
+                            title="View private NoodleR account"
+                          >
+                            View private
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => createPrivateAccount.mutate(viewedProfileAccount.id)}
+                            disabled={createPrivateAccount.isPending}
+                            className="mb-1 h-9 rounded-full border border-[var(--noodle-divider)] px-5 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                            title="Create a private NoodleR account linked to this profile"
+                          >
+                            {createPrivateAccount.isPending ? "Creating…" : "Create private account"}
+                          </button>
+                        ))}
                     </div>
 
                     {isEditingOwnProfile ? (
@@ -4953,6 +5189,44 @@ export function NoodleView() {
                       </div>
                     )}
                   </div>
+                  {viewingOwnPrivateAccount && (
+                    <div className="border-t border-[var(--noodle-divider)] p-4">
+                      <textarea
+                        value={privateComposerText}
+                        onChange={(event) => setPrivateComposerText(event.target.value)}
+                        placeholder="Post to your NoodleR…"
+                        className={cn(textareaClass, "min-h-16 w-full resize-none bg-transparent")}
+                      />
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <input
+                          value={privateComposerImageUrl}
+                          onChange={(event) => setPrivateComposerImageUrl(event.target.value)}
+                          placeholder="Image URL (optional)"
+                          className={cn(fieldClass, "h-8 flex-1")}
+                        />
+                        {privateComposerImageUrl.trim() && (
+                          <select
+                            value={privateComposerAccess}
+                            onChange={(event) => setPrivateComposerAccess(event.target.value as NoodlePostAccess)}
+                            className="h-8 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs"
+                          >
+                            <option value="subscriber">Subscribers only</option>
+                            <option value="ppv">Pay-per-post</option>
+                          </select>
+                        )}
+                        <button
+                          type="button"
+                          onClick={submitPrivatePost}
+                          disabled={
+                            createPost.isPending || (!privateComposerText.trim() && !privateComposerImageUrl.trim())
+                          }
+                          className="ml-auto h-8 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Post
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   <div className="border-t border-[var(--noodle-divider)]">
                     <div className="grid grid-cols-3 border-b border-[var(--noodle-divider)]">
                       {PROFILE_TABS.map((tab) => (
@@ -4973,7 +5247,11 @@ export function NoodleView() {
                       ))}
                     </div>
                     {profileVisiblePosts.length > 0 ? (
-                      <div>{profileVisiblePosts.map(renderPostArticle)}</div>
+                      settings?.layout === "grid" ? (
+                        renderPostGrid(profileVisiblePosts)
+                      ) : (
+                        <div>{profileVisiblePosts.map(renderPostArticle)}</div>
+                      )
                     ) : (
                       <div className="px-8 py-14 text-center">
                         <p className="text-sm font-semibold text-[var(--muted-foreground)]">
@@ -5033,6 +5311,8 @@ export function NoodleView() {
                     Go to the Settings on the left first, invite characters, pick a generation connection, then refresh.
                   </p>
                 </div>
+              ) : settings?.layout === "grid" ? (
+                renderPostGrid(timelinePosts)
               ) : (
                 timelinePosts.map(renderPostArticle)
               )}
@@ -5170,6 +5450,18 @@ export function NoodleView() {
                         >
                           <X size={14} />
                         </button>
+                      </div>
+                      <div className="flex items-center gap-2 border-t border-[var(--noodle-divider)] px-3 py-2">
+                        <span className="text-[0.7rem] font-semibold text-[var(--muted-foreground)]">Access</span>
+                        <select
+                          value={composerAccess}
+                          onChange={(event) => setComposerAccess(event.target.value as NoodlePostAccess)}
+                          className="h-7 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs"
+                        >
+                          <option value="public">Public</option>
+                          <option value="subscriber">Subscribers only</option>
+                          <option value="ppv">Pay-per-post</option>
+                        </select>
                       </div>
                     </div>
                   )}

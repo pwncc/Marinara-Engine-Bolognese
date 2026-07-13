@@ -27,6 +27,7 @@ export function chooseNoodleParticipantAccounts(input: {
   const recentlyActiveAccountIds = input.recentlyActiveAccountIds ?? new Set<string>();
   const priorityAccountIds = input.priorityAccountIds ?? new Set<string>();
   const candidates = input.accounts.filter((account) => {
+    if (account.visibility === "private") return false;
     if (account.kind === "character") {
       return account.invited || input.selectedGroupCharacterIds.has(account.entityId);
     }

@@ -23,6 +23,8 @@ import {
   noodleRescheduleRefreshSchema,
   noodleRefreshSchema,
   noodleSettingsUpdateSchema,
+  noodleSubscribeSchema,
+  noodleUnlockPostSchema,
   PROFESSOR_MARI_ID,
   readNoodlePollFromMetadata,
   type APIProvider,
@@ -1271,11 +1273,21 @@ export async function noodleRoutes(app: FastifyInstance) {
   app.post("/posts", async (req, reply) => {
     const parsed = noodleCreatePostSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
-    let account = await noodle.getAccountByEntity(parsed.data.authorKind, parsed.data.authorEntityId);
-    if (!account && parsed.data.authorKind === "persona") {
+    let account = parsed.data.authorAccountId
+      ? await noodle.getAccountById(parsed.data.authorAccountId)
+      : await noodle.getAccountByEntity(parsed.data.authorKind, parsed.data.authorEntityId);
+    if (!account && !parsed.data.authorAccountId && parsed.data.authorKind === "persona") {
       account = await resolvePersonaAccount(noodle, characters, parsed.data.authorEntityId);
     }
     if (!account) return reply.code(404).send({ error: "Noodle account not found" });
+    if (account.visibility === "public" && (parsed.data.parentPostId || parsed.data.quotePostId)) {
+      const referencedPostId = parsed.data.parentPostId || parsed.data.quotePostId!;
+      const referencedPost = await noodle.getPostById(referencedPostId);
+      const referencedAuthor = referencedPost ? await noodle.getAccountById(referencedPost.authorAccountId) : null;
+      if (referencedAuthor?.visibility === "private") {
+        return reply.code(403).send({ error: "Cannot quote or reply to a private Noodle post from a public account." });
+      }
+    }
     const mentionedAccounts = mentionedCharacterAccounts(await noodle.listAccounts(), parsed.data.content);
     const poll = parsed.data.poll ? createNoodlePoll(parsed.data.poll) : null;
     const post = await noodle.createPost({
@@ -1286,6 +1298,7 @@ export async function noodleRoutes(app: FastifyInstance) {
       parentPostId: parsed.data.parentPostId ?? null,
       quotePostId: parsed.data.quotePostId ?? null,
       source: "manual",
+      access: parsed.data.access ?? "public",
       metadata: { ...mentionedAccountMetadata(mentionedAccounts), ...(poll ? { poll } : {}) },
     });
     if (!post) return reply.code(404).send({ error: "Noodle author not found" });
@@ -1331,6 +1344,56 @@ export async function noodleRoutes(app: FastifyInstance) {
   app.delete("/timeline", async () => {
     await noodle.resetTimeline();
     return bootstrapVisibleNoodle(noodle, characters);
+  });
+
+  app.post("/accounts/:id/private", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const created = await noodle.createPrivateAccount(id);
+    if (!created) return reply.code(400).send({ error: "Could not create a private Noodle account for that account." });
+    return created;
+  });
+
+  app.post("/accounts/:id/subscribe", async (req, reply) => {
+    const { id: creatorAccountId } = req.params as { id: string };
+    const parsed = noodleSubscribeSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    const creator = await noodle.getAccountById(creatorAccountId);
+    if (!creator) return reply.code(404).send({ error: "Noodle account not found" });
+    let subscriber = await noodle.getAccountByEntity(parsed.data.subscriberKind, parsed.data.subscriberEntityId);
+    if (!subscriber && parsed.data.subscriberKind === "persona") {
+      subscriber = await resolvePersonaAccount(noodle, characters, parsed.data.subscriberEntityId);
+    }
+    if (!subscriber) return reply.code(404).send({ error: "Noodle subscriber not found" });
+    const subscription = await noodle.subscribe(subscriber.id, creator.id);
+    if (!subscription) return reply.code(400).send({ error: "Could not subscribe to that account." });
+    return subscription;
+  });
+
+  app.delete("/accounts/:id/subscribe", async (req, reply) => {
+    const { id: creatorAccountId } = req.params as { id: string };
+    const parsed = noodleSubscribeSchema.safeParse(req.query);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    let subscriber = await noodle.getAccountByEntity(parsed.data.subscriberKind, parsed.data.subscriberEntityId);
+    if (!subscriber && parsed.data.subscriberKind === "persona") {
+      subscriber = await resolvePersonaAccount(noodle, characters, parsed.data.subscriberEntityId);
+    }
+    if (!subscriber) return reply.code(404).send({ error: "Noodle subscriber not found" });
+    await noodle.unsubscribe(subscriber.id, creatorAccountId);
+    return { ok: true };
+  });
+
+  app.post("/posts/:id/unlock", async (req, reply) => {
+    const { id: postId } = req.params as { id: string };
+    const parsed = noodleUnlockPostSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    const post = await noodle.getPostById(postId);
+    if (!post) return reply.code(404).send({ error: "Noodle post not found" });
+    let actor = await noodle.getAccountByEntity(parsed.data.actorKind, parsed.data.actorEntityId);
+    if (!actor && parsed.data.actorKind === "persona") {
+      actor = await resolvePersonaAccount(noodle, characters, parsed.data.actorEntityId);
+    }
+    if (!actor) return reply.code(404).send({ error: "Noodle actor not found" });
+    return noodle.unlockPost(actor.id, postId);
   });
 
   app.post("/posts/:id/interactions", async (req, reply) => {
@@ -1805,12 +1868,17 @@ export async function noodleRoutes(app: FastifyInstance) {
         }
         const mentionedAccounts = mentionedCharacterAccounts(activeAccounts, generatedPost.content);
         const poll = generatedPost.poll ? createNoodlePoll(generatedPost.poll) : null;
+        // Flavor only: random filler accounts occasionally bait with a locked
+        // image, purely cosmetic parody content — no real account is gated by it.
+        const access: NoodlePost["access"] =
+          account.kind === "random_user" && imageUrl && Math.random() < 0.35 ? "ppv" : "public";
         const post = await noodle.createPost({
           authorAccountId: account.id,
           content: generatedPost.content,
           imagePrompt: persistedImagePrompt,
           imageUrl,
           source: "generated",
+          access,
           metadata: {
             runId,
             ...mediaMetadata,

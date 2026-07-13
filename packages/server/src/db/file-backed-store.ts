@@ -165,6 +165,8 @@ export const FILE_BACKED_TABLES = [
   "noodle_interactions",
   "noodle_activity_digests",
   "noodle_refresh_runs",
+  "noodle_account_subscriptions",
+  "noodle_post_unlocks",
   "lorebooks",
   "lorebook_character_links",
   "lorebook_persona_links",

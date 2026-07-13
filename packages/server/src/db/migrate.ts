@@ -163,6 +163,8 @@ const CREATE_TABLES: string[] = [
     avatar_url TEXT,
     invited TEXT NOT NULL DEFAULT 'false',
     settings TEXT NOT NULL DEFAULT '{}',
+    visibility TEXT NOT NULL DEFAULT 'public',
+    linked_account_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
@@ -175,10 +177,23 @@ const CREATE_TABLES: string[] = [
     parent_post_id TEXT,
     quote_post_id TEXT,
     source TEXT NOT NULL DEFAULT 'manual',
+    access TEXT NOT NULL DEFAULT 'public',
     metadata TEXT NOT NULL DEFAULT '{}',
     author_snapshot TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS noodle_account_subscriptions (
+    id TEXT PRIMARY KEY NOT NULL,
+    subscriber_account_id TEXT NOT NULL,
+    creator_account_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS noodle_post_unlocks (
+    id TEXT PRIMARY KEY NOT NULL,
+    account_id TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS noodle_interactions (
     id TEXT PRIMARY KEY NOT NULL,
@@ -1224,6 +1239,21 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     column: "source_interaction_id",
     definition: "TEXT",
   },
+  {
+    table: "noodle_posts",
+    column: "access",
+    definition: "TEXT NOT NULL DEFAULT 'public'",
+  },
+  {
+    table: "noodle_accounts",
+    column: "visibility",
+    definition: "TEXT NOT NULL DEFAULT 'public'",
+  },
+  {
+    table: "noodle_accounts",
+    column: "linked_account_id",
+    definition: "TEXT",
+  },
 ];
 
 /**
@@ -1451,4 +1481,19 @@ export async function runMigrations(db: DB) {
     sql.raw(`CREATE INDEX IF NOT EXISTS idx_global_images_folder ON global_images(folder_id, created_at DESC)`),
   );
   await db.run(sql.raw(`CREATE INDEX IF NOT EXISTS idx_global_images_created ON global_images(created_at DESC)`));
+  await db.run(
+    sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uniq_noodle_account_subscriptions ON noodle_account_subscriptions(subscriber_account_id, creator_account_id)`,
+    ),
+  );
+  await db.run(
+    sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uniq_noodle_post_unlocks ON noodle_post_unlocks(account_id, post_id)`,
+    ),
+  );
+  await db.run(
+    sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uniq_noodle_accounts_linked_account ON noodle_accounts(linked_account_id) WHERE linked_account_id IS NOT NULL`,
+    ),
+  );
 }

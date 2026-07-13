@@ -7,12 +7,14 @@ import { useUIStore } from "../stores/ui.store";
 import type {
   NoodleAccount,
   NoodleAccountKind,
+  NoodleAccountSubscription,
   NoodleBootstrap,
   NoodleCreateInteractionInput,
   NoodleCreatePostInput,
   NoodleInteraction,
   NoodleInteractionUpdateInput,
   NoodlePost,
+  NoodlePostUnlock,
   NoodlePostUpdateInput,
   NoodleRemoveInteractionInput,
   NoodleRescheduleRefreshInput,
@@ -314,6 +316,102 @@ export function useRefreshNoodle() {
         preservePollVotes(current, result.bootstrap),
       ),
     onSettled: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
+  });
+}
+
+export function useCreatePrivateNoodleAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (publicAccountId: string) => api.post<NoodleAccount>(`/noodle/accounts/${publicAccountId}/private`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
+  });
+}
+
+export function useSubscribeNoodleAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      creatorAccountId,
+      subscriberKind,
+      subscriberEntityId,
+    }: {
+      creatorAccountId: string;
+      subscriberKind: NoodleAccountKind;
+      subscriberEntityId: string;
+    }) =>
+      api.post<NoodleAccountSubscription>(`/noodle/accounts/${encodeURIComponent(creatorAccountId)}/subscribe`, {
+        subscriberKind,
+        subscriberEntityId,
+      }),
+    onSuccess: (subscription) => {
+      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+        current
+          ? {
+              ...current,
+              subscriptions: current.subscriptions.some((item) => item.id === subscription.id)
+                ? current.subscriptions
+                : [...current.subscriptions, subscription],
+            }
+          : current,
+      );
+    },
+  });
+}
+
+export function useUnsubscribeNoodleAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      creatorAccountId,
+      subscriberKind,
+      subscriberEntityId,
+    }: {
+      creatorAccountId: string;
+      subscriberKind: NoodleAccountKind;
+      subscriberEntityId: string;
+    }) => {
+      const params = new URLSearchParams({ subscriberKind, subscriberEntityId });
+      return api.delete(`/noodle/accounts/${encodeURIComponent(creatorAccountId)}/subscribe?${params}`);
+    },
+    onSuccess: (_result, variables) => {
+      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+        current
+          ? {
+              ...current,
+              subscriptions: current.subscriptions.filter(
+                (item) => item.creatorAccountId !== variables.creatorAccountId,
+              ),
+            }
+          : current,
+      );
+    },
+  });
+}
+
+export function useUnlockNoodlePost() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      postId,
+      actorKind,
+      actorEntityId,
+    }: {
+      postId: string;
+      actorKind: NoodleAccountKind;
+      actorEntityId: string;
+    }) => api.post<NoodlePostUnlock>(`/noodle/posts/${encodeURIComponent(postId)}/unlock`, { actorKind, actorEntityId }),
+    onSuccess: (unlock) => {
+      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+        current
+          ? {
+              ...current,
+              postUnlocks: current.postUnlocks.some((item) => item.id === unlock.id)
+                ? current.postUnlocks
+                : [...current.postUnlocks, unlock],
+            }
+          : current,
+      );
+    },
   });
 }
 
