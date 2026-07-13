@@ -108,6 +108,18 @@ export const noodleAccountUpdateSchema = z.object({
   settings: z.record(z.string(), z.unknown()).optional(),
 });
 
+export const noodleFillerProfileCreateSchema = z.object({
+  displayName: z.string().trim().min(1, "Enter a display name.").max(120),
+  bio: z.string().trim().max(500).optional().default(""),
+  enabled: z.boolean().optional().default(true),
+});
+
+export const noodleFillerProfileUpdateSchema = z.object({
+  displayName: z.string().trim().min(1).max(120).optional(),
+  bio: z.string().trim().max(500).optional(),
+  enabled: z.boolean().optional(),
+});
+
 export const noodleInviteSchema = z.object({
   characterId: z.string().min(1),
 });
@@ -387,6 +399,8 @@ export const noodleGeneratedProfilesSchema = z.object({
 export type NoodleSettingsInput = z.infer<typeof noodleSettingsSchema>;
 export type NoodleSettingsUpdateInput = z.infer<typeof noodleSettingsUpdateSchema>;
 export type NoodleAccountUpdateInput = z.infer<typeof noodleAccountUpdateSchema>;
+export type NoodleFillerProfileCreateInput = z.infer<typeof noodleFillerProfileCreateSchema>;
+export type NoodleFillerProfileUpdateInput = z.infer<typeof noodleFillerProfileUpdateSchema>;
 export type NoodleInviteInput = z.infer<typeof noodleInviteSchema>;
 export type NoodleBulkInviteInput = z.infer<typeof noodleBulkInviteSchema>;
 export type NoodlePollInput = z.infer<typeof noodlePollInputSchema>;

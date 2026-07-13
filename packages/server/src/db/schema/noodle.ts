@@ -114,3 +114,13 @@ export const noodleRefreshRuns = sqliteTable("noodle_refresh_runs", {
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
+
+export const noodleFillerProfiles = sqliteTable("noodle_filler_profiles", {
+  id: text("id").primaryKey(),
+  entityId: text("entity_id").notNull(),
+  displayName: text("display_name").notNull(),
+  bio: text("bio").notNull().default(""),
+  enabled: text("enabled").notNull().default("true"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});

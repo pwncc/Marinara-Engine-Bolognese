@@ -101,6 +101,10 @@ import {
   useRefreshNoodle,
   useRemoveNoodleCharacter,
   useRemoveNoodleInteraction,
+  useCreateNoodleFillerProfile,
+  useDeleteNoodleFillerProfile,
+  useNoodleFillerProfiles,
+  useUpdateNoodleFillerProfile,
   useRescheduleNoodleRefresh,
   useResetNoodleTimeline,
   useRetryPrivateIdentityGeneration,
@@ -947,6 +951,13 @@ export function NoodleView() {
   const deletePrivateAccount = useDeletePrivateNoodleAccount();
   const retryPrivateIdentity = useRetryPrivateIdentityGeneration();
   const loadOlderPosts = useLoadOlderNoodlePosts();
+  const [fillerAccountsExpanded, setFillerAccountsExpanded] = useState(false);
+  const [newFillerAccountName, setNewFillerAccountName] = useState("");
+  const fillerProfilesQuery = useNoodleFillerProfiles(fillerAccountsExpanded);
+  const fillerProfiles = fillerProfilesQuery.data ?? [];
+  const createFillerProfile = useCreateNoodleFillerProfile();
+  const updateFillerProfile = useUpdateNoodleFillerProfile();
+  const deleteFillerProfile = useDeleteNoodleFillerProfile();
   const subscribeAccount = useSubscribeNoodleAccount();
   const unsubscribeAccount = useUnsubscribeNoodleAccount();
   const unlockPost = useUnlockNoodlePost();
@@ -3013,6 +3024,72 @@ export function NoodleView() {
                   {(settings?.allowRandomUsers ?? false) ? <UserMinus size={15} /> : <UserPlus size={15} />}
                 </span>
               </button>
+              <button
+                type="button"
+                className="flex w-full items-center justify-between border-b border-[var(--marinara-chat-chrome-panel-border)] px-2 py-1.5 text-left text-[0.68rem] font-semibold text-[var(--muted-foreground)] transition-colors hover:bg-foreground/5"
+                onClick={() => setFillerAccountsExpanded((expanded) => !expanded)}
+              >
+                <span>Manage random user roster</span>
+                <span>{fillerAccountsExpanded ? "Hide" : "Show"}</span>
+              </button>
+              {fillerAccountsExpanded && (
+                <div className="space-y-1.5 border-b border-[var(--marinara-chat-chrome-panel-border)] p-2">
+                  {fillerProfilesQuery.isLoading && (
+                    <p className="text-[0.68rem] text-[var(--muted-foreground)]">Loading…</p>
+                  )}
+                  {fillerProfiles.map((profile) => (
+                    <div key={profile.id} className="flex items-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] p-1.5">
+                      <input
+                        type="checkbox"
+                        checked={profile.enabled}
+                        onChange={(event) =>
+                          updateFillerProfile.mutate({ id: profile.id, enabled: event.target.checked })
+                        }
+                        disabled={updateFillerProfile.isPending}
+                      />
+                      <input
+                        value={profile.displayName}
+                        onChange={(event) =>
+                          updateFillerProfile.mutate({ id: profile.id, displayName: event.target.value })
+                        }
+                        className="min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 text-xs font-semibold focus:border-[var(--noodle-divider)] focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => deleteFillerProfile.mutate(profile.id)}
+                        disabled={deleteFillerProfile.isPending}
+                        className="shrink-0 rounded-full p-1 text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+                        aria-label={`Delete ${profile.displayName}`}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      value={newFillerAccountName}
+                      onChange={(event) => setNewFillerAccountName(event.target.value)}
+                      placeholder="New filler account name…"
+                      className={cn(fieldClass, "h-7 flex-1 text-xs")}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const displayName = newFillerAccountName.trim();
+                        if (!displayName) return;
+                        createFillerProfile.mutate(
+                          { displayName, bio: "", enabled: true },
+                          { onSuccess: () => setNewFillerAccountName("") },
+                        );
+                      }}
+                      disabled={createFillerProfile.isPending || !newFillerAccountName.trim()}
+                      className="h-7 shrink-0 rounded-full bg-[var(--noodle-blue)] px-3 text-[0.68rem] font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+              )}
               {visibleInviteCharacters.map((character) => {
                 const id = readString(character.id);
                 const name = characterName(character);

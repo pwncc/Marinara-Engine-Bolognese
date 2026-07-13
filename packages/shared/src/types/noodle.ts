@@ -176,3 +176,13 @@ export interface NoodleBootstrap {
   postUnlocks: NoodlePostUnlock[];
   hasOlderHistory: boolean;
 }
+
+export interface NoodleFillerProfile {
+  id: string;
+  entityId: string;
+  displayName: string;
+  bio: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}

@@ -14,6 +14,8 @@ import {
   noodleBulkInviteSchema,
   noodleCreateInteractionSchema,
   noodleCreatePostSchema,
+  noodleFillerProfileCreateSchema,
+  noodleFillerProfileUpdateSchema,
   noodleInviteSchema,
   noodleInteractionOwnerSchema,
   noodleInteractionUpdateSchema,
@@ -499,38 +501,6 @@ function shuffle<T>(items: T[]): T[] {
   return next;
 }
 
-const RANDOM_NOODLE_USERS = [
-  {
-    entityId: "random_user:thread-countess",
-    displayName: "Thread Countess",
-    bio: "Chronically online textile hobbyist who treats every Noodle argument like court gossip.",
-  },
-  {
-    entityId: "random_user:packet-soup",
-    displayName: "Packet Soup",
-    bio: "Friendly lurker, recipe collector, and accidental drama amplifier.",
-  },
-  {
-    entityId: "random_user:orbit-notice",
-    displayName: "Orbit Notice",
-    bio: "Posts vague observations, likes too quickly, and follows anyone with interesting chaos.",
-  },
-  {
-    entityId: "random_user:glass-bulletin",
-    displayName: "Glass Bulletin",
-    bio: "Local rumor account with polished manners and questionable sources.",
-  },
-  {
-    entityId: "random_user:moth-hour",
-    displayName: "Moth Hour",
-    bio: "Night-scroller who replies with eerie encouragement and niche memes.",
-  },
-  {
-    entityId: "random_user:brine-index",
-    displayName: "Brine Index",
-    bio: "Overconfident commentator who keeps a spreadsheet of everyone else's scandals.",
-  },
-] as const;
 
 const PROFESSOR_MARI_NOODLE_BIO =
   "She/Her | 18+ | Skill Issue | Your Assistant After Hours (hey, I get to do fun stuff, too!) | Simp for Il Dottore 24/7 | LLMs Fan";
@@ -619,7 +589,9 @@ async function pickRandomCharacterBannerUrl(
 }
 
 async function ensureRandomUserAccounts(noodle: ReturnType<typeof createNoodleStorage>) {
-  for (const profile of RANDOM_NOODLE_USERS) {
+  const profiles = await noodle.listFillerProfiles();
+  for (const profile of profiles) {
+    if (!profile.enabled) continue;
     await noodle.upsertAccountFromProfile({
       kind: "random_user",
       entityId: profile.entityId,
@@ -2135,6 +2107,32 @@ export async function noodleRoutes(app: FastifyInstance) {
     const parsed = noodleSettingsUpdateSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     return noodle.updateSettings(parsed.data);
+  });
+
+  app.get("/filler-accounts", async () => {
+    return noodle.listFillerProfiles();
+  });
+
+  app.post("/filler-accounts", async (req, reply) => {
+    const parsed = noodleFillerProfileCreateSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    return noodle.createFillerProfile(parsed.data);
+  });
+
+  app.put("/filler-accounts/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = noodleFillerProfileUpdateSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    const updated = await noodle.updateFillerProfile(id, parsed.data);
+    if (!updated) return reply.code(404).send({ error: "Filler account not found" });
+    return updated;
+  });
+
+  app.delete("/filler-accounts/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const deleted = await noodle.deleteFillerProfile(id);
+    if (!deleted) return reply.code(404).send({ error: "Filler account not found" });
+    return { ok: true };
   });
 
   app.put("/refresh-schedule", async (req, reply) => {

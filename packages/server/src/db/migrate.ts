@@ -225,6 +225,15 @@ const CREATE_TABLES: string[] = [
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS noodle_filler_profiles (
+    id TEXT PRIMARY KEY NOT NULL,
+    entity_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    bio TEXT NOT NULL DEFAULT '',
+    enabled TEXT NOT NULL DEFAULT 'true',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS lorebooks (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,

@@ -15,6 +15,7 @@ import {
   type NoodleCreateInteractionInput,
   type NoodleCreatePostInput,
   type NoodleDigestEntry,
+  type NoodleFillerProfile,
   type NoodleInteraction,
   type NoodleInteractionType,
   type NoodleCarryoverMode,
@@ -35,6 +36,7 @@ import {
   noodleAccounts,
   noodleAccountSubscriptions,
   noodleActivityDigests,
+  noodleFillerProfiles,
   noodleInteractions,
   noodlePosts,
   noodlePostUnlocks,
@@ -54,6 +56,42 @@ const NOODLE_SETTINGS_KEY = "noodle.settings";
 const NOODLE_REFRESH_SCHEDULE_KEY = "noodle.refresh-schedule";
 const NOODLE_CARRYOVER_TARGETS: NoodleCarryoverTarget[] = ["conversation", "roleplay", "game"];
 
+// Default Noodle "random user" filler roster, seeded once (lazily, on first
+// read) into noodle_filler_profiles so it becomes user-editable data instead
+// of a hardcoded constant.
+const DEFAULT_NOODLE_FILLER_PROFILES: Array<{ entityId: string; displayName: string; bio: string }> = [
+  {
+    entityId: "random_user:thread-countess",
+    displayName: "Thread Countess",
+    bio: "Chronically online textile hobbyist who treats every Noodle argument like court gossip.",
+  },
+  {
+    entityId: "random_user:packet-soup",
+    displayName: "Packet Soup",
+    bio: "Friendly lurker, recipe collector, and accidental drama amplifier.",
+  },
+  {
+    entityId: "random_user:orbit-notice",
+    displayName: "Orbit Notice",
+    bio: "Posts vague observations, likes too quickly, and follows anyone with interesting chaos.",
+  },
+  {
+    entityId: "random_user:glass-bulletin",
+    displayName: "Glass Bulletin",
+    bio: "Local rumor account with polished manners and questionable sources.",
+  },
+  {
+    entityId: "random_user:moth-hour",
+    displayName: "Moth Hour",
+    bio: "Night-scroller who replies with eerie encouragement and niche memes.",
+  },
+  {
+    entityId: "random_user:brine-index",
+    displayName: "Brine Index",
+    bio: "Overconfident commentator who keeps a spreadsheet of everyone else's scandals.",
+  },
+];
+
 type AccountRow = typeof noodleAccounts.$inferSelect;
 type PostRow = typeof noodlePosts.$inferSelect;
 type InteractionRow = typeof noodleInteractions.$inferSelect;
@@ -61,6 +99,7 @@ type DigestRow = typeof noodleActivityDigests.$inferSelect;
 type RefreshRunRow = typeof noodleRefreshRuns.$inferSelect;
 type SubscriptionRow = typeof noodleAccountSubscriptions.$inferSelect;
 type PostUnlockRow = typeof noodlePostUnlocks.$inferSelect;
+type FillerProfileRow = typeof noodleFillerProfiles.$inferSelect;
 
 function normalizePostAccess(value: string): NoodlePostAccess {
   return value === "subscriber" || value === "ppv" ? value : "public";
@@ -239,6 +278,18 @@ function mapAccount(row: AccountRow): NoodleAccount {
   };
 }
 
+function mapFillerProfile(row: FillerProfileRow): NoodleFillerProfile {
+  return {
+    id: row.id,
+    entityId: row.entityId,
+    displayName: row.displayName,
+    bio: row.bio ?? "",
+    enabled: normalizeBool(row.enabled),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 function snapshotForAccount(account: NoodleAccount): NoodleAuthorSnapshot {
   return {
     id: account.id,
@@ -373,6 +424,74 @@ export function createNoodleStorage(db: DB) {
         await this.saveRefreshSchedule(reconciled);
       }
       return reconciled;
+    },
+
+    async listFillerProfiles(): Promise<NoodleFillerProfile[]> {
+      const rows = await db.select().from(noodleFillerProfiles).orderBy(desc(noodleFillerProfiles.createdAt));
+      if (rows.length === 0) {
+        // Lazily seed the default roster on first read instead of during a
+        // startup migration, so this works uniformly for both the legacy
+        // SQLite backend and the default file-native store.
+        const timestamp = now();
+        await db.insert(noodleFillerProfiles).values(
+          DEFAULT_NOODLE_FILLER_PROFILES.map((profile) => ({
+            id: newId(),
+            entityId: profile.entityId,
+            displayName: profile.displayName,
+            bio: profile.bio,
+            enabled: "true",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          })),
+        );
+        return this.listFillerProfiles();
+      }
+      return rows.map(mapFillerProfile);
+    },
+
+    async createFillerProfile(input: { displayName: string; bio?: string; enabled?: boolean }): Promise<NoodleFillerProfile> {
+      const id = newId();
+      const timestamp = now();
+      await db.insert(noodleFillerProfiles).values({
+        id,
+        entityId: `random_user:${id}`,
+        displayName: input.displayName,
+        bio: input.bio ?? "",
+        enabled: input.enabled === false ? "false" : "true",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      const rows = await db.select().from(noodleFillerProfiles).where(eq(noodleFillerProfiles.id, id));
+      return mapFillerProfile(rows[0]!);
+    },
+
+    async updateFillerProfile(
+      id: string,
+      patch: { displayName?: string; bio?: string; enabled?: boolean },
+    ): Promise<NoodleFillerProfile | null> {
+      const existing = await db.select().from(noodleFillerProfiles).where(eq(noodleFillerProfiles.id, id));
+      if (!existing[0]) return null;
+      await db
+        .update(noodleFillerProfiles)
+        .set({
+          ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
+          ...(patch.bio !== undefined ? { bio: patch.bio } : {}),
+          ...(patch.enabled !== undefined ? { enabled: patch.enabled ? "true" : "false" } : {}),
+          updatedAt: now(),
+        })
+        .where(eq(noodleFillerProfiles.id, id));
+      const rows = await db.select().from(noodleFillerProfiles).where(eq(noodleFillerProfiles.id, id));
+      return rows[0] ? mapFillerProfile(rows[0]) : null;
+    },
+
+    async deleteFillerProfile(id: string): Promise<boolean> {
+      const existing = await db.select().from(noodleFillerProfiles).where(eq(noodleFillerProfiles.id, id));
+      if (!existing[0]) return false;
+      await db.delete(noodleFillerProfiles).where(eq(noodleFillerProfiles.id, id));
+      await db
+        .delete(noodleAccounts)
+        .where(and(eq(noodleAccounts.kind, "random_user"), eq(noodleAccounts.entityId, existing[0].entityId)));
+      return true;
     },
 
     async listAccounts(): Promise<NoodleAccount[]> {

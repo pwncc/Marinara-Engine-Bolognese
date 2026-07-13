@@ -11,6 +11,9 @@ import type {
   NoodleBootstrap,
   NoodleCreateInteractionInput,
   NoodleCreatePostInput,
+  NoodleFillerProfile,
+  NoodleFillerProfileCreateInput,
+  NoodleFillerProfileUpdateInput,
   NoodleInteraction,
   NoodleInteractionUpdateInput,
   NoodlePost,
@@ -546,5 +549,38 @@ export function useConfirmNoodleImagePrompts() {
         preservePollVotes(current, bootstrap),
       ),
     onSettled: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
+  });
+}
+
+export function useNoodleFillerProfiles(enabled = true) {
+  return useQuery({
+    queryKey: [...noodleKeys.all, "filler-accounts"] as const,
+    queryFn: () => api.get<NoodleFillerProfile[]>("/noodle/filler-accounts"),
+    enabled,
+  });
+}
+
+export function useCreateNoodleFillerProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: NoodleFillerProfileCreateInput) => api.post<NoodleFillerProfile>("/noodle/filler-accounts", input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [...noodleKeys.all, "filler-accounts"] }),
+  });
+}
+
+export function useUpdateNoodleFillerProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }: { id: string } & NoodleFillerProfileUpdateInput) =>
+      api.put<NoodleFillerProfile>(`/noodle/filler-accounts/${encodeURIComponent(id)}`, patch),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [...noodleKeys.all, "filler-accounts"] }),
+  });
+}
+
+export function useDeleteNoodleFillerProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete<{ ok: boolean }>(`/noodle/filler-accounts/${encodeURIComponent(id)}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [...noodleKeys.all, "filler-accounts"] }),
   });
 }
