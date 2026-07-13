@@ -34,7 +34,10 @@ import {
 } from "../../packages/server/src/services/noodle/noodle-generated-refresh.js";
 import { normalizeNoodleImagePrompt } from "../../packages/server/src/services/noodle/noodle-image-prompt.js";
 import { NOODLE_IMAGE_POST } from "../../packages/server/src/services/prompt-overrides/registry/noodle.js";
-import { collectNoodlePriorityAccountIds } from "../../packages/server/src/routes/noodle.routes.js";
+import {
+  collectNoodlePriorityAccountIds,
+  sanitizePrivateNoodlerImageIdea,
+} from "../../packages/server/src/routes/noodle.routes.js";
 import { NOODLE_TIMELINE_VOICE } from "../../packages/server/src/services/prompt-overrides/registry/noodle.js";
 
 const makeAccount = (id: string): NoodleAccount => ({
@@ -475,6 +478,28 @@ const privateNoodlerImagePrompt = NOODLE_IMAGE_POST.defaultBuilder({
 assert.match(privateNoodlerImagePrompt, /Underlying visual identity to preserve: 20-year-old man/u);
 assert.match(privateNoodlerImagePrompt, /do not write or render the public name/u);
 assert.doesNotMatch(privateNoodlerImagePrompt, /Do not leak the public account name here/u);
+assert.equal(
+  sanitizePrivateNoodlerImageIdea(
+    "Professor Mari selfie\nWorld / Lore: borrowed academy symbol\nMari posing in a pink room",
+    {
+      sourceKind: "character",
+      publicName: "Alyssa",
+      visualDescription: "20-year-old woman, black hair, green eyes",
+      personalityDescription: "",
+      avatarPath: null,
+    },
+    {
+      identityDisclosure: "secret",
+      stageName: "Velvet Lecture",
+      stageBio: "",
+      stagePersonality: "",
+      stageDynamic: "",
+      stageAppearanceOverride: "",
+      preserveLinkedAppearance: true,
+    },
+  ),
+  "Velvet Lecture selfie\nVelvet Lecture posing in a pink room",
+);
 
 const cutoffAnchor = new Date("2026-07-10T12:00:00.000Z");
 assert.equal(noodlePastMemoryCutoff(cutoffAnchor), "2026-07-08T12:00:00.000Z");

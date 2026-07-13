@@ -386,6 +386,33 @@ function formatLinkedIdentityPromptBlock(context: NoodleLinkedAuthorContext, pro
   ]).join("\n");
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function sanitizePrivateNoodlerImageIdea(
+  draftPrompt: string,
+  context: NoodleLinkedAuthorContext,
+  profile: NoodlePrivateStageProfile,
+) {
+  let sanitized = draftPrompt;
+  const replacement = profile.stageName || "the private creator";
+  const blockedNames = new Set<string>();
+  if (profile.identityDisclosure !== "open") blockedNames.add(context.publicName);
+  if (context.publicName.toLowerCase() !== "professor mari") blockedNames.add("Professor Mari");
+  if (!/\bmari\b/iu.test(context.publicName)) blockedNames.add("Mari");
+  for (const name of blockedNames) {
+    const clean = name.trim();
+    if (!clean) continue;
+    sanitized = sanitized.replace(new RegExp(`\\b${escapeRegExp(clean)}\\b`, "giu"), replacement);
+  }
+  return sanitized
+    .split("\n")
+    .filter((line) => !/^\s*(?:world\s*\/\s*lore|lorebook|user persona|character profiles?)\s*:/iu.test(line))
+    .join("\n")
+    .trim();
+}
+
 function galleryImageUrl(filePath: string, fallbackChatId: string) {
   const filename = basename(filePath.replace(/\\/g, "/"));
   return `/api/gallery/file/${encodeURIComponent(fallbackChatId)}/${encodeURIComponent(filename)}`;
@@ -752,6 +779,7 @@ async function buildOptedInChatContext(
   chats: ReturnType<typeof createChatsStorage>,
   characters: ReturnType<typeof createCharactersStorage>,
   selectedCharacterIds: string[],
+  options: { focusOnlySelectedCharacters?: boolean } = {},
 ) {
   if (selectedCharacterIds.length === 0) return "No selected character chats are eligible for Noodle context.";
   const selected = new Set(selectedCharacterIds);
@@ -793,7 +821,10 @@ async function buildOptedInChatContext(
       })
       .filter((line): line is string => Boolean(line));
     const messageLines = await Promise.all(
-      messages.map(async (message) => {
+      messages.flatMap((message) => {
+        if (options.focusOnlySelectedCharacters && message.characterId && !selected.has(message.characterId)) return [];
+        return [message];
+      }).map(async (message) => {
         const role = messageRoleLabel(message.role);
         let speaker = role === "user" ? personaName : role === "narrator" ? "Narrator" : "Assistant";
         if (message.characterId) {
@@ -809,6 +840,7 @@ async function buildOptedInChatContext(
         return `- ${speaker} (${role}${characterId}): ${content}`;
       }),
     );
+    if (messageLines.length === 0) continue;
     blocks.push(
       [
         `<chat_context id="${escapePromptAttribute(chat.id)}" mode="${escapePromptAttribute(
@@ -908,7 +940,13 @@ async function buildRefreshPrompt(input: {
     recalledPosts = sampleNoodlePastMemories(olderPosts, pastMemorySampleSize);
   }
   const [chatContext, recentInteractions, recalledInteractions] = await Promise.all([
-    buildOptedInChatContext(input.chats, input.characters, selectedCharacterIds),
+    isolatedTargetAccount
+      ? isolatedTargetAccount.kind === "character"
+        ? buildOptedInChatContext(input.chats, input.characters, [isolatedTargetAccount.entityId], {
+            focusOnlySelectedCharacters: true,
+          })
+        : Promise.resolve("Private persona-linked NoodleR generation has no opted-in character chat context.")
+      : buildOptedInChatContext(input.chats, input.characters, selectedCharacterIds),
     input.noodle.listInteractions(recentPosts.map((post) => post.id)),
     input.noodle.listInteractions(recalledPosts.map((post) => post.id)),
   ]);
@@ -925,7 +963,11 @@ async function buildRefreshPrompt(input: {
         }\n</random_user>`,
     )
     .join("\n\n");
-  const personaContext = personaRow ? personaContextFromRow(personaRow) : "No user persona is active.";
+  const personaContext = isolatedTargetAccount
+    ? "Viewer persona intentionally omitted for private single-account NoodleR generation. It is not the author and must not influence the author's identity or image prompt."
+    : personaRow
+      ? personaContextFromRow(personaRow)
+      : "No user persona is active.";
   // A guided private NoodleR post can target a persona-linked private account, which
   // is otherwise never allowed to author generated activity. That single active
   // account's real persona sheet (description/personality/appearance) must still be
@@ -970,24 +1012,40 @@ async function buildRefreshPrompt(input: {
   // Lorebook context) so existing timelines are unaffected until a user opts in. Oldest-first scan
   // messages from recent timeline text give keyword-scoped entries real content to match against;
   // character context is appended last so entries keyed to a character's own traits stay in scan depth.
+  const lorebookScanMessages = isolatedTargetAccount
+    ? [
+        ...recentPosts
+          .slice()
+          .reverse()
+          .map((post) => ({ role: "user", content: post.content })),
+        ...(linkedAuthorContextBlock ? [{ role: "user", content: linkedAuthorContextBlock }] : []),
+        ...(privateStageContextBlock ? [{ role: "user", content: privateStageContextBlock }] : []),
+      ]
+    : [
+        ...recentPosts
+          .slice()
+          .reverse()
+          .map((post) => ({ role: "user", content: post.content })),
+        ...recentInteractions
+          .filter((interaction) => interaction.type === "reply" && interaction.content)
+          .map((interaction) => ({ role: "user", content: interaction.content ?? "" })),
+        ...(characterContext ? [{ role: "user", content: characterContext }] : []),
+      ];
   const lorebookResult = input.settings.enableLorebookContext
     ? await processLorebooks(
         input.db,
-        [
-          ...recentPosts
-            .slice()
-            .reverse()
-            .map((post) => ({ role: "user", content: post.content })),
-          ...recentInteractions
-            .filter((interaction) => interaction.type === "reply" && interaction.content)
-            .map((interaction) => ({ role: "user", content: interaction.content ?? "" })),
-          ...(characterContext ? [{ role: "user", content: characterContext }] : []),
-        ],
+        lorebookScanMessages,
         null,
         {
-          characterIds: selectedCharacterIds,
-          personaId: input.personaAccount?.entityId ?? null,
-          tokenBudget: noodleLorebookTokenBudget(activeCharacters.length),
+          characterIds:
+            isolatedTargetAccount?.kind === "character" ? [isolatedTargetAccount.entityId] : selectedCharacterIds,
+          personaId:
+            isolatedTargetAccount?.kind === "persona"
+              ? isolatedTargetAccount.entityId
+              : isolatedTargetAccount
+                ? null
+                : input.personaAccount?.entityId ?? null,
+          tokenBudget: noodleLorebookTokenBudget(isolatedTargetAccount ? 1 : activeCharacters.length),
           generationTriggers: ["noodle"],
           previewOnly: true,
         },
@@ -1025,6 +1083,7 @@ async function buildRefreshPrompt(input: {
       ? [
           "- For a private NoodleR account, treat Underlying Linked Identity as hidden continuity and Private Stage Persona as the visible creator role. Preserve the linked person's appearance and hard identity constraints, but write the post in the private stage persona's voice and dynamic.",
           `- ${identityDisclosureInstruction(privateStageProfile.identityDisclosure)}`,
+          "- For private NoodleR imagePrompt values, describe only this creator's scene, pose, outfit, mood, composition, and the linked visual traits. Do not copy lorebook names, unrelated character names, the viewer persona, Professor Mari, or any public identity that conflicts with the Underlying Linked Identity.",
         ]
       : []),
     "- For each interaction, set either targetTempId or targetPostId and set the unused target field to null.",
@@ -1036,11 +1095,13 @@ async function buildRefreshPrompt(input: {
 
   const visionCandidates = await prepareNoodleVisionAttachments([
     ...collectNoodlePromptImageCandidates(recentPosts, recentInteractions, {
-      priorityActorAccountId: input.personaAccount?.id,
+      priorityActorAccountId: isolatedTargetAccount?.id ?? input.personaAccount?.id,
     }),
-    ...collectNoodlePromptImageCandidates(recalledPosts, recalledInteractions, {
-      priorityActorAccountId: input.personaAccount?.id,
-    }),
+    ...(isolatedTargetAccount
+      ? []
+      : collectNoodlePromptImageCandidates(recalledPosts, recalledInteractions, {
+          priorityActorAccountId: input.personaAccount?.id,
+        })),
   ]);
   const captionedImages = new Map<string, string>();
   let visionAttachments: NoodleVisionAttachment[] = visionCandidates;
@@ -1741,6 +1802,7 @@ async function generateNoodlePostImage(input: {
       `Private stage persona: ${privateStageProfile.stageName}. ${privateStageProfile.stagePersonality}`.trim(),
       privateStageProfile.stageDynamic ? `Private roleplay dynamic: ${privateStageProfile.stageDynamic}` : null,
       identityDisclosureInstruction(privateStageProfile.identityDisclosure),
+      "Treat the timeline writer's draft image idea as scene/composition only. Ignore or replace any named identity, lorebook term, or character detail in that draft if it conflicts with this anchor.",
       privateStageProfile.preserveLinkedAppearance
         ? "The generated image must preserve the linked person's body, age range, species, face/hair/visible traits, and hard visual continuity. User scene directions can change outfit, pose, mood, and setting, not who the person is."
         : "The private stage appearance may diverge only where the stage appearance override explicitly says so.",
@@ -1748,10 +1810,15 @@ async function generateNoodlePostImage(input: {
     characterDescription = compactLines([privateVisualContext, characterDescription]).join("\n\n");
   }
 
+  const draftPrompt =
+    privateStageProfile && linkedAuthorContext
+      ? sanitizePrivateNoodlerImageIdea(input.draftPrompt, linkedAuthorContext, privateStageProfile)
+      : input.draftPrompt;
+
   const postPrompt = await loadPrompt(input.promptOverrides, NOODLE_IMAGE_POST, {
     authorName: input.account.displayName,
     postContent: input.postContent,
-    draftPrompt: input.draftPrompt,
+    draftPrompt,
     userInstructions: input.settings.imageGenerationPrompt,
     characterDescription,
   });
