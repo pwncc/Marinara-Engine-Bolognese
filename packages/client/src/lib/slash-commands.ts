@@ -633,6 +633,34 @@ const COMMANDS: SlashCommand[] = [
     },
   },
   {
+    name: "tictactoe",
+    aliases: ["ttt"],
+    description: "Start a game of tic-tac-toe with a character in this chat",
+    usage: "/tictactoe",
+    local: true,
+    async execute(_args, ctx) {
+      if (ctx.mode === "roleplay") {
+        return { handled: true, feedback: "Tic-tac-toe can only be played in conversation chats." };
+      }
+      findConversationGame("tictactoe")?.openSetup(ctx.chatId);
+      return { handled: true };
+    },
+  },
+  {
+    name: "rps",
+    aliases: ["rockpaperscissors"],
+    description: "Start a game of rock-paper-scissors with a character in this chat",
+    usage: "/rps",
+    local: true,
+    async execute(_args, ctx) {
+      if (ctx.mode === "roleplay") {
+        return { handled: true, feedback: "Rock-paper-scissors can only be played in conversation chats." };
+      }
+      findConversationGame("rps")?.openSetup(ctx.chatId);
+      return { handled: true };
+    },
+  },
+  {
     name: "sys",
     aliases: ["system"],
     description: "Insert a system message",

@@ -2,6 +2,8 @@ import { useChessGameStore } from "../stores/chess-game.store";
 import { useEightBallGameStore } from "../stores/eightball-game.store";
 import { usePokerGameStore } from "../stores/poker-game.store";
 import { useUnoGameStore } from "../stores/uno-game.store";
+import { useTicTacToeGameStore } from "../stores/tic-tac-toe-game.store";
+import { useRockPaperScissorsGameStore } from "../stores/rock-paper-scissors-game.store";
 
 export interface ConversationGameLauncher {
   id: string;
@@ -44,6 +46,22 @@ export const CONVERSATION_GAMES: ConversationGameLauncher[] = [
     description: "Play a pool match with a character in this chat.",
     playerLabel: "1v1 table sport",
     openSetup: (chatId) => useEightBallGameStore.getState().openSetup(chatId),
+  },
+  {
+    id: "tictactoe",
+    name: "Tic-Tac-Toe",
+    command: "/tictactoe",
+    description: "Play a classic three-in-a-row match against a character.",
+    playerLabel: "1v1 strategy",
+    openSetup: (chatId) => useTicTacToeGameStore.getState().openSetup(chatId),
+  },
+  {
+    id: "rps",
+    name: "Rock Paper Scissors",
+    command: "/rps",
+    description: "Challenge a character to a quick rock-paper-scissors match.",
+    playerLabel: "1v1 quick game",
+    openSetup: (chatId) => useRockPaperScissorsGameStore.getState().openSetup(chatId),
   },
 ];
 
