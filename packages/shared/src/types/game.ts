@@ -28,6 +28,8 @@ export interface GridCell {
   terrain: string;
   /** Optional longer description shown on hover/click */
   description?: string;
+  /** Explicit hierarchical-location binding. Unbound cells remain tactical positions. */
+  spatialLocationId?: string;
 }
 
 /** A node in a dungeon/interior node-graph map. */
@@ -41,6 +43,8 @@ export interface MapNode {
   y: number;
   discovered: boolean;
   description?: string;
+  /** Explicit hierarchical-location binding. Unbound nodes remain tactical positions. */
+  spatialLocationId?: string;
 }
 
 /** An edge connecting two nodes in a node-graph map. */
@@ -57,6 +61,8 @@ export interface GameMap {
   type: "grid" | "node";
   name: string;
   description: string;
+  /** Hierarchical location represented by this local or tactical map. */
+  spatialLocationId?: string;
   /** Grid dimensions (only for type: "grid") */
   width?: number;
   height?: number;

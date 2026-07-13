@@ -1,0 +1,118 @@
+import { z } from "zod";
+import type { SpatialContextDefinition } from "../types/spatial-context.js";
+import { SPATIAL_CONTEXT_LIMITS, validateSpatialContextDefinition } from "../utils/spatial-context.js";
+
+const spatialIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(SPATIAL_CONTEXT_LIMITS.maxIdLength)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u, "Use letters, numbers, dots, underscores, colons, or hyphens.");
+
+export const spatialOwnerModeSchema = z.enum(["roleplay", "game"]);
+export const spatialLocationKindSchema = z.enum(["region", "settlement", "place", "building", "floor", "room"]);
+export const spatialChildPresentationSchema = z.enum(["map", "layers", "list"]);
+export const spatialLocationStatusSchema = z.enum(["active", "archived"]);
+export const spatialLinkStateSchema = z.enum(["available", "hidden", "blocked"]);
+
+export const spatialLocationPlacementSchema = z
+  .object({
+    x: z.number().finite().min(0).max(100),
+    y: z.number().finite().min(0).max(100),
+  })
+  .strict();
+
+export const spatialLocationLinkSchema = z
+  .object({
+    targetId: spatialIdSchema,
+    label: z.string().trim().min(1).max(SPATIAL_CONTEXT_LIMITS.maxLinkLabelLength).optional(),
+    bidirectional: z.boolean().default(false),
+    state: spatialLinkStateSchema.default("available"),
+  })
+  .strict();
+
+export const spatialLocationSchema = z
+  .object({
+    id: spatialIdSchema,
+    parentId: spatialIdSchema.nullable(),
+    name: z.string().trim().min(1).max(SPATIAL_CONTEXT_LIMITS.maxNameLength),
+    kind: spatialLocationKindSchema,
+    description: z.string().max(SPATIAL_CONTEXT_LIMITS.maxDescriptionLength),
+    modelMemory: z.string().max(SPATIAL_CONTEXT_LIMITS.maxModelMemoryLength).optional(),
+    awarenessSummary: z.string().max(SPATIAL_CONTEXT_LIMITS.maxAwarenessSummaryLength).optional(),
+    icon: z.string().trim().min(1).max(64).optional(),
+    childPresentation: spatialChildPresentationSchema.default("list"),
+    placement: spatialLocationPlacementSchema.optional(),
+    layerOrder: z.number().int().safe().optional(),
+    links: z.array(spatialLocationLinkSchema).max(SPATIAL_CONTEXT_LIMITS.maxLinksPerLocation).default([]),
+    status: spatialLocationStatusSchema.default("active"),
+    sortOrder: z.number().int().safe().default(0),
+  })
+  .strict();
+
+export const spatialContextDefinitionSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    ownerMode: spatialOwnerModeSchema,
+    enabled: z.boolean(),
+    locations: z.array(spatialLocationSchema).max(SPATIAL_CONTEXT_LIMITS.maxLocations),
+    startingLocationId: spatialIdSchema.nullable(),
+    revision: z.number().int().nonnegative().safe(),
+  })
+  .strict()
+  .superRefine((definition, ctx) => {
+    const validation = validateSpatialContextDefinition(definition as SpatialContextDefinition);
+    for (const issue of validation.issues) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: issue.message,
+        path: issue.path,
+        params: { spatialCode: issue.code, locationId: issue.locationId },
+      });
+    }
+  });
+
+export const pendingSpatialTransitionSchema = z
+  .object({
+    destinationId: spatialIdSchema,
+    expectedDefinitionRevision: z.number().int().nonnegative().safe(),
+    expectedCurrentLocationId: spatialIdSchema.nullable(),
+    commandId: z.string().trim().min(1).max(SPATIAL_CONTEXT_LIMITS.maxCommandIdLength),
+  })
+  .strict();
+
+export const spatialSnapshotSourceSchema = z.enum([
+  "bootstrap",
+  "owner_turn",
+  "assistant_swipe",
+  "definition_repair",
+  "branch_copy",
+]);
+
+export const spatialContextSnapshotSchema = z
+  .object({
+    id: z.string().trim().min(1).max(SPATIAL_CONTEXT_LIMITS.maxIdLength),
+    chatId: z.string().trim().min(1),
+    messageId: z.string(),
+    swipeIndex: z.number().int().nonnegative(),
+    currentLocationId: spatialIdSchema.nullable(),
+    definitionRevision: z.number().int().nonnegative().safe(),
+    source: spatialSnapshotSourceSchema,
+    transitionCommandId: z.string().trim().min(1).max(SPATIAL_CONTEXT_LIMITS.maxCommandIdLength).nullable(),
+    createdAt: z.string().datetime(),
+  })
+  .strict();
+
+export const updateSpatialContextRequestSchema = z
+  .object({
+    expectedRevision: z.number().int().nonnegative().safe(),
+    expectedCurrentLocationId: spatialIdSchema.nullable(),
+    replacementCurrentLocationId: spatialIdSchema.nullable().optional(),
+    definition: spatialContextDefinitionSchema,
+  })
+  .strict();
+
+export type SpatialContextDefinitionInput = z.input<typeof spatialContextDefinitionSchema>;
+export type SpatialContextDefinitionOutput = z.output<typeof spatialContextDefinitionSchema>;
+export type PendingSpatialTransitionInput = z.input<typeof pendingSpatialTransitionSchema>;
+export type UpdateSpatialContextRequestInput = z.input<typeof updateSpatialContextRequestSchema>;

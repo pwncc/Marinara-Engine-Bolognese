@@ -1,0 +1,334 @@
+import assert from "node:assert/strict";
+import type {
+  GameMap,
+  SpatialContextDefinition,
+  SpatialDefinitionIssueCode,
+  SpatialLocation,
+} from "../../packages/shared/src/index.js";
+import {
+  resolveSpatialBreadcrumb,
+  resolveSpatialDestinations,
+  spatialContextDefinitionSchema,
+  validateSpatialArchive,
+  validateSpatialContextDefinition,
+  validateSpatialTransition,
+} from "../../packages/shared/src/index.js";
+
+function location(
+  id: string,
+  name: string,
+  overrides: Partial<Omit<SpatialLocation, "id" | "name">> = {},
+): SpatialLocation {
+  return {
+    id,
+    name,
+    parentId: null,
+    kind: "place",
+    description: `Description for ${name}.`,
+    childPresentation: "list",
+    links: [],
+    status: "active",
+    sortOrder: 0,
+    ...overrides,
+  };
+}
+
+function definition(
+  locations: SpatialLocation[],
+  overrides: Partial<Omit<SpatialContextDefinition, "locations">> = {},
+): SpatialContextDefinition {
+  return {
+    schemaVersion: 1,
+    ownerMode: "roleplay",
+    enabled: true,
+    locations,
+    startingLocationId: locations[0]?.id ?? null,
+    revision: 4,
+    ...overrides,
+  };
+}
+
+function issueCodes(value: SpatialContextDefinition): SpatialDefinitionIssueCode[] {
+  return validateSpatialContextDefinition(value).issues.map((entry) => entry.code);
+}
+
+const validDefinition = definition(
+  [
+    location("world", "Known World", {
+      kind: "region",
+      childPresentation: "map",
+    }),
+    location("capital", "Capital City", {
+      parentId: "world",
+      kind: "settlement",
+      childPresentation: "map",
+      placement: { x: 52, y: 45 },
+    }),
+    location("market", "Market", {
+      parentId: "capital",
+      placement: { x: 22, y: 70 },
+      sortOrder: 2,
+    }),
+    location("tower", "Wizard Tower", {
+      parentId: "capital",
+      kind: "building",
+      childPresentation: "layers",
+      placement: { x: 72, y: 30 },
+      sortOrder: 1,
+    }),
+    location("tower_ground", "Ground Floor", {
+      parentId: "tower",
+      kind: "floor",
+      layerOrder: 0,
+      sortOrder: 0,
+    }),
+    location("tower_library", "Library", {
+      parentId: "tower",
+      kind: "floor",
+      layerOrder: 1,
+      sortOrder: 1,
+      modelMemory: "The restricted shelf conceals a key.",
+      links: [
+        {
+          targetId: "tower",
+          label: "Stairs down",
+          bidirectional: false,
+          state: "available",
+        },
+        {
+          targetId: "market",
+          label: "Secret passage",
+          bidirectional: false,
+          state: "hidden",
+        },
+      ],
+    }),
+    location("tower_observatory", "Observatory", {
+      parentId: "tower",
+      kind: "floor",
+      layerOrder: 2,
+      sortOrder: 2,
+      links: [
+        {
+          targetId: "tower_library",
+          label: "Spiral stairs",
+          bidirectional: true,
+          state: "available",
+        },
+      ],
+    }),
+  ],
+  { startingLocationId: "tower_library" },
+);
+
+assert.deepEqual(validateSpatialContextDefinition(validDefinition), { valid: true, issues: [] });
+assert.equal(spatialContextDefinitionSchema.safeParse(validDefinition).success, true);
+
+assert.deepEqual(
+  resolveSpatialBreadcrumb(validDefinition, "tower_library").map((entry) => entry.id),
+  ["world", "capital", "tower", "tower_library"],
+);
+assert.deepEqual(resolveSpatialBreadcrumb(validDefinition, "missing"), []);
+
+const libraryDestinations = resolveSpatialDestinations(validDefinition, "tower_library");
+assert.deepEqual(
+  libraryDestinations.map((entry) => ({ id: entry.id, relation: entry.relation })),
+  [
+    { id: "tower", relation: "leave" },
+    { id: "tower_observatory", relation: "link" },
+  ],
+);
+assert.equal(
+  libraryDestinations.some((entry) => entry.id === "market"),
+  false,
+);
+
+assert.deepEqual(
+  resolveSpatialDestinations(validDefinition, "tower").map((entry) => ({
+    id: entry.id,
+    relation: entry.relation,
+  })),
+  [
+    { id: "capital", relation: "leave" },
+    { id: "tower_ground", relation: "enter" },
+    { id: "tower_library", relation: "enter" },
+    { id: "tower_observatory", relation: "enter" },
+  ],
+);
+
+const acceptedTransition = validateSpatialTransition(validDefinition, "tower_library", {
+  destinationId: "tower_observatory",
+  expectedDefinitionRevision: 4,
+  expectedCurrentLocationId: "tower_library",
+  commandId: "move-1",
+});
+assert.equal(acceptedTransition.ok, true);
+if (acceptedTransition.ok) {
+  assert.equal(acceptedTransition.destination.relation, "link");
+}
+
+assert.deepEqual(
+  validateSpatialTransition(validDefinition, "tower_library", {
+    destinationId: "tower_observatory",
+    expectedDefinitionRevision: 3,
+    expectedCurrentLocationId: "tower_library",
+    commandId: "move-2",
+  }),
+  {
+    ok: false,
+    code: "spatial_transition_stale_definition",
+    message: "The hierarchical map changed. Review the available destinations.",
+  },
+);
+assert.equal(
+  validateSpatialTransition(validDefinition, "tower_library", {
+    destinationId: "tower_observatory",
+    expectedDefinitionRevision: 4,
+    expectedCurrentLocationId: "tower_ground",
+    commandId: "move-3",
+  }).ok,
+  false,
+);
+assert.deepEqual(
+  validateSpatialTransition(validDefinition, "tower_library", {
+    destinationId: "market",
+    expectedDefinitionRevision: 4,
+    expectedCurrentLocationId: "tower_library",
+    commandId: "move-4",
+  }),
+  {
+    ok: false,
+    code: "spatial_destination_unreachable",
+    message: "The selected destination is not reachable from the current location.",
+  },
+);
+
+assert.equal(
+  validateSpatialArchive(validDefinition, "tower_library", {
+    currentLocationId: "tower_library",
+  }).ok,
+  false,
+);
+assert.deepEqual(
+  validateSpatialArchive(validDefinition, "tower_library", {
+    currentLocationId: "tower_library",
+    replacementLocationId: "tower_ground",
+  }),
+  { ok: true },
+);
+assert.equal(
+  validateSpatialArchive(validDefinition, "tower", {
+    currentLocationId: "tower_library",
+  }).ok,
+  false,
+);
+
+const duplicateIds = definition([location("same", "First"), location("same", "Second")]);
+assert.ok(issueCodes(duplicateIds).includes("duplicate_location_id"));
+assert.equal(spatialContextDefinitionSchema.safeParse(duplicateIds).success, false);
+
+const missingParent = definition([location("orphan", "Orphan", { parentId: "missing" })]);
+assert.ok(issueCodes(missingParent).includes("parent_missing"));
+
+const parentCycle = definition(
+  [location("cycle_a", "Cycle A", { parentId: "cycle_b" }), location("cycle_b", "Cycle B", { parentId: "cycle_a" })],
+  { startingLocationId: "cycle_a" },
+);
+assert.ok(issueCodes(parentCycle).includes("parent_cycle"));
+
+const deepLocations = Array.from({ length: 21 }, (_, index) =>
+  location(`depth_${index}`, `Depth ${index}`, {
+    parentId: index === 0 ? null : `depth_${index - 1}`,
+  }),
+);
+assert.ok(issueCodes(definition(deepLocations)).includes("maximum_depth_exceeded"));
+
+const invalidLayers = definition(
+  [
+    location("layer_parent", "Layer Parent", { childPresentation: "layers" }),
+    location("layer_one", "Layer One", { parentId: "layer_parent", layerOrder: 1 }),
+    location("layer_two", "Layer Two", { parentId: "layer_parent", layerOrder: 1 }),
+    location("layer_missing", "Layer Missing", { parentId: "layer_parent" }),
+  ],
+  { startingLocationId: "layer_one" },
+);
+assert.ok(issueCodes(invalidLayers).includes("duplicate_layer_order"));
+assert.ok(issueCodes(invalidLayers).includes("layer_order_missing"));
+
+const missingLink = definition([
+  location("link_source", "Link Source", {
+    links: [
+      {
+        targetId: "missing_target",
+        bidirectional: false,
+        state: "available",
+      },
+    ],
+  }),
+]);
+assert.ok(issueCodes(missingLink).includes("link_target_missing"));
+
+const manyLinkTargets = Array.from({ length: 51 }, (_, index) =>
+  location(`link_target_${index}`, `Link Target ${index}`),
+);
+const tooManyLinks = definition([
+  location("many_links", "Many Links", {
+    links: manyLinkTargets.map((target) => ({
+      targetId: target.id,
+      bidirectional: false,
+      state: "available",
+    })),
+  }),
+  ...manyLinkTargets,
+]);
+assert.ok(issueCodes(tooManyLinks).includes("too_many_links"));
+assert.equal(spatialContextDefinitionSchema.safeParse(tooManyLinks).success, false);
+
+assert.equal(
+  spatialContextDefinitionSchema.safeParse({
+    ...validDefinition,
+    ownerMode: "conversation",
+  }).success,
+  false,
+);
+assert.equal(
+  spatialContextDefinitionSchema.safeParse({
+    ...validDefinition,
+    locations: validDefinition.locations.map((entry) =>
+      entry.id === "capital" ? { ...entry, placement: { x: 101, y: 50 } } : entry,
+    ),
+  }).success,
+  false,
+);
+assert.equal(
+  spatialContextDefinitionSchema.safeParse({
+    ...validDefinition,
+    locations: Array.from({ length: 501 }, (_, index) => location(`wide_${index}`, `Wide ${index}`)),
+  }).success,
+  false,
+);
+
+const boundMap: GameMap = {
+  id: "tower-map",
+  type: "node",
+  name: "Wizard Tower",
+  description: "A local tower map.",
+  spatialLocationId: "tower",
+  nodes: [
+    {
+      id: "library-node",
+      emoji: "📚",
+      label: "Library",
+      x: 50,
+      y: 50,
+      discovered: true,
+      spatialLocationId: "tower_library",
+    },
+  ],
+  edges: [],
+  partyPosition: "library-node",
+};
+assert.equal(boundMap.spatialLocationId, "tower");
+assert.equal(boundMap.nodes?.[0]?.spatialLocationId, "tower_library");
+
+process.stdout.write("Spatial context regression passed.\n");
