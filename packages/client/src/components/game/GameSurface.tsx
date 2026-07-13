@@ -52,6 +52,7 @@ import {
   isGameTurnStoryboardRendering,
   useGameTurnStoryboards,
   useGenerateGameTurnStoryboard,
+  usePreviewGameTurnStoryboardPrompts,
   type GenerateGameTurnStoryboardInput,
 } from "../../hooks/use-game-storyboards";
 import {
@@ -130,6 +131,7 @@ import {
   formatTextQuotes,
   normalizeRpgStatPools,
   normalizeTextForMatch,
+  resolveGameSetupArtStylePrompt,
   scoreMusic,
   scoreAmbient,
 } from "@marinara-engine/shared";
@@ -2864,6 +2866,7 @@ function GameSurfaceComponent({
   const [failedNpcAvatarNames, setFailedNpcAvatarNames] = useState<Set<string>>(() => new Set());
   const [imagePromptReviewItems, setImagePromptReviewItems] = useState<GameImagePromptReviewItem[]>([]);
   const [imagePromptReviewSubmitting, setImagePromptReviewSubmitting] = useState(false);
+  const [manualStoryboardReviewActive, setManualStoryboardReviewActive] = useState(false);
   const [imagePromptReviewMediaType, setImagePromptReviewMediaType] = useState<"image" | "video">("image");
   const imagePromptReviewResolveRef = useRef<((overrides: GameImagePromptOverride[] | null) => void) | null>(null);
   const [volumePopoverOpen, setVolumePopoverOpen] = useState(false);
@@ -3573,7 +3576,8 @@ function GameSurfaceComponent({
   const turnStoryboardsFetching = turnStoryboardsQuery.isFetching;
   const latestTurnStoryboard = turnStoryboardRows?.[0] ?? null;
   const generateTurnStoryboard = useGenerateGameTurnStoryboard();
-  const storyboardGenerating = generateTurnStoryboard.isPending;
+  const previewTurnStoryboardPrompts = usePreviewGameTurnStoryboardPrompts();
+  const storyboardGenerating = generateTurnStoryboard.isPending || previewTurnStoryboardPrompts.isPending;
   const latestTurnStoryboardRendering = isGameTurnStoryboardRendering(latestTurnStoryboard);
 
   const latestAssistantDirectAddressMode = useMemo(() => {
@@ -4772,8 +4776,7 @@ function GameSurfaceComponent({
       canGenerateBackgrounds: gameBackgroundAutoGenerationEnabled,
       canGenerateIllustrations: gameImageAutoGenerationEnabled,
       artStylePrompt:
-        ((chatMeta.gameSetupConfig as Record<string, unknown> | undefined)?.artStylePrompt as string | undefined) ??
-        null,
+        resolveGameSetupArtStylePrompt(chatMeta.gameSetupConfig as Record<string, unknown> | undefined) || null,
       imagePromptInstructions:
         typeof chatMeta.gameImagePromptInstructions === "string" ? chatMeta.gameImagePromptInstructions : null,
     };
@@ -5789,7 +5792,7 @@ function GameSurfaceComponent({
   );
 
   const handleGenerateTurnStoryboard = useCallback(async () => {
-    if (!activeChatId || storyboardGenerating || latestTurnStoryboardRendering) return;
+    if (!activeChatId || storyboardGenerating || latestTurnStoryboardRendering || manualStoryboardReviewActive) return;
     if (!latestAssistantMsg?.id) {
       toast.error("No GM narration turn is available to storyboard.");
       return;
@@ -5803,19 +5806,69 @@ function GameSurfaceComponent({
       return;
     }
 
+    const payload: GenerateGameTurnStoryboardInput = {
+      chatId: activeChatId,
+      messageId: latestAssistantMsg.id,
+      swipeIndex: latestAssistantSwipeIndex,
+      sections: latestAssistantStoryboardSections,
+      keyframeCount: gameStoryboardKeyframeCount,
+      durationSeconds:
+        gameStoryboardAutoAnimationsEnabled && gameStoryboardAnimationDurationConfigured
+          ? gameStoryboardAnimationDurationSeconds
+          : undefined,
+      generateVideos: gameStoryboardAutoAnimationsEnabled,
+      debugMode: useUIStore.getState().debugMode,
+    };
+
+    setManualStoryboardReviewActive(true);
     try {
+      let promptOverrides: GameImagePromptOverride[] | undefined;
+      let plannedStoryboard: unknown;
+      if (useUIStore.getState().reviewImagePromptsBeforeSend) {
+        let preview: Awaited<ReturnType<typeof previewTurnStoryboardPrompts.mutateAsync>> | null = null;
+        try {
+          preview = await withTimeout(
+            () => previewTurnStoryboardPrompts.mutateAsync(payload),
+            GAME_ASSET_PREVIEW_TIMEOUT_MS,
+            () => {
+              toast.error("Storyboard prompt preview timed out. Continuing with the default prompts.");
+            },
+          );
+        } catch (error) {
+          if (!isTimeoutError(error)) throw error;
+        }
+
+        if (preview) {
+          plannedStoryboard = preview.plannedStoryboard;
+          if (preview.items.length > 0) {
+            let overrides: GameImagePromptOverride[] | null | typeof IMAGE_PROMPT_REVIEW_TIMED_OUT | undefined;
+            try {
+              overrides = await withTimeout(
+                () => openImagePromptReview(preview.items),
+                GAME_ASSET_PROMPT_REVIEW_TIMEOUT_MS,
+                () => {
+                  closeImagePromptReview(null);
+                  toast.error("Storyboard prompt review timed out. Continuing with the default prompts.");
+                },
+              );
+            } catch (error) {
+              if (isTimeoutError(error)) {
+                overrides = IMAGE_PROMPT_REVIEW_TIMED_OUT;
+              } else {
+                throw error;
+              }
+            }
+
+            if (overrides === null || overrides === undefined) return;
+            if (overrides !== IMAGE_PROMPT_REVIEW_TIMED_OUT) promptOverrides = overrides;
+          }
+        }
+      }
+
       const result = await generateTurnStoryboard.mutateAsync({
-        chatId: activeChatId,
-        messageId: latestAssistantMsg.id,
-        swipeIndex: latestAssistantSwipeIndex,
-        sections: latestAssistantStoryboardSections,
-        keyframeCount: gameStoryboardKeyframeCount,
-        durationSeconds:
-          gameStoryboardAutoAnimationsEnabled && gameStoryboardAnimationDurationConfigured
-            ? gameStoryboardAnimationDurationSeconds
-            : undefined,
-        generateVideos: gameStoryboardAutoAnimationsEnabled,
-        debugMode: useUIStore.getState().debugMode,
+        ...payload,
+        plannedStoryboard,
+        promptOverrides,
       });
       applyGeneratedStoryboardToCache(result.storyboard, { refetchTurnStoryboards: true });
       const frameCount = result.storyboard.keyframes.length;
@@ -5829,6 +5882,8 @@ function GameSurfaceComponent({
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Storyboard generation failed.");
+    } finally {
+      setManualStoryboardReviewActive(false);
     }
   }, [
     activeChatId,
@@ -5843,6 +5898,10 @@ function GameSurfaceComponent({
     latestAssistantStoryboardSections,
     latestAssistantSwipeIndex,
     latestTurnStoryboardRendering,
+    manualStoryboardReviewActive,
+    closeImagePromptReview,
+    openImagePromptReview,
+    previewTurnStoryboardPrompts,
     applyGeneratedStoryboardToCache,
     storyboardGenerating,
   ]);
@@ -5853,7 +5912,7 @@ function GameSurfaceComponent({
       autoStoryboardGenerationKeyRef.current = null;
       return;
     }
-    if (isStreaming || storyboardGenerating || latestTurnStoryboardRendering) return;
+    if (isStreaming || storyboardGenerating || latestTurnStoryboardRendering || manualStoryboardReviewActive) return;
     if (turnStoryboardsLoading || turnStoryboardsFetching) return;
     if (latestAssistantStoryboardSections.length === 0) return;
     if ((turnStoryboardRows?.length ?? 0) > 0) return;
@@ -5910,6 +5969,7 @@ function GameSurfaceComponent({
     latestAssistantStoryboardSections,
     latestAssistantSwipeIndex,
     latestTurnStoryboardRendering,
+    manualStoryboardReviewActive,
     applyGeneratedStoryboardToCache,
     storyboardGenerating,
     turnStoryboardRows,
@@ -6200,9 +6260,7 @@ function GameSurfaceComponent({
       worldOverview: (chatMeta.gameWorldOverview as string | undefined) ?? null,
       canGenerateBackgrounds: gameBackgroundAutoGenerationEnabled,
       canGenerateIllustrations: gameImageAutoGenerationEnabled,
-      artStylePrompt:
-        ((chatMeta.gameSetupConfig as Record<string, unknown> | undefined)?.artStylePrompt as string | undefined) ??
-        null,
+      artStylePrompt: resolveGameSetupArtStylePrompt(setupConfig) || null,
       imagePromptInstructions:
         typeof chatMeta.gameImagePromptInstructions === "string" ? chatMeta.gameImagePromptInstructions : null,
     };
@@ -9191,7 +9249,7 @@ function GameSurfaceComponent({
       worldOverview: (chatMeta.gameWorldOverview as string | undefined) ?? null,
       canGenerateBackgrounds: gameBackgroundAutoGenerationEnabled,
       canGenerateIllustrations: gameImageAutoGenerationEnabled,
-      artStylePrompt: (setupConfig?.artStylePrompt as string | undefined) ?? null,
+      artStylePrompt: resolveGameSetupArtStylePrompt(setupConfig) || null,
       imagePromptInstructions:
         typeof chatMeta.gameImagePromptInstructions === "string" ? chatMeta.gameImagePromptInstructions : null,
     };
@@ -10190,6 +10248,7 @@ function GameSurfaceComponent({
             disabled={
               storyboardGenerating ||
               latestTurnStoryboardRendering ||
+              manualStoryboardReviewActive ||
               isStreaming ||
               !gameImageGenerationEnabled ||
               !latestAssistantMsg?.id
