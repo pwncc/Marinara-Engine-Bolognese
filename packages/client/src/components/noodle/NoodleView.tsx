@@ -991,6 +991,7 @@ export function NoodleView() {
   const [privateGuideIncludeImage, setPrivateGuideIncludeImage] = useState(true);
   const [privateGuideTheme, setPrivateGuideTheme] = useState("");
   const [privateGuidePrompt, setPrivateGuidePrompt] = useState("");
+  const [privateGuideAccountId, setPrivateGuideAccountId] = useState<string | null>(null);
   const [imageUrlDraft, setImageUrlDraft] = useState("");
   const [imageGenerationPromptDraft, setImageGenerationPromptDraft] = useState("");
   const [pollQuestion, setPollQuestion] = useState("");
@@ -1075,6 +1076,7 @@ export function NoodleView() {
     () => (viewedProfileAccountId ? (accountById.get(viewedProfileAccountId) ?? personaAccount) : personaAccount),
     [accountById, personaAccount, viewedProfileAccountId],
   );
+  const privateGuideAccount = privateGuideAccountId ? (accountById.get(privateGuideAccountId) ?? null) : null;
   const noodleCustomEmojiMap = useNoodleCustomEmojiMap(viewedProfileAccount);
   const viewingOwnProfile = Boolean(personaAccount && viewedProfileAccount?.id === personaAccount.id);
   const viewingOwnPrivateAccount = Boolean(
@@ -2441,6 +2443,7 @@ export function NoodleView() {
       },
       {
         onSuccess: (result) => {
+          setPrivateGuideAccountId(null);
           setProfileTab("posts");
           if (result.imagePromptReviewItems.length > 0) {
             setImagePromptReviewItems(result.imagePromptReviewItems);
@@ -2454,6 +2457,15 @@ export function NoodleView() {
         onError: (error) => toast.error(error instanceof Error ? error.message : "Could not generate a NoodleR post."),
       },
     );
+  };
+
+  const openGuidedPrivatePost = (account: NoodleAccount) => {
+    setPrivateGuideAccess("subscriber");
+    setPrivateGuideIncludeText(true);
+    setPrivateGuideIncludeImage(true);
+    setPrivateGuideTheme("");
+    setPrivateGuidePrompt("");
+    setPrivateGuideAccountId(account.id);
   };
 
   const confirmReviewedNoodleImagePrompts = (overrides: ImagePromptOverride[]) => {
@@ -5294,64 +5306,13 @@ export function NoodleView() {
                         </div>
                         <button
                           type="button"
-                          onClick={() => generateGuidedPrivatePost(viewedProfileAccount)}
+                          onClick={() => openGuidedPrivatePost(viewedProfileAccount)}
                           disabled={refreshNoodle.isPending}
                           className="h-8 shrink-0 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          {refreshNoodle.isPending ? "Generating..." : "Generate guided post"}
+                          Generate guided post
                         </button>
                       </div>
-                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                        <label className="block space-y-1.5">
-                          <span className={labelClass}>Status</span>
-                          <select
-                            value={privateGuideAccess}
-                            onChange={(event) => setPrivateGuideAccess(event.target.value as NoodlePrivatePostAccess)}
-                            className={fieldClass}
-                          >
-                            <option value="subscriber">Subscribers only</option>
-                            <option value="ppv">Pay-per-post</option>
-                          </select>
-                        </label>
-                        <label className="block space-y-1.5">
-                          <span className={labelClass}>Theme</span>
-                          <input
-                            value={privateGuideTheme}
-                            onChange={(event) => setPrivateGuideTheme(event.target.value)}
-                            placeholder="Behind the scenes, outfit drop, flirt, teaser"
-                            className={fieldClass}
-                          />
-                        </label>
-                      </div>
-                      <div className="mt-3 flex flex-wrap gap-3 text-xs font-semibold text-[var(--foreground)]">
-                        <label className="inline-flex h-8 items-center gap-2 rounded-full border border-[var(--noodle-divider)] px-3">
-                          <input
-                            type="checkbox"
-                            checked={privateGuideIncludeText}
-                            onChange={(event) => setPrivateGuideIncludeText(event.target.checked)}
-                            className="h-3.5 w-3.5 accent-[var(--noodle-blue)]"
-                          />
-                          Text
-                        </label>
-                        <label className="inline-flex h-8 items-center gap-2 rounded-full border border-[var(--noodle-divider)] px-3">
-                          <input
-                            type="checkbox"
-                            checked={privateGuideIncludeImage}
-                            onChange={(event) => setPrivateGuideIncludeImage(event.target.checked)}
-                            className="h-3.5 w-3.5 accent-[var(--noodle-blue)]"
-                          />
-                          Image
-                        </label>
-                      </div>
-                      <label className="mt-3 block space-y-1.5">
-                        <span className={labelClass}>Prompt</span>
-                        <textarea
-                          value={privateGuidePrompt}
-                          onChange={(event) => setPrivateGuidePrompt(event.target.value)}
-                          placeholder="Tell the generator what this private post should be about."
-                          className={cn(textareaClass, "min-h-20 resize-none")}
-                        />
-                      </label>
                     </div>
                   )}
                   {viewingOwnPrivateAccount && (
@@ -5686,6 +5647,91 @@ export function NoodleView() {
             </div>
           </section>
         </div>
+      )}
+      {privateGuideAccount && (
+        <Modal
+          open={Boolean(privateGuideAccount)}
+          onClose={() => {
+            if (!refreshNoodle.isPending) setPrivateGuideAccountId(null);
+          }}
+          title="Generate NoodleR Post"
+          width="max-w-lg"
+          panelClassName={NOODLE_ICON_SCOPE_CLASS}
+          panelStyle={{ "--noodle-blue": NOODLE_BLUE } as CSSProperties}
+        >
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block space-y-1.5">
+                <span className={labelClass}>Status</span>
+                <select
+                  value={privateGuideAccess}
+                  onChange={(event) => setPrivateGuideAccess(event.target.value as NoodlePrivatePostAccess)}
+                  className={fieldClass}
+                >
+                  <option value="subscriber">Subscribers only</option>
+                  <option value="ppv">Pay-per-post</option>
+                </select>
+              </label>
+              <label className="block space-y-1.5">
+                <span className={labelClass}>Theme</span>
+                <input
+                  value={privateGuideTheme}
+                  onChange={(event) => setPrivateGuideTheme(event.target.value)}
+                  placeholder="Behind the scenes, outfit drop, flirt, teaser"
+                  className={fieldClass}
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap gap-3 text-xs font-semibold text-[var(--foreground)]">
+              <label className="inline-flex h-8 items-center gap-2 rounded-full border border-[var(--noodle-divider)] px-3">
+                <input
+                  type="checkbox"
+                  checked={privateGuideIncludeText}
+                  onChange={(event) => setPrivateGuideIncludeText(event.target.checked)}
+                  className="h-3.5 w-3.5 accent-[var(--noodle-blue)]"
+                />
+                Text
+              </label>
+              <label className="inline-flex h-8 items-center gap-2 rounded-full border border-[var(--noodle-divider)] px-3">
+                <input
+                  type="checkbox"
+                  checked={privateGuideIncludeImage}
+                  onChange={(event) => setPrivateGuideIncludeImage(event.target.checked)}
+                  className="h-3.5 w-3.5 accent-[var(--noodle-blue)]"
+                />
+                Image
+              </label>
+            </div>
+            <label className="block space-y-1.5">
+              <span className={labelClass}>Prompt</span>
+              <textarea
+                value={privateGuidePrompt}
+                onChange={(event) => setPrivateGuidePrompt(event.target.value)}
+                placeholder="Tell the generator what this private post should be about."
+                className={cn(textareaClass, "min-h-28 resize-none")}
+              />
+            </label>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPrivateGuideAccountId(null)}
+                disabled={refreshNoodle.isPending}
+                className="h-9 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] px-4 text-xs font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => generateGuidedPrivatePost(privateGuideAccount)}
+                disabled={refreshNoodle.isPending || (!privateGuideIncludeText && !privateGuideIncludeImage)}
+                className="flex h-9 items-center justify-center gap-2 rounded-md bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {refreshNoodle.isPending && <Loader2 size={14} className="animate-spin" />}
+                {refreshNoodle.isPending ? "Generating" : "Generate"}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
       {confirmAction && (
         <Modal
