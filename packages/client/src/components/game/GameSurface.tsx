@@ -4985,6 +4985,10 @@ function GameSurfaceComponent({
 
   const openImagePromptReview = useCallback(
     (items: GameImagePromptReviewItem[], mediaType: "image" | "video" = "image") => {
+      if (imagePromptReviewResolveRef.current) {
+        toast.error("Finish or cancel the current media prompt review first.");
+        return Promise.resolve(null);
+      }
       return new Promise<GameImagePromptOverride[] | null>((resolve) => {
         imagePromptReviewResolveRef.current = resolve;
         setImagePromptReviewSubmitting(false);
@@ -5664,36 +5668,65 @@ function GameSurfaceComponent({
           debugMode: useUIStore.getState().debugMode,
         };
         if (useUIStore.getState().reviewImagePromptsBeforeSend) {
-          const preview = await withTimeout(
-            (signal) =>
-              api.post<GameSceneVideoPromptPreview>(
-                "/game/generate-scene-video",
-                { ...payload, previewOnly: true },
-                { signal },
-              ),
-            GAME_ASSET_PREVIEW_TIMEOUT_MS,
-          );
-          const details = [`${preview.durationSeconds}s`, preview.aspectRatio, preview.resolution].filter(
-            (value): value is string => Boolean(value),
-          );
-          const overrides = await openImagePromptReview(
-            [
-              {
-                id: "game-scene-video",
-                kind: "video",
-                title: galleryImageId ? "Animate selected illustration" : "Animate latest illustration",
-                prompt: preview.prompt,
-                details: details.join(" | "),
-                maxLength: preview.maxPromptLength ?? undefined,
+          let preview: GameSceneVideoPromptPreview | undefined;
+          try {
+            preview = await withTimeout(
+              (signal) =>
+                api.post<GameSceneVideoPromptPreview>(
+                  "/game/generate-scene-video",
+                  { ...payload, previewOnly: true },
+                  { signal },
+                ),
+              GAME_ASSET_PREVIEW_TIMEOUT_MS,
+              () => {
+                toast.error("Video prompt preview timed out. Continuing with the default prompt.");
               },
-            ],
-            "video",
-          );
-          if (!overrides) return;
-          const reviewedPrompt = overrides[0]?.prompt.trim();
-          if (!reviewedPrompt) return;
-          setImagePromptReviewSubmitting(true);
-          payload.promptOverride = reviewedPrompt;
+            );
+          } catch (error) {
+            if (!isTimeoutError(error)) throw error;
+          }
+          if (preview) {
+            const details = [`${preview.durationSeconds}s`, preview.aspectRatio, preview.resolution].filter(
+              (value): value is string => Boolean(value),
+            );
+            let overrides: GameImagePromptOverride[] | null | typeof IMAGE_PROMPT_REVIEW_TIMED_OUT | undefined;
+            try {
+              overrides = await withTimeout(
+                () =>
+                  openImagePromptReview(
+                    [
+                      {
+                        id: "game-scene-video",
+                        kind: "video",
+                        title: galleryImageId ? "Animate selected illustration" : "Animate latest illustration",
+                        prompt: preview.prompt,
+                        details: details.join(" | "),
+                        maxLength: preview.maxPromptLength ?? undefined,
+                      },
+                    ],
+                    "video",
+                  ),
+                GAME_ASSET_PROMPT_REVIEW_TIMEOUT_MS,
+                () => {
+                  closeImagePromptReview(null);
+                  toast.error("Video prompt review timed out. Continuing with the default prompt.");
+                },
+              );
+            } catch (error) {
+              if (isTimeoutError(error)) {
+                overrides = IMAGE_PROMPT_REVIEW_TIMED_OUT;
+              } else {
+                throw error;
+              }
+            }
+            if (overrides === null || overrides === undefined) return;
+            if (overrides !== IMAGE_PROMPT_REVIEW_TIMED_OUT) {
+              const reviewedPrompt = overrides[0]?.prompt.trim();
+              if (!reviewedPrompt) return;
+              setImagePromptReviewSubmitting(true);
+              payload.promptOverride = reviewedPrompt;
+            }
+          }
         }
 
         const result = await withTimeout(
@@ -5718,6 +5751,7 @@ function GameSurfaceComponent({
     [
       activeChatId,
       chatMeta.gameLastIllustrationTag,
+      closeImagePromptReview,
       gameVideoGenerationEnabled,
       openImagePromptReview,
       queryClient,

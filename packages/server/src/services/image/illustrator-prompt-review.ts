@@ -6,6 +6,7 @@ export type IllustratorPromptReviewOverride = {
   negativePrompt?: string;
 };
 
+/** Validate and normalize a client-supplied Illustrator review resume payload. */
 export function parseIllustratorPromptReviewOverride(value: unknown): IllustratorPromptReviewOverride | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const input = value as Record<string, unknown>;
@@ -22,6 +23,7 @@ export function parseIllustratorPromptReviewOverride(value: unknown): Illustrato
   };
 }
 
+/** Select the compiled Illustrator prompt or the user's reviewed one-off override. */
 export function resolveIllustratorPromptSubmission(args: {
   generatedPrompt: string;
   generatedNegativePrompt: string;

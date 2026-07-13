@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { logger } from "../../lib/logger.js";
+import { logger, logDebugOverride } from "../../lib/logger.js";
 import {
   BUILT_IN_AGENTS,
   BUILT_IN_TOOLS,
@@ -104,6 +104,7 @@ import {
   isAgentWriteApprovalEnvelope,
 } from "./agent-write-approval.js";
 import { filterGameInternalAgentIds } from "../../services/lorebook/game-lorebook-scope.js";
+import { isDebugAgentsEnabled } from "../../config/runtime-config.js";
 import { sendSseEvent, startSseKeepalive, startSseReply } from "./sse.js";
 import { buildGenerationPromptPresetCandidates } from "./prompt-preset-selection.js";
 import {
@@ -2425,6 +2426,7 @@ async function applyRetryResultEffects(args: {
   queueImageGenerationRequests: boolean;
   reviewImagePromptsBeforeSend: boolean;
   illustratorPromptReviewOverride: IllustratorPromptReviewOverride | null;
+  debugMode: boolean;
   secretPlotRerollMode?: "full" | "turn_only";
 }) {
   const {
@@ -2445,6 +2447,7 @@ async function applyRetryResultEffects(args: {
     queueImageGenerationRequests,
     reviewImagePromptsBeforeSend,
     illustratorPromptReviewOverride,
+    debugMode,
     secretPlotRerollMode,
   } = args;
   const sortedResults = [...results].sort(
@@ -3058,6 +3061,19 @@ async function applyRetryResultEffects(args: {
               continue;
             }
 
+            const debugOverrideEnabled = debugMode || isDebugAgentsEnabled();
+            logDebugOverride(
+              debugOverrideEnabled,
+              "[debug/retry-agents/illustrator] final prompt:\n%s",
+              promptSubmission.prompt,
+            );
+            if (promptSubmission.negativePrompt) {
+              logDebugOverride(
+                debugOverrideEnabled,
+                "[debug/retry-agents/illustrator] final negative prompt:\n%s",
+                promptSubmission.negativePrompt,
+              );
+            }
             const imageConnectionQueueKey = imgConnFull.id?.trim() || `${imgServiceHint}:${imgBaseUrl}:${imgModel}`;
             logger.debug(
               "[retry-agents] Illustrator image request queue=%s connection=%s",
@@ -3677,6 +3693,7 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
         queueImageGenerationRequests,
         reviewImagePromptsBeforeSend,
         illustratorPromptReviewOverride,
+        debugMode,
         secretPlotRerollMode,
       });
 

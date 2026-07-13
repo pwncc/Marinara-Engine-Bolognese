@@ -55,11 +55,14 @@ export function ImagePromptReviewModal({
   const handleConfirm = () => {
     if (hasEmptyPrompt || isSubmitting) return;
     onConfirm(
-      items.map((item) => ({
-        id: item.id,
-        prompt: (drafts[item.id] ?? item.prompt).trim(),
-        negativePrompt: (negativeDrafts[item.id] ?? item.negativePrompt ?? "").trim() || undefined,
-      })),
+      items.map((item) => {
+        const negativePrompt = (negativeDrafts[item.id] ?? item.negativePrompt ?? "").trim();
+        return {
+          id: item.id,
+          prompt: (drafts[item.id] ?? item.prompt).trim(),
+          ...(item.negativePrompt !== undefined || negativePrompt ? { negativePrompt } : {}),
+        };
+      }),
     );
   };
 

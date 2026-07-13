@@ -34,6 +34,7 @@ import { generateImage, saveImageToDisk } from "../services/image/image-generati
 import { resolveConnectionImageDefaults } from "../services/image/image-generation-defaults.js";
 import { loadImageGenerationUserSettings } from "../services/image/image-generation-settings.js";
 import { compileImagePrompt } from "../services/image/image-prompt-compiler.js";
+import { resolveReviewedImagePromptSubmission } from "../services/image/image-prompt-review.js";
 import { runImageGenerationRequest } from "../services/image/image-generation-queue.js";
 import { persistGeneratedImageToEntityGalleries } from "../services/image/generated-image-entity-gallery.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
@@ -1049,11 +1050,14 @@ export async function galleryRoutes(app: FastifyInstance) {
     const imageBaseUrl = imageConn.baseUrl || "https://image.pollinations.ai";
     const imageSource = imageConn.imageGenerationSource || imageModel;
     const imageServiceHint = imageConn.imageService || imageSource;
-    const reviewedPrompt = input.promptOverride?.trim();
-    const providerPrompt = reviewedPrompt || compiledPrompt.prompt;
-    const providerNegativePrompt = reviewedPrompt
-      ? (input.negativePromptOverride?.trim() ?? "")
-      : (compiledPrompt.negativePrompt ?? "");
+    const promptSubmission = resolveReviewedImagePromptSubmission({
+      generatedPrompt: compiledPrompt.prompt,
+      generatedNegativePrompt: compiledPrompt.negativePrompt ?? "",
+      promptOverride: input.promptOverride,
+      negativePromptOverride: input.negativePromptOverride,
+    });
+    const providerPrompt = promptSubmission.prompt;
+    const providerNegativePrompt = promptSubmission.negativePrompt;
 
     if (input.previewOnly) {
       return {

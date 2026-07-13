@@ -57,6 +57,7 @@ import {
   parseIllustratorPromptReviewOverride,
   resolveIllustratorPromptSubmission,
 } from "../../packages/server/src/services/image/illustrator-prompt-review.js";
+import { resolveReviewedImagePromptSubmission } from "../../packages/server/src/services/image/image-prompt-review.js";
 import { resolveSceneVideoPrompt } from "../../packages/server/src/services/video/scene-video-prompt-review.js";
 
 assert.equal(resolveInitialGameGmConnectionId(undefined, "chat-connection"), "chat-connection");
@@ -299,6 +300,56 @@ assert.deepEqual(
   },
 );
 assert.equal(parseIllustratorPromptReviewOverride({ resultData: {}, prompt: "   " }), null);
+assert.deepEqual(
+  resolveReviewedImagePromptSubmission({
+    generatedPrompt: "Compiled selfie prompt",
+    generatedNegativePrompt: "Compiled selfie negative",
+    promptOverride: " Reviewed selfie prompt ",
+  }),
+  {
+    prompt: "Reviewed selfie prompt",
+    negativePrompt: "Compiled selfie negative",
+  },
+);
+assert.deepEqual(
+  resolveReviewedImagePromptSubmission({
+    generatedPrompt: "Compiled selfie prompt",
+    generatedNegativePrompt: "Compiled selfie negative",
+    promptOverride: "Reviewed selfie prompt",
+    negativePromptOverride: "",
+  }),
+  {
+    prompt: "Reviewed selfie prompt",
+    negativePrompt: "",
+  },
+);
+
+const chatAreaPromptReviewSource = readFileSync(
+  new URL("../../packages/client/src/components/chat/ChatArea.tsx", import.meta.url),
+  "utf8",
+);
+const gameSurfacePromptReviewSource = readFileSync(
+  new URL("../../packages/client/src/components/game/GameSurface.tsx", import.meta.url),
+  "utf8",
+);
+const imagePromptReviewModalSource = readFileSync(
+  new URL("../../packages/client/src/components/ui/ImagePromptReviewModal.tsx", import.meta.url),
+  "utf8",
+);
+const retryAgentsPromptReviewSource = readFileSync(
+  new URL("../../packages/server/src/routes/generate/retry-agents-route.ts", import.meta.url),
+  "utf8",
+);
+assert.match(chatAreaPromptReviewSource, /MEDIA_PROMPT_PREVIEW_TIMEOUT_MS/);
+assert.match(chatAreaPromptReviewSource, /confirmRoleplayVideoPromptReview/);
+assert.match(chatAreaPromptReviewSource, /confirmConversationSelfiePromptReview/);
+assert.match(gameSurfacePromptReviewSource, /if \(imagePromptReviewResolveRef\.current\)/);
+assert.match(gameSurfacePromptReviewSource, /Video prompt preview timed out\. Continuing with the default prompt\./);
+assert.match(
+  imagePromptReviewModalSource,
+  /item\.negativePrompt !== undefined \|\| negativePrompt \? \{ negativePrompt \} : \{\}/,
+);
+assert.match(retryAgentsPromptReviewSource, /\[debug\/retry-agents\/illustrator\] final prompt/);
 
 const sharedGameSetup = formatGameSetupShareText({
   gameName: "Tower Run",

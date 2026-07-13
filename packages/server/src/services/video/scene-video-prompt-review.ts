@@ -1,5 +1,6 @@
 import { limitSceneVideoPromptForProvider } from "./prompt-context.js";
 
+/** A client-correctable validation error for a reviewed scene-video prompt. */
 export class SceneVideoPromptReviewError extends Error {
   constructor(
     readonly statusCode: 400,
@@ -10,6 +11,7 @@ export class SceneVideoPromptReviewError extends Error {
   }
 }
 
+/** Select and provider-limit a generated or reviewed scene-video prompt. */
 export function resolveSceneVideoPrompt(args: {
   generatedPrompt: string;
   promptOverride?: string;
