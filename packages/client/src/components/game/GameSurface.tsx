@@ -11037,7 +11037,7 @@ function GameSurfaceComponent({
                 <div
                   className={cn(
                     "pointer-events-auto absolute left-3 right-14 z-20 flex min-w-0 items-start gap-2 md:right-auto",
-                    topOverlayOffsetClass,
+                    tacticalCombatActive ? "top-14" : topOverlayOffsetClass,
                     replayActive && "hidden",
                   )}
                 >

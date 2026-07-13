@@ -464,6 +464,13 @@ export function TacticalCombatUI({
 
   const [ui, setUi] = useState<UiMode>({ kind: "idle" });
   const [stagedMove, setStagedMove] = useState<TacticalCoord | null>(null);
+  // Optimistic move: keeps the mover's token at its committed destination through
+  // network flight + event playback (sendAction clears stagedMove immediately, and
+  // playEvents' baseline is the pre-action state — without this the token snaps
+  // back to its origin and re-walks the move). State drives rendering; the ref
+  // mirrors it so playEvents reads the current value without stale closures.
+  const [optimisticMove, setOptimisticMove] = useState<{ unitId: string; to: TacticalCoord } | null>(null);
+  const optimisticMoveRef = useRef<{ unitId: string; to: TacticalCoord } | null>(null);
   const [inspectTile, setInspectTile] = useState<TacticalCoord | null>(null);
   const [showThreat, setShowThreat] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
@@ -804,6 +811,8 @@ export function TacticalCombatUI({
         // No events to animate — release the lock sendAction set before flight.
         animatingRef.current = false;
         setAnimating(false);
+        optimisticMoveRef.current = null;
+        setOptimisticMove(null);
         setState(finalState);
         persistSnapshot(finalState);
         maybeEnd(finalState);
@@ -814,6 +823,17 @@ export function TacticalCombatUI({
       animatingRef.current = true;
       setAnimating(true);
       const working = renderMapFromState(preState);
+      // Pre-apply the optimistic move so the animation baseline already has the
+      // mover at its destination; the server's "move" event then re-sets the same
+      // coords, which is a visual no-op.
+      const opt = optimisticMoveRef.current;
+      if (opt) {
+        const mover = working.get(opt.unitId);
+        if (mover) {
+          mover.x = opt.to.x;
+          mover.y = opt.to.y;
+        }
+      }
       setAnimUnits(new Map(working));
 
       let elapsed = 0;
@@ -831,6 +851,8 @@ export function TacticalCombatUI({
       const done = setTimeout(() => {
         animatingRef.current = false;
         setAnimating(false);
+        optimisticMoveRef.current = null;
+        setOptimisticMove(null);
         setAnimUnits(null);
         setBanner(null);
         setState(finalState);
@@ -858,6 +880,8 @@ export function TacticalCombatUI({
     clearTimers();
     animatingRef.current = false;
     setAnimating(false);
+    optimisticMoveRef.current = null;
+    setOptimisticMove(null);
     setAnimUnits(null);
     setPopups([]);
     setBanner(null);
@@ -885,6 +909,14 @@ export function TacticalCombatUI({
       // below own its release.
       animatingRef.current = true;
       setAnimating(true);
+      // Derive the optimistic move (if any) from the action before resetSelection
+      // clears stagedMove, so the mover's token holds at its destination through
+      // network flight instead of snapping back to its origin.
+      const dest = action.type === "move" ? action.to : "to" in action ? action.to : undefined;
+      const moverId = "unitId" in action ? action.unitId : undefined;
+      const opt = dest && moverId ? { unitId: moverId, to: dest } : null;
+      optimisticMoveRef.current = opt;
+      setOptimisticMove(opt);
       resetSelection();
       actionMut
         .mutateAsync({ chatId, state: preState, action })
@@ -892,9 +924,12 @@ export function TacticalCombatUI({
           playEvents(res.events, res.state, preState, onSettled);
         })
         .catch((err: unknown) => {
-          // Release the lock so a rejected action doesn't wedge the grid.
+          // Release the lock so a rejected action doesn't wedge the grid. The move
+          // never happened, so the token must return home.
           animatingRef.current = false;
           setAnimating(false);
+          optimisticMoveRef.current = null;
+          setOptimisticMove(null);
           const msg = err instanceof Error ? err.message : "That action was rejected.";
           toast.error(msg);
         });
@@ -1067,6 +1102,12 @@ export function TacticalCombatUI({
         x = stagedMove.x;
         y = stagedMove.y;
       }
+      // Committed move in flight: hold the mover at its destination until playEvents
+      // takes over (its baseline is pre-applied with this same position).
+      if (!animUnits && optimisticMove && optimisticMove.unitId === u.id) {
+        x = optimisticMove.to.x;
+        y = optimisticMove.to.y;
+      }
       return {
         unit: u,
         x,
@@ -1074,7 +1115,7 @@ export function TacticalCombatUI({
         hp: anim?.hp ?? u.hp,
       };
     });
-  }, [liveState, animUnits, stagedMove, selectedUnitId]);
+  }, [liveState, animUnits, stagedMove, selectedUnitId, optimisticMove]);
 
   // ── Loading / error states (translucent so the scene shows through) ──
   if (starting) {
@@ -2018,8 +2059,14 @@ function TileInspect({
         </button>
       </div>
       <div className="flex gap-2 text-[0.65rem] text-white/60">
-        <span>Def +{info.defenseBonus}</span>
-        <span>Avoid +{info.avoidBonus}%</span>
+        {info.impassable ? (
+          <span className="font-semibold text-red-300/80">Impassable</span>
+        ) : (
+          <>
+            <span>Def +{info.defenseBonus}</span>
+            <span>Avoid +{info.avoidBonus}%</span>
+          </>
+        )}
       </div>
       {unit && (
         <div className="mt-2 border-t border-white/10 pt-2">

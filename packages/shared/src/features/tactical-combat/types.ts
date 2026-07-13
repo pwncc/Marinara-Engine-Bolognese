@@ -30,7 +30,7 @@ export interface TerrainInfo {
 export const TERRAIN_DATA: Record<TacticalTerrain, TerrainInfo> = {
   plains: { moveCost: 1, defenseBonus: 0, avoidBonus: 0, label: "Plains" },
   forest: { moveCost: 2, defenseBonus: 1, avoidBonus: 15, label: "Forest" },
-  mountain: { moveCost: 3, defenseBonus: 2, avoidBonus: 20, label: "Mountain" },
+  mountain: { moveCost: 99, defenseBonus: 0, avoidBonus: 0, impassable: true, label: "Mountain" },
   ruin: { moveCost: 1, defenseBonus: 1, avoidBonus: 10, label: "Ruins" },
   water: { moveCost: 99, defenseBonus: 0, avoidBonus: 0, impassable: true, label: "Water" },
   wall: { moveCost: 99, defenseBonus: 0, avoidBonus: 0, impassable: true, label: "Wall" },
