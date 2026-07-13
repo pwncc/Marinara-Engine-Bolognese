@@ -1,4 +1,4 @@
-# Spatial Context: Hierarchical Locations V3
+# Hierarchical Maps and Spatial Context V3
 
 Status: Proposed, implementation-ready after maintainer approval
 
@@ -6,9 +6,38 @@ Audience: Product, design, and Marinara Engine contributors
 
 Supersedes: `hierarchical-locations-prd-v2.md`
 
+## Architecture boundary
+
+This plan treats spatial orientation as a focused product capability with a narrow state boundary.
+
+The feature is a hierarchical map and spatial-orientation system, not a generic Voxta-style scenario engine. It borrows one useful Voxta pattern: persistent state selects a small, relevant prompt context. It does not initially add flags, variables, events, scripts, timers, or a separate action-inference model.
+
+The supported owner modes are Roleplay and Game. The legacy `visual_novel` enum value is compatibility residue and is not a supported product mode.
+
+The MVP has four layers:
+
+| Layer | Responsibility | Example |
+| --- | --- | --- |
+| Map definition | Stable spatial truth | The Library is inside the Wizard Tower |
+| Runtime state | The current scene location | The scene is currently in the Library |
+| Prompt projection | Bounded model orientation | Breadcrumb, current memory, reachable exits |
+| Transition | Validated state change | Move from Library to Observatory |
+
+The state machine is deliberately small:
+
+```text
+current location + requested destination + definition revision
+                              ↓
+                  validate ownership and reachability
+                       ↙ accepted       rejected ↘
+              persist snapshot         preserve state
+```
+
+Manual movement ships first. Later, a constrained model tool such as `change_location({ destinationId })` may request the same transition. The server, not the model, validates and applies it. A separate action-inference call is deferred unless later evidence shows it is needed.
+
 ## Summary
 
-Add a shared Spatial Context feature for Roleplay, Visual Novel, and Game. It provides an author-defined location hierarchy, one authoritative focal location, bounded prompt context, and server-validated movement.
+Add a shared Hierarchical Map feature for Roleplay and Game. It provides an author-defined location hierarchy, one authoritative focal location, bounded current-location prompt context, and server-validated movement.
 
 Connected Conversation can later read a safe projection of the linked story location, but it never owns or changes spatial state.
 
@@ -23,7 +52,7 @@ commit a validated move with the next owner turn
                     ↺
 ```
 
-This is not a general scenario engine. It does not add flags, events, author JavaScript, pathfinding, or a visual map.
+This is not a general scenario engine. It does not add flags, events, author JavaScript, or pathfinding. It does include a visual, nested map browser with map, layer, and list presentations.
 
 ## Product decisions
 
@@ -33,18 +62,18 @@ These decisions resolve the open questions from V2:
 2. Current location is snapshotted with committed message and swipe state so branches, regeneration, and checkpoints restore the correct position.
 3. Manual movement commits atomically with the next owner-mode user turn, before prompt generation.
 4. Spatial Context is authoritative when enabled. Game's legacy free-text location must not become a second source of truth.
-5. Roleplay and Visual Novel use the same projection wording in the MVP.
+5. Roleplay and Game use one shared spatial projection contract with thin mode-specific prompt adapters.
 6. `awarenessSummary` is author-written. When absent, Conversation receives a bounded excerpt of the public description only.
 7. Conversation uses scene-level wording unless authoritative presence data proves the connected character is present.
-8. Direct links are included in the MVP.
-9. Spatial lorebook attachment and model-requested movement remain later phases.
+8. Direct links and visual child placement are included in the MVP.
+9. Existing Game grid and node maps may bind explicitly to hierarchy locations; names are never matched automatically.
+10. Spatial lorebook attachment and model-requested movement remain later phases.
 
 ## Scope
 
 | Mode | Owns hierarchy | Moves focal location | Story projection | Connected projection |
 | --- | ---: | ---: | ---: | ---: |
 | Roleplay | Yes | Yes | Yes | N/A |
-| Visual Novel | Yes | Yes | Yes | N/A |
 | Game | Yes | Yes | Yes | N/A |
 | Conversation | No | No | No | Later phase, read-only |
 
@@ -59,13 +88,16 @@ Chat Settings shows a compact Spatial Context section with:
 - Location and warning counts
 - Open Location Editor action
 
-The editor is a lazy-loaded workspace, not a narrow settings form:
+The editor is a lazy-loaded map workspace, not a narrow settings form:
 
-- Desktop uses a hierarchy pane and location-detail pane.
+- Desktop uses a hierarchy pane, local map or layer view, and location-detail pane.
 - Mobile shows one pane at a time with clear back navigation.
 - Validation appears beside the affected field or node.
 - Save state and revision conflicts are always visible.
 - Archive is the primary removal action; hard delete is restricted.
+- Selection previews a location. A distinct Enter action navigates to it, so click never ambiguously means inspect, edit, and move.
+- Each parent presents children as a positioned map, ordered layers, or an accessible list.
+- Duplicate subtree supports creator reuse without requiring cross-chat templates in the MVP.
 
 ### Runtime movement
 
@@ -84,15 +116,20 @@ If validation fails, the message and movement are not partially committed. The c
 Definitions belong in chat metadata. Runtime position belongs in snapshot history.
 
 ```ts
-export type SpatialOwnerMode = "roleplay" | "visual_novel" | "game";
+export type SpatialOwnerMode = "roleplay" | "game";
 
 export interface ChatLocation {
   id: string;
   name: string;
   parentId: string | null;
   description: string;
+  kind: "region" | "settlement" | "place" | "building" | "floor" | "room";
+  modelMemory?: string;
+  icon?: string;
+  childPresentation: "map" | "layers" | "list";
+  placement?: { x: number; y: number };
+  layerOrder?: number;
   awarenessSummary?: string;
-  gmMemory?: string;
   links: ChatLocationLink[];
   status: "active" | "archived";
   sortOrder: number;
@@ -155,6 +192,8 @@ Reject:
 - More than 500 locations
 - Depth above 20
 - More than 50 links per location
+- Placement coordinates outside 0 to 100
+- Invalid or duplicate layer ordering within a layer parent
 - Movement to archived, hidden, blocked, or unreachable locations
 - Stale revisions or a changed current location
 - Reused command IDs with different contents
@@ -165,7 +204,7 @@ Text limits:
 - Name: 200 characters
 - Description: 4,000 characters
 - Awareness summary: 1,000 characters
-- GM memory: 8,000 characters
+- Private model memory: 8,000 characters
 
 Direct-link cycles are valid. Parent cycles are not.
 
@@ -208,15 +247,15 @@ Include:
 - Breadcrumb names
 - Current location ID
 - Public description
-- GM memory
+- Current-location private model memory
 - Available destination names, IDs, and link labels
 - An authoritative-state instruction
 
-Exclude all unrelated location descriptions and hidden or blocked destinations.
+Exclude all unrelated location descriptions and memories, hidden or blocked destinations, canvas coordinates, and editor metadata.
 
 ### Connected Conversation projection
 
-Added in Phase 2. Include only:
+Added in Phase 5. Include only:
 
 - Linked story name and mode
 - Breadcrumb
@@ -224,34 +263,40 @@ Added in Phase 2. Include only:
 - Read-only instruction
 - Character presence only when authoritative state proves it
 
-Never include GM memory, internal IDs, hidden destinations, the complete hierarchy, or location-attached lorebook content.
+Never include private model memory, internal IDs, hidden destinations, the complete hierarchy, or location-attached lorebook content.
 
-Game may prove presence through its committed `presentCharacters` state. Roleplay and Visual Novel use neutral wording such as “The linked story's current scene is…” until they gain an explicit presence source. Never infer presence by character name.
+Game may prove presence through its committed `presentCharacters` state. Roleplay uses neutral wording such as “The linked story's current scene is…” until it gains an explicit presence source. Never infer presence by character name.
 
 ### Required prompt paths
 
 The same projection resolver must feed:
 
 - Roleplay generation
-- Visual Novel generation
 - Game GM generation
 - Dry-run preview
 - Live Peek Prompt assembly
 
-Cached Peek Prompt continues to display the exact prompt originally sent. Debug logging includes the final projection but must not log GM memory at normal levels.
+Cached Peek Prompt continues to display the exact prompt originally sent. Debug logging includes the final projection but must not log private model memory at normal levels.
 
 ## Game compatibility
 
-Existing Game maps remain independent presentation and travel systems. No name matching or automatic binding is allowed.
+Existing Game grid and node maps remain local or tactical representations. The hierarchy becomes the world and containment layer above them.
 
 When Spatial Context is enabled:
 
 - Spatial Context supplies the authoritative named location to prompts.
 - The Game tracker displays the spatial breadcrumb as its location.
 - Legacy model or manual patches cannot independently change the free-text Game location.
-- Map clicks do not change Spatial Context without a future explicit binding.
+- `GameMap.spatialLocationId` may bind a whole map to one hierarchy location.
+- `GridCell.spatialLocationId` and `MapNode.spatialLocationId` may bind an enterable destination.
+- Bindings use stable IDs only; names are never matched automatically.
+- Selecting a bound destination creates the same pending transition as the hierarchy browser.
+- Moving between unbound cells or nodes changes only tactical party position.
+- Entering a location may select its bound local map; leaving may select the closest bound ancestor map.
 
 When disabled, existing Game location behavior is unchanged.
+
+This boundary preserves the current map UI and saves while preventing two sources of named spatial truth.
 
 ## API shape
 
@@ -286,7 +331,7 @@ Return `409 Conflict` for stale state and `400 Bad Request` for invalid graphs o
 - Add shared types and Zod schemas.
 - Add pure graph validation, breadcrumb, and destination helpers.
 - Add deterministic fixtures for valid and invalid graphs.
-- Confirm message/swipe snapshot integration points for all owner modes.
+- Confirm message/swipe snapshot integration points for Roleplay and Game.
 - Measure representative prompt projections.
 
 Exit condition: schema, movement semantics, and snapshot behavior are proven without UI.
@@ -298,21 +343,14 @@ Exit condition: schema, movement semantics, and snapshot behavior are proven wit
 3. Integrate atomic pending movement into owner-mode turn submission.
 4. Handle reload, swipes, branches, and Game checkpoints.
 5. Add the shared projection service to every required prompt path.
-6. Add the compact settings section and editor workspace.
-7. Add breadcrumb, destination picker, and pending state to owner surfaces.
-8. Reconcile the Game tracker location when enabled.
+6. Add the compact settings section, hierarchy navigator, local map canvas, layer selector, and editor workspace.
+7. Add breadcrumb, destination picker, preview, and pending state to owner surfaces.
+8. Bind existing Game maps, cells, and nodes through stable location IDs.
+9. Reconcile the Game tracker location when enabled.
 
-Exit condition: all three owner modes author, move, persist, restore, and prompt from the same spatial model.
+Exit condition: Roleplay and Game can author, move, persist, restore, and prompt from the same spatial model. Bound Game-map movement and unbound tactical movement remain distinct.
 
-### Phase 2: connected Conversation
-
-- Resolve the latest owner state through `connectedChatId` at generation time.
-- Add a bounded read-only projection.
-- Use conservative presence wording.
-- Add an optional read-only linked-location badge.
-- Cover unlink, relink, deleted owner, malformed links, and concluded stories.
-
-### Phase 3: location lorebooks
+### Phase 2: location lorebooks
 
 - Add `lorebookEntryIds` to locations.
 - Force-activate current-location entries in owner prompts under a reserved budget.
@@ -320,12 +358,25 @@ Exit condition: all three owner modes author, move, persist, restore, and prompt
 - Report broken references and activation source.
 - Prove no automatic leakage into Conversation.
 
-### Phase 4: model-requested movement
+### Phase 3: model-requested movement
 
 - Add a typed `change_location` request for owner modes.
 - Apply the same revision, reachability, and idempotency validation.
 - Record accepted and rejected requests in debug diagnostics.
 - Conversation remains unable to request transitions.
+
+### Phase 4: creator templates
+
+- Save and import reusable location subtrees or full maps.
+- Allow creators to ship starter maps with characters after ownership and merge behavior are specified.
+- Preserve internal references while generating new IDs when copying into another chat.
+
+### Phase 5: connected Conversation
+
+- Resolve the latest owner state through `connectedChatId` at generation time.
+- Add a bounded read-only projection.
+- Use conservative presence wording.
+- Cover unlink, relink, deleted owner, malformed links, and concluded stories.
 
 ## Repository implementation blueprint
 
@@ -341,7 +392,7 @@ Planning baseline: `hierarchical-locations` after merging `staging` at `4fd752ea
 | Swipes and branches | Swipe deletion shifts Game snapshot indexes. Branch creation copies all Game and turn-game snapshots to new message IDs. | Spatial snapshots must participate in both paths and must copy the snapshot effective at an earlier branch point. |
 | Prompt assembly | Live generation, dry run, live Peek Prompt, cached Peek Prompt, and Game GM prompts have distinct assembly paths. | Resolve structured spatial data once, then call a shared formatter/injector from every live path. Cached Peek Prompt continues to read the exact saved provider request. |
 | Client data | Server data uses React Query. Per-chat input drafts survive navigation and reload. Heavy editors are lazy-loaded through `AppShell`. | Add a dedicated query/mutation hook, persist pending transitions beside per-chat drafts, and route a lazy Location Editor through the existing detail-view model. |
-| Game travel | Game maps already have a pending map move that becomes visible `*moves to ...*` text. | Keep map travel and Spatial Context independent. Spatial movement is structured request data and is never synthesized into visible message text. |
+| Game travel | Game maps already have grid and node positions plus a pending map move that becomes visible `*moves to ...*` text. | Add optional stable-ID bindings. Bound destinations use structured spatial requests without visible prose; unbound movement keeps the existing tactical flow. |
 | Storage backends | File-native storage is the default; legacy libSQL remains supported. Small transactions are used, while large transaction loops are avoided for Windows stability. | Keep the owner-turn transaction constant-size and prove it against both storage backends before expanding the feature. |
 
 ### Target module map
@@ -360,16 +411,18 @@ New server modules:
 - `packages/server/src/services/spatial-context/state-resolution.ts`: effective snapshot resolution for bootstrap, visible swipe, regeneration, branching, and checkpoints.
 - `packages/server/src/services/spatial-context/projection.ts`: structured owner and connected projections plus bounded text formatting.
 - `packages/server/src/services/spatial-context/owner-turn.ts`: validation and constant-size atomic move plus user-message commit.
-- `packages/server/src/services/spatial-context/game-compatibility.ts`: authoritative breadcrumb projection into the legacy Game tracker boundary.
+- `packages/server/src/services/spatial-context/game-map-binding.ts`: authoritative breadcrumb projection plus explicit Game map, cell, and node binding resolution.
 - `packages/server/src/routes/spatial-context.routes.ts`: dedicated GET and revisioned PUT routes.
 
 New client modules:
 
 - `packages/client/src/hooks/use-spatial-context.ts`: query keys, GET, definition PUT, conflict handling, and cache invalidation.
 - `packages/client/src/features/spatial-context/SpatialContextSettingsSection.tsx`: compact Chat Settings summary and editor action.
-- `packages/client/src/features/spatial-context/SpatialContextEditor.tsx`: lazy full-page editor shell.
-- `packages/client/src/features/spatial-context/components/LocationTree.tsx`: hierarchy navigation and keyboard interactions.
-- `packages/client/src/features/spatial-context/components/LocationDetails.tsx`: field editing, links, archive controls, and inline validation.
+- `packages/client/src/features/spatial-context/SpatialMapWorkspace.tsx`: lazy full-page editor shell.
+- `packages/client/src/features/spatial-context/components/HierarchyNavigator.tsx`: hierarchy navigation and keyboard interactions.
+- `packages/client/src/features/spatial-context/components/LocalMapCanvas.tsx`: positioned child-location map.
+- `packages/client/src/features/spatial-context/components/LayerSelector.tsx`: ordered floor, tower, and dungeon layers.
+- `packages/client/src/features/spatial-context/components/LocationInspector.tsx`: field editing, preview, links, archive controls, and inline validation.
 - `packages/client/src/features/spatial-context/components/SpatialContextRuntimeBar.tsx`: breadcrumb, destination picker, pending state, and clear action.
 - `packages/client/src/features/spatial-context/lib/editor-state.ts`: working-copy operations and server-error mapping. This remains client-local and is not exported through a barrel.
 
@@ -439,7 +492,7 @@ Definition editing is not historical. A rename or reparent changes the breadcrum
 
 ### Atomic owner-turn sequence
 
-Extend `generateRequestSchema` and the client generation contract with optional `pendingSpatialTransition`. It is accepted only for Roleplay, Visual Novel, and Game owner chats.
+Extend `generateRequestSchema` and the client generation contract with optional `pendingSpatialTransition`. It is accepted only for Roleplay and Game owner chats.
 
 The server sequence is:
 
@@ -471,7 +524,7 @@ interface ResolvedOwnerSpatialProjection {
   currentLocationId: string;
   breadcrumb: Array<{ id: string; name: string }>;
   description: string;
-  gmMemory: string | null;
+  modelMemory: string | null;
   destinations: Array<{ id: string; name: string; label?: string }>;
   omittedDestinationCount: number;
 }
@@ -481,15 +534,15 @@ Prompt limits are separate from storage limits:
 
 - At most 20 breadcrumb nodes.
 - At most 4,000 characters of owner description.
-- At most 8,000 characters of GM memory.
+- At most 8,000 characters of private model memory.
 - At most 50 destinations in deterministic `sortOrder`, name, then ID order, followed only by an omitted count.
 - At most 1,000 characters for a connected `awarenessSummary` or fallback public-description excerpt.
 
-One formatter produces the owner system block. Roleplay and Visual Novel share identical wording. Game appends the same authoritative block to the built GM system prompt. A second formatter, introduced only in Phase 2, produces the privacy-reduced Conversation block.
+One formatter produces the shared structured owner block. Roleplay and Game use thin adapters around that block. A second formatter, introduced only in Phase 5, produces the privacy-reduced Conversation block.
 
 Every live path calls the same resolver and formatter immediately before final model-request preparation:
 
-- Standard Roleplay and Visual Novel generation.
+- Standard Roleplay generation.
 - Game GM generation.
 - `/api/generate/dryRun`.
 - Live Peek Prompt assembly when no exact saved request exists.
@@ -506,22 +559,27 @@ When Spatial Context is enabled for a Game chat:
 - Game-state GET responses and tracker UI receive the resolved breadcrumb as the displayed location.
 - World State agent patches and manual Game tracker patches cannot independently write `location`; the server drops that field with a debug diagnostic or returns a field-level conflict for explicit manual edits.
 - New Game snapshots mirror the breadcrumb into their legacy `location` value so session history and existing UI remain readable, but prompt code still reads the spatial projection.
-- Existing map clicks, map coordinates, and the current pending-map-move text flow remain unchanged and never mutate Spatial Context.
+- A Game map, grid cell, or node may bind explicitly to a stable hierarchy location ID.
+- Selecting a bound destination creates a structured pending spatial transition and does not insert movement prose.
+- Unbound cell and node movement remains tactical and changes only party position.
+- Entering a bound location selects its local map when available; leaving selects the closest bound ancestor map when available.
 - The UI labels the systems distinctly as `Story location` and `Map position` when both are visible.
 - Disabling Spatial Context immediately restores current legacy Game location behavior without deleting spatial definitions or snapshots.
 
-Negative controls must prove that a model-emitted Game location patch, a manual tracker edit, and a map click cannot change `currentLocationId`.
+Negative controls must prove that a model-emitted Game location patch, a manual tracker edit, and an unbound map click cannot change `currentLocationId`. Positive controls prove that a valid bound click uses the normal transition validator.
 
 ### Owner UI contract
 
-Chat Settings adds one compact `Spatial Context` section for Roleplay, Visual Novel, and Game only. It shows enabled state, current breadcrumb, active and archived counts, warning count, and `Open Location Editor`. It does not embed the full editor in the drawer.
+Chat Settings adds one compact `Hierarchical Map` section for Roleplay and Game only. It shows enabled state, current breadcrumb, active and archived counts, warning count, and `Open Map Editor`. It does not embed the full editor in the drawer.
 
 The Location Editor follows the existing full-page editor route:
 
-- Desktop uses a calm split workspace: a searchable hierarchy pane on the left and selected-location details on the right.
+- Desktop uses a hierarchy navigator, local map or layer view, and selected-location inspector.
 - Mobile shows the hierarchy first and details second, with a visible Back to locations action. No operation depends on hover or drag.
-- Tree rows expose add child, add sibling, move, archive, and link actions through labelled controls. Drag and drop may be added later, but keyboard and touch controls are sufficient for the MVP.
-- The detail pane contains name, public description, awareness summary, GM memory, status, sort order, parent, and direct links. GM memory is visually marked private to the owner story.
+- Rows expose add child, add sibling, reparent, duplicate subtree, archive, and link actions through labelled controls.
+- The local view renders children as positioned map nodes, ordered layers, or an accessible list.
+- Selecting previews a location; a distinct Enter action navigates to it.
+- The inspector contains name, kind, public description, private model memory, icon, presentation, placement or layer order, status, parent, and direct links.
 - Validation is inline and also summarized near Save. Selecting a summary item focuses the affected node and field.
 - The editor uses a local working copy and one revisioned Save action. `editorDirty` protects navigation. Server conflicts preserve the working copy and offer Reload server version or Review differences; there is no blind overwrite.
 - Empty state teaches the first action: `Create a starting location`. Enabling is unavailable until a valid active starting location exists.
@@ -589,26 +647,34 @@ Gate: reload, provider failure, swipe changes, earlier-message branching, import
 
 Gate: all prompt paths contain the same spatial block, no unrelated location text leaks, and Game cannot maintain a competing authoritative location.
 
-#### Package E: owner UI
+#### Package E: map browser and editor
 
-- Add React Query hooks and conflict mapping.
-- Add the Chat Settings section and lazy editor route.
-- Add desktop and mobile editor states.
+- Add React Query hooks, conflict mapping, settings summary, and lazy editor route.
+- Add hierarchy, local map, layer, list, preview, inspector, and duplicate-subtree workflows.
+- Add accessible desktop and mobile states.
+- Preserve unsaved edits across revision conflicts.
+
+Gate: creators can build and repair nested maps without drag, hover, or precision input.
+
+#### Package F: Roleplay and Game runtime UI
+
 - Add the shared runtime bar and per-chat pending-transition persistence.
-- Integrate Roleplay, Visual Novel, and Game send paths without altering visible message text.
+- Integrate Roleplay and Game send paths without altering visible message text.
+- Add explicit Game map, cell, and node binding controls.
+- Select bound maps after accepted transitions while preserving unbound tactical movement.
 
-Gate: all owner modes can author, move, recover from a stale revision, reload, switch chats, and use the feature with keyboard and touch.
+Gate: Roleplay and Game can move, recover from stale state, reload, switch chats, and use the feature with keyboard and touch.
 
-#### Package F: connected Conversation
+#### Package G: connected Conversation
 
-- Implement only after Packages A through E are stable.
+- Implement only after Packages A through F are stable.
 - Resolve the linked owner at generation time and use the reduced projection formatter.
 - Add conservative presence wording and read-only UI.
 - Prove unlink, relink, deleted owner, malformed reciprocal links, cycles, and concluded story behavior.
 
-Gate: Conversation never receives GM memory, internal IDs, hidden destinations, or mutation capability.
+Gate: Conversation never receives private model memory, internal IDs, hidden destinations, or mutation capability.
 
-Location lorebooks and model-requested movement remain separate later packages after the owner and connected projections ship.
+Location lorebooks, model-requested movement, creator templates, and per-character positions remain separate later packages after the owner MVP ships.
 
 ### Issue and pull-request boundaries
 
@@ -635,11 +701,11 @@ Suggested issue split:
 | --- | --- | --- |
 | Graph validation is deterministic | Dedicated spatial regression script with positive and negative fixtures | Inspect inline editor errors for representative invalid nodes |
 | Move and user message are atomic | Injected storage failure before and after each transaction write on both backends | Force a stale revision while a draft and destination are pending |
-| History restores the right location | Snapshot regression covering reload, swipes, regeneration, branch cutoff, and checkpoint | Exercise each flow in Roleplay, Visual Novel, and Game |
+| History restores the right location | Snapshot regression covering reload, swipes, regeneration, branch cutoff, and checkpoint | Exercise each flow in Roleplay and Game |
 | Prompt paths agree | Compare normalized blocks from generation helper, dry run, and live Peek Prompt | Inspect Peek Prompt and debug output for one chat per owner mode |
 | Context stays bounded | Wide and long-text fixtures assert character and destination caps | Inspect a deep and wide hierarchy in the editor and destination picker |
-| Privacy holds | Negative assertions for GM memory, hidden links, inactive nodes, and unrelated descriptions | Link a Conversation chat and inspect its prompt in Phase 2 |
-| Game has one location authority | Reject or ignore Game location patches while enabled; disabled-mode control remains unchanged | Try tracker edit, model patch, map move, checkpoint load, enable, and disable |
+| Privacy holds | Negative assertions for private memory, hidden links, inactive nodes, and unrelated descriptions | Link a Conversation chat and inspect its prompt in Phase 5 |
+| Game has one location authority | Reject legacy patches; validate bound transitions; preserve unbound movement | Try tracker edit, bound and unbound map moves, checkpoint load, enable, and disable |
 | UI is resilient | Playwright flow for create, edit, pending move, conflict, and mobile navigation | Verify dark, light, SillyTavern, keyboard, touch, long names, and empty states |
 | Portability preserves IDs and state | Native export/import and profile backup/restore round trips | Export a branched chat, import it, and inspect current breadcrumb and history |
 
@@ -653,10 +719,12 @@ Add `scripts/regressions/spatial-context.regression.ts` and a `regression:spatia
 - Reload, swipe selection, earlier-message branching, and Game checkpoint restore resolve the correct location.
 - Owner prompts contain only active-location context and valid destinations.
 - Game does not display or prompt from a competing free-text location when enabled.
+- Existing Game maps can bind explicitly to hierarchy locations without breaking tactical movement.
+- Roleplay and Game use the same hierarchy and transition rules.
 - Dry-run and Peek Prompt use the same projection behavior as generation.
 - Existing chats and disabled Spatial Context retain current behavior.
 - Conversation cannot own or mutate spatial state.
-- GM memory never enters Conversation projection.
+- Private model memory never enters Conversation projection.
 
 ## Validation
 
@@ -670,14 +738,13 @@ pnpm regression:prompt
 pnpm smoke:ui
 ```
 
-Manual verification covers desktop and mobile authoring, deep breadcrumbs, long names, conflict recovery, archive protections, all owner modes, reload, branching, checkpoint restore, and Peek Prompt. PR validation checkboxes remain unchecked for human verification.
+Manual verification covers desktop and mobile authoring, deep breadcrumbs, layers, positioned maps, long names, conflict recovery, archive protections, Roleplay, Game, bound and unbound map movement, reload, branching, checkpoint restore, and Peek Prompt. PR validation checkboxes remain unchecked for human verification.
 
 ## Deferred
 
-- Visual maps and map bindings
+- Immediate movement without a chat turn
 - Independent character positions
 - Generic flags, events, or scripts
 - Location templates and scenario packages
-- Immediate movement without a chat turn
 - Per-character spatial knowledge
 - Shareable location lore in Conversation
