@@ -16,6 +16,7 @@ import type {
   NoodlePost,
   NoodlePostUnlock,
   NoodlePostUpdateInput,
+  NoodlePrivateAccountCreateInput,
   NoodleRefreshInput,
   NoodleRemoveInteractionInput,
   NoodleRescheduleRefreshInput,
@@ -348,7 +349,8 @@ export function useNoodlerHub(
 export function useCreatePrivateNoodleAccount() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (publicAccountId: string) => api.post<NoodleAccount>(`/noodle/accounts/${publicAccountId}/private`, {}),
+    mutationFn: ({ publicAccountId, input }: { publicAccountId: string; input?: NoodlePrivateAccountCreateInput }) =>
+      api.post<NoodleAccount>(`/noodle/accounts/${publicAccountId}/private`, input ?? {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
   });
 }

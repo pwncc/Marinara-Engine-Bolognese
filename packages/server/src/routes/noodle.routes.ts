@@ -17,6 +17,8 @@ import {
   noodleInviteSchema,
   noodleInteractionOwnerSchema,
   noodleInteractionUpdateSchema,
+  noodlePrivateAccountCreateSchema,
+  noodlePrivateStageProfileSchema,
   noodlePostUpdateSchema,
   noodleRemoveInteractionSchema,
   noodleRescheduleRefreshSchema,
@@ -32,6 +34,8 @@ import {
   type NoodleInteraction,
   type NoodleInteractionType,
   type NoodlePost,
+  type NoodlePrivateIdentityDisclosure,
+  type NoodlePrivateStageProfile,
   type NoodleSettings,
 } from "@marinara-engine/shared";
 import type { ChatMessage } from "../services/llm/base-provider.js";
@@ -243,6 +247,143 @@ function characterAppearanceFromRow(row: { data: unknown }) {
   const extensions = parseRecord(data.extensions);
   const value = data.appearance ?? extensions.appearance ?? data.description;
   return typeof value === "string" ? value.trim() : "";
+}
+
+function compactLines(lines: Array<string | null | undefined>) {
+  return lines.map((line) => line?.trim()).filter((line): line is string => Boolean(line));
+}
+
+function characterPersonalityFromRow(row: { data: unknown }) {
+  const data = parseRecord(row.data);
+  const extensions = parseRecord(data.extensions);
+  return compactLines([
+    typeof data.personality === "string" ? `Personality: ${data.personality}` : null,
+    typeof data.scenario === "string" ? `Scenario: ${data.scenario}` : null,
+    typeof data.backstory === "string" ? `Backstory: ${data.backstory}` : null,
+    typeof extensions.backstory === "string" ? `Backstory: ${extensions.backstory}` : null,
+  ]).join("\n");
+}
+
+function personaAppearanceFromRow(row: {
+  description?: string | null;
+  appearance?: string | null;
+}) {
+  return row.appearance?.trim() || row.description?.trim() || "";
+}
+
+function personaPersonalityFromRow(row: {
+  description?: string | null;
+  personality?: string | null;
+  scenario?: string | null;
+  backstory?: string | null;
+}) {
+  return compactLines([
+    row.personality ? `Personality: ${row.personality}` : null,
+    row.scenario ? `Scenario: ${row.scenario}` : null,
+    row.backstory ? `Backstory: ${row.backstory}` : null,
+    row.description ? `Description: ${row.description}` : null,
+  ]).join("\n");
+}
+
+function defaultPrivateStageProfile(account: Pick<NoodleAccount, "displayName" | "bio">): NoodlePrivateStageProfile {
+  return {
+    identityDisclosure: "hinted",
+    stageName: account.displayName,
+    stageBio: account.bio || "",
+    stagePersonality: "",
+    stageDynamic: "",
+    stageAppearanceOverride: "",
+    preserveLinkedAppearance: true,
+  };
+}
+
+function parsePrivateStageProfile(account: NoodleAccount): NoodlePrivateStageProfile {
+  return noodlePrivateStageProfileSchema.parse({
+    ...defaultPrivateStageProfile(account),
+    ...parseRecord(account.settings.stageProfile),
+  });
+}
+
+function writePrivateStageProfileSettings(
+  settings: Record<string, unknown>,
+  profile: NoodlePrivateStageProfile,
+): Record<string, unknown> {
+  return {
+    ...settings,
+    stageProfile: profile,
+    privateStageProfileVersion: 1,
+  };
+}
+
+function identityDisclosureInstruction(disclosure: NoodlePrivateIdentityDisclosure) {
+  if (disclosure === "open") {
+    return "Identity disclosure: open. This private account may use the linked public identity directly when it fits.";
+  }
+  if (disclosure === "secret") {
+    return "Identity disclosure: secret. Never reveal the public name, public handle, title, or direct backstory identifiers in visible post text, profile text, image captions, watermarks, or signs.";
+  }
+  return "Identity disclosure: hinted. Avoid direct public names/handles, but subtle allusions, shared motifs, and in-jokes are allowed.";
+}
+
+type NoodleLinkedAuthorContext = {
+  sourceKind: "character" | "persona";
+  publicName: string;
+  visualDescription: string;
+  personalityDescription: string;
+  avatarPath: string | null;
+};
+
+async function resolveNoodleLinkedAuthorContext(input: {
+  account: NoodleAccount;
+  characters: ReturnType<typeof createCharactersStorage>;
+}): Promise<NoodleLinkedAuthorContext | null> {
+  if (input.account.kind === "character") {
+    const row = await input.characters.getById(input.account.entityId);
+    if (!row) return null;
+    return {
+      sourceKind: "character",
+      publicName: characterNameFromRow(row),
+      visualDescription: characterAppearanceFromRow(row),
+      personalityDescription: characterPersonalityFromRow(row),
+      avatarPath: row.avatarPath ?? null,
+    };
+  }
+  if (input.account.kind === "persona") {
+    const row = await input.characters.getPersona(input.account.entityId);
+    if (!row) return null;
+    return {
+      sourceKind: "persona",
+      publicName: personaNameFromRow(row),
+      visualDescription: personaAppearanceFromRow(row),
+      personalityDescription: personaPersonalityFromRow(row),
+      avatarPath: null,
+    };
+  }
+  return null;
+}
+
+function formatPrivateStagePromptBlock(profile: NoodlePrivateStageProfile) {
+  return compactLines([
+    `Stage name: ${profile.stageName}`,
+    profile.stageBio ? `Stage bio: ${profile.stageBio}` : null,
+    profile.stagePersonality ? `Stage personality/voice: ${profile.stagePersonality}` : null,
+    profile.stageDynamic ? `Private roleplay dynamic: ${profile.stageDynamic}` : null,
+    profile.stageAppearanceOverride ? `Stage appearance/style override: ${profile.stageAppearanceOverride}` : null,
+    `Preserve linked appearance: ${profile.preserveLinkedAppearance ? "yes" : "no"}`,
+    identityDisclosureInstruction(profile.identityDisclosure),
+  ]).join("\n");
+}
+
+function formatLinkedIdentityPromptBlock(context: NoodleLinkedAuthorContext, profile: NoodlePrivateStageProfile) {
+  const nameLine =
+    profile.identityDisclosure === "open"
+      ? `Public name: ${context.publicName}`
+      : `Public name: hidden from output (${context.sourceKind} identity anchor only)`;
+  return compactLines([
+    nameLine,
+    context.visualDescription ? `Visual identity: ${context.visualDescription}` : null,
+    context.personalityDescription ? `Continuity/personality context: ${context.personalityDescription}` : null,
+  ]).join("\n");
 }
 
 function galleryImageUrl(filePath: string, fallbackChatId: string) {
@@ -705,13 +846,27 @@ async function buildRefreshPrompt(input: {
   const selectedCharacterIds = activeCharacters.map((account) => account.entityId);
   const characterRows = await Promise.all(selectedCharacterIds.map((id) => input.characters.getById(id)));
   const personaRow = input.personaAccount ? await input.characters.getPersona(input.personaAccount.entityId) : null;
+  // A single-account NoodleR generation targets exactly one private account and
+  // produces exactly one isolated post — it never replies into or continues the
+  // general public feed. Pulling in the last 100 posts from every account (which
+  // skews toward whichever character posts most, e.g. a prominent built-in one)
+  // gives the model unrelated "voice" noise to latch onto when this account's own
+  // sheet is sparse. Scope timeline/memory context down to this account's own
+  // history instead of the whole feed.
+  const isolatedTargetAccount =
+    input.activeAccounts.length === 1 && input.activeAccounts[0]!.visibility === "private"
+      ? input.activeAccounts[0]!
+      : null;
   const recentCutoff = sinceHoursIso(48);
-  const [recentCreatedPosts, recentPersonaComments] = await Promise.all([
+  const [recentCreatedPostsRaw, recentPersonaComments] = await Promise.all([
     input.noodle.listPosts({ since: recentCutoff, limit: 100 }),
-    input.personaAccount
-      ? input.noodle.listRepliesByActorSince(input.personaAccount.id, recentCutoff, 100)
-      : Promise.resolve([]),
+    isolatedTargetAccount || !input.personaAccount
+      ? Promise.resolve([])
+      : input.noodle.listRepliesByActorSince(input.personaAccount.id, recentCutoff, 100),
   ]);
+  const recentCreatedPosts = isolatedTargetAccount
+    ? recentCreatedPostsRaw.filter((post) => post.authorAccountId === isolatedTargetAccount.id)
+    : recentCreatedPostsRaw;
   const recentlyCommentedPostIds = noodlePersonaCommentPostIds(recentPersonaComments, input.personaAccount?.id);
   const recentlyCommentedPosts = (
     await Promise.all(recentlyCommentedPostIds.map((postId) => input.noodle.getPostById(postId)))
@@ -721,9 +876,11 @@ async function buildRefreshPrompt(input: {
     (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
   );
   const enhancedTimelineWriting = input.settings.enableEnhancedTimelineWriting;
-  const pastMemorySampleSize = enhancedTimelineWriting
-    ? noodlePastMemorySampleSize()
-    : noodlePastMemorySampleSize(Math.random, NOODLE_LEGACY_PAST_MEMORY_INCLUSION_CHANCE, NOODLE_LEGACY_PAST_MEMORY_MAX_ITEMS);
+  const pastMemorySampleSize = isolatedTargetAccount
+    ? 0
+    : enhancedTimelineWriting
+      ? noodlePastMemorySampleSize()
+      : noodlePastMemorySampleSize(Math.random, NOODLE_LEGACY_PAST_MEMORY_INCLUSION_CHANCE, NOODLE_LEGACY_PAST_MEMORY_MAX_ITEMS);
   const olderPosts =
     pastMemorySampleSize > 0
       ? (await input.noodle.listPostsBefore(noodlePastMemoryCutoff())).filter((post) => !recentPostById.has(post.id))
@@ -789,6 +946,14 @@ async function buildRefreshPrompt(input: {
     .filter((row): row is NonNullable<typeof row> => !!row)
     .map(personaContextFromRow)
     .join("\n\n");
+  const privateStageProfile = isolatedTargetAccount ? parsePrivateStageProfile(isolatedTargetAccount) : null;
+  const linkedAuthorContext = isolatedTargetAccount
+    ? await resolveNoodleLinkedAuthorContext({ account: isolatedTargetAccount, characters: input.characters })
+    : null;
+  const linkedAuthorContextBlock = linkedAuthorContext && privateStageProfile
+    ? formatLinkedIdentityPromptBlock(linkedAuthorContext, privateStageProfile)
+    : "";
+  const privateStageContextBlock = privateStageProfile ? formatPrivateStagePromptBlock(privateStageProfile) : "";
   const activeAccountList = [...input.activeAccounts, ...(input.personaAccount ? [input.personaAccount] : [])]
     .map(
       (account) =>
@@ -856,6 +1021,12 @@ async function buildRefreshPrompt(input: {
           "- Exception: the account in the Author Persona Profile section is a persona-linked private NoodleR account and IS allowed to author the single requested post for this generation only. This exception applies to that one account alone.",
         ]
       : []),
+    ...(privateStageProfile
+      ? [
+          "- For a private NoodleR account, treat Underlying Linked Identity as hidden continuity and Private Stage Persona as the visible creator role. Preserve the linked person's appearance and hard identity constraints, but write the post in the private stage persona's voice and dynamic.",
+          `- ${identityDisclosureInstruction(privateStageProfile.identityDisclosure)}`,
+        ]
+      : []),
     "- For each interaction, set either targetTempId or targetPostId and set the unused target field to null.",
     "- pollOptionIndex must be a zero-based integer for votes and null for every other interaction.",
     "- An exact @handle in post or reply text tags that active account. Preserve the @handle exactly when mentioning someone.",
@@ -915,6 +1086,16 @@ async function buildRefreshPrompt(input: {
             personaAuthorContext,
             "",
           ]
+        : []),
+      ...(linkedAuthorContextBlock
+        ? [
+            "# Underlying Linked Identity (hidden continuity source for private NoodleR)",
+            linkedAuthorContextBlock,
+            "",
+          ]
+        : []),
+      ...(privateStageContextBlock
+        ? ["# Private Stage Persona (visible creator role for this NoodleR account)", privateStageContextBlock, ""]
         : []),
       ...(loreContext ? ["# World / Lore", loreContext, ""] : []),
       "# Random User Profiles",
@@ -979,7 +1160,9 @@ async function buildRefreshPrompt(input: {
               ? `user direction: ${input.privatePostGuide.prompt.trim()}`
               : "user direction: no extra direction supplied",
             "Follow the guide over generic timeline variety. Return exactly one post and no extra creator posts.",
-            "The theme and user direction above describe who this account's author is and looks like for this post. They override anything else in this prompt, including this account's own Character Profile entry if it conflicts, and must never be replaced with or blended with the User Persona's identity, appearance, or description — the User Persona is the private, unrelated reader viewing this account, not the author.",
+            privateStageProfile
+              ? "The theme and user direction above control this post's concept, scene, pose, outfit, and mood. They must preserve the Underlying Linked Identity's body/appearance unless the Private Stage Persona includes an explicit appearance/style override, and they must use the Private Stage Persona for voice and roleplay dynamic. Never blend the User Persona's identity or appearance into the author."
+              : "The theme and user direction above describe this post's concept, scene, pose, outfit, and mood. They must never be replaced with or blended with the User Persona's identity, appearance, or description — the User Persona is the private, unrelated reader viewing this account, not the author.",
           ]
         : []),
     ].join("\n");
@@ -1164,6 +1347,8 @@ const noodlePrivateIdentitySchema = z.object({
   handle: z.string().trim().min(1).max(30),
   bio: z.string().trim().max(300).default(""),
   appearance: z.string().trim().min(1).max(400),
+  personality: z.string().trim().max(800).default(""),
+  dynamic: z.string().trim().max(500).default(""),
 });
 
 async function generatePrivateAccountStageIdentity(input: {
@@ -1175,14 +1360,32 @@ async function generatePrivateAccountStageIdentity(input: {
     model: string;
     maxTokensOverride?: number | null;
   };
+  requestedStageProfile?: Partial<NoodlePrivateStageProfile>;
   debugMode: boolean;
-}): Promise<{ name: string; handle: string; bio: string; appearance: string } | null> {
-  const row =
-    input.publicAccount.kind === "character" ? await input.characters.getById(input.publicAccount.entityId) : null;
-  const knownAppearance = row ? characterAppearanceFromRow(row) : "";
-  const contextBlock = row
-    ? characterContextFromRow(row)
-    : `Persona display name: ${input.publicAccount.displayName}`;
+}): Promise<{
+  name: string;
+  handle: string;
+  bio: string;
+  appearance: string;
+  stageProfile: NoodlePrivateStageProfile;
+} | null> {
+  const linkedContext = await resolveNoodleLinkedAuthorContext({
+    account: input.publicAccount,
+    characters: input.characters,
+  });
+  const knownAppearance = linkedContext?.visualDescription ?? "";
+  const requestedDisclosure = input.requestedStageProfile?.identityDisclosure ?? "hinted";
+  const contextBlock = linkedContext
+    ? compactLines([
+        `Public display name: ${input.publicAccount.displayName}`,
+        `Public handle: @${input.publicAccount.handle}`,
+        linkedContext.sourceKind === "character"
+          ? `Linked source: character (${linkedContext.publicName})`
+          : `Linked source: persona (${linkedContext.publicName})`,
+        linkedContext.visualDescription ? `Established visual identity: ${linkedContext.visualDescription}` : null,
+        linkedContext.personalityDescription || null,
+      ]).join("\n")
+    : `Public display name: ${input.publicAccount.displayName}\nPublic handle: @${input.publicAccount.handle}`;
   const outputFormat = [
     NOODLE_JSON_OUTPUT_HEADING,
     JSON.stringify(
@@ -1192,6 +1395,8 @@ async function generatePrivateAccountStageIdentity(input: {
         bio: "short in-character NoodleR bio for an anonymous subscriber-only creator profile",
         appearance:
           "concrete physical appearance description for an image generator: hair, build, distinguishing features, typical outfit/style. Must describe a specific look, not just adjectives like 'attractive'.",
+        personality: "private stage voice/persona for posts, which may contrast with the public personality",
+        dynamic: "private roleplay dynamic or creator vibe, such as confident, coy, submissive but articulate, bratty, anonymous, etc.",
       },
       null,
       2,
@@ -1203,10 +1408,14 @@ async function generatePrivateAccountStageIdentity(input: {
       content: [
         "You invent a separate, anonymous NoodleR (private, subscriber-only) social profile for an existing Marinara Engine account.",
         NOODLE_ADULT_PLATFORM_POLICY,
-        "The NoodleR profile must NOT reuse the public account's real name or handle. Invent a distinct stage name/alias, the way a real anonymous content creator would use to protect their identity, while still fitting the character's personality and setting.",
+        identityDisclosureInstruction(requestedDisclosure),
+        requestedDisclosure === "open"
+          ? "The NoodleR profile may be recognizably tied to the public account, but it should still feel like a private creator stage profile rather than a duplicate public page."
+          : "The NoodleR profile must NOT reuse the public account's real name or handle. Invent a distinct stage name/alias, the way an anonymous content creator would use to protect their identity, while still fitting the underlying person.",
         knownAppearance
-          ? "Keep the appearance field consistent with the character's established look below; do not invent a different person."
+          ? "Keep the appearance field consistent with the linked account's established look below; do not invent a different person. The stage persona can change styling, voice, and dynamic, not the underlying body unless an explicit appearance override asks for styling changes."
           : "Invent a concrete, specific physical appearance for the profile photo — this field is required and must not be vague.",
+        "The private stage persona may contrast with the public personality. For example, a dominant public character can present as submissive but well-spoken in private, while preserving the same visual identity.",
         "Return JSON only. No prose outside the JSON object.",
       ].join("\n"),
     },
@@ -1216,6 +1425,13 @@ async function generatePrivateAccountStageIdentity(input: {
         "# Public Account Being Given a Private Stage Identity",
         `currentName: ${input.publicAccount.displayName}`,
         `currentHandle: ${input.publicAccount.handle}`,
+        `requestedDisclosure: ${requestedDisclosure}`,
+        input.requestedStageProfile?.stageName ? `requestedStageName: ${input.requestedStageProfile.stageName}` : "",
+        input.requestedStageProfile?.stageBio ? `requestedStageBio: ${input.requestedStageProfile.stageBio}` : "",
+        input.requestedStageProfile?.stagePersonality
+          ? `requestedPrivatePersona: ${input.requestedStageProfile.stagePersonality}`
+          : "",
+        input.requestedStageProfile?.stageDynamic ? `requestedDynamic: ${input.requestedStageProfile.stageDynamic}` : "",
         contextBlock,
         knownAppearance ? `Established appearance: ${knownAppearance}` : "",
         "",
@@ -1248,10 +1464,19 @@ async function generatePrivateAccountStageIdentity(input: {
     return null;
   }
   return {
-    name: parsed.data.name,
+    name: input.requestedStageProfile?.stageName?.trim() || parsed.data.name,
     handle: parsed.data.handle,
-    bio: parsed.data.bio,
+    bio: input.requestedStageProfile?.stageBio?.trim() || parsed.data.bio,
     appearance: parsed.data.appearance || knownAppearance,
+    stageProfile: noodlePrivateStageProfileSchema.parse({
+      identityDisclosure: requestedDisclosure,
+      stageName: input.requestedStageProfile?.stageName?.trim() || parsed.data.name,
+      stageBio: input.requestedStageProfile?.stageBio?.trim() || parsed.data.bio,
+      stagePersonality: input.requestedStageProfile?.stagePersonality?.trim() || parsed.data.personality,
+      stageDynamic: input.requestedStageProfile?.stageDynamic?.trim() || parsed.data.dynamic,
+      stageAppearanceOverride: input.requestedStageProfile?.stageAppearanceOverride?.trim() || "",
+      preserveLinkedAppearance: input.requestedStageProfile?.preserveLinkedAppearance ?? true,
+    }),
   };
 }
 
@@ -1449,6 +1674,10 @@ async function generateNoodlePostImage(input: {
   );
   let characterDescription = "";
   let referenceImages: string[] | undefined;
+  const privateStageProfile = input.account.visibility === "private" ? parsePrivateStageProfile(input.account) : null;
+  const linkedAuthorContext = privateStageProfile
+    ? await resolveNoodleLinkedAuthorContext({ account: input.account, characters: input.characters })
+    : null;
 
   if (
     input.account.kind === "character" &&
@@ -1495,6 +1724,28 @@ async function generateNoodlePostImage(input: {
         }
       }
     }
+  }
+
+  if (privateStageProfile && linkedAuthorContext) {
+    const privateVisualContext = compactLines([
+      "Private NoodleR visual identity anchor:",
+      privateStageProfile.identityDisclosure === "open"
+        ? `Linked public identity: ${linkedAuthorContext.publicName}`
+        : `Linked public identity: hidden ${linkedAuthorContext.sourceKind}; do not write or render the public name.`,
+      linkedAuthorContext.visualDescription
+        ? `Underlying visual identity to preserve: ${linkedAuthorContext.visualDescription}`
+        : null,
+      privateStageProfile.stageAppearanceOverride
+        ? `Private styling / appearance override: ${privateStageProfile.stageAppearanceOverride}`
+        : null,
+      `Private stage persona: ${privateStageProfile.stageName}. ${privateStageProfile.stagePersonality}`.trim(),
+      privateStageProfile.stageDynamic ? `Private roleplay dynamic: ${privateStageProfile.stageDynamic}` : null,
+      identityDisclosureInstruction(privateStageProfile.identityDisclosure),
+      privateStageProfile.preserveLinkedAppearance
+        ? "The generated image must preserve the linked person's body, age range, species, face/hair/visible traits, and hard visual continuity. User scene directions can change outfit, pose, mood, and setting, not who the person is."
+        : "The private stage appearance may diverge only where the stage appearance override explicitly says so.",
+    ]).join("\n");
+    characterDescription = compactLines([privateVisualContext, characterDescription]).join("\n\n");
   }
 
   const postPrompt = await loadPrompt(input.promptOverrides, NOODLE_IMAGE_POST, {
@@ -1809,6 +2060,8 @@ export async function noodleRoutes(app: FastifyInstance) {
 
   app.post("/accounts/:id/private", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const parsed = noodlePrivateAccountCreateSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     const publicAccount = await noodle.getAccountById(id);
     if (!publicAccount) return reply.code(404).send({ error: "Noodle account not found" });
     const created = await noodle.createPrivateAccount(id);
@@ -1835,6 +2088,7 @@ export async function noodleRoutes(app: FastifyInstance) {
           characters,
           provider,
           connection: conn,
+          requestedStageProfile: parsed.data.stageProfile,
           debugMode: false,
         });
         if (identity) {
@@ -1860,8 +2114,20 @@ export async function noodleRoutes(app: FastifyInstance) {
             displayName: identity.name,
             bio: identity.bio,
             ...(avatarUrl ? { avatarUrl } : {}),
+            settings: writePrivateStageProfileSettings(created.settings, identity.stageProfile),
           });
         }
+      }
+      if (!conn && parsed.data.stageProfile) {
+        const profile = noodlePrivateStageProfileSchema.parse({
+          ...defaultPrivateStageProfile(publicAccount),
+          ...parsed.data.stageProfile,
+        });
+        await noodle.updateAccount(created.id, {
+          displayName: profile.stageName,
+          bio: profile.stageBio,
+          settings: writePrivateStageProfileSettings(created.settings, profile),
+        });
       }
     } catch (error) {
       logger.warn(error, "[noodle] Failed to generate NoodleR stage identity for account %s", id);

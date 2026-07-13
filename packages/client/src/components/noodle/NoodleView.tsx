@@ -60,6 +60,8 @@ import {
   type NoodlePostAccess,
   type NoodlePoll,
   type NoodlePollInput,
+  type NoodlePrivateIdentityDisclosure,
+  type NoodlePrivateStageProfileInput,
   type NoodleRefreshSchedulerStatus,
   type NoodleSettingsUpdateInput,
 } from "@marinara-engine/shared";
@@ -112,6 +114,15 @@ import { useUIStore } from "../../stores/ui.store";
 type RawCharacter = { id?: unknown; data?: unknown; avatarPath?: unknown };
 type RawCharacterGroup = { id?: unknown; name?: unknown; description?: unknown; characterIds?: unknown };
 type RawPersona = { id?: unknown; createdAt?: unknown; updatedAt?: unknown };
+type PrivateStageDraft = {
+  publicAccountId: string;
+  identityDisclosure: NoodlePrivateIdentityDisclosure;
+  stageName: string;
+  stageBio: string;
+  stagePersonality: string;
+  stageDynamic: string;
+  stageAppearanceOverride?: string;
+};
 
 const fieldClass =
   "mari-chrome-field h-9 w-full min-w-0 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 text-xs text-[var(--foreground)] outline-none transition-colors focus:border-[var(--noodle-blue)]";
@@ -244,6 +255,19 @@ function readAccountSetting(account: NoodleAccount | null, key: string) {
 function readAccountSettingBoolean(account: NoodleAccount | null, key: string) {
   const value = account?.settings?.[key];
   return value === true || value === "true";
+}
+
+function privateStageProfileFromAccount(account: NoodleAccount | null) {
+  return parseRecord(account?.settings?.stageProfile);
+}
+
+function readPrivateStageSetting(account: NoodleAccount | null, key: string) {
+  return readString(privateStageProfileFromAccount(account)[key]).trim();
+}
+
+function readPrivateIdentityDisclosure(account: NoodleAccount | null): NoodlePrivateIdentityDisclosure {
+  const value = readPrivateStageSetting(account, "identityDisclosure");
+  return value === "open" || value === "secret" ? value : "hinted";
 }
 
 function hasGeneratedProfile(account: NoodleAccount | null) {
@@ -1024,6 +1048,14 @@ export function NoodleView() {
   const [privateGuideTheme, setPrivateGuideTheme] = useState("");
   const [privateGuidePrompt, setPrivateGuidePrompt] = useState("");
   const [privateGuideAccountId, setPrivateGuideAccountId] = useState<string | null>(null);
+  const [privateStageDraft, setPrivateStageDraft] = useState<PrivateStageDraft | null>(null);
+  const [stageProfileEditing, setStageProfileEditing] = useState(false);
+  const [stageProfileDisclosure, setStageProfileDisclosure] = useState<NoodlePrivateIdentityDisclosure>("hinted");
+  const [stageProfileName, setStageProfileName] = useState("");
+  const [stageProfileBio, setStageProfileBio] = useState("");
+  const [stageProfilePersonality, setStageProfilePersonality] = useState("");
+  const [stageProfileDynamic, setStageProfileDynamic] = useState("");
+  const [stageProfileAppearanceOverride, setStageProfileAppearanceOverride] = useState("");
   const [imageUrlDraft, setImageUrlDraft] = useState("");
   const [imageGenerationPromptDraft, setImageGenerationPromptDraft] = useState("");
   const [pollQuestion, setPollQuestion] = useState("");
@@ -1225,6 +1257,13 @@ export function NoodleView() {
     setProfileBannerUrl(readAccountSetting(viewedProfileAccount, "bannerUrl"));
     setProfileLocation(readAccountSetting(viewedProfileAccount, "location"));
     setProfileEditing(false);
+    setStageProfileEditing(false);
+    setStageProfileDisclosure(readPrivateIdentityDisclosure(viewedProfileAccount));
+    setStageProfileName(readPrivateStageSetting(viewedProfileAccount, "stageName") || viewedProfileAccount.displayName);
+    setStageProfileBio(readPrivateStageSetting(viewedProfileAccount, "stageBio") || viewedProfileAccount.bio);
+    setStageProfilePersonality(readPrivateStageSetting(viewedProfileAccount, "stagePersonality"));
+    setStageProfileDynamic(readPrivateStageSetting(viewedProfileAccount, "stageDynamic"));
+    setStageProfileAppearanceOverride(readPrivateStageSetting(viewedProfileAccount, "stageAppearanceOverride"));
   }, [viewedProfileAccount]);
 
   useEffect(() => {
@@ -1290,6 +1329,73 @@ export function NoodleView() {
           toast.success("Noodle profile updated.");
         },
         onError: (error) => toast.error(error instanceof Error ? error.message : "Could not update Noodle profile."),
+      },
+    );
+  };
+
+  const openPrivateStageSetup = (account: NoodleAccount) => {
+    setPrivateStageDraft({
+      publicAccountId: account.id,
+      identityDisclosure: "hinted",
+      stageName: "",
+      stageBio: "",
+      stagePersonality: "",
+      stageDynamic: "",
+    });
+  };
+
+  const createPrivateStageAccount = () => {
+    if (!privateStageDraft) return;
+    const publicAccount = accountById.get(privateStageDraft.publicAccountId);
+    const stageProfile: NoodlePrivateStageProfileInput = {
+      identityDisclosure: privateStageDraft.identityDisclosure,
+      stageName: privateStageDraft.stageName.trim() || `${publicAccount?.displayName ?? "Private"} After Dark`,
+      stageBio: privateStageDraft.stageBio.trim(),
+      stagePersonality: privateStageDraft.stagePersonality.trim(),
+      stageDynamic: privateStageDraft.stageDynamic.trim(),
+      preserveLinkedAppearance: true,
+    };
+    createPrivateAccount.mutate(
+      { publicAccountId: privateStageDraft.publicAccountId, input: { stageProfile } },
+      {
+        onSuccess: (account) => {
+          setPrivateStageDraft(null);
+          setViewedProfileAccountId(account.id);
+          toast.success("NoodleR profile created.");
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not create NoodleR profile."),
+      },
+    );
+  };
+
+  const saveStageProfile = () => {
+    if (!viewedProfileAccount || viewedProfileAccount.visibility !== "private") return;
+    const stageProfile: NoodlePrivateStageProfileInput = {
+      identityDisclosure: stageProfileDisclosure,
+      stageName: stageProfileName.trim() || viewedProfileAccount.displayName,
+      stageBio: stageProfileBio.trim(),
+      stagePersonality: stageProfilePersonality.trim(),
+      stageDynamic: stageProfileDynamic.trim(),
+      stageAppearanceOverride: stageProfileAppearanceOverride.trim(),
+      preserveLinkedAppearance: true,
+    };
+    updateAccount.mutate(
+      {
+        id: viewedProfileAccount.id,
+        displayName: stageProfile.stageName,
+        bio: stageProfile.stageBio ?? "",
+        settings: {
+          ...viewedProfileAccount.settings,
+          stageProfile,
+          privateStageProfileVersion: 1,
+        },
+      },
+      {
+        onSuccess: () => {
+          setStageProfileEditing(false);
+          toast.success("NoodleR stage profile updated.");
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not update stage profile."),
       },
     );
   };
@@ -5402,15 +5508,7 @@ export function NoodleView() {
                         ) : (
                           <button
                             type="button"
-                            onClick={() => {
-                              if (
-                                window.confirm(
-                                  `Create a private NoodleR account for ${viewedProfileAccount.displayName}? It stays hidden from the main feed, search, and suggestions — only reachable from this profile.`,
-                                )
-                              ) {
-                                createPrivateAccount.mutate(viewedProfileAccount.id);
-                              }
-                            }}
+                            onClick={() => openPrivateStageSetup(viewedProfileAccount)}
                             disabled={createPrivateAccount.isPending}
                             className="mb-1 h-9 rounded-full border border-[var(--noodle-divider)] px-5 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
                             title="Create a private NoodleR account linked to this profile"
@@ -5485,6 +5583,18 @@ export function NoodleView() {
                             {profileLocationPreview}
                           </p>
                         )}
+                        {viewedProfileAccount?.visibility === "private" && (
+                          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                            <span className="rounded-full border border-[var(--noodle-divider)] px-2.5 py-1 font-semibold text-[var(--muted-foreground)]">
+                              {readPrivateIdentityDisclosure(viewedProfileAccount)} identity
+                            </span>
+                            {readPrivateStageSetting(viewedProfileAccount, "stageDynamic") && (
+                              <span className="rounded-full border border-[var(--noodle-divider)] px-2.5 py-1 text-[var(--muted-foreground)]">
+                                {readPrivateStageSetting(viewedProfileAccount, "stageDynamic")}
+                              </span>
+                            )}
+                          </div>
+                        )}
                         <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm text-[var(--muted-foreground)]">
                           <button
                             type="button"
@@ -5507,6 +5617,122 @@ export function NoodleView() {
                   </div>
                   {viewedProfileAccount?.visibility === "private" && viewedProfileAccount.kind === "character" && (
                     <div className="border-t border-[var(--noodle-divider)] p-4">
+                      <div className="mb-4 rounded-lg border border-[var(--noodle-divider)] p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h4 className="text-sm font-bold text-[var(--foreground)]">Stage profile</h4>
+                            <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">
+                              Controls the private creator identity while the linked character keeps the visual anchor.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setStageProfileEditing((editing) => !editing)}
+                            className="h-8 shrink-0 rounded-full border border-[var(--noodle-divider)] px-3 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)]"
+                          >
+                            {stageProfileEditing ? "Close" : "Edit"}
+                          </button>
+                        </div>
+                        {stageProfileEditing ? (
+                          <div className="mt-3 space-y-3">
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <label className="block space-y-1.5">
+                                <span className={labelClass}>Identity</span>
+                                <select
+                                  value={stageProfileDisclosure}
+                                  onChange={(event) =>
+                                    setStageProfileDisclosure(event.target.value as NoodlePrivateIdentityDisclosure)
+                                  }
+                                  className={fieldClass}
+                                >
+                                  <option value="open">Open</option>
+                                  <option value="hinted">Hinted</option>
+                                  <option value="secret">Secret</option>
+                                </select>
+                              </label>
+                              <label className="block space-y-1.5">
+                                <span className={labelClass}>Stage name</span>
+                                <input
+                                  value={stageProfileName}
+                                  onChange={(event) => setStageProfileName(event.target.value)}
+                                  className={fieldClass}
+                                />
+                              </label>
+                            </div>
+                            <label className="block space-y-1.5">
+                              <span className={labelClass}>Private persona</span>
+                              <textarea
+                                value={stageProfilePersonality}
+                                onChange={(event) => setStageProfilePersonality(event.target.value)}
+                                className={cn(textareaClass, "min-h-20 resize-none")}
+                              />
+                            </label>
+                            <label className="block space-y-1.5">
+                              <span className={labelClass}>Dynamic</span>
+                              <input
+                                value={stageProfileDynamic}
+                                onChange={(event) => setStageProfileDynamic(event.target.value)}
+                                className={fieldClass}
+                              />
+                            </label>
+                            <label className="block space-y-1.5">
+                              <span className={labelClass}>Appearance/style override</span>
+                              <textarea
+                                value={stageProfileAppearanceOverride}
+                                onChange={(event) => setStageProfileAppearanceOverride(event.target.value)}
+                                placeholder="Optional styling, outfit, or presentation notes. The linked character's body/face is still preserved."
+                                className={cn(textareaClass, "min-h-20 resize-none")}
+                              />
+                            </label>
+                            <label className="block space-y-1.5">
+                              <span className={labelClass}>Bio</span>
+                              <textarea
+                                value={stageProfileBio}
+                                onChange={(event) => setStageProfileBio(event.target.value)}
+                                className={cn(textareaClass, "min-h-20 resize-none")}
+                              />
+                            </label>
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setStageProfileEditing(false)}
+                                disabled={updateAccount.isPending}
+                                className="h-8 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] px-3 text-xs font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={saveStageProfile}
+                                disabled={updateAccount.isPending}
+                                className="flex h-8 items-center justify-center gap-2 rounded-md bg-[var(--noodle-blue)] px-3 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {updateAccount.isPending && <Loader2 size={14} className="animate-spin" />}
+                                {updateAccount.isPending ? "Saving" : "Save"}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-3 grid gap-2 text-xs text-[var(--muted-foreground)]">
+                            <p>
+                              <span className="font-semibold text-[var(--foreground)]">Identity:</span>{" "}
+                              {readPrivateIdentityDisclosure(viewedProfileAccount)}
+                            </p>
+                            {readPrivateStageSetting(viewedProfileAccount, "stagePersonality") && (
+                              <p className="line-clamp-2">
+                                <span className="font-semibold text-[var(--foreground)]">Persona:</span>{" "}
+                                {readPrivateStageSetting(viewedProfileAccount, "stagePersonality")}
+                              </p>
+                            )}
+                            {readPrivateStageSetting(viewedProfileAccount, "stageAppearanceOverride") && (
+                              <p className="line-clamp-2">
+                                <span className="font-semibold text-[var(--foreground)]">Style:</span>{" "}
+                                {readPrivateStageSetting(viewedProfileAccount, "stageAppearanceOverride")}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="min-w-0">
                           <h4 className="text-sm font-bold text-[var(--foreground)]">NoodleR creator tools</h4>
@@ -5869,6 +6095,104 @@ export function NoodleView() {
             </div>
           </section>
         </div>
+      )}
+      {privateStageDraft && (
+        <Modal
+          open={Boolean(privateStageDraft)}
+          onClose={() => {
+            if (!createPrivateAccount.isPending) setPrivateStageDraft(null);
+          }}
+          title="Create NoodleR"
+          width="max-w-lg"
+          panelClassName={NOODLE_ICON_SCOPE_CLASS}
+          panelStyle={{ "--noodle-blue": NOODLE_BLUE } as CSSProperties}
+        >
+          <div className="space-y-4">
+            <label className="block space-y-1.5">
+              <span className={labelClass}>Identity</span>
+              <select
+                value={privateStageDraft.identityDisclosure}
+                onChange={(event) =>
+                  setPrivateStageDraft((draft) =>
+                    draft
+                      ? { ...draft, identityDisclosure: event.target.value as NoodlePrivateIdentityDisclosure }
+                      : draft,
+                  )
+                }
+                className={fieldClass}
+              >
+                <option value="open">Open</option>
+                <option value="hinted">Hinted</option>
+                <option value="secret">Secret</option>
+              </select>
+            </label>
+            <label className="block space-y-1.5">
+              <span className={labelClass}>Stage name</span>
+              <input
+                value={privateStageDraft.stageName}
+                onChange={(event) =>
+                  setPrivateStageDraft((draft) => (draft ? { ...draft, stageName: event.target.value } : draft))
+                }
+                placeholder="Leave blank for a generated alias"
+                className={fieldClass}
+              />
+            </label>
+            <label className="block space-y-1.5">
+              <span className={labelClass}>Private persona</span>
+              <textarea
+                value={privateStageDraft.stagePersonality}
+                onChange={(event) =>
+                  setPrivateStageDraft((draft) =>
+                    draft ? { ...draft, stagePersonality: event.target.value } : draft,
+                  )
+                }
+                placeholder="Submissive but well-spoken, bratty, anonymous, polished, confident..."
+                className={cn(textareaClass, "min-h-24 resize-none")}
+              />
+            </label>
+            <label className="block space-y-1.5">
+              <span className={labelClass}>Dynamic</span>
+              <input
+                value={privateStageDraft.stageDynamic}
+                onChange={(event) =>
+                  setPrivateStageDraft((draft) => (draft ? { ...draft, stageDynamic: event.target.value } : draft))
+                }
+                placeholder="soft-spoken tease, controlled submissive, confident domme"
+                className={fieldClass}
+              />
+            </label>
+            <label className="block space-y-1.5">
+              <span className={labelClass}>Bio</span>
+              <textarea
+                value={privateStageDraft.stageBio}
+                onChange={(event) =>
+                  setPrivateStageDraft((draft) => (draft ? { ...draft, stageBio: event.target.value } : draft))
+                }
+                placeholder="Leave blank for a generated private profile bio"
+                className={cn(textareaClass, "min-h-20 resize-none")}
+              />
+            </label>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPrivateStageDraft(null)}
+                disabled={createPrivateAccount.isPending}
+                className="h-9 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] px-4 text-xs font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={createPrivateStageAccount}
+                disabled={createPrivateAccount.isPending}
+                className="flex h-9 items-center justify-center gap-2 rounded-md bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {createPrivateAccount.isPending && <Loader2 size={14} className="animate-spin" />}
+                {createPrivateAccount.isPending ? "Creating" : "Create"}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
       {privateGuideAccount && (
         <Modal

@@ -464,6 +464,17 @@ assert.match(defaultNoodleImagePrompt, /^cel-shaded laboratory selfie/u);
 assert.match(defaultNoodleImagePrompt, /Dottore has blue hair/u);
 assert.doesNotMatch(defaultNoodleImagePrompt, /This entire post/u);
 assert.doesNotMatch(defaultNoodleImagePrompt, /Output only|Draft image idea|Post text/u);
+const privateNoodlerImagePrompt = NOODLE_IMAGE_POST.defaultBuilder({
+  authorName: "Velvet Lecture",
+  postContent: "Do not leak the public account name here.",
+  draftPrompt: "mirror selfie in soft evening light",
+  userInstructions: "preserve linked appearance",
+  characterDescription:
+    "Private NoodleR visual identity anchor:\nLinked public identity: hidden character; do not write or render the public name.\nUnderlying visual identity to preserve: 20-year-old man, short black hair, lean build, angular jaw.",
+});
+assert.match(privateNoodlerImagePrompt, /Underlying visual identity to preserve: 20-year-old man/u);
+assert.match(privateNoodlerImagePrompt, /do not write or render the public name/u);
+assert.doesNotMatch(privateNoodlerImagePrompt, /Do not leak the public account name here/u);
 
 const cutoffAnchor = new Date("2026-07-10T12:00:00.000Z");
 assert.equal(noodlePastMemoryCutoff(cutoffAnchor), "2026-07-08T12:00:00.000Z");

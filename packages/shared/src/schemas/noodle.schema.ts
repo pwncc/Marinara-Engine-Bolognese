@@ -237,6 +237,22 @@ export const noodleUnlockPostSchema = z.object({
   actorEntityId: z.string().min(1),
 });
 
+export const noodlePrivateIdentityDisclosureSchema = z.enum(["open", "hinted", "secret"]);
+
+export const noodlePrivateStageProfileSchema = z.object({
+  identityDisclosure: noodlePrivateIdentityDisclosureSchema.default("hinted"),
+  stageName: z.string().trim().min(1).max(80),
+  stageBio: z.string().trim().max(500).default(""),
+  stagePersonality: z.string().trim().max(1000).default(""),
+  stageDynamic: z.string().trim().max(500).default(""),
+  stageAppearanceOverride: z.string().trim().max(500).default(""),
+  preserveLinkedAppearance: z.boolean().default(true),
+});
+
+export const noodlePrivateAccountCreateSchema = z.object({
+  stageProfile: noodlePrivateStageProfileSchema.partial().optional(),
+});
+
 export const noodleInteractionUpdateSchema = noodleInteractionOwnerSchema
   .extend({
     content: z.string().max(2000).nullable().optional(),
@@ -379,6 +395,10 @@ export type NoodleCreatePostInput = z.infer<typeof noodleCreatePostSchema>;
 export type NoodlePostUpdateInput = z.infer<typeof noodlePostUpdateSchema>;
 export type NoodleSubscribeInput = z.infer<typeof noodleSubscribeSchema>;
 export type NoodleUnlockPostInput = z.infer<typeof noodleUnlockPostSchema>;
+export type NoodlePrivateIdentityDisclosure = z.infer<typeof noodlePrivateIdentityDisclosureSchema>;
+export type NoodlePrivateStageProfileInput = z.input<typeof noodlePrivateStageProfileSchema>;
+export type NoodlePrivateStageProfile = z.infer<typeof noodlePrivateStageProfileSchema>;
+export type NoodlePrivateAccountCreateInput = z.infer<typeof noodlePrivateAccountCreateSchema>;
 export type NoodleCreateInteractionInput = z.infer<typeof noodleCreateInteractionSchema>;
 export type NoodleRemoveInteractionInput = z.infer<typeof noodleRemoveInteractionSchema>;
 export type NoodleInteractionOwnerInput = z.infer<typeof noodleInteractionOwnerSchema>;
