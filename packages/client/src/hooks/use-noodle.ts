@@ -35,6 +35,14 @@ export type NoodleRefreshResult = {
 export const noodleKeys = {
   all: ["noodle"] as const,
   bootstrap: () => [...noodleKeys.all, "bootstrap"] as const,
+  hub: (subscriberKind: NoodleAccountKind, subscriberEntityId: string) =>
+    [...noodleKeys.all, "hub", subscriberKind, subscriberEntityId] as const,
+};
+
+export type NoodlerHub = {
+  owned: NoodleAccount[];
+  subscribed: NoodleAccount[];
+  discover: NoodleAccount[];
 };
 
 function preservePollVotes(current: NoodleBootstrap | undefined, next: NoodleBootstrap): NoodleBootstrap {
@@ -321,6 +329,22 @@ export function useRefreshNoodle() {
   });
 }
 
+export function useNoodlerHub(
+  subscriberKind: NoodleAccountKind | undefined,
+  subscriberEntityId: string | undefined,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: noodleKeys.hub(subscriberKind ?? "persona", subscriberEntityId ?? ""),
+    queryFn: () =>
+      api.get<NoodlerHub>(
+        `/noodle/noodler/hub?subscriberKind=${encodeURIComponent(subscriberKind!)}&subscriberEntityId=${encodeURIComponent(subscriberEntityId!)}`,
+      ),
+    enabled: enabled && Boolean(subscriberKind && subscriberEntityId),
+    staleTime: 10_000,
+  });
+}
+
 export function useCreatePrivateNoodleAccount() {
   const qc = useQueryClient();
   return useMutation({
@@ -341,10 +365,10 @@ export function useSubscribeNoodleAccount() {
       subscriberKind: NoodleAccountKind;
       subscriberEntityId: string;
     }) =>
-      api.post<NoodleAccountSubscription>(`/noodle/accounts/${encodeURIComponent(creatorAccountId)}/subscribe`, {
-        subscriberKind,
-        subscriberEntityId,
-      }),
+      api.post<NoodleAccountSubscription & { reaction: NoodleInteraction | null }>(
+        `/noodle/accounts/${encodeURIComponent(creatorAccountId)}/subscribe`,
+        { subscriberKind, subscriberEntityId },
+      ),
     onSuccess: (subscription) => {
       qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
         current
@@ -353,6 +377,10 @@ export function useSubscribeNoodleAccount() {
               subscriptions: current.subscriptions.some((item) => item.id === subscription.id)
                 ? current.subscriptions
                 : [...current.subscriptions, subscription],
+              interactions:
+                subscription.reaction && !current.interactions.some((item) => item.id === subscription.reaction!.id)
+                  ? [...current.interactions, subscription.reaction]
+                  : current.interactions,
             }
           : current,
       );
@@ -401,7 +429,11 @@ export function useUnlockNoodlePost() {
       postId: string;
       actorKind: NoodleAccountKind;
       actorEntityId: string;
-    }) => api.post<NoodlePostUnlock>(`/noodle/posts/${encodeURIComponent(postId)}/unlock`, { actorKind, actorEntityId }),
+    }) =>
+      api.post<NoodlePostUnlock & { reaction: NoodleInteraction | null }>(
+        `/noodle/posts/${encodeURIComponent(postId)}/unlock`,
+        { actorKind, actorEntityId },
+      ),
     onSuccess: (unlock) => {
       qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
         current
@@ -410,6 +442,10 @@ export function useUnlockNoodlePost() {
               postUnlocks: current.postUnlocks.some((item) => item.id === unlock.id)
                 ? current.postUnlocks
                 : [...current.postUnlocks, unlock],
+              interactions:
+                unlock.reaction && !current.interactions.some((item) => item.id === unlock.reaction!.id)
+                  ? [...current.interactions, unlock.reaction]
+                  : current.interactions,
             }
           : current,
       );

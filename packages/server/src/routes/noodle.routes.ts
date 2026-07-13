@@ -1124,6 +1124,262 @@ async function generateMissingNoodleProfiles(input: {
   }
 }
 
+const noodlePrivateIdentitySchema = z.object({
+  name: z.string().trim().min(1).max(60),
+  handle: z.string().trim().min(1).max(30),
+  bio: z.string().trim().max(300).default(""),
+  appearance: z.string().trim().min(1).max(400),
+});
+
+async function generatePrivateAccountStageIdentity(input: {
+  publicAccount: NoodleAccount;
+  characters: ReturnType<typeof createCharactersStorage>;
+  provider: ReturnType<typeof createLLMProvider>;
+  connection: {
+    provider: string;
+    model: string;
+    maxTokensOverride?: number | null;
+  };
+  debugMode: boolean;
+}): Promise<{ name: string; handle: string; bio: string; appearance: string } | null> {
+  const row =
+    input.publicAccount.kind === "character" ? await input.characters.getById(input.publicAccount.entityId) : null;
+  const knownAppearance = row ? characterAppearanceFromRow(row) : "";
+  const contextBlock = row
+    ? characterContextFromRow(row)
+    : `Persona display name: ${input.publicAccount.displayName}`;
+  const outputFormat = [
+    NOODLE_JSON_OUTPUT_HEADING,
+    JSON.stringify(
+      {
+        name: "distinct stage display name, unrelated to the public account's real name",
+        handle: "distinct handle without @, lowercase letters/numbers/underscores, unrelated to the public handle",
+        bio: "short in-character NoodleR bio for an anonymous subscriber-only creator profile",
+        appearance:
+          "concrete physical appearance description for an image generator: hair, build, distinguishing features, typical outfit/style. Must describe a specific look, not just adjectives like 'attractive'.",
+      },
+      null,
+      2,
+    ),
+  ].join("\n");
+  const messages: ChatMessage[] = [
+    {
+      role: "system",
+      content: [
+        "You invent a separate, anonymous NoodleR (private, subscriber-only) social profile for an existing Marinara Engine account.",
+        NOODLE_ADULT_PLATFORM_POLICY,
+        "The NoodleR profile must NOT reuse the public account's real name or handle. Invent a distinct stage name/alias, the way a real anonymous content creator would use to protect their identity, while still fitting the character's personality and setting.",
+        knownAppearance
+          ? "Keep the appearance field consistent with the character's established look below; do not invent a different person."
+          : "Invent a concrete, specific physical appearance for the profile photo — this field is required and must not be vague.",
+        "Return JSON only. No prose outside the JSON object.",
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: [
+        "# Public Account Being Given a Private Stage Identity",
+        `currentName: ${input.publicAccount.displayName}`,
+        `currentHandle: ${input.publicAccount.handle}`,
+        contextBlock,
+        knownAppearance ? `Established appearance: ${knownAppearance}` : "",
+        "",
+        outputFormat,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    },
+  ];
+  const promptForLog = messages.map((m) => `${m.role.toUpperCase()}:\n${m.content}`).join("\n\n");
+  logDebugOverride(input.debugMode, "[debug/noodle] Private stage identity prompt sent to model:\n%s", promptForLog);
+  const maxTokens = clampGenerationMaxOutputTokens({
+    provider: input.connection.provider as APIProvider,
+    model: input.connection.model,
+    maxTokens: profileSetupMaxTokens(1),
+    maxTokensOverride: input.connection.maxTokensOverride,
+  });
+  const result = await input.provider.chatComplete(messages, {
+    model: input.connection.model,
+    maxTokens,
+    temperature: 0.8,
+    topP: 0.9,
+    stream: false,
+    debugMode: input.debugMode,
+    responseFormat: noodleResponseFormat(input.connection.model, "profiles"),
+  });
+  const parsed = noodlePrivateIdentitySchema.safeParse(parseGameJsonish(result.content ?? ""));
+  if (!parsed.success) {
+    logger.warn("[noodle] Failed to parse generated NoodleR stage identity for %s", input.publicAccount.displayName);
+    return null;
+  }
+  return {
+    name: parsed.data.name,
+    handle: parsed.data.handle,
+    bio: parsed.data.bio,
+    appearance: parsed.data.appearance || knownAppearance,
+  };
+}
+
+async function generatePrivateAccountAvatar(input: {
+  displayName: string;
+  bio: string;
+  appearance: string;
+  imageConnection: NonNullable<Awaited<ReturnType<ReturnType<typeof createConnectionsStorage>["getWithKey"]>>>;
+  app: FastifyInstance;
+  debugMode: boolean;
+}): Promise<string | null> {
+  const imageSettings = await loadImageGenerationUserSettings(input.app.db);
+  const imageDefaults = resolveConnectionImageDefaults(input.imageConnection);
+  const imageModel = input.imageConnection.model || "";
+  const imageBaseUrl = input.imageConnection.baseUrl || "https://image.pollinations.ai";
+  const imageSource = input.imageConnection.imageGenerationSource || imageModel;
+  const imageServiceHint = input.imageConnection.imageService || imageSource;
+  const imageFallback = await resolveImageConnectionFallback(
+    createConnectionsStorage(input.app.db),
+    input.imageConnection.id,
+  );
+  // The appearance description is the load-bearing part of this prompt: without a
+  // concrete physical description, the backing image model/checkpoint falls back to
+  // whatever default identity it was trained/tuned on instead of a distinct look.
+  const avatarPrompt = [
+    input.appearance,
+    input.bio ? input.bio : "",
+    "Solo portrait, waist-up, social media profile picture style.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const compiledPrompt = compileImagePrompt({
+    kind: "avatar",
+    prompt: avatarPrompt,
+    styleProfiles: imageSettings.styleProfiles,
+    imageDefaults,
+  });
+  logDebugOverride(
+    input.debugMode,
+    "[debug/noodle/image] NoodleR avatar prompt for %s:\n%s",
+    input.displayName,
+    compiledPrompt.prompt,
+  );
+  const image = await generateNoodleImageWithRetry(
+    () =>
+      generateImage(imageSource, imageBaseUrl, input.imageConnection.apiKey || "", imageServiceHint, {
+        prompt: compiledPrompt.prompt,
+        negativePrompt: compiledPrompt.negativePrompt || undefined,
+        model: imageModel,
+        width: imageSettings.portrait.width,
+        height: imageSettings.portrait.height,
+        imageEndpointId: input.imageConnection.imageEndpointId || undefined,
+        comfyWorkflow: input.imageConnection.comfyuiWorkflow || undefined,
+        imageDefaults,
+        fallback: imageFallback,
+      }),
+    (error, attempt, maxAttempts) => {
+      logger.warn(error, "[noodle] Avatar generation attempt %d/%d failed for %s", attempt, maxAttempts, input.displayName);
+    },
+  );
+  const filePath = saveImageToDisk("noodle", image.base64, image.ext);
+  return galleryImageUrl(filePath, "noodle");
+}
+
+async function generateNoodlerReaction(input: {
+  noodle: ReturnType<typeof createNoodleStorage>;
+  creator: NoodleAccount;
+  subscriberDisplayName: string;
+  triggerPost: NoodlePost;
+  kind: "subscribe" | "unlock";
+  provider: ReturnType<typeof createLLMProvider>;
+  connection: {
+    provider: string;
+    model: string;
+    maxTokensOverride?: number | null;
+  };
+  debugMode: boolean;
+}): Promise<NoodleInteraction | null> {
+  const messages: ChatMessage[] = [
+    {
+      role: "system",
+      content: [
+        `You write a single short in-character reply from ${input.creator.displayName}, a NoodleR (private, subscriber-only) content creator, reacting to a fan's action on their profile.`,
+        NOODLE_ADULT_PLATFORM_POLICY,
+        "Write only the reply text: one or two sentences, casual and personal, matching the creator's voice and bio. No JSON, no quotes, no extra commentary.",
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: [
+        `Creator bio: ${input.creator.bio || "(no bio set)"}`,
+        `Fan display name: ${input.subscriberDisplayName}`,
+        `Fan action: ${input.kind === "subscribe" ? "just subscribed to this account" : "just unlocked this pay-per-view post"}`,
+        `The post they're replying under: ${input.triggerPost.content || "(image post)"}`,
+        "Write the creator's short thank-you reply now.",
+      ].join("\n"),
+    },
+  ];
+  const maxTokens = clampGenerationMaxOutputTokens({
+    provider: input.connection.provider as APIProvider,
+    model: input.connection.model,
+    maxTokens: 256,
+    maxTokensOverride: input.connection.maxTokensOverride,
+  });
+  const result = await input.provider.chatComplete(messages, {
+    model: input.connection.model,
+    maxTokens,
+    temperature: 0.9,
+    topP: 0.9,
+    stream: false,
+    debugMode: input.debugMode,
+  });
+  const content = (result.content ?? "").trim();
+  if (!content) return null;
+  return input.noodle.createInteraction(input.triggerPost.id, {
+    actorAccountId: input.creator.id,
+    type: "reply",
+    content,
+    parentInteractionId: null,
+  });
+}
+
+async function tryGenerateNoodlerReaction(input: {
+  noodle: ReturnType<typeof createNoodleStorage>;
+  connections: ReturnType<typeof createConnectionsStorage>;
+  creator: NoodleAccount;
+  subscriberDisplayName: string;
+  triggerPost: NoodlePost | null;
+  kind: "subscribe" | "unlock";
+}): Promise<NoodleInteraction | null> {
+  if (input.creator.visibility !== "private" || !input.triggerPost) return null;
+  try {
+    const settings = await input.noodle.getSettings();
+    const connectionId = settings.generationConnectionId;
+    const conn = connectionId ? await input.connections.getWithKey(connectionId) : null;
+    if (!conn) return null;
+    const baseUrl = resolveBaseUrl(conn);
+    const provider = createLLMProvider(
+      conn.provider,
+      baseUrl,
+      conn.apiKey,
+      conn.maxContext,
+      conn.openrouterProvider,
+      conn.maxTokensOverride,
+      conn.claudeFastMode === "true",
+      conn.treatAsLocalEndpoint === "true",
+    );
+    return await generateNoodlerReaction({
+      noodle: input.noodle,
+      creator: input.creator,
+      subscriberDisplayName: input.subscriberDisplayName,
+      triggerPost: input.triggerPost,
+      kind: input.kind,
+      provider,
+      connection: conn,
+      debugMode: false,
+    });
+  } catch (error) {
+    logger.warn(error, "[noodle] Failed to generate NoodleR reaction for %s", input.creator.displayName);
+    return null;
+  }
+}
+
 function interactionDigestVerb(type: NoodleInteractionType) {
   if (type === "reply") return "replied on";
   if (type === "repost") return "reposted";
@@ -1518,9 +1774,93 @@ export async function noodleRoutes(app: FastifyInstance) {
 
   app.post("/accounts/:id/private", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const publicAccount = await noodle.getAccountById(id);
+    if (!publicAccount) return reply.code(404).send({ error: "Noodle account not found" });
     const created = await noodle.createPrivateAccount(id);
     if (!created) return reply.code(400).send({ error: "Could not create a private Noodle account for that account." });
-    return created;
+
+    try {
+      const settings = await noodle.getSettings();
+      const connectionId = settings.generationConnectionId;
+      const conn = connectionId ? await connections.getWithKey(connectionId) : null;
+      if (conn) {
+        const baseUrl = resolveBaseUrl(conn);
+        const provider = createLLMProvider(
+          conn.provider,
+          baseUrl,
+          conn.apiKey,
+          conn.maxContext,
+          conn.openrouterProvider,
+          conn.maxTokensOverride,
+          conn.claudeFastMode === "true",
+          conn.treatAsLocalEndpoint === "true",
+        );
+        const identity = await generatePrivateAccountStageIdentity({
+          publicAccount,
+          characters,
+          provider,
+          connection: conn,
+          debugMode: false,
+        });
+        if (identity) {
+          let avatarUrl: string | null = null;
+          const imageConnection = settings.imageGenerationConnectionId
+            ? await connections.getWithKey(settings.imageGenerationConnectionId)
+            : await connections.getDefaultForImageGeneration();
+          if (imageConnection) {
+            avatarUrl = await generatePrivateAccountAvatar({
+              displayName: identity.name,
+              bio: identity.bio,
+              appearance: identity.appearance,
+              imageConnection,
+              app,
+              debugMode: false,
+            }).catch((error) => {
+              logger.warn(error, "[noodle] Failed to generate NoodleR avatar for %s", identity.name);
+              return null;
+            });
+          }
+          await noodle.updateAccount(created.id, {
+            handle: identity.handle,
+            displayName: identity.name,
+            bio: identity.bio,
+            ...(avatarUrl ? { avatarUrl } : {}),
+          });
+        }
+      }
+    } catch (error) {
+      logger.warn(error, "[noodle] Failed to generate NoodleR stage identity for account %s", id);
+    }
+
+    return (await noodle.getAccountById(created.id)) ?? created;
+  });
+
+  app.get("/noodler/hub", async (req, reply) => {
+    const parsed = noodleSubscribeSchema.safeParse({
+      subscriberKind: (req.query as Record<string, unknown>).subscriberKind,
+      subscriberEntityId: (req.query as Record<string, unknown>).subscriberEntityId,
+    });
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    let subscriber = await noodle.getAccountByEntity(parsed.data.subscriberKind, parsed.data.subscriberEntityId);
+    if (!subscriber && parsed.data.subscriberKind === "persona") {
+      subscriber = await resolvePersonaAccount(noodle, characters, parsed.data.subscriberEntityId);
+    }
+    if (!subscriber) return reply.code(404).send({ error: "Noodle subscriber not found" });
+
+    const privateAccounts = await noodle.listPrivateAccounts();
+    // A private account always shares kind+entityId with the public account it's
+    // linked from, so we can split owned-vs-browsable without a reverse lookup:
+    // "persona" private accounts are the caller's own NoodleR pages, "character"
+    // ones are creators to subscribe to.
+    const owned = privateAccounts.filter((account) => account.kind === "persona");
+    const creatorAccounts = privateAccounts.filter((account) => account.kind === "character");
+    const subscriptions = await noodle.listSubscriptionsForSubscriber(subscriber.id);
+    const subscribedCreatorIds = new Set(subscriptions.map((subscription) => subscription.creatorAccountId));
+    return {
+      owned,
+      subscribed: creatorAccounts.filter((account) => subscribedCreatorIds.has(account.id)),
+      discover: creatorAccounts.filter((account) => !subscribedCreatorIds.has(account.id)),
+    };
   });
 
   app.post("/accounts/:id/subscribe", async (req, reply) => {
@@ -1536,7 +1876,16 @@ export async function noodleRoutes(app: FastifyInstance) {
     if (!subscriber) return reply.code(404).send({ error: "Noodle subscriber not found" });
     const subscription = await noodle.subscribe(subscriber.id, creator.id);
     if (!subscription) return reply.code(400).send({ error: "Could not subscribe to that account." });
-    return subscription;
+    const triggerPost = await noodle.getMostRecentPostByAuthor(creator.id);
+    const reaction = await tryGenerateNoodlerReaction({
+      noodle,
+      connections,
+      creator,
+      subscriberDisplayName: subscriber.displayName,
+      triggerPost,
+      kind: "subscribe",
+    });
+    return { ...subscription, reaction };
   });
 
   app.delete("/accounts/:id/subscribe", async (req, reply) => {
@@ -1563,7 +1912,19 @@ export async function noodleRoutes(app: FastifyInstance) {
       actor = await resolvePersonaAccount(noodle, characters, parsed.data.actorEntityId);
     }
     if (!actor) return reply.code(404).send({ error: "Noodle actor not found" });
-    return noodle.unlockPost(actor.id, postId);
+    const unlock = await noodle.unlockPost(actor.id, postId);
+    const creator = await noodle.getAccountById(post.authorAccountId);
+    const reaction = creator
+      ? await tryGenerateNoodlerReaction({
+          noodle,
+          connections,
+          creator,
+          subscriberDisplayName: actor.displayName,
+          triggerPost: post,
+          kind: "unlock",
+        })
+      : null;
+    return { ...unlock, reaction };
   });
 
   app.post("/posts/:id/interactions", async (req, reply) => {

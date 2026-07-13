@@ -537,6 +537,16 @@ export function createNoodleStorage(db: DB) {
       return rows.map(mapPost);
     },
 
+    async getMostRecentPostByAuthor(authorAccountId: string): Promise<NoodlePost | null> {
+      const rows = await db
+        .select()
+        .from(noodlePosts)
+        .where(eq(noodlePosts.authorAccountId, authorAccountId))
+        .orderBy(desc(noodlePosts.createdAt))
+        .limit(1);
+      return rows[0] ? mapPost(rows[0]) : null;
+    },
+
     async listPostsBefore(before: string): Promise<NoodlePost[]> {
       const rows = await db
         .select()
@@ -1041,6 +1051,14 @@ export function createNoodleStorage(db: DB) {
 
     async listSubscriptions(): Promise<NoodleAccountSubscription[]> {
       const rows = await db.select().from(noodleAccountSubscriptions);
+      return rows.map(mapSubscription);
+    },
+
+    async listSubscriptionsForSubscriber(subscriberAccountId: string): Promise<NoodleAccountSubscription[]> {
+      const rows = await db
+        .select()
+        .from(noodleAccountSubscriptions)
+        .where(eq(noodleAccountSubscriptions.subscriberAccountId, subscriberAccountId));
       return rows.map(mapSubscription);
     },
 
