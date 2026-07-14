@@ -150,37 +150,67 @@ bootstrap cache entry before the refetch resolves.
 
 ---
 
-## Phase 5 — Client: file split (`NoodleHome.tsx` / `NoodlerHome.tsx`)
+## Phase 5 — Client: file split (`NoodleHome.tsx` / `NoodlerHome.tsx`) — PARTIALLY DONE
 
-Do this **after** Phase 3 lands — the split should follow the now-explicit mode boundary rather
-than a guessed one.
+Status: `NoodleHome.tsx` (home timeline/search/notifications), `NoodlerHome.tsx` (NoodleR hub
+tabs — timeline/subscriptions/discover/owned, lazy-loaded from `NoodleView.tsx` via `lazy()`),
+and `noodle-shared.tsx` (types, constants, `Avatar`, badges, and other genuinely shared bits)
+have been extracted and merged. `pnpm check`-equivalent (scoped tsc + eslint, plus a full client
+`tsc --noEmit` pass) was clean at merge time; **not verified in a browser** — no dev server was
+available in this environment, so a manual click-through on desktop and mobile is still owed
+before this ships.
+
+**Not done — remaining work for whoever picks this up next:** `NoodleView.tsx` is still ~6,558
+lines, not a "thin shell." The private/public profile view, the private composer, and the
+NoodleR settings sections (NoodleR Access, NoodleR Fan Activity) are still in `NoodleView.tsx`,
+not extracted into `NoodlerHome.tsx`/`NoodleHome.tsx`. This was a deliberate call by the
+extraction pass, not an oversight — those pieces are more entangled with state/logic shared
+across both modes than the hub/timeline views were, and forcing a split without careful
+untangling risked exactly the kind of duplicated-state-that-drifts-out-of-sync bug this whole
+effort exists to prevent. If you pick this up:
+- Grep `NoodleView.tsx` for the profile view (`activeNoodleView === "profile"`), the private
+  composer (`privateComposerText`/`privateComposerAccess`), and the settings sections ("NoodleR
+  Access"/"NoodleR Fan Activity") to find current locations.
+- The profile view in particular renders both public and private profiles from one code path
+  branching on `viewedProfileAccount.visibility` — decide whether to split it by mode (risking
+  duplication of the shared banner/avatar/tab chrome) or leave it in the shell and pass it as a
+  prop/children into both `NoodleHome`/`NoodlerHome` (avoids duplication, keeps the shell fatter).
+  Either is defensible; document whichever you pick.
+- Original plan for reference (kept below for anyone doing the rest of this extraction):
+
+<details>
+<summary>Original Phase 5 plan (not fully executed)</summary>
 
 - `NoodleView.tsx` becomes a thin shell: shared chrome (top bar, compose-modal wiring,
   `NoodleModeSwitcher`, settings-panel scaffold), the `activeNoodleMode` state, and
   `transitionNoodleMode`. It renders `<NoodleHome>` or `<NoodlerHome>` based on mode.
-- New file `packages/client/src/components/noodle/NoodleHome.tsx`: public feed — home timeline,
-  search, notifications, public profile view. Mechanical extraction of the existing
-  `activeNoodleView !== "noodler"` branches — minimize behavior changes in this step.
-- New file `packages/client/src/components/noodle/NoodlerHome.tsx`: NoodleR hub (~L5980-6114 in
-  the original file — timeline/subscriptions/discover/owned tabs), private profile view, composer
-  (~L6560-6656), fan-activity settings panel (~L6657+). Also mechanical extraction — do the UX
-  redesign (Phase 6) as a separate follow-up commit/PR, not combined with the extraction, so the
-  move-only diff is reviewable on its own.
-- Lazy-load `NoodlerHome.tsx` in `AppShell.tsx` per the existing pattern (see `CharacterEditor`
-  import there for the exact `lazy(() => import(...).then(...))` shape). Keep `NoodleHome.tsx`
-  eager since it's the default surface.
-- Extract genuinely shared bits (avatar rendering, image lightbox, the locked-content
-  blur+overlay pattern used at both ~L4326-4352 and ~L4600-4645) into a small shared file instead
-  of duplicating them into both new files.
+- `NoodleHome.tsx`: public feed — home timeline, search, notifications, public profile view.
+- `NoodlerHome.tsx`: NoodleR hub, private profile view, composer, fan-activity settings panel.
+- Lazy-load `NoodlerHome.tsx` (done, though from within `NoodleView.tsx` rather than
+  `AppShell.tsx` — functionally equivalent since `NoodleView.tsx` itself is already lazy-loaded
+  from `AppShell.tsx`).
+- Extract genuinely shared bits (avatar rendering, image lightbox, locked-content blur+overlay
+  pattern) into a small shared file instead of duplicating them (done — `noodle-shared.tsx`).
 
-**Verify:** `pnpm check` catches missed imports. Manually click through both modes on desktop and
-mobile widths, confirm no visual regression from the pre-split behavior.
+</details>
+
+**Verify (still owed):** manually click through both modes on desktop and mobile widths, confirm
+no visual regression from the pre-split behavior — profile view, composer, and settings
+especially, since those weren't touched by the extraction and should be behaviorally identical,
+but haven't been eyeballed in a running app.
 
 ---
 
 ## Phase 6 — NoodleR UX redesign (creator-platform framing)
 
 Do this in `NoodlerHome.tsx` after Phase 5 lands, so the redesign happens once, not twice.
+
+**Note on line anchors below:** Phase 5 only partially landed (see its section above) — the hub
+tabs (`renderNoodlerDiscoverCard`, `NOODLER_HUB_TABS`, subscribe/unlock rows) now live in
+`NoodlerHome.tsx`, but the composer, private profile view, and NoodleR settings sections are
+still in `NoodleView.tsx` at shifted line numbers. `NoodlerPrivateBadge`/`NoodlerBadge` and other
+shared primitives now live in `noodle-shared.tsx`. Re-grep for exact locations before editing —
+the `~L####` anchors below are from the pre-split file and are now approximate at best.
 
 **Reuse the existing chip/badge system instead of hand-rolled pills:**
 - `.mari-suggestion-chip` (`globals.css` ~L894-930, tinted pill with `color-mix` tint/border/glow)
