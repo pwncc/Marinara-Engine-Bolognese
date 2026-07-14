@@ -33,9 +33,10 @@ import {
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   Fragment,
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -43,14 +44,12 @@ import {
   type CSSProperties,
   type RefObject,
 } from "react";
-import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import {
   canManageNoodleReply,
   findNoodleTextMentions,
   noodleTextMentionsHandle as textMentionsHandle,
   readNoodlePollFromMetadata,
-  type NoodleTextMention,
   type APIConnection,
   type NoodleAccount,
   type NoodleCarryoverTarget,
@@ -65,7 +64,7 @@ import {
   type NoodleRefreshSchedulerStatus,
   type NoodleSettingsUpdateInput,
 } from "@marinara-engine/shared";
-import { cn, getAvatarCropStyle, parseAvatarCropJson, type AvatarCropValue } from "../../lib/utils";
+import { cn, parseAvatarCropJson, type AvatarCropValue } from "../../lib/utils";
 import { renderInlineWithCustomEmojis } from "../../lib/custom-emoji-render";
 import { useActivePersona, useCharacterGroups, useCharacters, usePersonas } from "../../hooks/use-characters";
 import { useConnections } from "../../hooks/use-connections";
@@ -121,6 +120,45 @@ import {
 } from "../../hooks/use-noodler";
 import { useUIStore } from "../../stores/ui.store";
 import { useTrackAchievement } from "../../hooks/use-achievements";
+import { NoodleHome, type NoodleHomeProps } from "./NoodleHome";
+import type { NoodlerHomeProps } from "./NoodlerHome";
+import {
+  Avatar,
+  BrowserChrome,
+  MobileTimelineBackButton,
+  NoodleAnchoredPopover,
+  NoodleLogo,
+  NoodleModeSwitcher,
+  NoodleToolButton,
+  NoodleToolPopover,
+  NoodlerBadge,
+  NoodlerPrivateBadge,
+  fieldClass,
+  iconButtonClass,
+  labelClass,
+  textareaClass,
+  NOODLE_BLUE,
+  NOODLER_BLUE,
+  NOODLE_ICON_SCOPE_CLASS,
+  NOODLE_MODE_META,
+  countInteractions,
+  createNoodleLightboxImage,
+  formatTime,
+  type ActiveComposerMention,
+  type ComposerTool,
+  type NoodleMode,
+  type NoodleNotificationFocusTarget,
+  type NoodlerHubTab,
+  type NoodlerTimelineItem,
+  type NoodleViewId,
+  type NotificationTab,
+  type ProfileConnectionTab,
+  type ProfileTab,
+  type ReplyComposerTool,
+  type TimelineTab,
+} from "./noodle-shared";
+
+const NoodlerHome = lazy(() => import("./NoodlerHome").then((module) => ({ default: module.NoodlerHome })));
 
 type RawCharacter = { id?: unknown; data?: unknown; avatarPath?: unknown };
 type RawCharacterGroup = { id?: unknown; name?: unknown; description?: unknown; characterIds?: unknown };
@@ -135,18 +173,6 @@ type PrivateStageDraft = {
   stageAppearanceOverride?: string;
 };
 
-const fieldClass =
-  "mari-chrome-field h-9 w-full min-w-0 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 text-xs text-[var(--foreground)] outline-none transition-colors focus:border-[var(--noodle-blue)]";
-const textareaClass =
-  "mari-chrome-field min-h-24 w-full min-w-0 resize-y rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] p-3 text-xs leading-relaxed text-[var(--foreground)] outline-none transition-colors focus:border-[var(--noodle-blue)]";
-const labelClass =
-  "text-[0.68rem] font-semibold uppercase tracking-normal text-[var(--marinara-chat-chrome-panel-muted)]";
-const iconButtonClass =
-  "inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-md px-2 text-xs font-medium !text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:!text-[var(--noodle-blue)]";
-const NOODLE_BLUE = "#7EA7FF";
-const NOODLER_BLUE = "#FF6FAE";
-const NOODLE_ICON_SCOPE_CLASS = "[&_svg]:!text-[var(--noodle-blue)]";
-const NOODLE_LOGO_SRC = "/noodle-klusek.png";
 const NOODLE_NOTIFICATIONS_READ_AT_KEY = "notificationsReadAt";
 const NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY = "followingAccountTimestamps";
 const NOODLER_LAST_VIEWED_AT_KEY = "noodlerLastViewedAt";
@@ -160,32 +186,7 @@ const NOODLE_MEDIA_PICKER_TABS: ConversationMediaPickerTab[] = [
   { id: "stickers", label: "Stickers" },
 ];
 
-type ComposerTool = "image" | "poll" | "media";
-type ReplyComposerTool = "image" | "media";
-type ProfileTab = "posts" | "likes" | "media";
-type ProfileConnectionTab = "followers" | "following";
-type NotificationTab = "likes" | "follows" | "replies";
-type TimelineTab = "main" | "following";
-type NoodlerHubTab = "timeline" | "subscriptions" | "discover" | "owned";
-type NoodleMode = "noodle" | "noodler";
 type NoodlePrivatePostAccess = Exclude<NoodlePostAccess, "public">;
-type NoodleViewId = "home" | "search" | "notifications" | "profile" | "settings" | "noodler" | "noodler-verification";
-type NoodleNotificationFocusTarget = {
-  postId: string;
-  interactionId: string | null;
-};
-type ActiveComposerMention = NoodleTextMention & { query: string };
-type NoodlerTimelineItem =
-  | { id: string; kind: "post"; createdAt: string; post: NoodlePost }
-  | {
-      id: string;
-      kind: "subscription" | "unlock" | "reply";
-      createdAt: string;
-      creatorAccount: NoodleAccount | null;
-      actorAccount: NoodleAccount | null;
-      post: NoodlePost | null;
-      interaction?: NoodleInteraction;
-    };
 type NoodleConfirmAction =
   | {
       kind: "delete-post";
@@ -222,41 +223,10 @@ const PROFILE_TABS: Array<{ id: ProfileTab; label: string }> = [
   { id: "media", label: "Media" },
 ];
 
-const TIMELINE_TABS: Array<{ id: TimelineTab; label: string }> = [
-  { id: "main", label: "Main" },
-  { id: "following", label: "Following" },
-];
-
 const PROFILE_CONNECTION_TABS: Array<{ id: ProfileConnectionTab; label: string }> = [
   { id: "followers", label: "Followers" },
   { id: "following", label: "Following" },
 ];
-
-const NOTIFICATION_TABS: Array<{ id: NotificationTab; label: string }> = [
-  { id: "likes", label: "Likes" },
-  { id: "follows", label: "Follows" },
-  { id: "replies", label: "Replies" },
-];
-
-const NOODLER_HUB_TABS: Array<{ id: NoodlerHubTab; label: string }> = [
-  { id: "timeline", label: "Timeline" },
-  { id: "subscriptions", label: "Subscriptions" },
-  { id: "discover", label: "Discover" },
-  { id: "owned", label: "Your Pages" },
-];
-
-const NOODLE_MODE_META: Record<NoodleMode, { label: string; url: string; tagline: string }> = {
-  noodle: {
-    label: "Noodle",
-    url: "https://noodle.local",
-    tagline: "Public social timeline",
-  },
-  noodler: {
-    label: "NoodleR",
-    url: "https://noodler.local",
-    tagline: "Private creator network",
-  },
-};
 
 function parseRecord(value: unknown): Record<string, unknown> {
   if (!value) return {};
@@ -413,28 +383,6 @@ function characterGroupName(group: RawCharacterGroup) {
   return readString(group.name).trim() || "Character folder";
 }
 
-function initials(name: string) {
-  return (
-    name
-      .split(/\s+/)
-      .map((part) => part[0])
-      .join("")
-      .slice(0, 2)
-      .toUpperCase() || "N"
-  );
-}
-
-function formatTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
 function formatNoodleRefreshTime(value: string | null, timezone?: string) {
   if (!value) return "";
   const date = new Date(value);
@@ -478,43 +426,6 @@ function noodleSchedulerSummary(scheduler: NoodleRefreshSchedulerStatus) {
   if (scheduler.state === "due") return "An automatic refresh is due now.";
   const nextTime = formatNoodleRefreshTime(scheduler.nextRefreshAt, scheduler.timezone);
   return nextTime ? `Next automatic refresh at ${nextTime}.` : "Automatic refresh is scheduled.";
-}
-
-function Avatar({
-  account,
-  size = "md",
-}: {
-  account: Pick<NoodleAccount, "displayName" | "avatarUrl"> & { avatarCrop?: AvatarCropValue | null };
-  size?: "sm" | "md" | "lg";
-}) {
-  const dimension = size === "sm" ? "h-8 w-8" : size === "lg" ? "h-24 w-24" : "h-11 w-11";
-  if (account.avatarUrl) {
-    return (
-      <div
-        className={cn(
-          dimension,
-          "relative aspect-square flex-none overflow-hidden rounded-full border border-[var(--noodle-blue)]/30",
-        )}
-      >
-        <img
-          src={account.avatarUrl}
-          alt=""
-          className="h-full w-full object-cover"
-          style={getAvatarCropStyle(account.avatarCrop)}
-        />
-      </div>
-    );
-  }
-  return (
-    <div
-      className={cn(
-        dimension,
-        "flex aspect-square flex-none items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 text-xs font-bold text-[var(--noodle-blue)] ring-1 ring-[var(--noodle-blue)]/25",
-      )}
-    >
-      {initials(account.displayName)}
-    </div>
-  );
 }
 
 function NoodleCustomEmojiText({
@@ -735,93 +646,6 @@ function NoodlePollCard({
   );
 }
 
-function NoodleLogo({ className }: { className?: string }) {
-  return <img src={NOODLE_LOGO_SRC} alt="" className={cn("object-contain", className)} />;
-}
-
-function NoodlerBadge({ className }: { className?: string }) {
-  return (
-    <span
-      title="Has a NoodleR page"
-      aria-label="Has a NoodleR page"
-      className={cn(
-        "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 text-[var(--noodle-blue)]",
-        className,
-      )}
-    >
-      <Lock size={10} strokeWidth={2.6} />
-    </span>
-  );
-}
-
-function NoodlerPrivateBadge({ className }: { className?: string }) {
-  return (
-    <span
-      title="Private NoodleR account"
-      aria-label="Private NoodleR account"
-      className={cn(
-        "inline-flex shrink-0 items-center gap-0.5 rounded-full bg-[var(--noodle-blue)] px-1.5 py-0.5 text-[0.6rem] font-black leading-none text-zinc-950",
-        className,
-      )}
-    >
-      <Lock size={9} strokeWidth={3} />
-      NoodleR
-    </span>
-  );
-}
-
-function MobileTimelineBackButton({ label = "Back to Noodle timeline", onClick }: { label?: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 lg:hidden"
-      title={label}
-      aria-label={label}
-    >
-      <ChevronLeft size={22} />
-    </button>
-  );
-}
-
-function NoodleModeSwitcher({
-  activeMode,
-  onOpenNoodle,
-  onOpenNoodler,
-}: {
-  activeMode: NoodleMode;
-  onOpenNoodle: () => void;
-  onOpenNoodler: () => void;
-}) {
-  const modes: Array<{ id: NoodleMode; icon: typeof Home; onClick: () => void }> = [
-    { id: "noodle", icon: Home, onClick: onOpenNoodle },
-    { id: "noodler", icon: Lock, onClick: onOpenNoodler },
-  ];
-  return (
-    <div className="grid grid-cols-2 gap-1 rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] p-1">
-      {modes.map((mode) => {
-        const Icon = mode.icon;
-        const active = activeMode === mode.id;
-        return (
-          <button
-            key={mode.id}
-            type="button"
-            onClick={mode.onClick}
-            aria-pressed={active}
-            className={cn(
-              "flex min-h-9 min-w-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-bold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
-              active && "bg-[var(--noodle-blue)]/15 text-[var(--foreground)] ring-1 ring-[var(--noodle-blue)]/30",
-            )}
-          >
-            <Icon size={14} className={cn(active && "!text-[var(--noodle-blue)]")} />
-            <span className="truncate">{NOODLE_MODE_META[mode.id].label}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function FieldLabel({ children, help }: { children: React.ReactNode; help?: React.ReactNode }) {
   return (
     <span className={cn(labelClass, "inline-flex items-center gap-1")}>
@@ -870,190 +694,6 @@ function ToggleSetting({
         onChange={(event) => onChange(event.target.checked)}
       />
     </label>
-  );
-}
-
-function BrowserChrome({ mode, path }: { mode: NoodleMode; path: string }) {
-  const meta = NOODLE_MODE_META[mode];
-  const host = mode === "noodler" ? "noodler.local" : "noodle.local";
-  return (
-    <div className="hidden h-11 shrink-0 items-center gap-2 border-b border-[var(--noodle-divider)] bg-[var(--background)] px-3 lg:flex">
-      <div className="hidden items-center gap-1.5 sm:flex" aria-hidden="true">
-        <span className="h-2.5 w-2.5 rounded-full bg-[var(--noodle-blue)]" />
-        <span className="h-2.5 w-2.5 rounded-full bg-[var(--muted-foreground)]/35" />
-        <span className="h-2.5 w-2.5 rounded-full bg-[var(--muted-foreground)]/25" />
-      </div>
-      <div className="hidden items-center gap-0.5 sm:flex" aria-hidden="true">
-        <span className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--noodle-blue)] opacity-70">
-          <ChevronLeft size={15} />
-        </span>
-        <span className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--noodle-blue)] opacity-50">
-          <ChevronRight size={15} />
-        </span>
-        <span className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--noodle-blue)]">
-          <RefreshCw size={14} />
-        </span>
-      </div>
-      <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-full border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--card)] px-3 text-xs shadow-sm">
-        <Lock size={13} className="hidden shrink-0 text-[var(--noodle-blue)] sm:block" />
-        <Search size={14} className="shrink-0 text-[var(--noodle-blue)] sm:hidden" />
-        <span className="truncate text-[var(--foreground)] sm:hidden">{`${host}${path}`}</span>
-        <span className="hidden truncate text-[var(--foreground)] sm:inline">{`${meta.url}${path}`}</span>
-        <span className="hidden rounded-full bg-[var(--noodle-blue)]/15 px-2 py-0.5 font-semibold text-[var(--noodle-blue)] sm:inline-flex">
-          {meta.label}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function countInteractions(interactions: NoodleInteraction[], type: NoodleInteractionType) {
-  return interactions.filter((interaction) => interaction.type === type).length;
-}
-
-function createNoodleLightboxImage(id: string, url: string, prompt = ""): ChatImage {
-  const filename = url.split("?")[0]?.split("/").pop();
-  const safeFilename = filename && /\.(?:avif|gif|jpe?g|png|webp)$/i.test(filename) ? filename : `noodle-${id}.png`;
-  return {
-    id,
-    chatId: "noodle",
-    filePath: safeFilename,
-    prompt,
-    provider: "",
-    model: "",
-    width: null,
-    height: null,
-    createdAt: "",
-    url,
-  };
-}
-
-function NoodleToolButton({
-  active,
-  title,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  title: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      aria-label={title}
-      className={cn(
-        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full p-0 !text-[var(--noodle-blue)] transition-colors active:scale-95 [&_svg]:!text-[var(--noodle-blue)]",
-        active ? "bg-[var(--noodle-blue)]/15 ring-1 ring-[var(--noodle-blue)]/25" : "hover:bg-[var(--noodle-blue)]/10",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function NoodleAnchoredPopover({
-  anchorRef,
-  children,
-  wide,
-  className,
-}: {
-  anchorRef: React.RefObject<HTMLElement | null>;
-  children: React.ReactNode;
-  wide?: boolean;
-  className?: string;
-}) {
-  const panelRef = useRef<HTMLDivElement | null>(null);
-  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
-
-  useLayoutEffect(() => {
-    const updatePosition = () => {
-      const anchor = anchorRef.current;
-      if (!anchor) return;
-      const anchorRect = anchor.getBoundingClientRect();
-      const panelWidth = panelRef.current?.offsetWidth ?? (wide ? 384 : 304);
-      const padding = 16;
-      const maxLeft = Math.max(padding, window.innerWidth - panelWidth - padding);
-      const centeredLeft = anchorRect.left + anchorRect.width / 2 - panelWidth / 2;
-      setPosition({
-        left: Math.min(Math.max(centeredLeft, padding), maxLeft),
-        top: anchorRect.bottom + 12,
-      });
-    };
-
-    updatePosition();
-    const frame = window.requestAnimationFrame(updatePosition);
-    window.addEventListener("resize", updatePosition);
-    window.addEventListener("scroll", updatePosition, true);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.removeEventListener("resize", updatePosition);
-      window.removeEventListener("scroll", updatePosition, true);
-    };
-  }, [anchorRef, wide]);
-
-  if (typeof document === "undefined") return null;
-
-  return createPortal(
-    <div
-      ref={panelRef}
-      className={cn(
-        "fixed z-[80] max-w-[calc(100vw-2rem)]",
-        NOODLE_ICON_SCOPE_CLASS,
-        wide ? "w-[18rem] sm:w-[24rem]" : "w-[19rem]",
-        className,
-      )}
-      style={
-        {
-          "--noodle-blue": NOODLE_BLUE,
-          "--noodle-divider": "var(--marinara-chat-chrome-panel-divider)",
-          left: position?.left ?? -9999,
-          top: position?.top ?? -9999,
-          opacity: position ? 1 : 0,
-        } as CSSProperties
-      }
-    >
-      {children}
-    </div>,
-    document.body,
-  );
-}
-
-function NoodleToolPopover({
-  title,
-  onClose,
-  children,
-  wide,
-  anchorRef,
-}: {
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-  wide?: boolean;
-  anchorRef: React.RefObject<HTMLElement | null>;
-}) {
-  return (
-    <NoodleAnchoredPopover anchorRef={anchorRef} wide={wide}>
-      <div className="marinara-chat-popover flex h-[22rem] max-h-[60vh] flex-col overflow-hidden rounded-xl border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] text-[var(--foreground)] shadow-2xl shadow-black/35">
-        <div className="flex shrink-0 items-center gap-1 border-b border-foreground/10 px-2 py-1.5">
-          <span className="flex-1 rounded-md bg-foreground/10 px-2 py-1 text-center text-xs font-medium text-foreground/80 ring-1 ring-foreground/15">
-            {title}
-          </span>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--noodle-blue)] transition-colors hover:bg-foreground/10"
-            title="Close"
-          >
-            <X size={14} />
-          </button>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">{children}</div>
-      </div>
-    </NoodleAnchoredPopover>
   );
 }
 
@@ -5148,96 +4788,6 @@ export function NoodleView() {
     </>
   );
 
-  const mobileSearchContent = (
-    <div className="min-h-full" data-component="NoodleView.MobileSearch">
-      <div className="sticky top-0 z-20 flex items-center gap-2 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 px-2 py-3 backdrop-blur">
-        <MobileTimelineBackButton onClick={openMobileHomeTimeline} />
-        <label className="flex h-11 min-w-0 flex-1 items-center gap-2 rounded-full bg-[var(--accent)] px-4 text-sm ring-1 ring-inset ring-[var(--noodle-divider)] transition-colors focus-within:ring-[var(--noodle-blue)]">
-          <Search size={18} className="shrink-0 text-[var(--noodle-blue)]" />
-          <input
-            type="search"
-            value={postSearch}
-            onChange={(event) => setPostSearch(event.target.value)}
-            placeholder="Search posts or @users"
-            aria-label="Search Noodle"
-            className="min-w-0 flex-1 border-0 bg-transparent text-sm text-[var(--foreground)] outline-none placeholder:text-[var(--muted-foreground)]"
-          />
-          {postSearch.trim() && (
-            <button
-              type="button"
-              onClick={() => setPostSearch("")}
-              className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--noodle-blue)] hover:bg-[var(--noodle-blue)]/10"
-              title="Clear search"
-              aria-label="Clear search"
-            >
-              <X size={14} />
-            </button>
-          )}
-        </label>
-      </div>
-
-      {rawPostSearch && (
-        <section className="border-b border-[var(--noodle-divider)]" aria-labelledby="noodle-mobile-search-results">
-          <div className="border-b border-[var(--noodle-divider)] px-4 py-3">
-            <h2 id="noodle-mobile-search-results" className="text-lg font-bold">
-              Search results
-            </h2>
-          </div>
-          {isAccountSearch ? (
-            accountSearchResults.length > 0 ? (
-              <div>{accountSearchResults.map((account) => renderAccountRow(account, { showFollowButton: true }))}</div>
-            ) : (
-              <p className="px-4 py-6 text-sm text-[var(--muted-foreground)]">No accounts found.</p>
-            )
-          ) : timelinePosts.length > 0 ? (
-            <div>{timelinePosts.map(renderPostArticle)}</div>
-          ) : (
-            <p className="px-4 py-6 text-sm text-[var(--muted-foreground)]">No posts found.</p>
-          )}
-        </section>
-      )}
-
-      <section aria-labelledby="noodle-mobile-who-to-follow">
-        <div className="border-b border-[var(--noodle-divider)] px-4 py-3">
-          <h2 id="noodle-mobile-who-to-follow" className="text-lg font-bold">
-            Who to follow
-          </h2>
-        </div>
-        {suggestedCharacters.length > 0 ? (
-          <div className="divide-y divide-[var(--noodle-divider)]">
-            {suggestedCharacters.map((character) => (
-              <div key={character.accountId} className="flex items-center gap-3 px-4 py-3">
-                <button
-                  type="button"
-                  onClick={() => openProfile(character.account)}
-                  className="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left transition-colors hover:text-[var(--noodle-blue)]"
-                >
-                  <Avatar account={character.account} size="sm" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold">{character.name}</span>
-                    <span className="block truncate text-xs text-[var(--muted-foreground)]">@{character.handle}</span>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => updateFollowedAccount(character.account, true)}
-                  disabled={updateAccount.isPending}
-                  className="h-8 rounded-full bg-[var(--foreground)] px-4 text-xs font-bold text-[var(--background)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Follow
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="px-4 py-6 text-sm text-[var(--muted-foreground)]">
-            {followableCharacterAccounts.length > 0 ? "You're following everyone!" : "No one's cooking yet…"}
-          </p>
-        )}
-      </section>
-    </div>
-  );
-
   const rightRailContent = (
     <aside className="hidden w-[22rem] shrink-0 px-4 py-3 xl:block">
       <div className="sticky top-3 space-y-4">
@@ -5300,6 +4850,103 @@ export function NoodleView() {
       </div>
     </aside>
   );
+
+  const noodleHomeProps: NoodleHomeProps = {
+    activeNoodleView: activeNoodleView === "search" || activeNoodleView === "notifications" ? activeNoodleView : "home",
+    isLoading,
+    personaAccount,
+    settings,
+    onOpenMobileDrawer: () => setMobileDrawerOpen(true),
+    onBackToHome: openMobileHomeTimeline,
+    postSearch,
+    onPostSearchChange: setPostSearch,
+    rawPostSearch,
+    normalizedPostSearch,
+    isAccountSearch,
+    accountSearchTerm,
+    accountSearchResults,
+    renderAccountRow,
+    timelineTab,
+    onTimelineTabChange: setTimelineTab,
+    timelinePosts,
+    baseTimelinePostsCount: baseTimelinePosts.length,
+    postsCount: posts.length,
+    renderPostArticle,
+    renderPostGrid,
+    onOpenProfile: openProfile,
+    suggestedCharacters,
+    followableCharacterAccountsCount: followableCharacterAccounts.length,
+    onUpdateFollowedAccount: updateFollowedAccount,
+    updateAccountPending: updateAccount.isPending,
+    composeOpen,
+    inlineComposerRef,
+    composer,
+    onComposerChange: handleComposerChange,
+    onComposerBlur: () => setComposer(composerValueRef.current),
+    onComposerKeyDown: handleComposerKeyDown,
+    activeMention,
+    mentionSuggestionsCount: mentionSuggestions.length,
+    activeMentionIndex,
+    composePlaceholder,
+    composeActionLabel,
+    renderComposerMentionSuggestions,
+    renderDraftPoll,
+    attachedImageUrl,
+    onAttachedImageUrlChange: setAttachedImageUrl,
+    composerAccess,
+    onComposerAccessChange: setComposerAccess,
+    imageToolRef,
+    pollToolRef,
+    mediaToolRef,
+    activeComposerTool,
+    onActiveComposerToolChange: setActiveComposerTool,
+    draftPollActive: Boolean(draftPoll),
+    onTogglePollComposer: togglePollComposer,
+    onSubmitPost: submitPost,
+    canSubmitPost,
+    createPostPending: createPost.isPending,
+    renderComposerToolPopovers,
+    onTriggerRefresh: triggerRefresh,
+    refreshNoodlePending: refreshNoodle.isPending,
+    imagePromptReviewItemsCount: imagePromptReviewItems.length,
+    notificationTab,
+    onNotificationTabChange: setNotificationTab,
+    notificationLikesCount: notificationLikes.length,
+    notificationFollowAccountsCount: notificationFollowAccounts.length,
+    notificationReplyItemsCount: notificationReplyItems.length,
+    renderLikeNotification: renderLikeNotification as (item: unknown) => React.ReactNode,
+    renderFollowNotification: renderFollowNotification as (item: unknown) => React.ReactNode,
+    renderReplyNotification: renderReplyNotification as (item: unknown) => React.ReactNode,
+    notificationLikes,
+    notificationFollowAccounts,
+    notificationReplyItems,
+    hasOlderHistory: Boolean(data?.hasOlderHistory),
+    oldestLoadedPostCreatedAt,
+    onLoadOlderPosts: (before) =>
+      loadOlderPosts.mutate(before, {
+        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not load older posts."),
+      }),
+    loadOlderPostsPending: loadOlderPosts.isPending,
+  };
+
+  const noodlerHomeProps: NoodlerHomeProps = {
+    activeNoodleView: activeNoodleView === "noodler" ? "noodler" : "noodler-verification",
+    personaAccount,
+    onBackToHome: openMobileHomeTimeline,
+    onEnableNoodlerFromVerification: enableNoodlerFromVerification,
+    hasSettings: Boolean(settings),
+    updateSettingsPending: updateSettings.isPending,
+    noodlerHubLoading: noodlerHubQuery.isLoading,
+    noodlerHubTab,
+    onNoodlerHubTabChange: setNoodlerHubTab,
+    noodlerTimelineItems,
+    renderNoodlerTimelineItem,
+    privateAccountsCount: privateAccounts.length,
+    noodlerHub,
+    renderNoodlerAccountRow,
+    sortedNoodlerDiscoverAccounts,
+    renderNoodlerDiscoverCard,
+  };
 
   return (
     <div
@@ -5666,380 +5313,16 @@ export function NoodleView() {
 
           <main ref={timelineScrollRef} className="min-w-0 flex-1 overflow-y-auto lg:max-w-[640px]">
             <div className="min-h-full w-full border-x border-[var(--noodle-divider)] bg-[var(--background)] pb-[calc(52px+env(safe-area-inset-bottom))] lg:pb-0">
-              {activeNoodleView === "home" && (
-                <div
-                  className="sticky top-0 z-30 grid h-14 grid-cols-[3rem_minmax(0,1fr)_3rem] items-center border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 px-3 backdrop-blur lg:hidden"
-                  data-component="NoodleView.MobileHeader"
+              {activeNoodleView === "noodler-verification" || activeNoodleView === "noodler" ? (
+                <Suspense
+                  fallback={
+                    <div className="flex justify-center py-14">
+                      <Loader2 size={24} className="animate-spin text-[var(--noodle-blue)]" />
+                    </div>
+                  }
                 >
-                  <button
-                    type="button"
-                    onClick={() => setMobileDrawerOpen(true)}
-                    className="flex h-10 w-10 items-center justify-center rounded-full transition-colors hover:bg-[var(--accent)]"
-                    title="Open account menu"
-                    aria-label="Open Noodle account menu"
-                  >
-                    {personaAccount ? (
-                      <Avatar account={personaAccount} size="sm" />
-                    ) : (
-                      <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 ring-1 ring-[var(--noodle-blue)]/25">
-                        <AtSign size={18} />
-                      </span>
-                    )}
-                  </button>
-                  <NoodleLogo className="mx-auto h-9 w-14" />
-                  <span aria-hidden="true" />
-                </div>
-              )}
-              {activeNoodleView === "home" &&
-                (isAccountSearch ? (
-                  <div className="sticky top-14 z-20 flex h-12 items-center gap-3 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 px-4 backdrop-blur lg:top-0">
-                    <AtSign size={19} className="text-[var(--noodle-blue)]" />
-                    <div className="min-w-0">
-                      <h2 className="truncate text-sm font-bold">Accounts</h2>
-                      <p className="truncate text-[0.68rem] text-[var(--muted-foreground)]">
-                        {accountSearchTerm ? `@${accountSearchTerm}` : "Type a handle after @"}
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="sticky top-14 z-20 grid grid-cols-2 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur lg:top-0">
-                    {TIMELINE_TABS.map((tab) => (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        onClick={() => setTimelineTab(tab.id)}
-                        className={cn(
-                          "relative flex h-12 items-center justify-center text-sm font-bold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
-                          timelineTab === tab.id && "text-[var(--foreground)]",
-                        )}
-                        aria-pressed={timelineTab === tab.id}
-                      >
-                        {tab.label}
-                        {timelineTab === tab.id && (
-                          <span className="absolute bottom-0 left-1/2 h-1 w-14 -translate-x-1/2 rounded-full bg-[var(--noodle-blue)]" />
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                ))}
-
-              {activeNoodleView === "home" && !isAccountSearch && !composeOpen && (
-                <div
-                  className="border-b border-[var(--noodle-divider)] px-4 py-3"
-                  data-component="NoodleView.InlineComposer"
-                >
-                  <div className="grid grid-cols-[2.75rem_minmax(0,1fr)] gap-3">
-                    {personaAccount ? (
-                      <Avatar account={personaAccount} />
-                    ) : (
-                      <AtSign size={28} className="text-[var(--noodle-blue)]" />
-                    )}
-                    <div className="min-w-0">
-                      <textarea
-                        ref={inlineComposerRef}
-                        defaultValue={composer}
-                        onChange={handleComposerChange}
-                        onBlur={() => setComposer(composerValueRef.current)}
-                        onKeyDown={handleComposerKeyDown}
-                        disabled={!personaAccount}
-                        placeholder={composePlaceholder}
-                        aria-autocomplete="list"
-                        aria-controls={activeMention && !composeOpen ? "noodle-inline-mention-list" : undefined}
-                        aria-expanded={Boolean(activeMention && !composeOpen)}
-                        aria-activedescendant={
-                          activeMention && !composeOpen && mentionSuggestions.length > 0
-                            ? `noodle-inline-mention-list-option-${Math.min(
-                                activeMentionIndex,
-                                mentionSuggestions.length - 1,
-                              )}`
-                            : undefined
-                        }
-                        className="min-h-20 w-full resize-none border-0 bg-transparent py-2 text-[1rem] leading-6 text-[var(--foreground)] outline-none placeholder:text-[var(--muted-foreground)] disabled:opacity-60"
-                      />
-                      {!composeOpen && renderComposerMentionSuggestions("noodle-inline-mention-list")}
-                      {renderDraftPoll()}
-                      {attachedImageUrl && (
-                        <div className="mb-3 overflow-hidden rounded-xl border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/10">
-                          <img src={attachedImageUrl} alt="" className="max-h-52 w-full object-cover" />
-                          <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-[var(--noodle-blue)]">
-                            <span className="min-w-0 truncate">Attached image</span>
-                            <button
-                              type="button"
-                              onClick={() => setAttachedImageUrl("")}
-                              className="flex h-7 w-7 items-center justify-center rounded-full hover:bg-[var(--noodle-blue)]/15"
-                              title="Remove image"
-                            >
-                              <X size={14} />
-                            </button>
-                          </div>
-                          <div className="flex items-center gap-2 border-t border-[var(--noodle-divider)] px-3 py-2">
-                            <span className="text-[0.7rem] font-semibold text-[var(--muted-foreground)]">Access</span>
-                            <select
-                              value={composerAccess}
-                              onChange={(event) => setComposerAccess(event.target.value as NoodlePostAccess)}
-                              className="h-7 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs"
-                            >
-                              <option value="public">Public</option>
-                              <option value="subscriber">Subscribers only</option>
-                              <option value="ppv">Pay-per-post</option>
-                            </select>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="mt-1 h-px w-full bg-[var(--noodle-divider)]" />
-                  <div className="relative mt-3 flex items-center justify-between gap-2 pl-14">
-                    <div className="flex min-w-0 flex-wrap items-center gap-1">
-                      <div ref={imageToolRef} className="relative">
-                        <NoodleToolButton
-                          title="Attach image"
-                          active={activeComposerTool === "image"}
-                          onClick={() => setActiveComposerTool((current) => (current === "image" ? null : "image"))}
-                        >
-                          <ImageIcon size={18} />
-                        </NoodleToolButton>
-                      </div>
-                      <div ref={pollToolRef} className="relative">
-                        <NoodleToolButton
-                          title={draftPoll ? "Edit poll" : "Create poll"}
-                          active={activeComposerTool === "poll" || Boolean(draftPoll)}
-                          onClick={togglePollComposer}
-                        >
-                          <ListChecks size={18} />
-                        </NoodleToolButton>
-                      </div>
-                      <div ref={mediaToolRef} className="relative">
-                        <NoodleToolButton
-                          title="Emoji, GIFs and stickers"
-                          active={activeComposerTool === "media"}
-                          onClick={() => setActiveComposerTool((current) => (current === "media" ? null : "media"))}
-                        >
-                          <Smile size={18} />
-                        </NoodleToolButton>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={submitPost}
-                      disabled={!canSubmitPost || createPost.isPending}
-                      className="h-8 rounded-full bg-[var(--noodle-blue)] px-5 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {composeActionLabel}
-                    </button>
-                    {!composeOpen &&
-                      renderComposerToolPopovers({
-                        imageRef: imageToolRef,
-                        pollRef: pollToolRef,
-                        mediaRef: mediaToolRef,
-                      })}
-                  </div>
-                </div>
-              )}
-
-              {activeNoodleView === "home" && !isAccountSearch && (
-                <div className="border-b border-[var(--noodle-divider)] px-4 py-2">
-                  <button
-                    type="button"
-                    onClick={triggerRefresh}
-                    disabled={refreshNoodle.isPending || !settings || imagePromptReviewItems.length > 0}
-                    className="flex h-9 w-full items-center justify-center gap-2 rounded-full text-sm font-bold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-                    title="Refresh timeline"
-                    aria-label="Refresh timeline"
-                  >
-                    {refreshNoodle.isPending ? (
-                      <Loader2 size={17} className="!text-[var(--noodle-blue)] animate-spin" />
-                    ) : (
-                      <RefreshCw size={17} className="!text-[var(--noodle-blue)]" />
-                    )}
-                    {refreshNoodle.isPending ? "Refreshing" : "Refresh timeline"}
-                  </button>
-                </div>
-              )}
-
-              {activeNoodleView === "noodler-verification" ? (
-                <div className="min-h-full" data-component="NoodleView.NoodlerVerification">
-                  <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
-                    <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
-                      <MobileTimelineBackButton label="Back to Noodle" onClick={openMobileHomeTimeline} />
-                      <Lock size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
-                      <div className="min-w-0">
-                        <h2 className="truncate text-lg font-bold">NoodleR Verification</h2>
-                        <p className="truncate text-xs text-[var(--muted-foreground)]">Private creator network access</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <section className="px-4 py-6 sm:px-6 sm:py-8">
-                    <div className="rounded-lg border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/8 px-4 py-4">
-                      <div className="flex items-start gap-3">
-                        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[var(--noodle-blue)] text-zinc-950">
-                          <Lock size={22} />
-                        </span>
-                        <div className="min-w-0">
-                          <p className="text-xs font-black uppercase tracking-normal text-[var(--noodle-blue)]">
-                            Verification Desk
-                          </p>
-                          <h3 className="mt-1 text-2xl font-black leading-tight">Verify your NoodleR eligibility.</h3>
-                          <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--muted-foreground)]">
-                            NoodleR uses private creator pages, subscriptions, and paid unlocks. This quick check marks
-                            the feature as intentionally enabled before those controls appear.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                      {[
-                        { icon: User, title: "Government ID", detail: "Passport, license, or anything that looks official enough." },
-                        { icon: ImageIcon, title: "Photo pass", detail: "A current profile photo for the badge desk." },
-                        { icon: AtSign, title: "Handle match", detail: "Confirm the Noodle account requesting access." },
-                        { icon: Check, title: "Access notice", detail: "Acknowledge that NoodleR profiles are private pages." },
-                      ].map((item, index) => {
-                        const Icon = item.icon;
-                        return (
-                          <article key={item.title} className="rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] p-3">
-                            <div className="flex items-start gap-3">
-                              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
-                                <Icon size={17} />
-                              </span>
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center justify-between gap-2">
-                                  <p className="truncate text-sm font-bold">{item.title}</p>
-                                  <span className="shrink-0 rounded-full bg-[var(--noodle-blue)]/10 px-2 py-0.5 text-[0.65rem] font-bold text-[var(--noodle-blue)]">
-                                    Step {index + 1}
-                                  </span>
-                                </div>
-                                <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">{item.detail}</p>
-                              </div>
-                            </div>
-                          </article>
-                        );
-                      })}
-                    </div>
-
-                    <div className="mt-5 rounded-lg border border-dashed border-[var(--noodle-blue)]/45 bg-[var(--background)] p-4">
-                      <p className="text-sm font-bold">Upload packet</p>
-                      <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                        {["Front of ID", "Back of ID", "Photo pass"].map((label) => (
-                          <button
-                            key={label}
-                            type="button"
-                            onClick={() => toast.info("No upload needed. This verification desk is only a preview.")}
-                            className="flex h-24 flex-col items-center justify-center gap-2 rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] text-xs font-bold text-[var(--muted-foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:text-[var(--foreground)]"
-                          >
-                            <ImageIcon size={18} />
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="mt-5 rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-sm font-bold">Review status</span>
-                        <span className="rounded-full bg-[var(--noodle-blue)]/10 px-2 py-1 text-xs font-black text-[var(--noodle-blue)]">
-                          Ready instantly
-                        </span>
-                      </div>
-                      <div className="mt-3 space-y-2 text-xs leading-5 text-[var(--muted-foreground)]">
-                        <p>1. Review the requested materials.</p>
-                        <p>2. Click start verification.</p>
-                        <p>3. NoodleR unlocks immediately after the very short review.</p>
-                      </div>
-                    </div>
-
-                    <div className="mt-6 flex flex-col gap-2 sm:flex-row">
-                      <button
-                        type="button"
-                        onClick={enableNoodlerFromVerification}
-                        disabled={!settings || updateSettings.isPending}
-                        className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--noodle-blue)] px-5 text-sm font-black text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {updateSettings.isPending ? <Loader2 size={17} className="animate-spin" /> : <Check size={17} />}
-                        {updateSettings.isPending ? "Verifying" : "Start verification"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={openMobileHomeTimeline}
-                        className="inline-flex h-11 items-center justify-center rounded-lg border border-[var(--noodle-divider)] px-5 text-sm font-bold transition-colors hover:bg-[var(--accent)]"
-                      >
-                        Maybe later
-                      </button>
-                    </div>
-                  </section>
-                </div>
-              ) : activeNoodleView === "search" ? (
-                mobileSearchContent
-              ) : activeNoodleView === "notifications" ? (
-                <div className="min-h-full">
-                  <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
-                    <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
-                      <MobileTimelineBackButton label="Back to Noodle" onClick={openMobileHomeTimeline} />
-                      <Bell size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
-                      <div className="min-w-0">
-                        <h2 className="truncate text-lg font-bold">Notifications</h2>
-                        <p className="truncate text-xs text-[var(--muted-foreground)]">
-                          {personaAccount ? `Public social timeline · @${personaAccount.handle}` : "Choose a persona account"}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-3">
-                      {NOTIFICATION_TABS.map((tab) => (
-                        <button
-                          key={tab.id}
-                          type="button"
-                          onClick={() => setNotificationTab(tab.id)}
-                          className={cn(
-                            "relative flex h-12 items-center justify-center text-sm font-bold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
-                            notificationTab === tab.id && "text-[var(--foreground)]",
-                          )}
-                        >
-                          {tab.label}
-                          {notificationTab === tab.id && (
-                            <span className="absolute bottom-0 left-1/2 h-1 w-14 -translate-x-1/2 rounded-full bg-[var(--noodle-blue)]" />
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {notificationTab === "likes" ? (
-                    notificationLikes.length > 0 ? (
-                      <div>{notificationLikes.map(renderLikeNotification)}</div>
-                    ) : (
-                      <div className="px-8 py-14 text-center">
-                        <Heart size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
-                        <p className="text-base font-bold">No likes yet.</p>
-                        <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                          Likes on your Noodle posts will show here.
-                        </p>
-                      </div>
-                    )
-                  ) : notificationTab === "follows" ? (
-                    notificationFollowAccounts.length > 0 ? (
-                      <div>{notificationFollowAccounts.map(renderFollowNotification)}</div>
-                    ) : (
-                      <div className="px-8 py-14 text-center">
-                        <Bell size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
-                        <p className="text-base font-bold">No follows yet.</p>
-                        <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                          Accounts following you will show here.
-                        </p>
-                      </div>
-                    )
-                  ) : notificationReplyItems.length > 0 ? (
-                    <div>{notificationReplyItems.map(renderReplyNotification)}</div>
-                  ) : (
-                    <div className="px-8 py-14 text-center">
-                      <MessageCircle size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
-                      <p className="text-base font-bold">No replies or mentions yet.</p>
-                      <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                        Replies to your posts and @{personaAccount?.handle ?? "mentions"} will show here.
-                      </p>
-                    </div>
-                  )}
-                </div>
+                  <NoodlerHome {...noodlerHomeProps} />
+                </Suspense>
               ) : activeNoodleView === "settings" ? (
                 <div className="min-h-full">
                   <div className="border-b border-[var(--noodle-divider)] px-2 py-3 lg:px-4 lg:py-5">
@@ -6055,92 +5338,6 @@ export function NoodleView() {
                     </div>
                   </div>
                   {settingsContent}
-                </div>
-              ) : activeNoodleView === "noodler" ? (
-                <div className="min-h-full">
-                  <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
-                    <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
-                      <MobileTimelineBackButton label="Back to Noodle" onClick={openMobileHomeTimeline} />
-                      <Lock size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
-                      <div className="min-w-0">
-                        <h2 className="truncate text-lg font-bold">NoodleR</h2>
-                        <p className="truncate text-xs text-[var(--muted-foreground)]">
-                          {personaAccount ? `Private creator network · @${personaAccount.handle}` : "Choose a persona account"}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                  {!personaAccount ? (
-                    <p className="px-4 py-6 text-sm text-[var(--muted-foreground)]">Choose a persona account first.</p>
-                  ) : noodlerHubQuery.isLoading ? (
-                    <div className="flex justify-center py-14">
-                      <Loader2 size={24} className="animate-spin text-[var(--noodle-blue)]" />
-                    </div>
-                  ) : (
-                    <>
-                      <div className="grid grid-cols-4 border-b border-[var(--noodle-divider)]">
-                        {NOODLER_HUB_TABS.map((tab) => (
-                          <button
-                            key={tab.id}
-                            type="button"
-                            onClick={() => setNoodlerHubTab(tab.id)}
-                            className={cn(
-                              "relative flex h-12 min-w-0 items-center justify-center px-1 text-center text-xs font-bold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] sm:text-sm",
-                              noodlerHubTab === tab.id && "text-[var(--foreground)]",
-                            )}
-                          >
-                            <span className="truncate">{tab.label}</span>
-                            {noodlerHubTab === tab.id && (
-                              <span className="absolute bottom-0 left-1/2 h-1 w-12 -translate-x-1/2 rounded-full bg-[var(--noodle-blue)]" />
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                      {noodlerHubTab === "timeline" ? (
-                        noodlerTimelineItems.length > 0 ? (
-                          <div>{noodlerTimelineItems.map(renderNoodlerTimelineItem)}</div>
-                        ) : privateAccounts.length > 0 ? (
-                          <div className="px-8 py-14 text-center">
-                            <Lock size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
-                            <p className="text-base font-bold">Nothing here yet.</p>
-                            <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                              NoodleR posts, comments, subscribers, and unlocks will show here.
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="px-8 py-14 text-center">
-                            <Lock size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
-                            <p className="text-base font-bold">No NoodleR accounts yet.</p>
-                            <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                              Create a private page from a persona or character profile.
-                            </p>
-                          </div>
-                        )
-                      ) : noodlerHubTab === "subscriptions" ? (
-                        noodlerHub && noodlerHub.subscribed.length > 0 ? (
-                          <div>{noodlerHub.subscribed.map((account) => renderNoodlerAccountRow(account))}</div>
-                        ) : (
-                          <p className="px-4 py-4 text-sm text-[var(--muted-foreground)]">
-                            Not subscribed to any NoodleR creators yet.
-                          </p>
-                        )
-                      ) : noodlerHubTab === "discover" ? (
-                        sortedNoodlerDiscoverAccounts.length > 0 ? (
-                          <div>{sortedNoodlerDiscoverAccounts.map(renderNoodlerDiscoverCard)}</div>
-                        ) : (
-                          <p className="px-4 py-4 text-sm text-[var(--muted-foreground)]">
-                            No other NoodleR creators to discover yet.
-                          </p>
-                        )
-                      ) : noodlerHub && noodlerHub.owned.length > 0 ? (
-                        <div>{noodlerHub.owned.map((account) => renderNoodlerAccountRow(account))}</div>
-                      ) : (
-                        <p className="px-4 py-4 text-sm text-[var(--muted-foreground)]">
-                          No NoodleR pages of your own yet. Create one from a persona's profile.
-                        </p>
-                      )}
-                    </>
-                  )}
                 </div>
               ) : activeNoodleView === "profile" && profileConnectionTab ? (
                 <div className="min-h-full">
@@ -6820,77 +6017,8 @@ export function NoodleView() {
                     )}
                   </div>
                 </div>
-              ) : isLoading ? (
-                <div className="space-y-0">
-                  {Array.from({ length: 4 }).map((_, index) => (
-                    <div key={index} className="flex gap-3 border-b border-[var(--noodle-divider)] px-4 py-4">
-                      <div className="h-11 w-11 shrink-0 rounded-full bg-[var(--muted)]" />
-                      <div className="min-w-0 flex-1 space-y-3">
-                        <div className="h-3 w-40 rounded bg-[var(--muted)]" />
-                        <div className="h-3 w-full rounded bg-[var(--muted)]" />
-                        <div className="h-3 w-2/3 rounded bg-[var(--muted)]" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : isAccountSearch ? (
-                accountSearchResults.length > 0 ? (
-                  <div>
-                    {accountSearchResults.map((account) => renderAccountRow(account, { showFollowButton: true }))}
-                  </div>
-                ) : (
-                  <div className="px-8 py-14 text-center">
-                    <AtSign size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
-                    <p className="text-base font-bold">No accounts found.</p>
-                    <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                      Try searching by handle, like @mari.
-                    </p>
-                  </div>
-                )
-              ) : normalizedPostSearch && timelinePosts.length === 0 ? (
-                <div className="px-8 py-14 text-center">
-                  <p className="text-base font-bold">No posts found.</p>
-                  <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                    Try a different search.
-                  </p>
-                </div>
-              ) : timelineTab === "following" && baseTimelinePosts.length === 0 ? (
-                <div className="px-8 py-14 text-center">
-                  <AtSign size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
-                  <p className="text-base font-bold">Nothing from followed characters yet.</p>
-                  <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                    Follow characters from the suggestions panel, then refresh Noodle.
-                  </p>
-                </div>
-              ) : posts.length === 0 ? (
-                <div className="px-8 py-14 text-center">
-                  <NoodleLogo className="mx-auto mb-5 h-16 w-24 opacity-95" />
-                  <p className="text-base font-bold">The plate is empty.</p>
-                  <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                    Go to the Settings on the left first, invite characters, pick a generation connection, then refresh.
-                  </p>
-                </div>
-              ) : settings?.layout === "grid" ? (
-                renderPostGrid(timelinePosts)
               ) : (
-                timelinePosts.map(renderPostArticle)
-              )}
-              {!normalizedPostSearch && data?.hasOlderHistory && oldestLoadedPostCreatedAt && (
-                <div className="flex justify-center border-t border-[var(--noodle-divider)] p-4">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      loadOlderPosts.mutate(oldestLoadedPostCreatedAt, {
-                        onError: (error) =>
-                          toast.error(error instanceof Error ? error.message : "Could not load older posts."),
-                      })
-                    }
-                    disabled={loadOlderPosts.isPending}
-                    className="h-9 rounded-full border border-[var(--noodle-divider)] px-4 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {loadOlderPosts.isPending ? "Loading…" : "Load older posts"}
-                  </button>
-                </div>
+                <NoodleHome {...noodleHomeProps} />
               )}
             </div>
           </main>
