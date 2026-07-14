@@ -21,6 +21,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Fixed
 
+- Fixed graceful shutdown completing before a file-native storage flush could drain newer writes queued during its active disk write, and made persistent close-time I/O failures reject shutdown instead of silently reporting success (#3602).
+- Fixed the Agent Editor custom-music folder picker omitting saved remote-admin and CSRF credentials by routing its privileged request through the shared API client (#3603).
 - Fixed dense Connections editor text flickering or shifting in Chromium browsers at the accent pulse's 500 ms update cadence. Editor reading surfaces now retain the selected base accent while headers and explicit accent chrome continue to pulse (#3599).
 - Fixed recalled-memory truncation splitting supplementary Unicode characters such as emoji or Lydian text into invalid UTF-16 surrogate halves, which caused strict provider JSON parsers to reject otherwise valid Conversation generations (#3596).
 - Fixed selected background-library images immediately disappearing in Roleplay mode because the renderer probed the GET-only image route with an unsupported HEAD request (#3592).

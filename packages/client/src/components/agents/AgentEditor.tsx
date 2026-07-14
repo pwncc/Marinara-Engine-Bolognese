@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useUIStore } from "../../stores/ui.store";
 import { showConfirmDialog } from "../../lib/app-dialogs";
+import { api } from "../../lib/api-client";
 import {
   agentKeys,
   useAgentConfigs,
@@ -1343,14 +1344,8 @@ export function AgentEditor() {
 
   const handleSelectCustomMusicFolder = useCallback(async () => {
     try {
-      const res = await fetch("/api/game-assets/pick-local-music-folder", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-      const data = (await res.json().catch(() => ({}))) as { success?: boolean; path?: string; error?: string };
-      if (!res.ok || data.success !== true || !data.path) {
-        throw new Error(data.error ?? "No folder selected.");
-      }
+      const data = await api.post<{ success: boolean; path: string }>("/game-assets/pick-local-music-folder");
+      if (data.success !== true || !data.path) throw new Error("No folder selected.");
       setLocalCustomMusicExternalFolder(data.path);
       setLocalCustomMusicSource("folder");
       setDirty(true);
