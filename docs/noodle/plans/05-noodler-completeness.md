@@ -2,14 +2,18 @@
 
 ## Status
 
-Part 1 (scheduler + global kill switch) implemented — see `04-noodler-fan-activity.md`
-Status. Parts 2–4 (timeline, Discover refinements, accent theming) not started. Note
+Parts 1–4 implemented. Part 1 (scheduler + global kill switch) is covered in
+`04-noodler-fan-activity.md`. Parts 2–4 are implemented in the existing NoodleR hub:
+tabbed Timeline / Subscriptions / Discover / Your Pages views, client-derived activity
+interleaving from bootstrap data, Discover activity sorting and badges via account
+settings, and accent-token theming for NoodleR-scoped views. Note
 while implementing Part 1: a `GET /noodler/hub` route and a "NoodleR" client view already
 existed before this plan was written, listing owned / subscribed / discover private
 accounts in three flat sections. That's a real head start on Part 3 (Discover) — it
 already has the account roster and the owned/subscribed/discover split; it's missing the
 activity-based sort, unseen-activity badges, and `lastViewedAt` tracking this plan calls
-for. Re-read that view before starting Part 3 rather than building a second one.
+for. The final implementation kept that route and upgraded the existing client view
+rather than building a second one.
 
 ## Goal
 

@@ -143,10 +143,12 @@ const labelClass =
 const iconButtonClass =
   "inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-md px-2 text-xs font-medium !text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:!text-[var(--noodle-blue)]";
 const NOODLE_BLUE = "#7EA7FF";
+const NOODLER_BLUE = "#FF6FAE";
 const NOODLE_ICON_SCOPE_CLASS = "[&_svg]:!text-[var(--noodle-blue)]";
 const NOODLE_LOGO_SRC = "/noodle-klusek.png";
 const NOODLE_NOTIFICATIONS_READ_AT_KEY = "notificationsReadAt";
 const NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY = "followingAccountTimestamps";
+const NOODLER_LAST_VIEWED_AT_KEY = "noodlerLastViewedAt";
 const NOODLE_INVITE_PAGE_SIZE = 50;
 const NOODLE_PERSONA_SWITCHER_PAGE_SIZE = 5;
 const NOODLE_MENTION_SUGGESTION_LIMIT = 8;
@@ -163,6 +165,7 @@ type ProfileTab = "posts" | "likes" | "media";
 type ProfileConnectionTab = "followers" | "following";
 type NotificationTab = "likes" | "follows" | "replies";
 type TimelineTab = "main" | "following";
+type NoodlerHubTab = "timeline" | "subscriptions" | "discover" | "owned";
 type NoodlePrivatePostAccess = Exclude<NoodlePostAccess, "public">;
 type NoodleViewId = "home" | "search" | "notifications" | "profile" | "settings" | "noodler";
 type NoodleNotificationFocusTarget = {
@@ -170,6 +173,17 @@ type NoodleNotificationFocusTarget = {
   interactionId: string | null;
 };
 type ActiveComposerMention = NoodleTextMention & { query: string };
+type NoodlerTimelineItem =
+  | { id: string; kind: "post"; createdAt: string; post: NoodlePost }
+  | {
+      id: string;
+      kind: "subscription" | "unlock" | "reply";
+      createdAt: string;
+      creatorAccount: NoodleAccount | null;
+      actorAccount: NoodleAccount | null;
+      post: NoodlePost | null;
+      interaction?: NoodleInteraction;
+    };
 type NoodleConfirmAction =
   | {
       kind: "delete-post";
@@ -220,6 +234,13 @@ const NOTIFICATION_TABS: Array<{ id: NotificationTab; label: string }> = [
   { id: "likes", label: "Likes" },
   { id: "follows", label: "Follows" },
   { id: "replies", label: "Replies" },
+];
+
+const NOODLER_HUB_TABS: Array<{ id: NoodlerHubTab; label: string }> = [
+  { id: "timeline", label: "Timeline" },
+  { id: "subscriptions", label: "Subscriptions" },
+  { id: "discover", label: "Discover" },
+  { id: "owned", label: "Your Pages" },
 ];
 
 function parseRecord(value: unknown): Record<string, unknown> {
@@ -302,6 +323,10 @@ function readFanActivityIntensity(account: NoodleAccount | null | undefined): "l
 
 function readFanActivityAutoSchedule(account: NoodleAccount | null | undefined) {
   return fanActivitySettingsFromAccount(account).autoSchedule === true;
+}
+
+function readNoodlerLastViewedAt(account: NoodleAccount | null | undefined) {
+  return readString(account?.settings?.[NOODLER_LAST_VIEWED_AT_KEY]);
 }
 
 function hasGeneratedProfile(account: NoodleAccount | null) {
@@ -1085,6 +1110,7 @@ export function NoodleView() {
   const [activeNoodleView, setActiveNoodleView] = useState<NoodleViewId>("home");
   const [viewedProfileAccountId, setViewedProfileAccountId] = useState<string | null>(null);
   const [timelineTab, setTimelineTab] = useState<TimelineTab>("main");
+  const [noodlerHubTab, setNoodlerHubTab] = useState<NoodlerHubTab>("timeline");
   const [inviteSearch, setInviteSearch] = useState("");
   const [inviteFoldersOpen, setInviteFoldersOpen] = useState(false);
   const [inviteCharacterLimit, setInviteCharacterLimit] = useState(NOODLE_INVITE_PAGE_SIZE);
@@ -1258,6 +1284,121 @@ export function NoodleView() {
     activeNoodleView === "noodler" && Boolean(personaAccount),
   );
   const noodlerHub = noodlerHubQuery.data;
+  const privateAccounts = useMemo(
+    () => accounts.filter((account) => account.visibility === "private"),
+    [accounts],
+  );
+  const privateAccountIds = useMemo(() => new Set(privateAccounts.map((account) => account.id)), [privateAccounts]);
+  const privatePosts = useMemo(
+    () => posts.filter((post) => privateAccountIds.has(post.authorAccountId)),
+    [posts, privateAccountIds],
+  );
+  const privatePostById = useMemo(() => new Map(privatePosts.map((post) => [post.id, post])), [privatePosts]);
+  const subscriberCountByCreatorId = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const subscription of subscriptions) {
+      if (!privateAccountIds.has(subscription.creatorAccountId)) continue;
+      counts.set(subscription.creatorAccountId, (counts.get(subscription.creatorAccountId) ?? 0) + 1);
+    }
+    return counts;
+  }, [privateAccountIds, subscriptions]);
+  const latestPrivatePostByCreatorId = useMemo(() => {
+    const latest = new Map<string, NoodlePost>();
+    for (const post of privatePosts) {
+      const current = latest.get(post.authorAccountId);
+      if (!current || post.createdAt > current.createdAt) latest.set(post.authorAccountId, post);
+    }
+    return latest;
+  }, [privatePosts]);
+  const noodlerTimelineItems = useMemo<NoodlerTimelineItem[]>(() => {
+    const items: NoodlerTimelineItem[] = privatePosts.map((post) => ({
+      id: `post:${post.id}`,
+      kind: "post",
+      createdAt: post.createdAt,
+      post,
+    }));
+
+    for (const subscription of subscriptions) {
+      if (!privateAccountIds.has(subscription.creatorAccountId)) continue;
+      items.push({
+        id: `subscription:${subscription.id}`,
+        kind: "subscription",
+        createdAt: subscription.createdAt,
+        creatorAccount: accountById.get(subscription.creatorAccountId) ?? null,
+        actorAccount: accountById.get(subscription.subscriberAccountId) ?? null,
+        post: null,
+      });
+    }
+
+    for (const unlock of postUnlocks) {
+      const post = privatePostById.get(unlock.postId) ?? null;
+      if (!post) continue;
+      items.push({
+        id: `unlock:${unlock.id}`,
+        kind: "unlock",
+        createdAt: unlock.createdAt,
+        creatorAccount: accountById.get(post.authorAccountId) ?? null,
+        actorAccount: accountById.get(unlock.accountId) ?? null,
+        post,
+      });
+    }
+
+    for (const interaction of interactions) {
+      if (interaction.type !== "reply") continue;
+      const post = privatePostById.get(interaction.postId) ?? null;
+      if (!post || interaction.actorAccountId === post.authorAccountId) continue;
+      items.push({
+        id: `reply:${interaction.id}`,
+        kind: "reply",
+        createdAt: interaction.createdAt,
+        creatorAccount: accountById.get(post.authorAccountId) ?? null,
+        actorAccount: accountById.get(interaction.actorAccountId) ?? null,
+        post,
+        interaction,
+      });
+    }
+
+    return items
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt) || right.id.localeCompare(left.id))
+      .slice(0, 160);
+  }, [accountById, interactions, postUnlocks, privateAccountIds, privatePostById, privatePosts, subscriptions]);
+  const noodlerUnseenCountByAccountId = useMemo(() => {
+    const counts = new Map<string, number>();
+    const incrementIfUnseen = (account: NoodleAccount | null | undefined, createdAt: string) => {
+      if (!account) return;
+      const lastViewedAt = readNoodlerLastViewedAt(account);
+      if (lastViewedAt && createdAt <= lastViewedAt) return;
+      counts.set(account.id, (counts.get(account.id) ?? 0) + 1);
+    };
+    for (const post of privatePosts) incrementIfUnseen(accountById.get(post.authorAccountId), post.createdAt);
+    for (const subscription of subscriptions) {
+      incrementIfUnseen(accountById.get(subscription.creatorAccountId), subscription.createdAt);
+    }
+    for (const unlock of postUnlocks) {
+      const post = privatePostById.get(unlock.postId);
+      incrementIfUnseen(post ? accountById.get(post.authorAccountId) : null, unlock.createdAt);
+    }
+    for (const interaction of interactions) {
+      if (interaction.type !== "reply") continue;
+      const post = privatePostById.get(interaction.postId);
+      if (!post || interaction.actorAccountId === post.authorAccountId) continue;
+      incrementIfUnseen(accountById.get(post.authorAccountId), interaction.createdAt);
+    }
+    return counts;
+  }, [accountById, interactions, postUnlocks, privatePostById, privatePosts, subscriptions]);
+  const sortedNoodlerDiscoverAccounts = useMemo(() => {
+    const hubAccounts = noodlerHub ? [...noodlerHub.subscribed, ...noodlerHub.discover] : [];
+    return uniqueAccountsById(hubAccounts).sort((left, right) => {
+      const leftUnseen = noodlerUnseenCountByAccountId.get(left.id) ?? 0;
+      const rightUnseen = noodlerUnseenCountByAccountId.get(right.id) ?? 0;
+      if (leftUnseen !== rightUnseen) return rightUnseen - leftUnseen;
+      const leftPost = latestPrivatePostByCreatorId.get(left.id)?.createdAt ?? "";
+      const rightPost = latestPrivatePostByCreatorId.get(right.id)?.createdAt ?? "";
+      return rightPost.localeCompare(leftPost) || sortAccountsByDisplayName(left, right);
+    });
+  }, [latestPrivatePostByCreatorId, noodlerHub, noodlerUnseenCountByAccountId]);
+  const isNoodlerScopedView =
+    activeNoodleView === "noodler" || (activeNoodleView === "profile" && viewedProfileAccount?.visibility === "private");
   const canRevealPostAccess = (post: NoodlePost) => {
     if (post.access === "public") return true;
     if (post.authorAccountId === personaAccount?.id) return true;
@@ -2166,8 +2307,21 @@ export function NoodleView() {
     [followableCharacterAccounts, followedAccountIds],
   );
 
+  const markNoodlerAccountViewed = (account: NoodleAccount) => {
+    if (account.visibility !== "private") return;
+    if ((noodlerUnseenCountByAccountId.get(account.id) ?? 0) === 0) return;
+    updateAccount.mutate({
+      id: account.id,
+      settings: {
+        ...account.settings,
+        [NOODLER_LAST_VIEWED_AT_KEY]: new Date().toISOString(),
+      },
+    });
+  };
+
   const openProfile = (account: NoodleAccount | null) => {
     if (!account) return;
+    markNoodlerAccountViewed(account);
     setViewedProfileAccountId(account.id === personaAccount?.id ? null : account.id);
     setProfileEditing(false);
     setProfileTab("posts");
@@ -4389,6 +4543,7 @@ export function NoodleView() {
   const renderNoodlerAccountRow = (account: NoodleAccount) => {
     const subscribed = subscribedCreatorIds.has(account.id);
     const isOwn = account.kind === "persona";
+    const unseenCount = noodlerUnseenCountByAccountId.get(account.id) ?? 0;
     return (
       <div
         key={account.id}
@@ -4406,6 +4561,11 @@ export function NoodleView() {
               <NoodlerPrivateBadge />
             </span>
             <span className="block truncate text-sm text-[var(--muted-foreground)]">@{account.handle}</span>
+            {unseenCount > 0 && (
+              <span className="mt-1 inline-flex h-5 items-center rounded-full bg-[var(--noodle-blue)] px-2 text-[0.65rem] font-black text-zinc-950">
+                {unseenCount > 9 ? "9+" : unseenCount} new
+              </span>
+            )}
             {account.bio.trim() && (
               <span className="mt-1 line-clamp-2 block text-sm leading-5 text-[var(--foreground)]">{account.bio}</span>
             )}
@@ -4439,6 +4599,147 @@ export function NoodleView() {
           </button>
         )}
       </div>
+    );
+  };
+
+  const renderNoodlerActivityRow = (item: Extract<NoodlerTimelineItem, { kind: "subscription" | "unlock" | "reply" }>) => {
+    const actor = item.actorAccount ?? item.interaction?.actorSnapshot ?? null;
+    const creator = item.creatorAccount;
+    const icon = item.kind === "subscription" ? UserPlus : item.kind === "unlock" ? Lock : MessageCircle;
+    const Icon = icon;
+    const actionText =
+      item.kind === "subscription"
+        ? "subscribed to"
+        : item.kind === "unlock"
+          ? "unlocked a post from"
+          : "commented on";
+    return (
+      <div key={item.id} className="flex items-start gap-3 border-b border-[var(--noodle-divider)] px-4 py-4">
+        {actor ? (
+          <button
+            type="button"
+            onClick={() => openProfile(item.actorAccount)}
+            disabled={!item.actorAccount}
+            className="rounded-full transition-opacity enabled:hover:opacity-80 disabled:cursor-default"
+            title={item.actorAccount ? `View @${item.actorAccount.handle}` : undefined}
+          >
+            <Avatar account={actor} />
+          </button>
+        ) : (
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 text-[var(--noodle-blue)]">
+            <Icon size={21} />
+          </span>
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <button
+              type="button"
+              onClick={() => openProfile(item.actorAccount)}
+              disabled={!item.actorAccount}
+              className="font-bold transition-colors enabled:hover:text-[var(--noodle-blue)] disabled:cursor-default"
+            >
+              {actor?.displayName ?? "NoodleR fan"}
+            </button>
+            <span className="text-xs text-[var(--muted-foreground)]">{formatTime(item.createdAt)}</span>
+          </div>
+          <p className="mt-1 text-sm leading-5">
+            {actionText}{" "}
+            <button
+              type="button"
+              onClick={() => openProfile(creator)}
+              disabled={!creator}
+              className="font-semibold text-[var(--noodle-blue)] transition-opacity enabled:hover:opacity-80 disabled:cursor-default"
+            >
+              {creator?.displayName ?? "a NoodleR creator"}
+            </button>
+          </p>
+          {item.kind === "reply" && item.interaction?.content && (
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-5">{item.interaction.content}</p>
+          )}
+          {item.post && (
+            <p className="mt-2 line-clamp-2 text-xs leading-5 text-[var(--muted-foreground)]">{item.post.content}</p>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderNoodlerTimelineItem = (item: NoodlerTimelineItem) =>
+    item.kind === "post" ? renderPostArticle(item.post) : renderNoodlerActivityRow(item);
+
+  const renderNoodlerDiscoverCard = (account: NoodleAccount) => {
+    const subscribed = subscribedCreatorIds.has(account.id);
+    const subscriberCount = subscriberCountByCreatorId.get(account.id) ?? 0;
+    const latestPost = latestPrivatePostByCreatorId.get(account.id) ?? null;
+    const unseenCount = noodlerUnseenCountByAccountId.get(account.id) ?? 0;
+    return (
+      <article key={account.id} className="border-b border-[var(--noodle-divider)] px-4 py-4">
+        <div className="flex items-start gap-3">
+          <button
+            type="button"
+            onClick={() => openProfile(account)}
+            className="rounded-full transition-opacity hover:opacity-80"
+            title={`View @${account.handle}`}
+          >
+            <Avatar account={account} />
+          </button>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-start justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => openProfile(account)}
+                className="min-w-0 text-left transition-colors hover:text-[var(--noodle-blue)]"
+              >
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate text-sm font-bold">{account.displayName}</span>
+                  <NoodlerPrivateBadge />
+                </span>
+                <span className="block truncate text-sm text-[var(--muted-foreground)]">@{account.handle}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleSubscription(account.id)}
+                disabled={subscribeAccount.isPending || unsubscribeAccount.isPending}
+                className={cn(
+                  "h-8 shrink-0 rounded-full px-4 text-xs font-bold transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50",
+                  subscribed
+                    ? "border border-[var(--noodle-divider)] text-[var(--foreground)]"
+                    : "bg-[var(--foreground)] text-[var(--background)]",
+                )}
+              >
+                {subscribed ? "Subscribed" : "Subscribe"}
+              </button>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
+              <span>{subscriberCount} subscriber{subscriberCount === 1 ? "" : "s"}</span>
+              {unseenCount > 0 && (
+                <span className="rounded-full bg-[var(--noodle-blue)] px-2 py-0.5 font-black text-zinc-950">
+                  {unseenCount > 9 ? "9+" : unseenCount} new
+                </span>
+              )}
+            </div>
+            {account.bio.trim() && <p className="mt-2 line-clamp-2 text-sm leading-5">{account.bio}</p>}
+            {latestPost ? (
+              <button
+                type="button"
+                onClick={() => openProfile(account)}
+                className="mt-3 w-full rounded-lg border border-[var(--noodle-divider)] p-3 text-left transition-colors hover:border-[var(--noodle-blue)]/60 hover:bg-[var(--noodle-blue)]/10"
+              >
+                <span className="text-[0.65rem] font-semibold uppercase tracking-normal text-[var(--noodle-blue)]">
+                  Latest post
+                </span>
+                <span className="mt-1 line-clamp-2 block text-sm leading-5">
+                  {latestPost.content || (latestPost.imageUrl ? "Shared an image." : "Private update")}
+                </span>
+              </button>
+            ) : (
+              <p className="mt-3 rounded-lg border border-dashed border-[var(--noodle-divider)] px-3 py-3 text-sm text-[var(--muted-foreground)]">
+                No private posts yet.
+              </p>
+            )}
+          </div>
+        </div>
+      </article>
     );
   };
 
@@ -4834,7 +5135,7 @@ export function NoodleView() {
       data-component="NoodleView"
       style={
         {
-          "--noodle-blue": NOODLE_BLUE,
+          "--noodle-blue": isNoodlerScopedView ? NOODLER_BLUE : NOODLE_BLUE,
           "--noodle-divider": "var(--marinara-chat-chrome-panel-divider)",
         } as CSSProperties
       }
@@ -4871,7 +5172,7 @@ export function NoodleView() {
               )}
               style={
                 {
-                  "--noodle-blue": NOODLE_BLUE,
+                  "--noodle-blue": isNoodlerScopedView ? NOODLER_BLUE : NOODLE_BLUE,
                   "--noodle-divider": "var(--marinara-chat-chrome-panel-divider)",
                 } as CSSProperties
               }
@@ -5494,48 +5795,67 @@ export function NoodleView() {
                     </div>
                   ) : (
                     <>
-                      <section aria-labelledby="noodler-hub-owned">
-                        <div className="border-b border-[var(--noodle-divider)] px-4 py-3">
-                          <h3 id="noodler-hub-owned" className="text-base font-bold">
-                            Your NoodleR pages
-                          </h3>
-                        </div>
-                        {noodlerHub && noodlerHub.owned.length > 0 ? (
-                          <div>{noodlerHub.owned.map((account) => renderNoodlerAccountRow(account))}</div>
+                      <div className="grid grid-cols-4 border-b border-[var(--noodle-divider)]">
+                        {NOODLER_HUB_TABS.map((tab) => (
+                          <button
+                            key={tab.id}
+                            type="button"
+                            onClick={() => setNoodlerHubTab(tab.id)}
+                            className={cn(
+                              "relative flex h-12 min-w-0 items-center justify-center px-1 text-center text-xs font-bold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] sm:text-sm",
+                              noodlerHubTab === tab.id && "text-[var(--foreground)]",
+                            )}
+                          >
+                            <span className="truncate">{tab.label}</span>
+                            {noodlerHubTab === tab.id && (
+                              <span className="absolute bottom-0 left-1/2 h-1 w-12 -translate-x-1/2 rounded-full bg-[var(--noodle-blue)]" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                      {noodlerHubTab === "timeline" ? (
+                        noodlerTimelineItems.length > 0 ? (
+                          <div>{noodlerTimelineItems.map(renderNoodlerTimelineItem)}</div>
+                        ) : privateAccounts.length > 0 ? (
+                          <div className="px-8 py-14 text-center">
+                            <Lock size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
+                            <p className="text-base font-bold">Nothing here yet.</p>
+                            <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
+                              NoodleR posts, comments, subscribers, and unlocks will show here.
+                            </p>
+                          </div>
                         ) : (
-                          <p className="px-4 py-4 text-sm text-[var(--muted-foreground)]">
-                            No NoodleR pages of your own yet. Create one from a persona's profile.
-                          </p>
-                        )}
-                      </section>
-                      <section aria-labelledby="noodler-hub-subscribed">
-                        <div className="border-b border-[var(--noodle-divider)] px-4 py-3">
-                          <h3 id="noodler-hub-subscribed" className="text-base font-bold">
-                            Subscriptions
-                          </h3>
-                        </div>
-                        {noodlerHub && noodlerHub.subscribed.length > 0 ? (
+                          <div className="px-8 py-14 text-center">
+                            <Lock size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
+                            <p className="text-base font-bold">No NoodleR accounts yet.</p>
+                            <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
+                              Create a private page from a persona or character profile.
+                            </p>
+                          </div>
+                        )
+                      ) : noodlerHubTab === "subscriptions" ? (
+                        noodlerHub && noodlerHub.subscribed.length > 0 ? (
                           <div>{noodlerHub.subscribed.map((account) => renderNoodlerAccountRow(account))}</div>
                         ) : (
                           <p className="px-4 py-4 text-sm text-[var(--muted-foreground)]">
                             Not subscribed to any NoodleR creators yet.
                           </p>
-                        )}
-                      </section>
-                      <section aria-labelledby="noodler-hub-discover">
-                        <div className="border-b border-[var(--noodle-divider)] px-4 py-3">
-                          <h3 id="noodler-hub-discover" className="text-base font-bold">
-                            Discover
-                          </h3>
-                        </div>
-                        {noodlerHub && noodlerHub.discover.length > 0 ? (
-                          <div>{noodlerHub.discover.map((account) => renderNoodlerAccountRow(account))}</div>
+                        )
+                      ) : noodlerHubTab === "discover" ? (
+                        sortedNoodlerDiscoverAccounts.length > 0 ? (
+                          <div>{sortedNoodlerDiscoverAccounts.map(renderNoodlerDiscoverCard)}</div>
                         ) : (
                           <p className="px-4 py-4 text-sm text-[var(--muted-foreground)]">
                             No other NoodleR creators to discover yet.
                           </p>
-                        )}
-                      </section>
+                        )
+                      ) : noodlerHub && noodlerHub.owned.length > 0 ? (
+                        <div>{noodlerHub.owned.map((account) => renderNoodlerAccountRow(account))}</div>
+                      ) : (
+                        <p className="px-4 py-4 text-sm text-[var(--muted-foreground)]">
+                          No NoodleR pages of your own yet. Create one from a persona's profile.
+                        </p>
+                      )}
                     </>
                   )}
                 </div>
