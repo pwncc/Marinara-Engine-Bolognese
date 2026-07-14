@@ -1164,6 +1164,10 @@ export function NoodleView() {
   const [profileConnectionTab, setProfileConnectionTab] = useState<ProfileConnectionTab | null>(null);
   const [notificationTab, setNotificationTab] = useState<NotificationTab>("likes");
   const [activeNoodleView, setActiveNoodleView] = useState<NoodleViewId>("home");
+  // Explicit source of truth for chrome selection — set only by
+  // transitionNoodleMode/openProfile/openOwnProfile, never derived from
+  // account data, so no render path can accidentally infer NoodleR chrome.
+  const [activeNoodleMode, setActiveNoodleMode] = useState<NoodleMode>("noodle");
   const [viewedProfileAccountId, setViewedProfileAccountId] = useState<string | null>(null);
   const [timelineTab, setTimelineTab] = useState<TimelineTab>("main");
   const [noodlerHubTab, setNoodlerHubTab] = useState<NoodlerHubTab>("timeline");
@@ -1454,10 +1458,6 @@ export function NoodleView() {
       return rightPost.localeCompare(leftPost) || sortAccountsByDisplayName(left, right);
     });
   }, [latestPrivatePostByCreatorId, noodlerHub, noodlerUnseenCountByAccountId]);
-  const isNoodlerScopedView =
-    isNoodlerEnabled &&
-    (activeNoodleView === "noodler" || (activeNoodleView === "profile" && viewedProfileAccount?.visibility === "private"));
-  const activeNoodleMode: NoodleMode = isNoodlerScopedView || activeNoodleView === "noodler-verification" ? "noodler" : "noodle";
   const activeNoodleModeMeta = NOODLE_MODE_META[activeNoodleMode];
   const composeActionLabel = activeNoodleMode === "noodler" ? "NoodleR Post" : "Post";
   const composePlaceholder = activeNoodleMode === "noodler" ? "Post to NoodleR..." : "What's simmering?";
@@ -2412,9 +2412,7 @@ export function NoodleView() {
   const openProfile = (account: NoodleAccount | null) => {
     if (!account) return;
     if (account.visibility === "private" && !isNoodlerEnabled) {
-      setActiveNoodleView("noodler-verification");
-      setAccountSwitcherOpen(false);
-      setMobileDrawerOpen(false);
+      enterNoodlerVerification();
       return;
     }
     markNoodlerAccountViewed(account);
@@ -2422,6 +2420,7 @@ export function NoodleView() {
     setProfileEditing(false);
     setProfileTab("posts");
     setProfileConnectionTab(null);
+    setActiveNoodleMode(account.visibility === "private" ? "noodler" : "noodle");
     setActiveNoodleView("profile");
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
@@ -2432,6 +2431,7 @@ export function NoodleView() {
     setProfileEditing(false);
     setProfileTab("posts");
     setProfileConnectionTab(null);
+    setActiveNoodleMode("noodle");
     setActiveNoodleView("profile");
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
@@ -3042,15 +3042,36 @@ export function NoodleView() {
   const transitionNoodleMode = useCallback(
     (next: NoodleMode) => {
       resetNoodleModeTransientState();
+      setActiveNoodleMode(next);
       setActiveNoodleView(next === "noodler" ? "noodler" : "home");
     },
     [resetNoodleModeTransientState],
   );
 
+  // The verification screen is presented with NoodleR chrome even though
+  // the feature isn't enabled yet — route every entry point through this
+  // so activeNoodleMode never falls out of sync with what's on screen.
+  const enterNoodlerVerification = useCallback(() => {
+    resetNoodleModeTransientState();
+    setActiveNoodleMode("noodler");
+    setActiveNoodleView("noodler-verification");
+  }, [resetNoodleModeTransientState]);
+
   const openHomeTimeline = useCallback(() => {
     transitionNoodleMode("noodle");
     scrollTimelineToTop();
   }, [transitionNoodleMode, scrollTimelineToTop]);
+
+  // Safety net: if enableNoodler flips off through a path other than
+  // setNoodlerEnabled (e.g. settings refetched after being changed in
+  // another tab/device) while still on NoodleR chrome, fall back to Noodle
+  // mode instead of leaving stale NoodleR chrome up. The verification
+  // screen is exempt — it's intentionally NoodleR-styled while disabled.
+  useEffect(() => {
+    if (!isNoodlerEnabled && activeNoodleMode === "noodler" && activeNoodleView !== "noodler-verification") {
+      transitionNoodleMode("noodle");
+    }
+  }, [isNoodlerEnabled, activeNoodleMode, activeNoodleView, transitionNoodleMode]);
 
   const openMobileHomeTimeline = () => {
     setPostSearch("");
@@ -3132,7 +3153,7 @@ export function NoodleView() {
 
   const setNoodlerEnabled = (enabled: boolean) => {
     if (enabled) {
-      setActiveNoodleView("noodler-verification");
+      enterNoodlerVerification();
       return;
     }
     saveSettings({ enableNoodler: false, enableNoodlerFanActivityScheduler: false });
@@ -3144,8 +3165,7 @@ export function NoodleView() {
 
   const openNoodlerHub = () => {
     if (!isNoodlerEnabled) {
-      resetNoodleModeTransientState();
-      setActiveNoodleView("noodler-verification");
+      enterNoodlerVerification();
       return;
     }
     transitionNoodleMode("noodler");
@@ -3645,7 +3665,7 @@ export function NoodleView() {
               )}
               <button
                 type="button"
-                onClick={() => setActiveNoodleView("noodler-verification")}
+                onClick={enterNoodlerVerification}
                 className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-[var(--noodle-divider)] px-3 text-xs font-bold transition-colors hover:bg-[var(--accent)]"
               >
                 <Lock size={14} />
