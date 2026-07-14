@@ -234,14 +234,29 @@ move with it.
   per-creator-account value, not a single global default — a deliberate deviation from the
   original plan text below. `SettingControls`/`ToggleSetting` reuse still applies if a global
   *default* price is wanted later.
-- **Also discovered, not fixed:** the shared full-screen compose modal (`"New NoodleR post"` /
-  `"New post"` title, `composerAccess` state, submit path is `submitPost` around
-  `packages/client/src/components/noodle/NoodleView.tsx` — grep `composerAccess`) has the exact
-  same access-defaulting bug as the inline composer did, AND — more concerning — its submit call
-  never sets `authorAccountId`, so it's unclear whether posting through it while in NoodleR mode
-  actually targets the private account at all, despite the modal's title changing to "New NoodleR
-  post". This needs investigation with a live app before touching; left untouched here rather than
-  guess.
+- **`authorAccountId` bug — investigated and fixed.** Confirmed by reading
+  `resolvePersonaAccount`/`POST /posts` server-side (`packages/server/src/routes/noodle.routes.ts`):
+  when `authorAccountId` is omitted, the route falls back to
+  `getAccountByEntity(authorKind, authorEntityId)`, which resolves `personaAccount.entityId` to the
+  **public** persona account — so the shared modal's `submitPost` (`NoodleView.tsx`, grep
+  `composerAccess`) always posted publicly regardless of mode, despite the modal's title changing
+  to "New NoodleR post". Fixed: added `personaLinkedNoodlerAccount` (derived from
+  `personaAccount.linkedAccountId`, distinct from the profile-view's `linkedNoodlerAccount` which
+  is derived from `viewedProfileAccount` instead — the modal isn't page-scoped, so it must resolve
+  the poster's *own* linked account, not whichever profile happens to be open). `submitPost` now
+  passes `authorAccountId: personaLinkedNoodlerAccount.id` and forces `access: "public"` when no
+  linked account exists yet, and `canSubmitPost` now also requires a linked account when
+  `activeNoodleMode === "noodler"` so the modal can't silently post publicly under a "New NoodleR
+  post" title.
+- **Also discovered, not fixed:** the same access-defaulting bug the inline composer had (access
+  selector only offered when an image is attached) is still present in **two** places sharing the
+  same `composerAccess`/`attachedImageUrl` state: the inline composer now living in
+  `NoodleHome.tsx` (~L473-500, still a bare `<select>`) and the full-screen modal in
+  `NoodleView.tsx` (same pattern, near the `authorAccountId` fix above). Phase 6's chip-styled,
+  always-visible access selector was only ever applied to `submitPrivatePost`'s creator-tools
+  composer (`NoodlerHome.tsx`) — these two share one fix (same state, same handler) but it's a UI
+  redesign across two files, not a one-line change, so left as Phase 6 follow-up rather than
+  scope-creeping a Phase 5/bugfix pass.
 
 Original plan text follows for reference (some of it — chip reuse, pricing fields, composer
 chips — is now done; treat the rest as still-open):

@@ -911,6 +911,9 @@ export function NoodleView() {
   const canEditViewedProfile = Boolean(
     viewingOwnProfile || (viewedProfileAccount?.kind === "character" && viewedProfileAccount.invited),
   );
+  const personaLinkedNoodlerAccount = personaAccount?.linkedAccountId
+    ? (accountById.get(personaAccount.linkedAccountId) ?? null)
+    : null;
   const subscribedCreatorIds = useMemo(() => {
     if (!personaAccount) return new Set<string>();
     return new Set(
@@ -1569,7 +1572,11 @@ export function NoodleView() {
       </section>
     ) : null;
 
-  const canSubmitPost = Boolean(personaAccount && (composerHasText || attachedImageUrl.trim() || draftPoll));
+  const canSubmitPost = Boolean(
+    personaAccount &&
+      (activeNoodleMode !== "noodler" || personaLinkedNoodlerAccount) &&
+      (composerHasText || attachedImageUrl.trim() || draftPoll),
+  );
   const confirmActionPending =
     confirmAction?.kind === "delete-post"
       ? deletePost.isPending
@@ -2185,14 +2192,16 @@ export function NoodleView() {
   const submitPost = () => {
     if (!personaAccount || !canSubmitPost) return;
     const content = composerValueRef.current.trim() || draftPoll?.question || "Shared an image.";
+    const postingToNoodler = activeNoodleMode === "noodler" && Boolean(personaLinkedNoodlerAccount);
     createPost.mutate(
       {
         authorKind: "persona",
         authorEntityId: personaAccount.entityId,
+        ...(postingToNoodler ? { authorAccountId: personaLinkedNoodlerAccount!.id } : {}),
         content,
         imageUrl: attachedImageUrl.trim() || null,
         poll: draftPoll,
-        access: attachedImageUrl.trim() ? composerAccess : "public",
+        access: postingToNoodler ? composerAccess : "public",
       },
       {
         onSuccess: () => {
