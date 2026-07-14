@@ -229,10 +229,20 @@ export function normalizeNoodleSettings(raw: unknown): NoodleSettings {
   const rawRecord = parseRecord(raw);
   const migratedMaxImagesPerRefresh =
     rawRecord.maxImagesPerRefresh ?? rawRecord.maxImagePromptsPerDay ?? DEFAULT_NOODLE_SETTINGS.maxImagesPerRefresh;
+  const rawNoodler = parseRecord(rawRecord.noodler);
+  const migratedNoodler = {
+    ...DEFAULT_NOODLE_SETTINGS.noodler,
+    ...rawNoodler,
+    enableFanActivityScheduler:
+      rawNoodler.enableFanActivityScheduler ??
+      rawRecord.enableNoodlerFanActivityScheduler ??
+      DEFAULT_NOODLE_SETTINGS.noodler.enableFanActivityScheduler,
+  };
   const parsed = noodleSettingsSchema.safeParse({
     ...DEFAULT_NOODLE_SETTINGS,
     ...rawRecord,
     maxImagesPerRefresh: migratedMaxImagesPerRefresh,
+    noodler: migratedNoodler,
   });
   if (!parsed.success) return noodleSettingsSchema.parse(DEFAULT_NOODLE_SETTINGS);
   const min = Math.min(parsed.data.participantMin, parsed.data.participantMax);
@@ -391,7 +401,11 @@ export function createNoodleStorage(db: DB) {
 
     async updateSettings(input: NoodleSettingsUpdateInput): Promise<NoodleSettings> {
       const current = await this.getSettings();
-      const next = normalizeNoodleSettings({ ...current, ...input });
+      const next = normalizeNoodleSettings({
+        ...current,
+        ...input,
+        noodler: { ...current.noodler, ...input.noodler },
+      });
       await settingsStore.set(NOODLE_SETTINGS_KEY, JSON.stringify(next));
       const currentSchedule = await this.getRefreshSchedule();
       const reconciled = reconcileNoodleRefreshSchedule(currentSchedule, next.refreshesPerDay, new Date());

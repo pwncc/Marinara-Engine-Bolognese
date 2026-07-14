@@ -63,10 +63,15 @@ try {
     maxImagesPerRefresh: 9,
     allowRandomUsers: true,
     maxGeneratedPostsPerRefresh: 11,
+    noodler: { enableFanActivityScheduler: true },
   });
   assert.equal(updated.maxImagesPerRefresh, 9);
   assert.equal(updated.allowRandomUsers, true);
   assert.equal(updated.maxGeneratedPostsPerRefresh, 11);
+  assert.equal(updated.noodler.enableFanActivityScheduler, true);
+  const partiallyUpdated = await firstNoodle.updateSettings({ allowRandomUsers: false });
+  assert.equal(partiallyUpdated.allowRandomUsers, false);
+  assert.equal(partiallyUpdated.noodler.enableFanActivityScheduler, true);
   const characterAccount = await firstNoodle.upsertAccountFromProfile({
     kind: "character",
     entityId: "renamed-character",
@@ -99,8 +104,9 @@ try {
   const reopenedDb = await createFileNativeDB();
   const reopenedSettings = await createNoodleStorage(reopenedDb as unknown as DB).getSettings();
   assert.equal(reopenedSettings.maxImagesPerRefresh, 9);
-  assert.equal(reopenedSettings.allowRandomUsers, true);
+  assert.equal(reopenedSettings.allowRandomUsers, false);
   assert.equal(reopenedSettings.maxGeneratedPostsPerRefresh, 11);
+  assert.equal(reopenedSettings.noodler.enableFanActivityScheduler, true);
   await reopenedDb._fileStore.close();
 } finally {
   rmSync(storageDir, { recursive: true, force: true });

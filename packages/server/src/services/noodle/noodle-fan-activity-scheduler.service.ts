@@ -5,7 +5,7 @@
 // own poll loop, own persisted state (per-account nextRunAt inside
 // noodleAccounts.settings.fanActivity, not the public timeline's schedule
 // table). Gated by two independent switches — the global
-// enableNoodlerFanActivityScheduler kill switch, and each account's own
+// settings.noodler.enableFanActivityScheduler kill switch, and each account's own
 // fanActivity.autoSchedule — so turning one off never depends on the other,
 // and a failure or slowdown here can never delay the public refresh
 // scheduler (separate lock scope key: the account id, same scope guided
@@ -107,7 +107,7 @@ export function startNoodleFanActivityScheduler(app: FastifyInstance) {
     polling = true;
     try {
       const settings = await noodle.getSettings();
-      if (!settings.enableNoodlerFanActivityScheduler) return;
+      if (!settings.noodler.enableFanActivityScheduler) return;
 
       const privateAccounts = await noodle.listPrivateAccounts();
       const now = Date.now();

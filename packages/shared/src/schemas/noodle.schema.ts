@@ -44,8 +44,14 @@ export const DEFAULT_NOODLE_SETTINGS = {
   generationConnectionId: null,
   layout: "timeline",
   enableNoodler: false,
-  enableNoodlerFanActivityScheduler: false,
+  noodler: {
+    enableFanActivityScheduler: false,
+  },
 } as const;
+
+export const noodlerSettingsSchema = z.object({
+  enableFanActivityScheduler: z.boolean().default(DEFAULT_NOODLE_SETTINGS.noodler.enableFanActivityScheduler),
+});
 
 export const noodleSettingsSchema = z.object({
   refreshesPerDay: z.number().int().min(0).max(24).default(DEFAULT_NOODLE_SETTINGS.refreshesPerDay),
@@ -95,12 +101,12 @@ export const noodleSettingsSchema = z.object({
   generationConnectionId: z.string().min(1).nullable().default(DEFAULT_NOODLE_SETTINGS.generationConnectionId),
   layout: noodleLayoutSchema.default(DEFAULT_NOODLE_SETTINGS.layout),
   enableNoodler: z.boolean().default(DEFAULT_NOODLE_SETTINGS.enableNoodler),
-  enableNoodlerFanActivityScheduler: z
-    .boolean()
-    .default(DEFAULT_NOODLE_SETTINGS.enableNoodlerFanActivityScheduler),
+  noodler: noodlerSettingsSchema.default(() => ({ ...DEFAULT_NOODLE_SETTINGS.noodler })),
 });
 
-export const noodleSettingsUpdateSchema = noodleSettingsSchema.partial();
+export const noodleSettingsUpdateSchema = noodleSettingsSchema.partial().extend({
+  noodler: noodlerSettingsSchema.partial().optional(),
+});
 
 export const noodleAccountUpdateSchema = z.object({
   handle: z

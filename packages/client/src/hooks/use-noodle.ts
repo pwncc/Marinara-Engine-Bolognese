@@ -103,7 +103,11 @@ export function useUpdateNoodleSettings() {
         current
           ? {
               ...current,
-              settings: { ...current.settings, ...patch } as NoodleSettings,
+              settings: {
+                ...current.settings,
+                ...patch,
+                noodler: { ...current.settings.noodler, ...patch.noodler },
+              } as NoodleSettings,
             }
           : current,
       );

@@ -2815,7 +2815,7 @@ export function NoodleView() {
       enterNoodlerVerification();
       return;
     }
-    saveSettings({ enableNoodler: false, enableNoodlerFanActivityScheduler: false });
+    saveSettings({ enableNoodler: false, noodler: { enableFanActivityScheduler: false } });
     // Always reset, not just when currently in NoodleR mode — otherwise a
     // stale viewedProfileAccountId/noodlerHubTab from an earlier visit can
     // survive disabling the feature.
@@ -3363,9 +3363,9 @@ export function NoodleView() {
               <ToggleSetting
                 label="Enable NoodleR fan activity"
                 help="Lets the fan-activity scheduler run unattended for any NoodleR page that has both fan activity and its own auto-schedule toggle turned on. Manual 'Simulate fan activity now' is unaffected by this switch either way."
-                checked={settings.enableNoodlerFanActivityScheduler}
+                checked={settings.noodler.enableFanActivityScheduler}
                 disabled={updateSettings.isPending || !isNoodlerEnabled}
-                onChange={(checked) => saveSettings({ enableNoodlerFanActivityScheduler: checked })}
+                onChange={(checked) => saveSettings({ noodler: { enableFanActivityScheduler: checked } })}
               />
             </div>
           </Section>
