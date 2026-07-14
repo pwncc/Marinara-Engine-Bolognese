@@ -166,6 +166,7 @@ type ProfileConnectionTab = "followers" | "following";
 type NotificationTab = "likes" | "follows" | "replies";
 type TimelineTab = "main" | "following";
 type NoodlerHubTab = "timeline" | "subscriptions" | "discover" | "owned";
+type NoodleMode = "noodle" | "noodler";
 type NoodlePrivatePostAccess = Exclude<NoodlePostAccess, "public">;
 type NoodleViewId = "home" | "search" | "notifications" | "profile" | "settings" | "noodler";
 type NoodleNotificationFocusTarget = {
@@ -242,6 +243,19 @@ const NOODLER_HUB_TABS: Array<{ id: NoodlerHubTab; label: string }> = [
   { id: "discover", label: "Discover" },
   { id: "owned", label: "Your Pages" },
 ];
+
+const NOODLE_MODE_META: Record<NoodleMode, { label: string; url: string; tagline: string }> = {
+  noodle: {
+    label: "Noodle",
+    url: "https://noodle.local",
+    tagline: "Public social timeline",
+  },
+  noodler: {
+    label: "NoodleR",
+    url: "https://noodler.local",
+    tagline: "Private creator network",
+  },
+};
 
 function parseRecord(value: unknown): Record<string, unknown> {
   if (!value) return {};
@@ -755,17 +769,55 @@ function NoodlerPrivateBadge({ className }: { className?: string }) {
   );
 }
 
-function MobileTimelineBackButton({ onClick }: { onClick: () => void }) {
+function MobileTimelineBackButton({ label = "Back to Noodle timeline", onClick }: { label?: string; onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
       className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 lg:hidden"
-      title="Back to timeline"
-      aria-label="Back to Noodle timeline"
+      title={label}
+      aria-label={label}
     >
       <ChevronLeft size={22} />
     </button>
+  );
+}
+
+function NoodleModeSwitcher({
+  activeMode,
+  onOpenNoodle,
+  onOpenNoodler,
+}: {
+  activeMode: NoodleMode;
+  onOpenNoodle: () => void;
+  onOpenNoodler: () => void;
+}) {
+  const modes: Array<{ id: NoodleMode; icon: typeof Home; onClick: () => void }> = [
+    { id: "noodle", icon: Home, onClick: onOpenNoodle },
+    { id: "noodler", icon: Lock, onClick: onOpenNoodler },
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-1 rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] p-1">
+      {modes.map((mode) => {
+        const Icon = mode.icon;
+        const active = activeMode === mode.id;
+        return (
+          <button
+            key={mode.id}
+            type="button"
+            onClick={mode.onClick}
+            aria-pressed={active}
+            className={cn(
+              "flex min-h-9 min-w-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-bold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+              active && "bg-[var(--noodle-blue)]/15 text-[var(--foreground)] ring-1 ring-[var(--noodle-blue)]/30",
+            )}
+          >
+            <Icon size={14} className={cn(active && "!text-[var(--noodle-blue)]")} />
+            <span className="truncate">{NOODLE_MODE_META[mode.id].label}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -820,7 +872,8 @@ function ToggleSetting({
   );
 }
 
-function BrowserChrome() {
+function BrowserChrome({ mode }: { mode: NoodleMode }) {
+  const meta = NOODLE_MODE_META[mode];
   return (
     <div className="hidden h-11 shrink-0 items-center gap-2 border-b border-[var(--noodle-divider)] bg-[var(--background)] px-3 lg:flex">
       <div className="hidden items-center gap-1.5 sm:flex" aria-hidden="true">
@@ -842,10 +895,12 @@ function BrowserChrome() {
       <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-full border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--card)] px-3 text-xs shadow-sm">
         <Lock size={13} className="hidden shrink-0 text-[var(--noodle-blue)] sm:block" />
         <Search size={14} className="shrink-0 text-[var(--noodle-blue)] sm:hidden" />
-        <span className="truncate text-[var(--foreground)] sm:hidden">noodle.marinara.local/home</span>
-        <span className="hidden truncate text-[var(--foreground)] sm:inline">https://noodle.local</span>
+        <span className="truncate text-[var(--foreground)] sm:hidden">
+          {mode === "noodler" ? "noodler.local/hub" : "noodle.local/home"}
+        </span>
+        <span className="hidden truncate text-[var(--foreground)] sm:inline">{meta.url}</span>
         <span className="hidden rounded-full bg-[var(--noodle-blue)]/15 px-2 py-0.5 font-semibold text-[var(--noodle-blue)] sm:inline-flex">
-          Noodle
+          {meta.label}
         </span>
       </div>
     </div>
@@ -1399,6 +1454,10 @@ export function NoodleView() {
   }, [latestPrivatePostByCreatorId, noodlerHub, noodlerUnseenCountByAccountId]);
   const isNoodlerScopedView =
     activeNoodleView === "noodler" || (activeNoodleView === "profile" && viewedProfileAccount?.visibility === "private");
+  const activeNoodleMode: NoodleMode = isNoodlerScopedView ? "noodler" : "noodle";
+  const activeNoodleModeMeta = NOODLE_MODE_META[activeNoodleMode];
+  const composeActionLabel = activeNoodleMode === "noodler" ? "NoodleR Post" : "Post";
+  const composePlaceholder = activeNoodleMode === "noodler" ? "Post to NoodleR..." : "What's simmering?";
   const canRevealPostAccess = (post: NoodlePost) => {
     if (post.access === "public") return true;
     if (post.authorAccountId === personaAccount?.id) return true;
@@ -5140,7 +5199,7 @@ export function NoodleView() {
         } as CSSProperties
       }
     >
-      <BrowserChrome />
+      <BrowserChrome mode={activeNoodleMode} />
       <input ref={imageFileRef} type="file" accept="image/*" className="hidden" onChange={handleImageFile} />
       <input ref={replyImageFileRef} type="file" accept="image/*" className="hidden" onChange={handleReplyImageFile} />
       {imageLightbox && (
@@ -5188,7 +5247,7 @@ export function NoodleView() {
                   )}
                   <p className="mt-3 truncate text-lg font-bold">{personaAccount?.displayName ?? "Noodle Account"}</p>
                   <p className="truncate text-sm text-[var(--muted-foreground)]">
-                    {personaAccount ? `@${personaAccount.handle}` : "Pick a persona below"}
+                    {personaAccount ? `${activeNoodleModeMeta.tagline} · @${personaAccount.handle}` : "Pick a persona below"}
                   </p>
                 </div>
                 <button
@@ -5202,7 +5261,15 @@ export function NoodleView() {
                 </button>
               </div>
 
-              <nav className="mt-7 space-y-1" aria-label="Noodle account navigation">
+              <div className="mt-7">
+                <NoodleModeSwitcher
+                  activeMode={activeNoodleMode}
+                  onOpenNoodle={openMobileHomeTimeline}
+                  onOpenNoodler={openNoodlerHub}
+                />
+              </div>
+
+              <nav className="mt-4 space-y-1" aria-label="Noodle account navigation">
                 <button
                   type="button"
                   onClick={openMobileHomeTimeline}
@@ -5218,14 +5285,6 @@ export function NoodleView() {
                 >
                   <User size={23} />
                   Profile
-                </button>
-                <button
-                  type="button"
-                  onClick={openNoodlerHub}
-                  className="flex min-h-12 w-full items-center gap-4 rounded-xl px-2 text-left text-base font-bold transition-colors hover:bg-[var(--accent)]"
-                >
-                  <Lock size={23} />
-                  NoodleR
                 </button>
                 <button
                   type="button"
@@ -5246,7 +5305,7 @@ export function NoodleView() {
                   className="flex min-h-12 w-full items-center gap-4 rounded-xl px-2 text-left text-base font-bold transition-colors hover:bg-[var(--accent)]"
                 >
                   <Pencil size={23} />
-                  Post
+                  {composeActionLabel}
                 </button>
               </nav>
 
@@ -5331,7 +5390,14 @@ export function NoodleView() {
               <div className="mb-5 flex h-12 items-center">
                 <NoodleLogo className="h-10 w-16" />
               </div>
-              <nav className="space-y-1">
+              <div className="mb-4">
+                <NoodleModeSwitcher
+                  activeMode={activeNoodleMode}
+                  onOpenNoodle={openHomeTimeline}
+                  onOpenNoodler={openNoodlerHub}
+                />
+              </div>
+              <nav className="space-y-1 border-t border-[var(--noodle-divider)] pt-3">
                 <button
                   type="button"
                   onClick={openHomeTimeline}
@@ -5377,17 +5443,6 @@ export function NoodleView() {
                 </button>
                 <button
                   type="button"
-                  onClick={openNoodlerHub}
-                  className={cn(
-                    "flex min-h-11 w-full items-center gap-4 rounded-full px-3 text-left text-[0.95rem] font-semibold hover:bg-[var(--accent)]",
-                    activeNoodleView === "noodler" && "bg-[var(--noodle-blue)]/10",
-                  )}
-                >
-                  <Lock size={22} className="!text-[var(--noodle-blue)]" />
-                  NoodleR
-                </button>
-                <button
-                  type="button"
                   onClick={openSettings}
                   className={cn(
                     "flex min-h-11 w-full items-center gap-4 rounded-full px-3 text-left text-[0.95rem] font-semibold hover:bg-[var(--accent)]",
@@ -5407,7 +5462,7 @@ export function NoodleView() {
                 }}
                 className="mt-5 h-12 rounded-full bg-[var(--noodle-blue)] px-6 text-sm font-bold text-zinc-950 transition-opacity hover:opacity-90"
               >
-                Post
+                {composeActionLabel}
               </button>
               <div ref={accountSwitcherRef} className="relative mt-auto">
                 {accountSwitcherOpen && (
@@ -5571,7 +5626,7 @@ export function NoodleView() {
                         onBlur={() => setComposer(composerValueRef.current)}
                         onKeyDown={handleComposerKeyDown}
                         disabled={!personaAccount}
-                        placeholder="What's simmering?"
+                        placeholder={composePlaceholder}
                         aria-autocomplete="list"
                         aria-controls={activeMention && !composeOpen ? "noodle-inline-mention-list" : undefined}
                         aria-expanded={Boolean(activeMention && !composeOpen)}
@@ -5654,7 +5709,7 @@ export function NoodleView() {
                       disabled={!canSubmitPost || createPost.isPending}
                       className="h-8 rounded-full bg-[var(--noodle-blue)] px-5 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      Post
+                      {composeActionLabel}
                     </button>
                     {!composeOpen &&
                       renderComposerToolPopovers({
@@ -5692,12 +5747,12 @@ export function NoodleView() {
                 <div className="min-h-full">
                   <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
                     <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
-                      <MobileTimelineBackButton onClick={openMobileHomeTimeline} />
+                      <MobileTimelineBackButton label="Back to Noodle" onClick={openMobileHomeTimeline} />
                       <Bell size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
                       <div className="min-w-0">
                         <h2 className="truncate text-lg font-bold">Notifications</h2>
                         <p className="truncate text-xs text-[var(--muted-foreground)]">
-                          {personaAccount ? `@${personaAccount.handle}` : "Choose a persona account"}
+                          {personaAccount ? `Public social timeline · @${personaAccount.handle}` : "Choose a persona account"}
                         </p>
                       </div>
                     </div>
@@ -5761,7 +5816,7 @@ export function NoodleView() {
                 <div className="min-h-full">
                   <div className="border-b border-[var(--noodle-divider)] px-2 py-3 lg:px-4 lg:py-5">
                     <div className="flex items-center gap-3">
-                      <MobileTimelineBackButton onClick={openMobileHomeTimeline} />
+                      <MobileTimelineBackButton label="Back to Noodle" onClick={openMobileHomeTimeline} />
                       <Settings2 size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
                       <div className="min-w-0">
                         <h2 className="text-lg font-bold">Noodle settings</h2>
@@ -5777,12 +5832,12 @@ export function NoodleView() {
                 <div className="min-h-full">
                   <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
                     <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
-                      <MobileTimelineBackButton onClick={openMobileHomeTimeline} />
+                      <MobileTimelineBackButton label="Back to Noodle" onClick={openMobileHomeTimeline} />
                       <Lock size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
                       <div className="min-w-0">
                         <h2 className="truncate text-lg font-bold">NoodleR</h2>
                         <p className="truncate text-xs text-[var(--muted-foreground)]">
-                          {personaAccount ? `@${personaAccount.handle}` : "Choose a persona account"}
+                          {personaAccount ? `Private creator network · @${personaAccount.handle}` : "Choose a persona account"}
                         </p>
                       </div>
                     </div>
@@ -6707,7 +6762,7 @@ export function NoodleView() {
               >
                 <X size={17} />
               </button>
-              <h2 className="text-sm font-bold">New post</h2>
+              <h2 className="text-sm font-bold">{activeNoodleMode === "noodler" ? "New NoodleR post" : "New post"}</h2>
             </div>
             <div className="p-4">
               <div className="grid grid-cols-[2.75rem_minmax(0,1fr)] gap-3">
@@ -6725,7 +6780,7 @@ export function NoodleView() {
                     onBlur={() => setComposer(composerValueRef.current)}
                     onKeyDown={handleComposerKeyDown}
                     disabled={!personaAccount}
-                    placeholder="What's simmering?"
+                    placeholder={composePlaceholder}
                     aria-autocomplete="list"
                     aria-controls={activeMention ? "noodle-modal-mention-list" : undefined}
                     aria-expanded={Boolean(activeMention)}
@@ -6807,7 +6862,7 @@ export function NoodleView() {
                   disabled={!canSubmitPost || createPost.isPending}
                   className="h-9 rounded-full bg-[var(--noodle-blue)] px-6 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {createPost.isPending ? "Posting..." : "Post"}
+                  {createPost.isPending ? "Posting..." : composeActionLabel}
                 </button>
                 {composeOpen &&
                   renderComposerToolPopovers({
