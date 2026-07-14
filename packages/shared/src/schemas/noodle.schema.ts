@@ -176,6 +176,10 @@ export const noodleCreatePostSchema = z.object({
   quotePostId: z.string().min(1).nullable().optional(),
   poll: noodlePollInputSchema.nullable().optional(),
   access: noodlePostAccessSchema.optional(),
+  // Simulated pay-per-view price shown on the locked-post overlay for
+  // access="ppv" posts. Display-only flavor for the NoodleR creator-platform
+  // framing — no real payment is processed.
+  ppvPrice: z.number().min(0).max(999_999).optional(),
 });
 
 export const noodlePostUpdateSchema = z.object({

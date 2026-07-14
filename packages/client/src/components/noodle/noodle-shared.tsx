@@ -96,6 +96,20 @@ export function countInteractions(interactions: NoodleInteraction[], type: Noodl
   return interactions.filter((interaction) => interaction.type === type).length;
 }
 
+// Display-only simulated pricing — no real payment is ever processed. Falls
+// back to a plain label when the creator hasn't set a subscriptionPrice.
+export function subscribeLabel(account: Pick<NoodleAccount, "settings">, subscribed: boolean) {
+  if (subscribed) return "Subscribed";
+  const price = account.settings?.subscriptionPrice;
+  return typeof price === "number" ? `Subscribe · $${price.toFixed(2)}/mo` : "Subscribe";
+}
+
+export function unlockLabel(post: Pick<NoodlePost, "access" | "metadata">) {
+  if (post.access !== "ppv") return "Subscribers only";
+  const price = post.metadata?.ppvPrice;
+  return typeof price === "number" ? `Unlock · $${price.toFixed(2)}` : "Pay-per-post";
+}
+
 export function createNoodleLightboxImage(id: string, url: string, prompt = ""): ChatImage {
   const filename = url.split("?")[0]?.split("/").pop();
   const safeFilename = filename && /\.(?:avif|gif|jpe?g|png|webp)$/i.test(filename) ? filename : `noodle-${id}.png`;

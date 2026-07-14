@@ -2550,7 +2550,11 @@ export async function noodleRoutes(app: FastifyInstance) {
       quotePostId: parsed.data.quotePostId ?? null,
       source: "manual",
       access: parsed.data.access ?? "public",
-      metadata: { ...mentionedAccountMetadata(mentionedAccounts), ...(poll ? { poll } : {}) },
+      metadata: {
+        ...mentionedAccountMetadata(mentionedAccounts),
+        ...(poll ? { poll } : {}),
+        ...(parsed.data.access === "ppv" && parsed.data.ppvPrice != null ? { ppvPrice: parsed.data.ppvPrice } : {}),
+      },
     });
     if (!post) return reply.code(404).send({ error: "Noodle author not found" });
     const digest = await noodle.createDigest({

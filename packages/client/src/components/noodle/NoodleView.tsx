@@ -144,6 +144,8 @@ import {
   countInteractions,
   createNoodleLightboxImage,
   formatTime,
+  subscribeLabel,
+  unlockLabel,
   type ActiveComposerMention,
   type ComposerTool,
   type NoodleMode,
@@ -847,7 +849,8 @@ export function NoodleView() {
   const [composerAccess, setComposerAccess] = useState<NoodlePostAccess>("public");
   const [privateComposerText, setPrivateComposerText] = useState("");
   const [privateComposerImageUrl, setPrivateComposerImageUrl] = useState("");
-  const [privateComposerAccess, setPrivateComposerAccess] = useState<NoodlePostAccess>("subscriber");
+  const [privateComposerAccess, setPrivateComposerAccess] = useState<NoodlePostAccess>("public");
+  const [privateComposerPpvPrice, setPrivateComposerPpvPrice] = useState("");
   const [privateGuideAccess, setPrivateGuideAccess] = useState<NoodlePrivatePostAccess>("subscriber");
   const [privateGuideIncludeText, setPrivateGuideIncludeText] = useState(true);
   const [privateGuideIncludeImage, setPrivateGuideIncludeImage] = useState(true);
@@ -2272,6 +2275,7 @@ export function NoodleView() {
     if (!personaAccount || !viewedProfileAccount || !viewingOwnPrivateAccount) return;
     const content = privateComposerText.trim() || "Shared an image.";
     if (!content && !privateComposerImageUrl.trim()) return;
+    const ppvPrice = privateComposerAccess === "ppv" ? Number.parseFloat(privateComposerPpvPrice) : NaN;
     createPost.mutate(
       {
         authorKind: "persona",
@@ -2279,13 +2283,15 @@ export function NoodleView() {
         authorAccountId: viewedProfileAccount.id,
         content,
         imageUrl: privateComposerImageUrl.trim() || null,
-        access: privateComposerImageUrl.trim() ? privateComposerAccess : "public",
+        access: privateComposerAccess,
+        ...(Number.isFinite(ppvPrice) && ppvPrice >= 0 ? { ppvPrice } : {}),
       },
       {
         onSuccess: () => {
           setPrivateComposerText("");
           setPrivateComposerImageUrl("");
-          setPrivateComposerAccess("subscriber");
+          setPrivateComposerAccess("public");
+          setPrivateComposerPpvPrice("");
         },
         onError: (error) => toast.error(error instanceof Error ? error.message : "Could not post to NoodleR."),
       },
@@ -3997,9 +4003,7 @@ export function NoodleView() {
               <div className="relative mt-3 flex h-52 w-full items-center justify-center overflow-hidden rounded-xl">
                 <img src={post.imageUrl} alt="" className="h-full w-full object-cover blur-2xl" />
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/45 text-center text-white">
-                  <span className="text-xs font-semibold">
-                    {post.access === "subscriber" ? "Subscribers only" : "Pay-per-post"}
-                  </span>
+                  <span className="text-xs font-semibold">{unlockLabel(post)}</span>
                   {post.access === "ppv" && (
                     <button
                       type="button"
@@ -4283,13 +4287,7 @@ export function NoodleView() {
             : toggleSubscription(post.authorAccountId)
         }
         className="group relative aspect-square overflow-hidden bg-[var(--accent)]"
-        title={
-          revealed
-            ? post.content || author?.displayName || "Noodle post"
-            : post.access === "subscriber"
-              ? "Subscribers only"
-              : "Pay-per-post"
-        }
+        title={revealed ? post.content || author?.displayName || "Noodle post" : unlockLabel(post)}
       >
         <img
           src={post.imageUrl!}
@@ -4301,7 +4299,7 @@ export function NoodleView() {
         />
         {!revealed && (
           <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-[0.65rem] font-semibold text-white">
-            {post.access === "subscriber" ? "Subscribers only" : "Pay-per-post"}
+            {unlockLabel(post)}
           </span>
         )}
       </button>
@@ -4398,7 +4396,7 @@ export function NoodleView() {
                 : "bg-[var(--foreground)] text-[var(--background)]",
             )}
           >
-            {subscribed ? "Subscribed" : "Subscribe"}
+            {subscribeLabel(account, subscribed)}
           </button>
         )}
         {isOwn && (
@@ -4522,7 +4520,7 @@ export function NoodleView() {
                     : "bg-[var(--foreground)] text-[var(--background)]",
                 )}
               >
-                {subscribed ? "Subscribed" : "Subscribe"}
+                {subscribeLabel(account, subscribed)}
               </button>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
@@ -5492,7 +5490,7 @@ export function NoodleView() {
                               : "bg-[var(--foreground)] text-[var(--background)]",
                           )}
                         >
-                          {subscribedCreatorIds.has(viewedProfileAccount.id) ? "Subscribed" : "Subscribe"}
+                          {subscribeLabel(viewedProfileAccount, subscribedCreatorIds.has(viewedProfileAccount.id))}
                         </button>
                       ) : canFollowViewedProfile && viewedProfileAccount ? (
                         <button
@@ -5845,12 +5843,76 @@ export function NoodleView() {
                           have to unlock each pay-per-post individually.
                         </span>
                       </label>
+                      <label className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                        <span className="shrink-0 font-semibold text-[var(--foreground)]">Subscription price</span>
+                        <span>$</span>
+                        <input
+                          key={viewedProfileAccount?.id}
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          inputMode="decimal"
+                          defaultValue={
+                            typeof viewedProfileAccount?.settings?.subscriptionPrice === "number"
+                              ? (viewedProfileAccount.settings.subscriptionPrice as number)
+                              : ""
+                          }
+                          placeholder="9.99"
+                          onBlur={(event) => {
+                            if (!viewedProfileAccount) return;
+                            const value = Number.parseFloat(event.target.value);
+                            updateAccount.mutate({
+                              id: viewedProfileAccount.id,
+                              settings: { subscriptionPrice: Number.isFinite(value) && value >= 0 ? value : null },
+                            });
+                          }}
+                          className={cn(fieldClass, "h-7 w-24")}
+                        />
+                        <span>/mo · shown to fans, no real payment is processed</span>
+                      </label>
                       <textarea
                         value={privateComposerText}
                         onChange={(event) => setPrivateComposerText(event.target.value)}
                         placeholder="Post to your NoodleR…"
                         className={cn(textareaClass, "min-h-16 w-full resize-none bg-transparent")}
                       />
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        {(
+                          [
+                            { value: "public", label: "Public" },
+                            {
+                              value: "subscriber",
+                              label:
+                                typeof viewedProfileAccount?.settings?.subscriptionPrice === "number"
+                                  ? `Subscribers · $${(viewedProfileAccount.settings.subscriptionPrice as number).toFixed(2)}/mo`
+                                  : "Subscribers only",
+                            },
+                            { value: "ppv", label: "Pay-per-view" },
+                          ] as const
+                        ).map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => setPrivateComposerAccess(option.value)}
+                            style={{ "--chip-tint": "var(--noodle-blue)" } as CSSProperties}
+                            className={cn(
+                              "mari-suggestion-chip",
+                              privateComposerAccess === option.value && "mari-suggestion-chip--selected",
+                            )}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                        {privateComposerAccess === "ppv" && (
+                          <input
+                            value={privateComposerPpvPrice}
+                            onChange={(event) => setPrivateComposerPpvPrice(event.target.value)}
+                            placeholder="Price (optional)"
+                            inputMode="decimal"
+                            className={cn(fieldClass, "h-7 w-28")}
+                          />
+                        )}
+                      </div>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <input
                           value={privateComposerImageUrl}
@@ -5858,16 +5920,6 @@ export function NoodleView() {
                           placeholder="Image URL (optional)"
                           className={cn(fieldClass, "h-8 flex-1")}
                         />
-                        {privateComposerImageUrl.trim() && (
-                          <select
-                            value={privateComposerAccess}
-                            onChange={(event) => setPrivateComposerAccess(event.target.value as NoodlePostAccess)}
-                            className="h-8 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs"
-                          >
-                            <option value="subscriber">Subscribers only</option>
-                            <option value="ppv">Pay-per-post</option>
-                          </select>
-                        )}
                         <button
                           type="button"
                           onClick={submitPrivatePost}
