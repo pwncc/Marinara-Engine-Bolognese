@@ -463,8 +463,8 @@ const defaultNoodleImagePrompt = NOODLE_IMAGE_POST.defaultBuilder({
   userInstructions: "dramatic blue lighting",
   characterDescription: "Dottore has blue hair and a white mask.",
 });
-assert.match(defaultNoodleImagePrompt, /^cel-shaded laboratory selfie/u);
-assert.match(defaultNoodleImagePrompt, /Dottore has blue hair/u);
+assert.match(defaultNoodleImagePrompt, /^Dottore has blue hair/u);
+assert.match(defaultNoodleImagePrompt, /cel-shaded laboratory selfie/u);
 assert.doesNotMatch(defaultNoodleImagePrompt, /This entire post/u);
 assert.doesNotMatch(defaultNoodleImagePrompt, /Output only|Draft image idea|Post text/u);
 const privateNoodlerImagePrompt = NOODLE_IMAGE_POST.defaultBuilder({

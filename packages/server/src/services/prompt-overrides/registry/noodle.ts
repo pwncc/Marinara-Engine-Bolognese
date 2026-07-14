@@ -16,7 +16,7 @@ export const NOODLE_IMAGE_POST: PromptOverrideKeyDef<NoodleImagePostCtx> = {
   key: "noodle.imagePost",
   label: "Noodle Post Image",
   description:
-    "Template that assembles the final image-generation prompt. The default sends the visual idea, appearance notes, and Noodle image directions without the post text or meta-instructions.",
+    "Template that assembles the final image-generation prompt. The default leads with appearance notes so the character's actual look dominates over the timeline writer's scene idea, followed by the visual idea and Noodle image directions, without the post text or meta-instructions.",
   variables: [
     { name: "authorName", description: "Display name of the Noodle account posting.", example: "Dottore" },
     {
@@ -42,7 +42,7 @@ export const NOODLE_IMAGE_POST: PromptOverrideKeyDef<NoodleImagePostCtx> = {
     },
   ],
   defaultBuilder: (ctx) =>
-    [ctx.draftPrompt.trim() || `A social-media-ready image posted by ${ctx.authorName}.`, ctx.characterDescription, ctx.userInstructions]
+    [ctx.characterDescription, ctx.draftPrompt.trim() || `A social-media-ready image posted by ${ctx.authorName}.`, ctx.userInstructions]
       .map((part) => part.trim())
       .filter(Boolean)
       .join("\n\n"),

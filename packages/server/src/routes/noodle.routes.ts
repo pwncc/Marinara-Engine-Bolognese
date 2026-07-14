@@ -1072,6 +1072,7 @@ async function buildRefreshPrompt(input: {
     "- Do not make an account interact with the same existing post again when it has already liked, reposted, voted, or replied there, unless that account was tagged or is answering a direct response to its own comment. Never make an account reply to its own comment.",
     "- Avoid repeating an account's recent post topic or phrasing. Continue an existing thread only when new activity gives the account a reason to return.",
     NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION,
+    "- imagePrompt values describe scene, pose, outfit, mood, composition, and setting only. Do not invent or restate the character's physical appearance (hair, build, face, species, etc.) — that is layered in separately from the character's own profile, and a conflicting guess in imagePrompt will fight it.",
     ...(personaAuthorContext
       ? [
           "- Exception: the account in the Author Persona Profile section is a persona-linked private NoodleR account and IS allowed to author the single requested post for this generation only. This exception applies to that one account alone.",
