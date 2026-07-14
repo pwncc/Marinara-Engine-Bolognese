@@ -494,8 +494,15 @@ export function createNoodleStorage(db: DB) {
       return true;
     },
 
-    async listAccounts(): Promise<NoodleAccount[]> {
-      const rows = await db.select().from(noodleAccounts).orderBy(desc(noodleAccounts.updatedAt));
+    async listAccounts(options: { includePrivate?: boolean } = {}): Promise<NoodleAccount[]> {
+      const includePrivate = options.includePrivate ?? true;
+      const rows = includePrivate
+        ? await db.select().from(noodleAccounts).orderBy(desc(noodleAccounts.updatedAt))
+        : await db
+            .select()
+            .from(noodleAccounts)
+            .where(eq(noodleAccounts.visibility, "public"))
+            .orderBy(desc(noodleAccounts.updatedAt));
       return rows.map(mapAccount);
     },
 
@@ -1292,23 +1299,39 @@ export function createNoodleStorage(db: DB) {
     },
 
     async bootstrap(): Promise<NoodleBootstrap> {
-      const posts = await this.listPosts({ limit: 160 });
       const settings = await this.getSettings();
+      const includePrivate = settings.enableNoodler;
+      const accounts = await this.listAccounts({ includePrivate });
+      const visibleAccountIds = includePrivate ? null : new Set(accounts.map((account) => account.id));
+      const allPosts = await this.listPosts({ limit: 160 });
+      const posts = visibleAccountIds
+        ? allPosts.filter((post) => visibleAccountIds.has(post.authorAccountId))
+        : allPosts;
       const scheduler = noodleRefreshSchedulerStatus(
         await this.ensureRefreshSchedule(new Date(), settings),
         new Date(),
       );
       const oldestLoadedPost = posts[posts.length - 1];
       const hasOlderHistory = oldestLoadedPost ? await this.hasPostsBefore(oldestLoadedPost.createdAt) : false;
+      const allSubscriptions = await this.listSubscriptions();
+      const allPostUnlocks = await this.listPostUnlocks();
+      const subscriptions = visibleAccountIds
+        ? allSubscriptions.filter(
+            (sub) => visibleAccountIds.has(sub.subscriberAccountId) && visibleAccountIds.has(sub.creatorAccountId),
+          )
+        : allSubscriptions;
+      const postUnlocks = visibleAccountIds
+        ? allPostUnlocks.filter((unlock) => visibleAccountIds.has(unlock.accountId))
+        : allPostUnlocks;
       return {
         settings,
         scheduler,
-        accounts: await this.listAccounts(),
+        accounts,
         posts,
         interactions: await this.listInteractions(posts.map((post) => post.id)),
         digests: await this.listDigests({ limit: 80 }),
-        subscriptions: await this.listSubscriptions(),
-        postUnlocks: await this.listPostUnlocks(),
+        subscriptions,
+        postUnlocks,
         hasOlderHistory,
       };
     },

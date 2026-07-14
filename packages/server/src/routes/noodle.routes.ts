@@ -2299,19 +2299,40 @@ export async function noodleRoutes(app: FastifyInstance) {
   });
 
   // Cursor pagination for history older than the bootstrap's fixed-size
-  // window (bootstrap() only ever returns the newest 160 posts). Returns raw
-  // posts, unfiltered by account visibility, matching bootstrap's existing
-  // convention — the client applies the same private-account feed filter it
-  // already uses for the initial page.
+  // window (bootstrap() only ever returns the newest 160 posts). Posts from
+  // private (NoodleR) accounts are excluded unless enableNoodler is on,
+  // matching bootstrap()'s scoping — without this, scrolling far enough back
+  // would leak private posts even with NoodleR disabled.
   app.get("/posts", async (req, reply) => {
     const query = req.query as Record<string, unknown>;
     const before = typeof query.before === "string" ? query.before : null;
     if (!before) return reply.code(400).send({ error: "before is required" });
     const requestedLimit = typeof query.limit === "string" ? Number.parseInt(query.limit, 10) : 40;
     const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(100, requestedLimit)) : 40;
-    const rows = await noodle.listPostsBefore(before, { limit: limit + 1 });
-    const hasMore = rows.length > limit;
-    const posts = hasMore ? rows.slice(0, limit) : rows;
+    const settings = await noodle.getSettings();
+    let visibleAccountIds: Set<string> | null = null;
+    if (!settings.enableNoodler) {
+      const visibleAccounts = await noodle.listAccounts({ includePrivate: false });
+      visibleAccountIds = new Set(visibleAccounts.map((account) => account.id));
+    }
+    // Fetch raw pages and filter out private-account posts client-side of the
+    // query (listPostsBefore has no visibility filter). Loop rather than
+    // filtering a single fixed-size page so hasMore/cursor stay correct when
+    // private posts are interspersed with public ones.
+    const collected: NoodlePost[] = [];
+    let cursor = before;
+    for (;;) {
+      const batch = await noodle.listPostsBefore(cursor, { limit: limit + 1 });
+      if (batch.length === 0) break;
+      const filteredBatch = visibleAccountIds
+        ? batch.filter((post) => visibleAccountIds.has(post.authorAccountId))
+        : batch;
+      collected.push(...filteredBatch);
+      cursor = batch[batch.length - 1]!.createdAt;
+      if (batch.length <= limit || collected.length > limit) break;
+    }
+    const hasMore = collected.length > limit;
+    const posts = hasMore ? collected.slice(0, limit) : collected;
     const interactions = await noodle.listInteractions(posts.map((post) => post.id));
     return { posts, interactions, hasMore };
   });
