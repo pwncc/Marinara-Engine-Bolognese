@@ -81,6 +81,7 @@ import { buildNpcPortraitProviderPrompt } from "../../packages/server/src/servic
 import { resolveNpcPortraitAppearance } from "../../packages/server/src/routes/game.routes.js";
 import { buildLegacyDefaultAgentConfigUpdate } from "../../packages/server/src/services/agents/default-prompt-migration.js";
 import { buildMemoryRecallBlock } from "../../packages/server/src/services/generation/memory-recall-context.js";
+import { truncateRecalledMemory } from "../../packages/server/src/services/generation/memory-recall-pack.js";
 import { mergeConversationCharacterMemories } from "../../packages/server/src/services/generation/conversation-memory-context.js";
 import { injectIdentityFallbackMessages } from "../../packages/server/src/services/generation/character-prompt-context.js";
 import { injectSceneContextMessages } from "../../packages/server/src/services/generation/scene-context-runtime.js";
@@ -105,8 +106,10 @@ import {
 import {
   appendNonLeadingSystemMessagesToLastUser,
   appendReadableAttachmentsToContent,
+  applyTrackerCharacterCardIdentity,
   buildGenerationGuideInstruction,
   appendSeparateAgentInjectionMessage,
+  collectLatestTrackerCharacterHistory,
   preserveTrackerCharacterUiFields,
   shouldEnableAgentsForGeneration,
   shouldInjectIdentityFallback,
@@ -1644,6 +1647,24 @@ const cases: RegressionCase[] = [
     },
   },
   {
+    name: "memory recall truncation preserves supplementary Unicode characters",
+    run() {
+      const tokenBudget = 96;
+      const maxChars = tokenBudget * 4;
+      const marker = "\n...[recalled memory truncated]...\n";
+      const headChars = Math.ceil((maxChars - marker.length) * 0.7);
+      const tailChars = maxChars - marker.length - headChars;
+      const cutsHeadPair = `${"a".repeat(headChars - 1)}\u{10920}${"b".repeat(maxChars)}`;
+      const cutsTailPair = `${"a".repeat(maxChars)}😀${"b".repeat(tailChars - 1)}`;
+
+      for (const memory of [cutsHeadPair, cutsTailPair]) {
+        const truncated = truncateRecalledMemory(memory, tokenBudget);
+        assert.match(truncated, /\[recalled memory truncated]/);
+        assert.doesNotMatch(JSON.stringify(truncated), /\\u(?:d[89ab][0-9a-f]{2}(?!\\ud[c-f][0-9a-f]{2})|d[c-f][0-9a-f]{2})/i);
+      }
+    },
+  },
+  {
     name: "conversation awareness memories escape XML delimiters",
     async run() {
       const merged = await mergeConversationCharacterMemories({
@@ -2860,6 +2881,43 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
         Goal: "Find the atlas",
       });
 
+      const recurringHistory = collectLatestTrackerCharacterHistory([
+        { presentCharacters: [] },
+        {
+          presentCharacters: JSON.stringify([
+            {
+              characterId: "mira-card",
+              name: "Mira",
+              customFields: { Goal: "Find the atlas" },
+              stats: [
+                { name: "HP", value: 72, max: 100, color: "#ef4444" },
+                { name: "MP", value: 31, max: 80, color: "#3b82f6" },
+              ],
+            },
+          ]),
+        },
+      ]);
+      const returningCharacters: Array<Record<string, unknown>> = [
+        {
+          characterId: "Mira",
+          name: "Mira",
+          stats: [{ name: "HP", value: 65, max: 100, color: "#ef4444" }],
+          avatarPath: "/api/avatars/npc/chat/mira.png",
+        },
+      ];
+      preserveTrackerCharacterUiFields(returningCharacters, recurringHistory);
+      const matchedCards = applyTrackerCharacterCardIdentity(returningCharacters, [
+        { id: "mira-card", name: "Mira", avatarPath: "/api/avatars/file/mira.png", avatarCrop: { zoom: 2, offsetX: 1, offsetY: 1 } },
+      ]);
+      assert.deepEqual(returningCharacters[0]?.stats, [
+        { name: "HP", value: 65, max: 100, color: "#ef4444" },
+        { name: "MP", value: 31, max: 80, color: "#3b82f6" },
+      ]);
+      assert.deepEqual(returningCharacters[0]?.customFields, { Goal: "Find the atlas" });
+      assert.equal(returningCharacters[0]?.characterId, "mira-card");
+      assert.equal(returningCharacters[0]?.avatarPath, "/api/avatars/file/mira.png");
+      assert.equal(matchedCards.has("mira-card"), true);
+
       assert.equal(resolveCharacterCustomFieldName("  ", "Goal"), "Goal");
       assert.equal(makeUniqueCharacterCustomFieldName({ "New Field": "", "new   field 2": "" }), "New Field 3");
 
@@ -2894,6 +2952,54 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
       assert.doesNotMatch(promptBlock ?? "", /Duplicate mood/);
       assert.match(promptBlock ?? "", /Field 62: 62/);
       assert.doesNotMatch(promptBlock ?? "", /Field 63: 63/);
+    },
+  },
+  {
+    name: "character tracker receives card RPG configuration and recurring-character history",
+    async run() {
+      const { calls, provider } = makeCapturingProvider(`{"presentCharacters":[]}`);
+      const config = makeRegressionAgentConfig({
+        id: "builtin:character-tracker",
+        type: "character-tracker",
+        name: "Character Tracker",
+        promptTemplate: DEFAULT_AGENT_PROMPTS["character-tracker"] ?? "Track characters.",
+        settings: { resultType: "character_tracker_update" },
+      });
+      const context = makeRegressionAgentContext({
+        characters: [
+          {
+            id: "mira-card",
+            name: "Mira",
+            description: "A recurring alchemist.",
+            rpgStats: {
+              enabled: true,
+              hp: { value: 90, max: 100 },
+              pools: [{ name: "HP", value: 90, max: 100, color: "#ef4444" }],
+              attributes: [{ name: "INT", value: 18 }],
+            },
+          },
+        ],
+        characterTrackerHistory: [
+          {
+            characterId: "mira-card",
+            name: "Mira",
+            emoji: "⚗️",
+            mood: "Focused",
+            appearance: null,
+            outfit: null,
+            thoughts: null,
+            customFields: {},
+            stats: [{ name: "HP", value: 72, max: 100, color: "#ef4444" }],
+          },
+        ],
+      });
+      await executeAgent(config as any, context, provider as any, "regression-model");
+      const system = calls[0]?.[0]?.content ?? "";
+      assert.match(system, /Configured RPG pools: HP: 90\/100/u);
+      assert.match(system, /Configured RPG attributes: INT: 18/u);
+      assert.match(system, /<character_tracker_history>/u);
+      assert.match(system, /this list does not mean everyone is present now/u);
+      assert.match(system, /"value":72/u);
     },
   },
   {

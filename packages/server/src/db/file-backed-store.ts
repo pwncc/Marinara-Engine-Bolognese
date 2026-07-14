@@ -104,6 +104,10 @@ export type FileNativeDB = {
   _fileStore: FileNativeStoreController;
 };
 
+export type FileNativeStoreTestHooks = {
+  beforeTableWrite?: (table: string, serializedRows: string) => Promise<void> | void;
+};
+
 type SelectFromBuilder = {
   from: (table: Table) => SelectQueryBuilder;
 };
@@ -184,6 +188,7 @@ export const FILE_BACKED_TABLES = [
   "agent_memory",
   "custom_tools",
   "game_state_snapshots",
+  "spatial_context_snapshots",
   "game_engine_state",
   "game_checkpoints",
   "game_scene_videos",
@@ -229,6 +234,7 @@ export const CASCADES: Array<{ parent: FileBackedTable; child: FileBackedTable; 
   { parent: "chats", child: "chat_images", parentKey: "id", childKey: "chatId" },
   { parent: "chats", child: "memory_chunks", parentKey: "id", childKey: "chatId" },
   { parent: "chats", child: "game_state_snapshots", parentKey: "id", childKey: "chatId" },
+  { parent: "chats", child: "spatial_context_snapshots", parentKey: "id", childKey: "chatId" },
   { parent: "chats", child: "game_engine_state", parentKey: "id", childKey: "chatId" },
   { parent: "chats", child: "game_checkpoints", parentKey: "id", childKey: "chatId" },
   { parent: "chats", child: "game_scene_videos", parentKey: "id", childKey: "chatId" },
@@ -245,6 +251,7 @@ export const CASCADES: Array<{ parent: FileBackedTable; child: FileBackedTable; 
   // checkpoints (by snapshotId and messageId), snapshots, and engine state
   // whenever messages are removed.
   { parent: "messages", child: "game_state_snapshots", parentKey: "id", childKey: "messageId" },
+  { parent: "messages", child: "spatial_context_snapshots", parentKey: "id", childKey: "messageId" },
   { parent: "messages", child: "game_checkpoints", parentKey: "id", childKey: "messageId" },
   { parent: "messages", child: "game_engine_state", parentKey: "id", childKey: "messageId" },
   { parent: "game_state_snapshots", child: "game_checkpoints", parentKey: "id", childKey: "snapshotId" },
@@ -276,6 +283,12 @@ const SET_NULL_RELATIONS: Array<{
     child: "game_turn_storyboard_keyframes",
     parentKey: "id",
     childKey: "sceneVideoId",
+  },
+  {
+    parent: "spatial_context_snapshots",
+    child: "game_checkpoints",
+    parentKey: "id",
+    childKey: "spatialSnapshotId",
   },
 ];
 
@@ -996,7 +1009,8 @@ class FileTableStore {
   private dirtyTables = new Set<string>();
   private backupRecoveredPaths = new Set<string>();
   private dirty = false;
-  private saving = false;
+  private activeFlush: Promise<void> | null = null;
+  private lastFlushError: unknown = null;
   private debounceTimer: NodeJS.Timeout | null = null;
   private safetyTimer: NodeJS.Timeout | null = null;
   private beforeExitHandler: (() => void) | null = null;
@@ -1014,6 +1028,7 @@ class FileTableStore {
   constructor(
     private readonly rootDir: string,
     private readonly legacyDbPaths: string[],
+    private readonly testHooks?: FileNativeStoreTestHooks,
   ) {
     for (const table of FILE_BACKED_TABLES) {
       this.tables.set(table, []);
@@ -1190,12 +1205,12 @@ class FileTableStore {
   }
 
   async flush(force = false) {
-    if (this.saving) {
-      this.dirty = true;
+    if (this.activeFlush) {
+      await this.activeFlush;
+      if (this.dirty || this.dirtyTables.size > 0) await this.flush(force);
       return;
     }
     if (!force && !this.dirty && this.dirtyTables.size === 0) return;
-    this.saving = true;
     this.dirty = false;
     // Snapshot the dirty set and reset it BEFORE the async write. saveFileSnapshots
     // now yields the event loop, so a markDirty() that interleaves during the I/O
@@ -1203,16 +1218,24 @@ class FileTableStore {
     // clear() — the synchronous version had a zero-width window here.
     const dirtyTables = this.dirtyTables;
     this.dirtyTables = new Set();
+    const flush = (async () => {
+      try {
+        await this.saveFileSnapshots(dirtyTables);
+        this.lastFlushError = null;
+      } catch (err) {
+        this.lastFlushError = err;
+        this.dirty = true;
+        // Re-mark the tables we failed to persist so they retry on the next flush
+        // (without clobbering any tables marked dirty during the failed write).
+        for (const table of dirtyTables) this.dirtyTables.add(table);
+        logger.error(err, "[file-storage] Failed to persist file-native storage");
+      }
+    })();
+    this.activeFlush = flush;
     try {
-      await this.saveFileSnapshots(dirtyTables);
-    } catch (err) {
-      this.dirty = true;
-      // Re-mark the tables we failed to persist so they retry on the next flush
-      // (without clobbering any tables marked dirty during the failed write).
-      for (const table of dirtyTables) this.dirtyTables.add(table);
-      logger.error(err, "[file-storage] Failed to persist file-native storage");
+      await flush;
     } finally {
-      this.saving = false;
+      if (this.activeFlush === flush) this.activeFlush = null;
     }
   }
 
@@ -1229,7 +1252,11 @@ class FileTableStore {
       process.off("beforeExit", this.beforeExitHandler);
       this.beforeExitHandler = null;
     }
-    await this.flush(true);
+    if (this.activeFlush) await this.activeFlush;
+    while (this.dirty || this.dirtyTables.size > 0) {
+      await this.flush(true);
+      if (this.lastFlushError) throw this.lastFlushError;
+    }
   }
 
   getQuarantinedTables() {
@@ -1530,7 +1557,9 @@ class FileTableStore {
       tables[table] = rows.length;
       const path = tableFilePath(this.rootDir, table);
       if (dirtyTables.has(table) || !existsSync(path)) {
-        await atomicWriteFile(path, JSON.stringify(rows), { refreshBackup: !this.backupRecoveredPaths.has(path) });
+        const serializedRows = JSON.stringify(rows);
+        await this.testHooks?.beforeTableWrite?.(table, serializedRows);
+        await atomicWriteFile(path, serializedRows, { refreshBackup: !this.backupRecoveredPaths.has(path) });
       }
     }
 
@@ -1651,9 +1680,12 @@ class SelectQuery implements SelectQueryBuilder {
   }
 }
 
-export async function createFileNativeDB(legacyDbPaths: string[] = []): Promise<FileNativeDB> {
+export async function createFileNativeDB(
+  legacyDbPaths: string[] = [],
+  testHooks?: FileNativeStoreTestHooks,
+): Promise<FileNativeDB> {
   const rootDir = getFileStorageDir();
-  const store = new FileTableStore(rootDir, legacyDbPaths);
+  const store = new FileTableStore(rootDir, legacyDbPaths, testHooks);
   await store.initialize();
 
   const controller: FileNativeStoreController = {

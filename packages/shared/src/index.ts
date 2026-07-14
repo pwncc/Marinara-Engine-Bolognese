@@ -31,6 +31,7 @@ export * from "./types/professor-mari-workspace.js";
 export * from "./types/achievement.js";
 export * from "./types/conversation-call.js";
 export * from "./types/noodle.js";
+export * from "./types/spatial-context.js";
 
 // Schemas
 export * from "./schemas/chat.schema.js";
@@ -49,6 +50,8 @@ export * from "./schemas/extension.schema.js";
 export * from "./schemas/app-settings.schema.js";
 export * from "./schemas/conversation-call.schema.js";
 export * from "./schemas/noodle.schema.js";
+export * from "./schemas/spatial-context.schema.js";
+export * from "./schemas/folder.schema.js";
 
 // Constants
 export * from "./constants/providers.js";
@@ -101,6 +104,9 @@ export * from "./features/turn-games/rock-paper-scissors/types.js";
 export * from "./features/turn-games/rock-paper-scissors/tools.js";
 export { rockPaperScissorsEngine } from "./features/turn-games/rock-paper-scissors/engine.js";
 
+// Tactical (grid) combat for Game Mode (classic combat's alternative style)
+export * from "./features/tactical-combat/index.js";
+
 // Utils
 export * from "./utils/macro-engine.js";
 export * from "./utils/xml-wrapper.js";
@@ -129,3 +135,4 @@ export * from "./utils/conversation-presence.js";
 export * from "./utils/noodle-mentions.js";
 export * from "./utils/noodle-polls.js";
 export * from "./utils/noodle-interactions.js";
+export * from "./utils/spatial-context.js";

@@ -66,6 +66,7 @@ import { PickerDropdown } from "../../features/chat-settings/PickerDropdown";
 import { ChatSettingsSection as Section } from "../../features/chat-settings/ChatSettingsSection";
 import { AdvancedParametersSection } from "../../features/chat-settings/sections/AdvancedParametersSection";
 import { ChatNameSection } from "../../features/chat-settings/sections/ChatNameSection";
+import { CombatStyleSection } from "../../features/chat-settings/sections/CombatStyleSection";
 import { ConnectionSection } from "../../features/chat-settings/sections/ConnectionSection";
 import { ConversationPromptSection } from "../../features/chat-settings/sections/ConversationPromptSection";
 import { DiscordMirrorControls } from "../../features/chat-settings/sections/DiscordMirrorSection";
@@ -76,6 +77,7 @@ import { LorebooksSection } from "../../features/chat-settings/sections/Lorebook
 import { PromptPresetSection } from "../../features/chat-settings/sections/PromptPresetSection";
 import { SceneInstructionsSection } from "../../features/chat-settings/sections/SceneInstructionsSection";
 import { TranslationSection } from "../../features/chat-settings/sections/TranslationSection";
+import { SpatialContextSettingsSection } from "../../features/spatial-context/SpatialContextSettingsSection";
 import { cn, getAvatarCropStyle, type AvatarCrop } from "../../lib/utils";
 import { showAlertDialog, showConfirmDialog, showPromptDialog } from "../../lib/app-dialogs";
 import { HelpTooltip } from "../ui/HelpTooltip";
@@ -226,7 +228,7 @@ import {
   resolveDefaultAgentPromptTemplateId,
   resolveAgentPromptTemplate,
 } from "@marinara-engine/shared";
-import type { Chat, CharacterGroup, Lorebook } from "@marinara-engine/shared";
+import type { Chat, CharacterGroup, Lorebook, GameCombatStyle } from "@marinara-engine/shared";
 import {
   isCustomToolSelectable,
   useCustomToolCapabilities,
@@ -740,6 +742,7 @@ const CHAT_SETTINGS_ORDER = {
   connection: -1300,
   promptPreset: -1200,
   advancedParameters: -1100,
+  combatStyle: -1050,
   persona: -1000,
   characters: -900,
   cardTheming: -850,
@@ -747,6 +750,7 @@ const CHAT_SETTINGS_ORDER = {
   scopedRegex: -750,
   connectedChat: -700,
   connectedNotes: -690,
+  spatialMap: -650,
   lorebooks: -600,
   agents: -500,
   widgets: -450,
@@ -1718,6 +1722,10 @@ export function ChatSettingsDrawer({
   const gameImageIncludeCharacterAppearance = metadata.gameImageIncludeCharacterAppearance !== false;
   const gameImageAutoGenerationEnabled = metadata.gameImageAutoGenerationEnabled !== false;
   const gameImageDynamicPromptEnabled = metadata.gameImageDynamicPromptEnabled === true;
+  const effectiveCombatStyle: GameCombatStyle =
+    (metadata.gameCombatStyle as GameCombatStyle | undefined) ??
+    (metadata.gameSetupConfig?.combatStyle as GameCombatStyle | undefined) ??
+    "classic";
   const gameStoryboardAutoIllustrationsEnabled = metadata.gameStoryboardAutoIllustrationsEnabled === true;
   const gameStoryboardAutoAnimationsEnabled = metadata.gameStoryboardAutoGenerationEnabled === true;
   const gameStoryboardUseDirectScenePrompt = metadata.gameStoryboardUseDirectScenePrompt === true;
@@ -4115,6 +4123,15 @@ export function ChatSettingsDrawer({
             </div>
           )}
 
+          {/* Combat Style — game mode only */}
+          {isGame && (
+            <CombatStyleSection
+              style={{ order: CHAT_SETTINGS_ORDER.combatStyle }}
+              combatStyle={effectiveCombatStyle}
+              onCombatStyleChange={(gameCombatStyle) => updateMeta.mutate({ id: chat.id, gameCombatStyle })}
+            />
+          )}
+
           {/* Scene System Prompt — shown only for scene-created chats */}
           {metadata.sceneSystemPrompt && (
             <SceneInstructionsSection
@@ -6367,6 +6384,17 @@ export function ChatSettingsDrawer({
                 />
               </div>
             </Section>
+          )}
+
+          {(chatMode === "roleplay" || chatMode === "game") && (
+            <SpatialContextSettingsSection
+              chatId={chat.id}
+              style={{ order: CHAT_SETTINGS_ORDER.spatialMap }}
+              onOpenEditor={() => {
+                onClose();
+                useUIStore.getState().openSpatialMapDetail(chat.id);
+              }}
+            />
           )}
 
           <div style={{ order: CHAT_SETTINGS_ORDER.lorebooks }}>

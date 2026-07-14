@@ -3,6 +3,7 @@
 // ──────────────────────────────────────────────
 import {
   AtSign,
+  AlertTriangle,
   Bell,
   Check,
   ChevronLeft,
@@ -49,6 +50,7 @@ import {
   canManageNoodleReply,
   findNoodleTextMentions,
   noodleTextMentionsHandle as textMentionsHandle,
+  PROFESSOR_MARI_ID,
   readNoodlePollFromMetadata,
   type APIConnection,
   type NoodleAccount,
@@ -872,7 +874,17 @@ export function NoodleView() {
   const [pollOptions, setPollOptions] = useState(["", ""]);
   const [draftPoll, setDraftPoll] = useState<NoodlePollInput | null>(null);
 
-  const accounts = useMemo(() => data?.accounts ?? [], [data?.accounts]);
+  const settings = data?.settings;
+  const accounts = useMemo(
+    () =>
+      (data?.accounts ?? []).filter(
+        (account) =>
+          (settings?.allowProfessorMari ?? true) ||
+          account.kind !== "character" ||
+          account.entityId !== PROFESSOR_MARI_ID,
+      ),
+    [data?.accounts, settings?.allowProfessorMari],
+  );
   const livePersonaIds = useMemo(() => {
     const ids = new Set<string>();
     for (const persona of personas ?? []) {
@@ -925,7 +937,6 @@ export function NoodleView() {
   const interactions = useMemo(() => data?.interactions ?? [], [data?.interactions]);
   const subscriptions = useMemo(() => data?.subscriptions ?? [], [data?.subscriptions]);
   const postUnlocks = useMemo(() => data?.postUnlocks ?? [], [data?.postUnlocks]);
-  const settings = data?.settings;
   const scheduler = data?.scheduler;
   const accountById = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const accountByHandle = useMemo(
@@ -1280,6 +1291,7 @@ export function NoodleView() {
   const saveProfile = () => {
     if (!viewedProfileAccount || !canEditViewedProfile) return;
     const normalizedHandle = profileHandle.trim().replace(/^@+/, "");
+    const nextAvatarUrl = profileAvatarUrl.trim() || null;
     const nextSettings = {
       ...viewedProfileAccount.settings,
       bannerUrl: profileBannerUrl.trim(),
@@ -1291,7 +1303,7 @@ export function NoodleView() {
         handle: normalizedHandle,
         displayName: profileName.trim(),
         bio: profileBio,
-        avatarUrl: profileAvatarUrl.trim() || null,
+        ...(nextAvatarUrl !== viewedProfileAccount.avatarUrl ? { avatarUrl: nextAvatarUrl } : {}),
         settings: nextSettings,
       },
       {
@@ -2823,9 +2835,10 @@ export function NoodleView() {
     () =>
       characters
         .filter((character) => readString(character.id))
+        .filter((character) => (settings?.allowProfessorMari ?? true) || readString(character.id) !== PROFESSOR_MARI_ID)
         .filter((character) => characterName(character).toLowerCase().includes(normalizedInviteSearch))
         .sort((left, right) => characterName(left).localeCompare(characterName(right))),
-    [characters, normalizedInviteSearch],
+    [characters, normalizedInviteSearch, settings?.allowProfessorMari],
   );
   const visibleInviteCharacters = filteredCharacters.slice(0, inviteCharacterLimit);
   const hasMoreInviteCharacters = filteredCharacters.length > visibleInviteCharacters.length;
@@ -2911,6 +2924,14 @@ export function NoodleView() {
         help="Choose who can participate in Noodle refreshes. Direct character invites, selected character folders, and optional random users form the pool the generator can draw from."
       >
         <div className="space-y-4">
+          <ToggleSetting
+            label="Professor Mari participates"
+            help="When off, Professor Mari is hidden from Noodle account discovery and excluded from future generated posts, replies, reactions, mentions, profiles, and chat carryover. Existing timeline history is preserved."
+            checked={settings?.allowProfessorMari ?? true}
+            disabled={!settings || updateSettings.isPending}
+            onChange={(checked) => saveSettings({ allowProfessorMari: checked })}
+          />
+
           <label className="block space-y-1.5">
             <FieldLabel help="Filters both character folders and individual characters in this invite section.">
               Characters to Invite
@@ -3207,6 +3228,19 @@ export function NoodleView() {
                     )}
                   </div>
                   <p className="mt-1.5 leading-5 text-[var(--muted-foreground)]">{noodleSchedulerSummary(scheduler)}</p>
+                  {(scheduler.timezone === "Etc/Unknown" || scheduler.timezone === "local") && (
+                    <div
+                      className="mt-2 flex gap-2 rounded-md bg-[var(--destructive)]/10 px-2.5 py-2 leading-5 text-[var(--foreground)]"
+                      role="alert"
+                    >
+                      <AlertTriangle className="mt-0.5 shrink-0 text-[var(--destructive)]" size={14} />
+                      <p>
+                        The server timezone could not be detected. Remove a blank <code>TZ=</code> from your{" "}
+                        <code>.env</code>, or set an IANA timezone such as <code>TZ=Europe/Warsaw</code>, then restart
+                        Marinara.
+                      </p>
+                    </div>
+                  )}
                   {scheduler.scheduledTimes.length > 0 && (
                     <div className="mt-2">
                       <p className="text-[0.68rem] font-semibold text-[var(--muted-foreground)]">

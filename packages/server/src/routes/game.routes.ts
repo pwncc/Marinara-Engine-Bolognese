@@ -2,7 +2,7 @@
 // Routes: Game Mode
 // ──────────────────────────────────────────────
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { createHash, randomUUID } from "crypto";
+import { createHash, randomInt, randomUUID } from "crypto";
 import { existsSync, readFileSync } from "fs";
 import { basename, extname, join } from "path";
 import { z } from "zod";
@@ -16,6 +16,14 @@ import { createGalleryStorage } from "../services/storage/gallery.storage.js";
 import { createGameSceneVideosStorage } from "../services/storage/game-scene-videos.storage.js";
 import { createGameStoryboardsStorage } from "../services/storage/game-storyboards.storage.js";
 import { createGameStateStorage } from "../services/storage/game-state.storage.js";
+import { createSpatialContextStorage } from "../services/storage/spatial-context.storage.js";
+import { formatOwnerSpatialBreadcrumb, resolveOwnerSpatialProjection } from "../services/spatial-context/projection.js";
+import { parseStoredSpatialDefinition, resolveEffectiveSpatialState } from "../services/spatial-context/state-resolution.js";
+import {
+  GameMapBindingError,
+  updateGameMapBinding,
+  type UpdateGameMapBindingInput,
+} from "../services/spatial-context/game-map-binding.js";
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
 import { createAgentsStorage } from "../services/storage/agents.storage.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
@@ -127,6 +135,11 @@ import {
   parseTrackerHiddenFields,
   normalizeRpgStatPools,
   resolveGameSetupArtStylePrompt,
+  createTacticalCombat,
+  applyAction as applyTacticalAction,
+  runEnemyPhase as runTacticalEnemyPhase,
+  isTerminal as isTacticalTerminal,
+  TERRAIN_DATA,
   type RPGStatsConfig,
 } from "@marinara-engine/shared";
 import { mergeCustomParameters, parseGameStateRow, resolveBaseUrl } from "./generate/generate-route-utils.js";
@@ -161,6 +174,9 @@ import type {
   PartyArc,
   HudWidget,
   AgentPromptTemplateOption,
+  Combatant,
+  TacticalCombatState,
+  TacticalAction,
 } from "@marinara-engine/shared";
 import { getAssetManifest, GAME_ASSETS_DIR } from "../services/game/asset-manifest.service.js";
 import {
@@ -1517,6 +1533,7 @@ const gameSetupConfigSchema = z.object({
   setting: z.string().min(1),
   tone: z.string().min(1).max(200),
   difficulty: z.string().min(1).max(100),
+  combatStyle: z.enum(["classic", "tactical"]).optional(),
   playerGoals: z.string().max(2000).default(""),
   gmMode: z.enum(["standalone", "character"]),
   rating: z.enum(["sfw", "nsfw"]).default("sfw"),
@@ -1675,6 +1692,30 @@ const mapMoveSchema = z.object({
   position: z.union([z.object({ x: z.number().int(), y: z.number().int() }), z.string().min(1).max(200)]),
   mapId: z.string().min(1).max(200).optional().nullable(),
 });
+
+const mapBindingSchema = z.discriminatedUnion("target", [
+  z.object({
+    target: z.literal("map"),
+    chatId: z.string().min(1),
+    mapId: z.string().min(1).max(200),
+    spatialLocationId: z.string().min(1).nullable(),
+  }),
+  z.object({
+    target: z.literal("cell"),
+    chatId: z.string().min(1),
+    mapId: z.string().min(1).max(200),
+    x: z.number().int(),
+    y: z.number().int(),
+    spatialLocationId: z.string().min(1).nullable(),
+  }),
+  z.object({
+    target: z.literal("node"),
+    chatId: z.string().min(1),
+    mapId: z.string().min(1).max(200),
+    nodeId: z.string().min(1).max(200),
+    spatialLocationId: z.string().min(1).nullable(),
+  }),
+]);
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -6781,13 +6822,28 @@ export async function gameRoutes(app: FastifyInstance) {
       let carriedStateSnapshotId = "";
       if (previousState) {
         try {
+          const previousSpatialState = await resolveEffectiveSpatialState(app.db, latestSession.id);
+          if (previousSpatialState.definition?.enabled && previousSpatialState.currentLocationId) {
+            await createSpatialContextStorage(app.db).replaceBootstrap({
+              chatId: newChat.id,
+              currentLocationId: previousSpatialState.currentLocationId,
+              definitionRevision: previousSpatialState.definition.revision,
+              source: "branch_copy",
+              transitionCommandId: null,
+              transitionPayloadHash: null,
+            });
+          }
+          const ownerSpatialProjection = await resolveOwnerSpatialProjection(app.db, newChat.id);
           carriedStateSnapshotId = await stateStore.create({
             chatId: newChat.id,
             messageId: recapMessageId,
             swipeIndex: 0,
             date: previousState.date,
             time: previousState.time,
-            location: previousState.location,
+            location:
+              ownerSpatialProjection?.ownerMode === "game"
+                ? formatOwnerSpatialBreadcrumb(ownerSpatialProjection)
+                : previousState.location,
             weather: previousState.weather,
             temperature: previousState.temperature,
             worldCustomFields: previousWorldCustomFields,
@@ -8558,6 +8614,65 @@ export async function gameRoutes(app: FastifyInstance) {
     };
   });
 
+  // ── PUT /game/map/binding ──
+  app.put("/map/binding", async (req, reply) => {
+    const input = mapBindingSchema.parse(req.body);
+    const chats = createChatsStorage(app.db);
+    const chat = await chats.getById(input.chatId);
+    if (!chat) return reply.status(404).send({ error: "Chat not found.", code: "game_chat_missing" });
+    if (chat.mode !== "game") {
+      return reply.status(400).send({ error: "Map bindings require a Game chat.", code: "game_mode_required" });
+    }
+    try {
+      const bindingInput = input as UpdateGameMapBindingInput & { chatId: string };
+      const updated = await chats.patchMetadata(input.chatId, (metadata) => {
+        const definition = parseStoredSpatialDefinition(metadata);
+        if (!definition?.enabled) {
+          throw Object.assign(new Error("Enable and save the hierarchical map before binding Game maps."), {
+            code: "spatial_definition_missing",
+            statusCode: 409,
+          });
+        }
+        if (
+          input.spatialLocationId &&
+          !definition.locations.some(
+            (location) => location.id === input.spatialLocationId && location.status === "active",
+          )
+        ) {
+          throw Object.assign(new Error("The selected hierarchical location no longer exists."), {
+            code: "spatial_location_missing",
+            statusCode: 400,
+          });
+        }
+        return updateGameMapBinding(metadata, bindingInput);
+      });
+      if (!updated) return reply.status(404).send({ error: "Chat not found.", code: "game_chat_missing" });
+      const updatedMetadata = parseMeta(updated.metadata);
+      return {
+        sessionChat: updated,
+        map: updatedMetadata.gameMap as GameMap,
+        maps: getGameMapsFromMeta(updatedMetadata),
+        activeGameMapId:
+          (updatedMetadata.activeGameMapId as string | null) ??
+          getGameMapId(updatedMetadata.gameMap as GameMap | null),
+      };
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "statusCode" in error &&
+        typeof error.statusCode === "number" &&
+        "code" in error &&
+        typeof error.code === "string"
+      ) {
+        return reply.status(error.statusCode).send({ error: error.message, code: error.code });
+      }
+      if (error instanceof GameMapBindingError) {
+        return reply.status(400).send({ error: error.message, code: error.code });
+      }
+      throw error;
+    }
+  });
+
   // ── GET /game/:gameId/sessions ──
   app.get<{ Params: { gameId: string } }>("/:gameId/sessions", async (req) => {
     const chats = createChatsStorage(app.db);
@@ -8699,6 +8814,189 @@ export async function gameRoutes(app: FastifyInstance) {
     );
 
     return { result, combatants };
+  });
+
+  // ── Tactical (grid) combat ──
+  // Alternative to classic menu combat. The battle engine lives in the shared
+  // package (pure, deterministic, seeded); these endpoints are thin adapters.
+  // State round-trips through the client exactly like classic combat — no DB
+  // table; the client persists the snapshot to chat metadata.
+
+  // A combatant blob from the client. The engine reads a fixed set of numeric
+  // fields; everything else (mp/skills/statusEffects/element/sprite/side) passes
+  // through untouched so hydration stays lossless.
+  const tacticalCombatantSchema = z
+    .object({
+      id: z.string().min(1),
+      name: z.string().min(1),
+      hp: z.number(),
+      maxHp: z.number(),
+      attack: z.number(),
+      defense: z.number(),
+      speed: z.number(),
+      level: z.number(),
+    })
+    .passthrough();
+
+  // Known terrain keys, derived at runtime from the shared engine's own data
+  // so this list can never drift from what `terrainInfoAt` actually handles.
+  const KNOWN_TERRAIN_TYPES = new Set(Object.keys(TERRAIN_DATA));
+
+  // The persisted TacticalCombatState blob. Validated defensively at the
+  // envelope level only — the shared engine owns the full invariants and never
+  // throws on unexpected shapes. Dimensions/array sizes are bounded and the
+  // grid is cross-checked against its declared width/height so a malformed
+  // round-tripped state fails fast with a 400 instead of crashing the engine
+  // (see `terrainInfoAt` in shared/tactical-combat/math.ts, which indexes
+  // TERRAIN_DATA unconditionally).
+  const tacticalStateSchema = z
+    .object({
+      schemaVersion: z.literal(1),
+      grid: z
+        .object({
+          width: z.number().int().min(1).max(64),
+          height: z.number().int().min(1).max(64),
+          tiles: z.array(z.array(z.string())),
+        })
+        .passthrough()
+        .superRefine((grid, ctx) => {
+          if (grid.tiles.length !== grid.height) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["tiles"],
+              message: "grid.tiles does not match declared dimensions",
+            });
+            return;
+          }
+          for (let y = 0; y < grid.tiles.length; y++) {
+            const row = grid.tiles[y];
+            if (!row || row.length !== grid.width) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["tiles", y],
+                message: "grid.tiles does not match declared dimensions",
+              });
+              continue;
+            }
+            for (let x = 0; x < row.length; x++) {
+              const cell = row[x];
+              if (cell === undefined || !KNOWN_TERRAIN_TYPES.has(cell)) {
+                ctx.addIssue({
+                  code: z.ZodIssueCode.custom,
+                  path: ["tiles", y, x],
+                  message: "unknown terrain type",
+                });
+              }
+            }
+          }
+        }),
+      units: z.array(z.record(z.unknown())).max(40),
+      phase: z.enum(["player", "enemy"]),
+      round: z.number().int().min(1).max(10000),
+      seed: z.number().int(),
+      actionCounter: z.number().int().min(0).max(1_000_000),
+      log: z.array(z.record(z.unknown())).max(2000),
+      difficulty: z.string(),
+      outcome: z.enum(["victory", "defeat", "fled"]).optional(),
+    })
+    .passthrough();
+
+  // A player action. The `type` gate is enforced here; legality (unit exists,
+  // in range, tile reachable, MP/cooldown) is validated by the engine, which
+  // returns `{ ok: false, error }` for illegal input.
+  const tacticalActionSchema = z
+    .object({
+      type: z.enum(["move", "attack", "skill", "item", "defend", "wait", "endTurn", "flee"]),
+    })
+    .passthrough();
+
+  // ── POST /game/combat/tactical/start ──
+  app.post("/combat/tactical/start", async (req, reply) => {
+    const schema = z.object({
+      chatId: z.string().min(1),
+      // Caps mirror /action's units .max(40) so a battle /start accepts can
+      // never produce a state /action rejects.
+      party: z.array(tacticalCombatantSchema).min(1).max(20),
+      enemies: z.array(tacticalCombatantSchema).min(1).max(20),
+      seed: z.number().int().optional(),
+      // Scene-derived battlefield theming (Round 2). Unknown strings normalize
+      // in the engine (environment → default, formation → "line").
+      environment: z.string().optional(),
+      formation: z.string().optional(),
+    });
+    const { chatId, party, enemies, seed, environment, formation } = schema.parse(req.body);
+
+    const chats = createChatsStorage(app.db);
+    const chat = await chats.getById(chatId);
+    if (!chat) return reply.status(404).send({ error: "Chat not found" });
+
+    const meta = parseMeta(chat.metadata);
+    const difficulty = ((meta.gameSetupConfig as Record<string, unknown>)?.difficulty as string) ?? "normal";
+    // Determinism only matters once the seed exists, so any source is fine here.
+    const resolvedSeed = seed ?? randomInt(0, 0x1_0000_0000);
+
+    const state = createTacticalCombat(party as unknown as Combatant[], enemies as unknown as Combatant[], {
+      seed: resolvedSeed,
+      difficulty,
+      environment,
+      formation,
+    });
+
+    logger.info(
+      "Tactical combat started for chat %s (%d party, %d enemies, difficulty=%s, seed=%d)",
+      chatId,
+      party.length,
+      enemies.length,
+      difficulty,
+      resolvedSeed,
+    );
+
+    return { state };
+  });
+
+  // ── POST /game/combat/tactical/action ──
+  app.post("/combat/tactical/action", async (req, reply) => {
+    const schema = z.object({
+      chatId: z.string().min(1),
+      state: tacticalStateSchema,
+      action: tacticalActionSchema,
+    });
+    const { chatId, state, action } = schema.parse(req.body);
+
+    const chats = createChatsStorage(app.db);
+    const chat = await chats.getById(chatId);
+    if (!chat) return reply.status(404).send({ error: "Chat not found" });
+
+    // The schema only validates the envelope; the engine assumes further
+    // internal invariants that a hand-crafted round-tripped state could still
+    // violate. Guard against that so a malformed request fails cleanly with a
+    // 400 instead of an unhandled 500.
+    try {
+      const applied = applyTacticalAction(
+        state as unknown as TacticalCombatState,
+        action as unknown as TacticalAction,
+      );
+      if (!applied.ok) {
+        return reply.status(400).send({ error: applied.error });
+      }
+
+      let nextState = applied.state;
+      const events = [...applied.events];
+
+      // The player action auto-advances the phase once every party unit has acted.
+      // Resolve the enemy phase in the same round-trip and append its events after
+      // the player's, so the client animates one continuous sequence.
+      if (nextState.phase === "enemy" && !isTacticalTerminal(nextState)) {
+        const enemyResult = runTacticalEnemyPhase(nextState);
+        nextState = enemyResult.state;
+        events.push(...enemyResult.events);
+      }
+
+      return { state: nextState, events };
+    } catch (err) {
+      logger.warn(err, "Tactical action failed on round-tripped state for chat %s", chatId);
+      return reply.status(400).send({ error: "Invalid tactical combat state" });
+    }
   });
 
   // ── POST /game/combat/loot ──
@@ -11628,13 +11926,28 @@ export async function gameRoutes(app: FastifyInstance) {
     const input = checkpointCreateSchema.parse(req.body);
     const checkpoints = createCheckpointService(app.db);
     const stateStore = createGameStateStorage(app.db);
+    const spatialStore = createSpatialContextStorage(app.db);
 
     const snapshot = await stateStore.getLatest(input.chatId);
     if (!snapshot) throw new Error("No game state snapshot to checkpoint");
+    const spatialState = await resolveEffectiveSpatialState(app.db, input.chatId);
+    const spatialSnapshot =
+      spatialState.snapshot ??
+      (spatialState.definition?.enabled && spatialState.currentLocationId
+        ? await spatialStore.replaceBootstrap({
+            chatId: input.chatId,
+            currentLocationId: spatialState.currentLocationId,
+            definitionRevision: spatialState.definitionRevision,
+            source: "bootstrap",
+            transitionCommandId: null,
+            transitionPayloadHash: null,
+          })
+        : null);
 
     const id = await checkpoints.create({
       chatId: input.chatId,
       snapshotId: snapshot.id,
+      spatialSnapshotId: spatialSnapshot?.id ?? null,
       messageId: snapshot.messageId,
       label: input.label,
       triggerType: input.triggerType as CheckpointTrigger,
@@ -11678,6 +11991,7 @@ export async function gameRoutes(app: FastifyInstance) {
     const input = checkpointLoadSchema.parse(req.body);
     const checkpointSvc = createCheckpointService(app.db);
     const stateStore = createGameStateStorage(app.db);
+    const spatialStore = createSpatialContextStorage(app.db);
     const chats = createChatsStorage(app.db);
 
     const cp = await checkpointSvc.getById(input.checkpointId);
@@ -11690,6 +12004,13 @@ export async function gameRoutes(app: FastifyInstance) {
     const snapshot = await stateStore.getById(cp.snapshotId);
     if (!snapshot) throw new Error("Checkpoint snapshot was deleted and can no longer be restored");
     if (snapshot.chatId !== input.chatId) throw new Error("Checkpoint snapshot does not belong to this chat");
+    const spatialSnapshot = cp.spatialSnapshotId ? await spatialStore.getById(cp.spatialSnapshotId) : null;
+    if (cp.spatialSnapshotId && !spatialSnapshot) {
+      throw new Error("Checkpoint spatial snapshot was deleted and can no longer be restored");
+    }
+    if (spatialSnapshot && spatialSnapshot.chatId !== input.chatId) {
+      throw new Error("Checkpoint spatial snapshot does not belong to this chat");
+    }
 
     // Create a system message to mark the restore point
     const restoreMsg = await chats.createMessage({
@@ -11704,7 +12025,25 @@ export async function gameRoutes(app: FastifyInstance) {
     // locks and manual overrides so they keep protecting fields after a restore.
     // Tolerant parse: malformed JSON must not throw after the restore message is
     // already created, and an object value (not a string) must not be dropped.
+    if (spatialSnapshot) {
+      await spatialStore.replaceAtAnchor({
+        chatId: input.chatId,
+        messageId: restoreMsg.id,
+        swipeIndex: 0,
+        currentLocationId: spatialSnapshot.currentLocationId,
+        definitionRevision: spatialSnapshot.definitionRevision,
+        source: "definition_repair",
+        transitionCommandId: null,
+        transitionPayloadHash: null,
+      });
+    }
+    const ownerSpatialProjection = await resolveOwnerSpatialProjection(app.db, input.chatId, {
+      exactAnchor: { messageId: restoreMsg.id, swipeIndex: 0 },
+    });
     const manualOverrides = parseJsonField<Record<string, string> | null>(snapshot.manualOverrides, null);
+    if (manualOverrides && ownerSpatialProjection?.ownerMode === "game") {
+      delete manualOverrides.location;
+    }
     await stateStore.create(
       {
         chatId: input.chatId,
@@ -11712,7 +12051,10 @@ export async function gameRoutes(app: FastifyInstance) {
         swipeIndex: 0,
         date: snapshot.date,
         time: snapshot.time,
-        location: snapshot.location,
+        location:
+          ownerSpatialProjection?.ownerMode === "game"
+            ? formatOwnerSpatialBreadcrumb(ownerSpatialProjection)
+            : snapshot.location,
         weather: snapshot.weather,
         temperature: snapshot.temperature,
         worldCustomFields: normalizeWorldCustomFields(parseJsonField(snapshot.worldCustomFields, [])),

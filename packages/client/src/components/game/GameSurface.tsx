@@ -66,6 +66,7 @@ import {
 } from "../../hooks/use-chats";
 import { useConnections } from "../../hooks/use-connections";
 import { useGenerate } from "../../hooks/use-generate";
+import { useGenerateSpatialMapDraft, useSpatialContext } from "../../hooks/use-spatial-context";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { spriteKeys, type SpriteInfo } from "../../hooks/use-characters";
 import { lorebookKeys } from "../../hooks/use-lorebooks";
@@ -73,7 +74,14 @@ import { api, getJsonRepairRequest, type JsonRepairRequest } from "../../lib/api
 import { useRenderTimer } from "../../lib/perf-diagnostics";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { CHAT_FLOATING_UI_DISMISS_EVENT } from "../../lib/chat-floating-ui-events";
-import { cn, parseAvatarCropJson, type AvatarCrop, type LegacyAvatarCrop, type AvatarCropValue } from "../../lib/utils";
+import {
+  cn,
+  generateClientId,
+  parseAvatarCropJson,
+  type AvatarCrop,
+  type LegacyAvatarCrop,
+  type AvatarCropValue,
+} from "../../lib/utils";
 import { filterLanguageGenerationConnections } from "../../lib/connection-filters";
 import { gameAssetFileUrl } from "../../lib/game-asset-urls";
 import { audioManager } from "../../lib/game-audio";
@@ -118,6 +126,9 @@ import type {
   HudWidget,
   SceneSpotifyTrackCandidate,
   SceneSpotifyTrackSelection,
+  SpatialMapGroundingMode,
+  SpatialMapDraftSize,
+  PendingSpatialTransition,
 } from "@marinara-engine/shared";
 import type { SceneSegmentEffect } from "@marinara-engine/shared";
 import {
@@ -389,6 +400,10 @@ type PreparedCombatState = {
   itemEffects: CombatItemEffect[];
   mechanics: CombatMechanic[];
   dialogueCues: CombatDialogueCue[];
+  /** Raw blueprint scene fields (tactical combat: palette + auto background). */
+  environment: string;
+  styleNotes: CombatStyleNotes | null;
+  formation: string | null;
 };
 
 type GameAssetGenerationOptions = {
@@ -892,6 +907,7 @@ function generatedPartyMemberToCombatant(
   const hp = Math.max(0, Math.min(maxHp, Number(member.hp) || maxHp));
   const level = combatLevelFromHp(maxHp, fallbackLevel);
   const element = member.attacks?.find((attack) => attack.element)?.element;
+  const combatClass = typeof member.class === "string" && member.class.trim() ? member.class.trim() : undefined;
   return {
     id: matchedAvatar?.id ?? `generated-party-${index}-${slugifyCombatantId(member.name)}`,
     name: member.name || `Ally ${index + 1}`,
@@ -908,6 +924,7 @@ function generatedPartyMemberToCombatant(
     statusEffects: combatStatusEffectsFromGenerated(member.statuses),
     skills: combatSkillsFromGeneratedAttacks(member.attacks, level),
     element,
+    combatClass,
   };
 }
 
@@ -932,6 +949,7 @@ function generatedEnemyToCombatant(enemy: CombatEnemy, index: number, fallbackLe
   const hp = Math.max(0, Math.min(maxHp, Number(enemy.hp) || maxHp));
   const level = combatLevelFromHp(maxHp, fallbackLevel);
   const element = enemy.attacks?.find((attack) => attack.element)?.element;
+  const combatClass = typeof enemy.class === "string" && enemy.class.trim() ? enemy.class.trim() : undefined;
   return {
     id: `generated-enemy-${index}-${slugifyCombatantId(enemy.name)}`,
     name: enemy.name || `Enemy ${index + 1}`,
@@ -946,6 +964,7 @@ function generatedEnemyToCombatant(enemy: CombatEnemy, index: number, fallbackLe
     statusEffects: combatStatusEffectsFromGenerated(enemy.statuses),
     skills: combatSkillsFromGeneratedAttacks(enemy.attacks, level),
     element,
+    combatClass,
   };
 }
 
@@ -1396,13 +1415,27 @@ const GameCombatUI = lazy(async () => {
   return { default: module.GameCombatUI };
 });
 
+const TacticalCombatUI = lazy(async () => {
+  const module = await import("./TacticalCombatUI");
+  return { default: module.TacticalCombatUI };
+});
+
 const StoryboardBackgroundControls = lazy(async () => {
   const module = await import("./StoryboardBackgroundControls");
   return { default: module.StoryboardBackgroundControls };
 });
 
 import { Modal } from "../ui/Modal";
-import type { Chat, SessionSummary, Combatant, Message, GameCombatStateSnapshot } from "@marinara-engine/shared";
+import type {
+  Chat,
+  SessionSummary,
+  Combatant,
+  Message,
+  GameCombatStateSnapshot,
+  GameCombatStyle,
+  TacticalCombatState,
+  CombatStyleNotes,
+} from "@marinara-engine/shared";
 import type { CharacterMap, PersonaInfo } from "../chat/chat-area.types";
 
 /** Typewriter component for the intro screen — reveals text character-by-character. */
@@ -2328,6 +2361,7 @@ function GameSurfaceComponent({
   useRenderTimer("game-surface"); // [#3104 diagnostic]
   // Sync game metadata → store
   useSyncGameState(activeChatId, chatMeta);
+  const spatialContext = useSpatialContext(activeChatId);
 
   useEffect(() => {
     return () => {
@@ -2660,6 +2694,18 @@ function GameSurfaceComponent({
   const [combatItemEffects, setCombatItemEffects] = useState<CombatItemEffect[]>([]);
   const [combatMechanics, setCombatMechanics] = useState<CombatMechanic[]>([]);
   const [combatDialogueCues, setCombatDialogueCues] = useState<CombatDialogueCue[]>([]);
+  // Scene fields captured from the /encounter/init blueprint. Threaded into the
+  // tactical combat UI (environment palette + formation) and used to auto-generate
+  // a battlefield background. Set alongside combatParty; cleared with it.
+  const [combatSceneMeta, setCombatSceneMeta] = useState<{
+    environment: string;
+    environmentType: string | null;
+    formation: string | null;
+    styleNotes: CombatStyleNotes | null;
+  } | null>(null);
+  // Guards the fire-once-per-battle auto background generation for tactical combat,
+  // keyed by combatStartMessageId so a subsequent battle fires again.
+  const tacticalAutoBackgroundFiredRef = useRef<string | null>(null);
   const [queuedCombatStatuses, setQueuedCombatStatuses] = useState<{
     statuses: CombatStatusTag[];
     messageId: string;
@@ -3029,6 +3075,7 @@ function GameSurfaceComponent({
     setPendingEncounter(null);
     setCombatParty(null);
     setCombatEnemies(null);
+    setCombatSceneMeta(null);
     setCombatSpriteSuggestion(null);
     setNarrationDoneMsgId(null);
     lastProcessedMsgRef.current = null;
@@ -6337,13 +6384,18 @@ function GameSurfaceComponent({
   ]);
 
   const sendMessage = useCallback(
-    (message: string, attachments?: Array<{ type: string; data: string }>) => {
-      if ((chatMeta.gameSessionStatus as string) === "concluded") return;
-      generate({
+    async (
+      message: string,
+      attachments?: Array<{ type: string; data: string }>,
+      pendingSpatialTransition?: PendingSpatialTransition,
+    ) => {
+      if ((chatMeta.gameSessionStatus as string) === "concluded") return false;
+      return await generate({
         chatId: activeChatId,
         connectionId: null,
         userMessage: formatTextQuotes(message, quoteFormat),
         ...(attachments?.length ? { attachments } : {}),
+        ...(pendingSpatialTransition ? { pendingSpatialTransition } : {}),
       });
     },
     [activeChatId, chatMeta.gameSessionStatus, generate, quoteFormat],
@@ -6352,6 +6404,7 @@ function GameSurfaceComponent({
   // Game mutations
   const createGame = useCreateGame();
   const gameSetup = useGameSetup();
+  const generateSetupMapDraft = useGenerateSpatialMapDraft();
   const startGame = useStartGame();
   const rollDice = useRollDice();
   const skillCheck = useSkillCheck();
@@ -6372,6 +6425,12 @@ function GameSurfaceComponent({
   const gameSetupResetRef = useRef(gameSetup.reset);
   const startGameResetRef = useRef(startGame.reset);
   const startSessionResetRef = useRef(startSession.reset);
+  const pendingSetupMapDraftRef = useRef<{
+    size: SpatialMapDraftSize;
+    groundingMode: SpatialMapGroundingMode;
+    sourceLorebookIds: string[];
+    connectionId?: string;
+  } | null>(null);
   createGameResetRef.current = createGame.reset;
   gameSetupResetRef.current = gameSetup.reset;
   startGameResetRef.current = startGame.reset;
@@ -6383,6 +6442,45 @@ function GameSurfaceComponent({
     startGameResetRef.current();
     startSessionResetRef.current();
   }, [activeChatId]);
+
+  const completePostSetupMapDraft = useCallback(
+    async (chatId: string) => {
+      const request = pendingSetupMapDraftRef.current;
+      pendingSetupMapDraftRef.current = null;
+      if (!request) {
+        useGameModeStore.getState().setSetupActive(false);
+        return;
+      }
+
+      try {
+        const result = await generateSetupMapDraft.mutateAsync({
+          chatId,
+          operation: "create",
+          size: request.size,
+          groundingMode: request.groundingMode,
+          sourceLorebookIds: request.sourceLorebookIds,
+          connectionId: request.connectionId,
+          debugMode: useUIStore.getState().debugMode,
+        });
+        useGameModeStore.getState().setSetupActive(false);
+        useUIStore.getState().openSpatialMapDraftReview({
+          chatId,
+          result,
+          source: "game_setup",
+        });
+        toast.success("World created. Review the hierarchical map before saving it.");
+      } catch (error) {
+        useGameModeStore.getState().setSetupActive(false);
+        toast.error(
+          error instanceof Error
+            ? `The game was created, but its map draft failed: ${error.message}. You can build one later from Chat Settings.`
+            : "The game was created, but its map draft failed. You can build one later from Chat Settings.",
+          { duration: 10000 },
+        );
+      }
+    },
+    [generateSetupMapDraft],
+  );
 
   const handleStartGameNow = useCallback(() => {
     if (startGame.isPending || startGameRequested || startGameGuardRef.current) return;
@@ -6532,14 +6630,18 @@ function GameSurfaceComponent({
       }
 
       if (request.kind === "game_setup") {
-        useGameModeStore.getState().setSetupActive(false);
+        if (pendingSetupMapDraftRef.current) {
+          void completePostSetupMapDraft(targetChatId);
+        } else {
+          useGameModeStore.getState().setSetupActive(false);
+        }
       }
       if (request.kind === "session_conclusion") {
         setConfirmEndSessionOpen(false);
       }
       setJsonRepairRequest(null);
     },
-    [activeChatId, gameId, queryClient],
+    [activeChatId, completePostSetupMapDraft, gameId, queryClient],
   );
 
   const handleNpcPortraitClick = useCallback(
@@ -7536,6 +7638,14 @@ function GameSurfaceComponent({
   );
 
   const combatUiActive = gameState === "combat" && !!combatParty && !!combatEnemies;
+  // Effective combat style: runtime metadata override (settings drawer) ??
+  // wizard setup choice ?? legacy default "classic".
+  const combatSetupConfig = chatMeta.gameSetupConfig as Record<string, unknown> | undefined;
+  const effectiveCombatStyle: GameCombatStyle =
+    (chatMeta.gameCombatStyle as GameCombatStyle | undefined) ??
+    (combatSetupConfig?.combatStyle as GameCombatStyle | undefined) ??
+    "classic";
+  const tacticalCombatActive = combatUiActive && effectiveCombatStyle === "tactical";
   const topOverlayOffsetClass = "top-3";
   const queuedCombatMatchesLatest =
     !!queuedCombatGeneration?.messageId &&
@@ -7735,6 +7845,22 @@ function GameSurfaceComponent({
               });
           }
 
+          const rawStyleNotes = response.combatState.styleNotes;
+          const styleNotes: CombatStyleNotes | null =
+            rawStyleNotes && typeof rawStyleNotes === "object"
+              ? {
+                  environmentType: String(rawStyleNotes.environmentType ?? "").trim(),
+                  atmosphere: String(rawStyleNotes.atmosphere ?? "").trim(),
+                  timeOfDay: String(rawStyleNotes.timeOfDay ?? "").trim(),
+                  weather: String(rawStyleNotes.weather ?? "").trim(),
+                }
+              : null;
+          // `battlefield` is an optional forward-compatible field the encounter blueprint
+          // may add for tactical combat; read defensively in case the type lags the schema.
+          const blueprintFormation = (
+            response.combatState as { battlefield?: { formation?: unknown } }
+          ).battlefield?.formation;
+
           setPreparedCombatState({
             messageId,
             party: combatants.party,
@@ -7742,6 +7868,10 @@ function GameSurfaceComponent({
             itemEffects: Array.isArray(response.combatState.itemEffects) ? response.combatState.itemEffects : [],
             mechanics: Array.isArray(response.combatState.mechanics) ? response.combatState.mechanics : [],
             dialogueCues: Array.isArray(response.combatState.dialogueCues) ? response.combatState.dialogueCues : [],
+            environment: typeof response.combatState.environment === "string" ? response.combatState.environment : "",
+            styleNotes,
+            formation:
+              typeof blueprintFormation === "string" && blueprintFormation.trim() ? blueprintFormation.trim() : null,
           });
         })
         .catch((err) => {
@@ -7808,6 +7938,12 @@ function GameSurfaceComponent({
     setCombatItemEffects(preparedCombatState.itemEffects);
     setCombatMechanics(preparedCombatState.mechanics);
     setCombatDialogueCues(preparedCombatState.dialogueCues);
+    setCombatSceneMeta({
+      environment: preparedCombatState.environment,
+      environmentType: preparedCombatState.styleNotes?.environmentType?.trim() || null,
+      formation: preparedCombatState.formation,
+      styleNotes: preparedCombatState.styleNotes,
+    });
     setCombatStartMessageId(preparedCombatState.messageId);
     setQueuedCombatGeneration(null);
     setPreparedCombatState(null);
@@ -7828,6 +7964,94 @@ function GameSurfaceComponent({
     queuedCombatGeneration,
     scenePreparing,
     transitionGameState,
+  ]);
+
+  // Auto-generate a battlefield establishing-shot background when a TACTICAL battle
+  // mounts fresh (i.e. not restored from an in-progress snapshot). Non-blocking:
+  // combat starts immediately and the generated background crossfades into
+  // `displayedBackground` when ready (TacticalCombatUI is translucent over it).
+  useEffect(() => {
+    if (!combatUiActive || !activeChatId || !combatStartMessageId) return;
+
+    const combatSetupConfig = chatMeta.gameSetupConfig as Record<string, unknown> | undefined;
+    const effectiveCombatStyle: GameCombatStyle =
+      (chatMeta.gameCombatStyle as GameCombatStyle | undefined) ??
+      (combatSetupConfig?.combatStyle as GameCombatStyle | undefined) ??
+      "classic";
+    if (effectiveCombatStyle !== "tactical") return;
+
+    // Only for a FRESH battle — a restored in-progress snapshot keeps its background.
+    if (chatMeta.gameTacticalCombatSnapshot) return;
+
+    // Respect the same asset-generation gating the manual scene-background path uses.
+    if (gameStoryboardBackgroundVisualEnabled || !gameBackgroundGenerationEnabled) return;
+
+    // Fire exactly once per battle (keyed by the message that started it).
+    if (tacticalAutoBackgroundFiredRef.current === combatStartMessageId) return;
+    tacticalAutoBackgroundFiredRef.current = combatStartMessageId;
+
+    const styleNotes = combatSceneMeta?.styleNotes ?? null;
+    const environmentText = combatSceneMeta?.environment?.trim() || "";
+    const time = styleNotes?.timeOfDay || gameSnapshot?.time || metaTime || "";
+    const weather = styleNotes?.weather || gameSnapshot?.weather || "";
+    // Battle-flavored establishing shot: reads like a battlefield with no characters,
+    // mirroring how handleManualSceneBackground assembles its scene description.
+    const backgroundDescription = [
+      "Tactical battlefield establishing shot: a wide empty battleground viewed from above, no characters or units present.",
+      environmentText ? `Environment: ${environmentText}` : null,
+      styleNotes?.environmentType ? `Terrain: ${styleNotes.environmentType}` : null,
+      styleNotes?.atmosphere ? `Atmosphere: ${styleNotes.atmosphere}` : null,
+      time ? `Time: ${time}` : null,
+      weather ? `Weather: ${weather}` : null,
+      gameSnapshot?.location ? `Location: ${gameSnapshot.location}` : null,
+      combatSetupConfig?.genre ? `Genre: ${String(combatSetupConfig.genre)}` : null,
+      combatSetupConfig?.setting ? `Setting: ${String(combatSetupConfig.setting)}` : null,
+      chatMeta.gameWorldOverview ? `World: ${String(chatMeta.gameWorldOverview).slice(0, 220)}` : null,
+    ]
+      .filter(Boolean)
+      .join(". ")
+      .slice(0, 500);
+
+    if (!backgroundDescription.trim()) return;
+
+    const slugBase = backgroundOptionKey(
+      ["tactical-battle", gameSnapshot?.location || chat.name, combatStartMessageId].filter(Boolean).join("-"),
+    ).slice(0, 72);
+    const assetPayload: GameAssetGenerationPayload = {
+      chatId: activeChatId,
+      backgroundTag: slugBase || `tactical-battle-${Date.now().toString(36)}`,
+      backgroundDescription,
+      forceBackground: true,
+      debugMode: useUIStore.getState().debugMode,
+    };
+
+    // Non-interactive: bypass the prompt-review modal for this auto path.
+    void runGameAssetGeneration(assetPayload, { allowPromptReview: false })
+      .then((result) => {
+        if (!result?.generatedBackground && !result?.fallbackBackground) return;
+        return applyGeneratedAssets(result);
+      })
+      .catch((err) => {
+        console.warn("[game-combat] Failed to auto-generate tactical battle background", err);
+      });
+  }, [
+    combatUiActive,
+    activeChatId,
+    combatStartMessageId,
+    combatSceneMeta,
+    chatMeta.gameCombatStyle,
+    chatMeta.gameSetupConfig,
+    chatMeta.gameTacticalCombatSnapshot,
+    chatMeta.gameWorldOverview,
+    chat.name,
+    gameBackgroundGenerationEnabled,
+    gameStoryboardBackgroundVisualEnabled,
+    gameSnapshot?.location,
+    gameSnapshot?.time,
+    gameSnapshot?.weather,
+    metaTime,
+    runGameAssetGeneration,
+    applyGeneratedAssets,
   ]);
 
   const retryCombatGeneration = useCallback(() => {
@@ -8708,22 +8932,76 @@ function GameSurfaceComponent({
         setPendingMapMove(null);
         return;
       }
+      const boundSpatialLocationId =
+        typeof position === "string"
+          ? viewedMap?.nodes?.find((node) => node.id === position)?.spatialLocationId
+          : viewedMap?.cells?.find((cell) => cell.x === position.x && cell.y === position.y)?.spatialLocationId;
+      if (boundSpatialLocationId && spatialContext.isLoading) {
+        toast.info("Story locations are still loading. Try that map position again in a moment.");
+        setPendingMapMove(null);
+        return;
+      }
+      if (boundSpatialLocationId && spatialContext.data?.definition?.enabled) {
+        const spatial = spatialContext.data;
+        const definition = spatial.definition;
+        if (!definition) return;
+        if (!spatial.currentLocationId) {
+          toast.error("The current story location is unavailable. Repair the hierarchy before moving.");
+          setPendingMapMove(null);
+          return;
+        }
+        if (spatial.currentLocationId === boundSpatialLocationId) {
+          toast.info("The party is already at that story location.");
+          setPendingMapMove(null);
+          return;
+        }
+        const destination = spatial.destinations.find((candidate) => candidate.id === boundSpatialLocationId);
+        if (!destination) {
+          toast.error("That story location is not reachable from the party's current location.");
+          setPendingMapMove(null);
+          return;
+        }
+        useChatStore.getState().setPendingSpatialTransition(activeChatId, {
+          transition: {
+            destinationId: destination.id,
+            expectedDefinitionRevision: definition.revision,
+            expectedCurrentLocationId: spatial.currentLocationId,
+            commandId: generateClientId(),
+          },
+          destinationName: destination.name,
+          relation: destination.relation,
+          ...(destination.label ? { label: destination.label } : {}),
+          status: "ready",
+        });
+        setPendingMapMove(null);
+        return;
+      }
       if (isSameMapPosition(currentMap?.partyPosition, position)) {
         setPendingMapMove(null);
         return;
       }
       setPendingMapMove({ position, label: describeMapPosition(position) });
     },
-    [currentMap?.partyPosition, describeMapPosition, isSameMapPosition, sessionInteractive, viewedMapIsActive],
+    [
+      activeChatId,
+      currentMap?.partyPosition,
+      describeMapPosition,
+      isSameMapPosition,
+      sessionInteractive,
+      spatialContext.data,
+      spatialContext.isLoading,
+      viewedMap,
+      viewedMapIsActive,
+    ],
   );
 
   const handleSendGameTurn = useCallback(
     async (
       message: string,
       attachments?: Array<{ type: string; data: string }>,
-      options?: { commitPendingMove?: boolean },
+      options?: { commitPendingMove?: boolean; pendingSpatialTransition?: PendingSpatialTransition },
     ) => {
-      if (!sessionInteractive) return;
+      if (!sessionInteractive) return false;
       audioManager.unlock();
       // Commit a pending interrupt: persist the truncated GM message before generating
       // so the server-side prompt build doesn't see segments the player never read. We
@@ -8745,7 +9023,7 @@ function GameSurfaceComponent({
         } catch {
           if (interruptedCommandKey) interruptedInteractiveCommandKeysRef.current.delete(interruptedCommandKey);
           toast.error("Failed to commit the interrupt. Please try again.");
-          return;
+          return false;
         }
       }
       // Risky mode tells the GM about the interrupt via a one-line system message.
@@ -8761,7 +9039,7 @@ function GameSurfaceComponent({
         } catch {
           if (interruptedCommandKey) interruptedInteractiveCommandKeysRef.current.delete(interruptedCommandKey);
           toast.error("Failed to mark the risky interrupt. Please try again.");
-          return;
+          return false;
         }
       }
       if (interruptedCommandKey) {
@@ -8769,14 +9047,20 @@ function GameSurfaceComponent({
       }
       setPendingInterrupt(null);
       if (options?.commitPendingMove && pendingMapMove) {
-        moveOnMap.mutate({ chatId: activeChatId, position: pendingMapMove.position, mapId: activeMapId });
+        try {
+          await moveOnMap.mutateAsync({ chatId: activeChatId, position: pendingMapMove.position, mapId: activeMapId });
+        } catch {
+          toast.error("Failed to update the map position. Please try again.");
+          return false;
+        }
       }
       setActiveChoices(null);
       setDiceRollResult(null);
-      sendMessage(message, attachments);
-      if (options?.commitPendingMove && pendingMapMove) {
+      const succeeded = await sendMessage(message, attachments, options?.pendingSpatialTransition);
+      if (succeeded !== false && options?.commitPendingMove && pendingMapMove) {
         setPendingMapMove(null);
       }
+      return succeeded;
     },
     [
       activeChatId,
@@ -8922,6 +9206,7 @@ function GameSurfaceComponent({
 
     setCombatParty(null);
     setCombatEnemies(null);
+    setCombatSceneMeta(null);
     setPendingEncounter(null);
     setQueuedEncounter(null);
     setQueuedCombatGeneration(null);
@@ -8951,6 +9236,7 @@ function GameSurfaceComponent({
     (outcome: "victory" | "defeat" | "flee", summary: CombatSummary) => {
       setCombatParty(null);
       setCombatEnemies(null);
+      setCombatSceneMeta(null);
       setQueuedCombatGeneration(null);
       setCombatGenerationPending(false);
       setCombatItemEffects([]);
@@ -9527,7 +9813,35 @@ function GameSurfaceComponent({
           }
         >
           <GameSetupWizard
-            onComplete={(config, preferences, conns, wizardGameName) => {
+            onComplete={(config, preferences, conns, wizardGameName, mapDraft) => {
+              const runSetup = (chatId: string) => {
+                pendingSetupMapDraftRef.current = mapDraft
+                  ? {
+                      size: mapDraft.size,
+                      groundingMode: mapDraft.groundingMode,
+                      sourceLorebookIds: mapDraft.sourceLorebookIds,
+                      connectionId: conns.gmConnectionId,
+                    }
+                  : null;
+                gameSetup.mutate(
+                  {
+                    chatId,
+                    connectionId: conns.gmConnectionId,
+                    preferences,
+                    promptPresetId: config.promptPresetId ?? null,
+                    keepSetupActive: Boolean(mapDraft),
+                  },
+                  {
+                    onSuccess: () => {
+                      if (mapDraft) void completePostSetupMapDraft(chatId);
+                    },
+                    onError: (error) => {
+                      if (!handleJsonRepairError(error)) pendingSetupMapDraftRef.current = null;
+                    },
+                  },
+                );
+              };
+
               if (needsCreation) {
                 // Create game structure first, then run setup
                 createGame.mutate(
@@ -9542,31 +9856,16 @@ function GameSurfaceComponent({
                   },
                   {
                     onSuccess: (res) => {
-                      gameSetup.mutate(
-                        {
-                          chatId: res.sessionChat.id,
-                          connectionId: conns.gmConnectionId,
-                          preferences,
-                          promptPresetId: config.promptPresetId ?? null,
-                        },
-                        { onError: handleJsonRepairError },
-                      );
+                      runSetup(res.sessionChat.id);
                     },
                   },
                 );
               } else {
-                gameSetup.mutate(
-                  {
-                    chatId: activeChatId,
-                    connectionId: conns.gmConnectionId,
-                    preferences,
-                    promptPresetId: config.promptPresetId ?? null,
-                  },
-                  { onError: handleJsonRepairError },
-                );
+                runSetup(activeChatId);
               }
             }}
             onCancel={() => {
+              if (createGame.isPending || gameSetup.isPending || generateSetupMapDraft.isPending) return;
               useGameModeStore.getState().setSetupActive(false);
               if (canAutoDeleteEmptySetupChat) {
                 deleteChat.mutate(activeChatId, {
@@ -9579,7 +9878,8 @@ function GameSurfaceComponent({
                 toast.info("Game setup dismissed. The campaign was kept.");
               }
             }}
-            isLoading={createGame.isPending || gameSetup.isPending}
+            isLoading={createGame.isPending || gameSetup.isPending || generateSetupMapDraft.isPending}
+            isDraftingMap={generateSetupMapDraft.isPending}
             characters={characters}
           />
         </Suspense>
@@ -10389,7 +10689,7 @@ function GameSurfaceComponent({
                 data-tracker-panel-anchor="roleplay-hud"
                 className={cn(
                   "pointer-events-none absolute right-3 z-50",
-                  topOverlayOffsetClass,
+                  tacticalCombatActive ? "top-14" : topOverlayOffsetClass,
                   replayActive && "hidden",
                 )}
               >
@@ -10878,13 +11178,14 @@ function GameSurfaceComponent({
                 <div
                   className={cn(
                     "pointer-events-auto absolute left-3 right-14 z-20 flex min-w-0 items-start gap-2 md:right-auto",
-                    topOverlayOffsetClass,
+                    tacticalCombatActive ? "top-14" : topOverlayOffsetClass,
                     replayActive && "hidden",
                   )}
                 >
                   {/* Mobile: map icon button that opens modal */}
                   <div data-tour="game-map" className="md:hidden">
                     <MobileMapButton
+                      chatId={activeChatId}
                       map={viewedMap}
                       maps={availableMaps}
                       activeMapId={activeMapId}
@@ -10900,6 +11201,8 @@ function GameSurfaceComponent({
                       day={currentGameDay}
                       onDayChange={handleGameDayChange}
                       onTimeChange={handleGameTimeChange}
+                      spatialContext={spatialContext.data}
+                      spatialContextLoading={spatialContext.isLoading}
                     />
                   </div>
                   {/* Desktop: inline minimap */}
@@ -10920,6 +11223,8 @@ function GameSurfaceComponent({
                       day={currentGameDay}
                       onDayChange={handleGameDayChange}
                       onTimeChange={handleGameTimeChange}
+                      spatialContext={spatialContext.data}
+                      spatialContextLoading={spatialContext.isLoading}
                       chatId={activeChatId}
                       constraintsRef={hudSurfaceRef}
                     />
@@ -11136,27 +11441,44 @@ function GameSurfaceComponent({
                             </div>
                           }
                         >
-                          <GameCombatUI
-                            chatId={activeChatId}
-                            party={combatParty}
-                            enemies={combatEnemies}
-                            inventoryItems={inventoryItems}
-                            onCombatEnd={handleCombatEnd}
-                            onInventoryItemUsed={handleUseCombatInventoryItem}
-                            onCombatantsChange={handleCombatantsChange}
-                            onOpenInventory={() => setInventoryOpen(true)}
-                            onCustomInstruction={handleCombatCustomInstruction}
-                            onSpriteSuggestionChange={setCombatSpriteSuggestion}
-                            isStreaming={isStreaming}
-                            narration="Battle starts."
-                            combatDialogue={combatDialogueLines}
-                            combatDialogueCues={combatDialogueCues}
-                            combatItemEffects={combatItemEffects}
-                            combatMechanics={combatMechanics}
-                            voicedCombatSpeakerNames={voicedCombatSpeakerNames}
-                            gameVoiceVolume={effectiveGameVoiceVolume}
-                            combatControlsSlot={combatControlsSlot}
-                          />
+                          {effectiveCombatStyle === "tactical" ? (
+                            <TacticalCombatUI
+                              chatId={activeChatId}
+                              party={combatParty}
+                              enemies={combatEnemies}
+                              difficulty={(combatSetupConfig?.difficulty as string | undefined) ?? "normal"}
+                              initialState={
+                                (chatMeta.gameTacticalCombatSnapshot as TacticalCombatState | null | undefined) ?? null
+                              }
+                              environment={combatSceneMeta?.environmentType ?? null}
+                              formation={combatSceneMeta?.formation ?? null}
+                              playerCombatantId={combatParty[0]?.id ?? null}
+                              onCombatEnd={handleCombatEnd}
+                              onCustomInstruction={handleCombatCustomInstruction}
+                            />
+                          ) : (
+                            <GameCombatUI
+                              chatId={activeChatId}
+                              party={combatParty}
+                              enemies={combatEnemies}
+                              inventoryItems={inventoryItems}
+                              onCombatEnd={handleCombatEnd}
+                              onInventoryItemUsed={handleUseCombatInventoryItem}
+                              onCombatantsChange={handleCombatantsChange}
+                              onOpenInventory={() => setInventoryOpen(true)}
+                              onCustomInstruction={handleCombatCustomInstruction}
+                              onSpriteSuggestionChange={setCombatSpriteSuggestion}
+                              isStreaming={isStreaming}
+                              narration="Battle starts."
+                              combatDialogue={combatDialogueLines}
+                              combatDialogueCues={combatDialogueCues}
+                              combatItemEffects={combatItemEffects}
+                              combatMechanics={combatMechanics}
+                              voicedCombatSpeakerNames={voicedCombatSpeakerNames}
+                              gameVoiceVolume={effectiveGameVoiceVolume}
+                              combatControlsSlot={combatControlsSlot}
+                            />
+                          )}
                         </Suspense>
                       </div>
                     );

@@ -17,6 +17,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Added real feed pagination beyond the initial Noodle bootstrap window so older timeline posts can be loaded instead of stopping at the first batch.
 - Added editable random-user filler rosters for Noodle so supporting non-character accounts are no longer hardcoded.
 - Added NoodleR planning docs covering the grid layout, subscription/unlock model, private accounts, fan activity, and completeness follow-up work.
+- Added a **Combat Preference** to Game mode, chosen in the setup wizard and changeable later from the Chat Settings **Combat Style** section: keep the classic narrative combat, or switch to a new tactical battle style inspired by grid-based tactics RPGs. Tactical encounters play out on a terrain-painted battlefield with scene-matched backdrops, unit classes, party formations, per-unit movement and attack ranges, counters, critical hits, misses, and a full enemy phase driven by a deterministic seeded engine at four difficulty levels. Battles feature animated movement, floating damage popups, a draggable unit inspector and action menu, staged moves shown as translucent previews until confirmed, defeated units leaving the battlefield, restartable encounters, and a mobile-friendly layout.
 
 ### Changed
 
@@ -37,10 +38,27 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [2.2.2]
 
+### Added
+
+- Added a default-on Noodle setting that can exclude Professor Mari from account discovery and future generated activity without deleting existing timeline history ([#3598](https://github.com/Pasta-Devs/Marinara-Engine/issues/3598)).
+
+- Added separate opt-in browser and Android generation-completion notifications for manually started Conversation, Roleplay, Visual Novel, and Game replies that finish while Marinara is unfocused, without changing autonomous-message background notification preferences (#3588).
+
 ### Changed
 
 - Began the v2.2.2 development cycle and synchronized version metadata across packages, the PWA manifest, Windows installer sources, Android APK metadata, and shared update checks.
 - Android `versionName` is `2.2.2` with `versionCode 34`.
+
+### Fixed
+
+- Fixed recurring Roleplay characters losing tracker stats, custom fields, or their character-card avatar after being absent for several scenes. Character Tracker now receives card RPG configuration and bounded historical continuity, restores omitted prior values, and enforces card identity and artwork in normal and retry runs (#3606).
+- Fixed graceful shutdown completing before a file-native storage flush could drain newer writes queued during its active disk write, and made persistent close-time I/O failures reject shutdown instead of silently reporting success (#3602).
+- Fixed the Agent Editor custom-music folder picker omitting saved remote-admin and CSRF credentials by routing its privileged request through the shared API client (#3603).
+- Fixed dense Connections editor text flickering or shifting in Chromium browsers at the accent pulse's 500 ms update cadence. Editor reading surfaces now retain the selected base accent while headers and explicit accent chrome continue to pulse (#3599).
+- Fixed recalled-memory truncation splitting supplementary Unicode characters such as emoji or Lydian text into invalid UTF-16 surrogate halves, which caused strict provider JSON parsers to reject otherwise valid Conversation generations (#3596).
+- Fixed selected background-library images immediately disappearing in Roleplay mode because the renderer probed the GET-only image route with an unsupported HEAD request (#3592).
+- Fixed Noodle profile text edits resetting character avatars from their configured crop to the full source image. Unchanged avatars now preserve their crop, and previously lost crops recover from the matching character card on the next profile save.
+- Fixed a blank `TZ=` forcing server-side schedules and date-sensitive Conversation context into the synthetic `Etc/Unknown` UTC timezone. Blank values now inherit the host timezone, Noodle warns when timezone detection is unresolved, and chats remember the browser timezone for autonomous scheduling, temporal awareness, daily memories, and tool macros (#3590).
 
 ## [2.2.1]
 

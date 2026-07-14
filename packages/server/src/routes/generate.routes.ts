@@ -58,6 +58,15 @@ import type {
   ThinkingTagPair,
 } from "@marinara-engine/shared";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
+import { commitSpatialOwnerTurn, SpatialOwnerTurnError } from "../services/spatial-context/owner-turn.js";
+import {
+  formatOwnerSpatialBreadcrumb,
+  injectOwnerSpatialPrompt,
+  omitAuthoritativeGameLocation,
+  projectGameSnapshotLocation,
+  resolveOwnerSpatialProjection,
+} from "../services/spatial-context/projection.js";
+import { materializeAssistantSpatialState } from "../services/spatial-context/state-resolution.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
 import { createPromptsStorage } from "../services/storage/prompts.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
@@ -175,6 +184,8 @@ import {
   buildUserMessageRegenerationPromptFromSource,
   buildLockedPlayerStatsArrayPatch,
   buildLockedPersonaTrackerPatch,
+  applyTrackerCharacterCardIdentity,
+  collectLatestTrackerCharacterHistory,
   createLocalSidecarGenerationConnection,
   extractImageAttachmentDataUrls,
   appendNonLeadingSystemMessagesToLastUser,
@@ -656,6 +667,18 @@ export async function generateRoutes(app: FastifyInstance) {
     if (requestChatMode === "conversation" && input.impersonate) {
       return reply.status(400).send({ error: "Impersonate is not available in Conversation mode" });
     }
+    if (input.pendingSpatialTransition && requestChatMode !== "roleplay" && requestChatMode !== "game") {
+      return reply.status(400).send({
+        error: "Only Roleplay and Game chats can change hierarchical location.",
+        code: "spatial_mode_unsupported",
+      });
+    }
+    if (input.pendingSpatialTransition && (input.impersonate || input.regenerateMessageId || input.continueMessageId)) {
+      return reply.status(400).send({
+        error: "A hierarchical location change must be submitted as a new owner turn.",
+        code: "spatial_transition_requires_new_turn",
+      });
+    }
     if (input.regenerateMessageId && input.continueMessageId) {
       return reply.status(400).send({ error: "Choose either regenerateMessageId or continueMessageId, not both" });
     }
@@ -728,12 +751,16 @@ export async function generateRoutes(app: FastifyInstance) {
     const discordWebhookUrl = typeof earlyMeta.discordWebhookUrl === "string" ? earlyMeta.discordWebhookUrl : "";
     let pendingUserDiscordMsg = "";
     let currentTurnUserMessageId: string | null = null;
+    let committedSpatialTransition:
+      | { commandId: string; currentLocationId: string | null; definitionRevision: number }
+      | null = null;
 
     // Save user message — skip for impersonate (no real user message to save)
-    if (!input.impersonate && (input.userMessage || input.attachments?.length)) {
+    if (!input.impersonate && (input.userMessage || input.attachments?.length || input.pendingSpatialTransition)) {
       // ── Commit game state: lock in the game state the user was seeing ──
       // Find the last assistant message's active swipe and commit its game state.
       // This ensures swipes/regens always use the state from the user's accepted turn.
+      let spatialGameStateSnapshotId: string | null = null;
       const preMessages = await chats.listMessages(input.chatId).catch(releaseActiveGenerationAndRethrow);
       for (let i = preMessages.length - 1; i >= 0; i--) {
         if (preMessages[i]!.role === "assistant") {
@@ -741,19 +768,52 @@ export async function generateRoutes(app: FastifyInstance) {
           const gs = await gameStateStore
             .getByMessage(lastAsstMsg.id, lastAsstMsg.activeSwipeIndex)
             .catch(releaseActiveGenerationAndRethrow);
-          if (gs) await gameStateStore.commit(gs.id).catch(releaseActiveGenerationAndRethrow);
+          if (gs && input.pendingSpatialTransition && requestChatMode === "game") {
+            spatialGameStateSnapshotId = gs.id;
+          } else if (gs) {
+            await gameStateStore.commit(gs.id).catch(releaseActiveGenerationAndRethrow);
+          }
           break;
         }
       }
 
-      const userMsg = await chats
-        .createMessage({
-          chatId: input.chatId,
-          role: "user",
-          characterId: null,
-          content: input.userMessage ?? "",
-        })
-        .catch(releaseActiveGenerationAndRethrow);
+      let userMsg: Awaited<ReturnType<typeof chats.createMessage>>;
+      if (input.pendingSpatialTransition) {
+        try {
+          const committed = await commitSpatialOwnerTurn(app.db, {
+            chatId: input.chatId,
+            content: input.userMessage ?? "",
+            transition: input.pendingSpatialTransition,
+            gameStateSnapshotId: spatialGameStateSnapshotId,
+            attachments: input.attachments,
+          });
+          userMsg = committed.message;
+          committedSpatialTransition = {
+            commandId: input.pendingSpatialTransition.commandId,
+            currentLocationId: committed.snapshot.currentLocationId,
+            definitionRevision: committed.snapshot.definitionRevision,
+          };
+        } catch (error) {
+          releaseActiveGeneration();
+          if (error instanceof SpatialOwnerTurnError) {
+            return reply.status(error.statusCode).send({
+              error: error.message,
+              code: error.code,
+              ...(error.details ?? {}),
+            });
+          }
+          throw error;
+        }
+      } else {
+        userMsg = await chats
+          .createMessage({
+            chatId: input.chatId,
+            role: "user",
+            characterId: null,
+            content: input.userMessage ?? "",
+          })
+          .catch(releaseActiveGenerationAndRethrow);
+      }
       currentTurnUserMessageId = userMsg?.id ?? null;
       if (requestChatMode === "conversation") {
         recordUserActivity(input.chatId);
@@ -854,8 +914,21 @@ export async function generateRoutes(app: FastifyInstance) {
     const mainFallbackConnection = await connections.getFallbackForMain().catch(releaseActiveGenerationAndRethrow);
     const mainFallbackBaseUrl = mainFallbackConnection ? resolveBaseUrl(mainFallbackConnection) : "";
     let chatMeta = parseExtra(chat.metadata) as Record<string, unknown>;
-    const promptTimeZone =
-      normalizePromptTimeZone(chatMeta.promptTimeZone) ?? normalizePromptTimeZone(input.userTimeZone);
+    const requestTimeZone = normalizePromptTimeZone(input.userTimeZone);
+    const storedPromptTimeZone = normalizePromptTimeZone(chatMeta.promptTimeZone);
+    const promptTimeZone = requestTimeZone ?? storedPromptTimeZone;
+    if (!input.autonomous && requestTimeZone && requestTimeZone !== storedPromptTimeZone) {
+      try {
+        const updatedChat = await chats.patchMetadata(
+          input.chatId,
+          (current) => ({ ...current, promptTimeZone: requestTimeZone }),
+          { touchUpdatedAt: false },
+        );
+        if (updatedChat) chatMeta = parseExtra(updatedChat.metadata) as Record<string, unknown>;
+      } catch (err) {
+        logger.warn(err, "[generate] Failed to remember timezone for chat %s", input.chatId);
+      }
+    }
     const promptNow = toZonedWallClockDate(new Date(), promptTimeZone);
     const excludePastReasoning = chatMeta.excludePastReasoning !== false;
     const imageCaptioningRuntime: ImageCaptioningRuntime = await resolveImageCaptioningRuntime({
@@ -892,6 +965,12 @@ export async function generateRoutes(app: FastifyInstance) {
 
     // Set up SSE headers
     startSseReply(reply, { "X-Accel-Buffering": "no" });
+    if (committedSpatialTransition) {
+      sendSseEvent(reply, {
+        type: "spatial_transition_committed",
+        data: { chatId: input.chatId, ...committedSpatialTransition },
+      });
+    }
     const onFallback = createReplyFallbackNotifier(reply);
 
     let generationComplete = false;
@@ -1067,10 +1146,23 @@ export async function generateRoutes(app: FastifyInstance) {
         excludeMessageId: input.regenerateMessageId ?? null,
         fallbackMessageIds: resolveRegenerationGameStateFallbackMessageIds(scopedMessages, input.regenerateMessageId),
       };
-      const selectedGameStateSnapshotPromise = gameStateStore.getForGeneration(
+      const ownerSpatialProjectionPromise = resolveOwnerSpatialProjection(
+        app.db,
+        input.chatId,
+        input.regenerateMessageId
+          ? { beforeMessageId: input.regenerateMessageId }
+          : input.continueMessageId
+            ? { throughMessageId: input.continueMessageId }
+            : {},
+      );
+      const rawSelectedGameStateSnapshotPromise = gameStateStore.getForGeneration(
         input.chatId,
         gameStateGenerationOptions,
       );
+      const selectedGameStateSnapshotPromise = Promise.all([
+        rawSelectedGameStateSnapshotPromise,
+        ownerSpatialProjectionPromise,
+      ]).then(([snapshot, projection]) => projectGameSnapshotLocation(snapshot, projection));
       const selectedGameStateForPrompt = async (): Promise<Record<string, unknown> | null> => {
         const row = await selectedGameStateSnapshotPromise;
         return row ? (parseGameStateRow(row as Record<string, unknown>) as unknown as Record<string, unknown>) : null;
@@ -1317,6 +1409,7 @@ export async function generateRoutes(app: FastifyInstance) {
         // doesn't burn an extra generation pass with no new context to read.
         let mariFetchSucceededThisIteration = false;
         let finalMessages: GenerationPromptMessage[] = [...runningMessagesForFollowUp];
+        const ownerSpatialProjection = await ownerSpatialProjectionPromise;
         let conversationCommandsReminder: string | null = null;
         let conversationContextMacroSlots: ConversationContextMacroSlots = {
           ...EMPTY_CONVERSATION_CONTEXT_MACRO_SLOTS,
@@ -1726,6 +1819,7 @@ export async function generateRoutes(app: FastifyInstance) {
             enableAgents: chatEnableAgents,
             activeAgentIds: chatActiveAgentIds,
             activeLorebookIds: chatActiveLorebookIds,
+            forcedLorebookEntryIds: ownerSpatialProjection?.lorebookEntryIds ?? [],
             excludedLorebookIds: lorebookScopeExclusions.excludedLorebookIds,
             excludedLorebookSourceAgentIds: lorebookScopeExclusions.excludedSourceAgentIds,
             lorebookTokenBudget: resolveLorebookTokenBudget(chatMeta),
@@ -2240,6 +2334,7 @@ export async function generateRoutes(app: FastifyInstance) {
             characterIds: promptCharacterIds,
             personaId,
             activeLorebookIds: chatActiveLorebookIds,
+            forcedEntryIds: ownerSpatialProjection?.ownerMode === "roleplay" ? ownerSpatialProjection.lorebookEntryIds : [],
             excludedLorebookIds: lorebookScopeExclusions.excludedLorebookIds,
             excludedSourceAgentIds: lorebookScopeExclusions.excludedSourceAgentIds,
             tokenBudget: resolveLorebookTokenBudget(chatMeta),
@@ -2597,6 +2692,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 characterIds,
                 personaId,
                 activeLorebookIds: chatActiveLorebookIds,
+                forcedEntryIds: ownerSpatialProjection?.ownerMode === "game" ? ownerSpatialProjection.lorebookEntryIds : [],
                 excludedLorebookIds: lorebookScopeExclusions.excludedLorebookIds,
                 excludedSourceAgentIds: lorebookScopeExclusions.excludedSourceAgentIds,
                 tokenBudget: resolveLorebookTokenBudget(chatMeta),
@@ -2731,6 +2827,7 @@ export async function generateRoutes(app: FastifyInstance) {
             chars,
             characterIds,
             awarenessBlock: convoAwarenessBlock,
+            timeZone: promptTimeZone,
           });
         }
 
@@ -2904,6 +3001,8 @@ export async function generateRoutes(app: FastifyInstance) {
           }
         }
 
+        finalMessages = injectOwnerSpatialPrompt(finalMessages, ownerSpatialProjection);
+
         // Get current game state (if any)
         // Prefer committed game state after a real user turn, but keep visible
         // uncommitted tracker edits authoritative for continue/impersonate flows.
@@ -2932,6 +3031,11 @@ export async function generateRoutes(app: FastifyInstance) {
         const committedSnapshots = await gameStateStore.getCommittedForMessages(
           agentSlice.filter((m: any) => m.role === "assistant"),
         );
+        const characterTrackerHistory = resolvedAgents.some((agent) => agent.type === "character-tracker")
+          ? collectLatestTrackerCharacterHistory(
+              await gameStateStore.getRecent(input.chatId, 100, latestGameState?.createdAt),
+            )
+          : [];
         const visibleHistorySnapshot =
           latestGameState &&
           visibleGameStateAnchor &&
@@ -2978,6 +3082,7 @@ export async function generateRoutes(app: FastifyInstance) {
           mainResponse: null,
           gameState,
           characters: charInfo,
+          characterTrackerHistory: characterTrackerHistory as unknown as AgentContext["characterTrackerHistory"],
           persona:
             personaName !== "User"
               ? {
@@ -4663,7 +4768,11 @@ export async function generateRoutes(app: FastifyInstance) {
               targetedOnly: true,
             });
           }
-          const preparedMessagesForGen = targetScopedMessagesForGen.map((message) => ({
+          const spatiallyScopedMessagesForGen = injectOwnerSpatialPrompt(
+            targetScopedMessagesForGen,
+            ownerSpatialProjection,
+          );
+          const preparedMessagesForGen = spatiallyScopedMessagesForGen.map((message) => ({
             ...message,
             content: (targetCharacterProfile
               ? resolveDeferredCharacterMacros(message.content, targetCharacterProfile, promptMacroContext)
@@ -5014,20 +5123,26 @@ export async function generateRoutes(app: FastifyInstance) {
                       const latest = await gameStateStore.getLatest(input.chatId);
                       if (latest) {
                         const u = parsed.update;
-                        const updates: Record<string, unknown> = {};
+                        let updates: Record<string, unknown> = {};
                         if (u.type === "location_change") updates.location = u.value;
                         if (u.type === "time_advance") updates.time = u.value;
+                        if (u.type === "location_change" && ownerSpatialProjection?.ownerMode === "game") {
+                          logger.debug(
+                            "[generate/game] Ignored update_game_state location because Spatial Context is authoritative",
+                          );
+                        }
+                        updates = omitAuthoritativeGameLocation(updates, ownerSpatialProjection);
                         if (Object.keys(updates).length > 0) {
                           const lockedUpdates = applyTrackerFieldLocksToGameStatePatch(
                             updates,
                             parseGameStateRow(latest as Record<string, unknown>),
                           );
                           await gameStateStore.updateLatest(input.chatId, lockedUpdates);
-                          Object.assign(updates, lockedUpdates);
+                          updates = lockedUpdates;
+                          // Send game_state_patch so HUD updates live
+                          logger.debug("[game_state_patch] tool update_game_state: %j", updates);
+                          reply.raw.write(`data: ${JSON.stringify({ type: "game_state_patch", data: updates })}\n\n`);
                         }
-                        // Send game_state_patch so HUD updates live
-                        logger.debug("[game_state_patch] tool update_game_state: %j", updates);
-                        reply.raw.write(`data: ${JSON.stringify({ type: "game_state_patch", data: updates })}\n\n`);
                       }
                     }
                   } catch {
@@ -5611,6 +5726,18 @@ export async function generateRoutes(app: FastifyInstance) {
                     isGenerated: true,
                   })
                 : savedMsg;
+              if (
+                anchoredMsg?.id &&
+                (requestChatMode === "roleplay" || requestChatMode === "game")
+              ) {
+                await materializeAssistantSpatialState(app.db, {
+                  chatId: input.chatId,
+                  messageId: anchoredMsg.id,
+                  swipeIndex: anchoredMsg.activeSwipeIndex ?? 0,
+                  regenerate: false,
+                  continuation: false,
+                });
+              }
               if (markGenerationCommitted && anchoredMsg?.id) {
                 generationComplete = true;
               }
@@ -5658,6 +5785,20 @@ export async function generateRoutes(app: FastifyInstance) {
               content: fullResponse,
             });
             savedSwipeIndex = 0;
+          }
+          if (
+            savedMsg?.id &&
+            savedSwipeIndex !== null &&
+            !input.impersonate &&
+            (requestChatMode === "roleplay" || requestChatMode === "game")
+          ) {
+            await materializeAssistantSpatialState(app.db, {
+              chatId: input.chatId,
+              messageId: savedMsg.id,
+              swipeIndex: savedSwipeIndex,
+              regenerate: Boolean(input.regenerateMessageId),
+              continuation: Boolean(input.continueMessageId),
+            });
           }
           if (markGenerationCommitted && savedMsg?.id) {
             generationComplete = true;
@@ -5772,7 +5913,7 @@ export async function generateRoutes(app: FastifyInstance) {
                     sendSseEvent(reply, { type: "game_map_update", data: nextMeta.gameMap });
 
                     const persistedMsg = refreshedMsg ?? savedMsg;
-                    if (latestLocation && persistedMsg?.id) {
+                    if (latestLocation && persistedMsg?.id && ownerSpatialProjection?.ownerMode !== "game") {
                       const persistedSwipeIndex = persistedMsg.activeSwipeIndex ?? 0;
                       const targetSnapshot =
                         (await gameStateStore.getByMessage(persistedMsg.id, persistedSwipeIndex)) ??
@@ -6544,10 +6685,12 @@ export async function generateRoutes(app: FastifyInstance) {
             const refreshedForSwipe = await chats.getMessage(messageId);
             if (refreshedForSwipe) targetSwipeIndex = refreshedForSwipe.activeSwipeIndex ?? 0;
           }
-          const siblingSwipeSnapshot =
+          const siblingSwipeSnapshot = projectGameSnapshotLocation(
             input.regenerateMessageId && messageId && targetSwipeIndex > 0
               ? await gameStateStore.getByMessage(messageId, targetSwipeIndex - 1)
-              : null;
+              : null,
+            ownerSpatialProjection,
+          );
           const trackerBaseGameStateSnapshot = siblingSwipeSnapshot ?? baseGameStateSnapshot;
           const serializeMigratedTrackerLocks = (state: ReturnType<typeof parseGameStateRow> | null) => {
             const locks = normalizeTrackerFieldLocksForState(state?.fieldLocks, state);
@@ -6885,7 +7028,14 @@ export async function generateRoutes(app: FastifyInstance) {
                 // Build the new snapshot from agent output, falling back to previous snapshot.
                 let newDate = coerceGameStateTextValue(gs.date) ?? coerceGameStateTextValue(prevSnap?.date);
                 let newTime = coerceGameStateTextValue(gs.time) ?? coerceGameStateTextValue(prevSnap?.time);
-                let newLocation = coerceGameStateTextValue(gs.location) ?? coerceGameStateTextValue(prevSnap?.location);
+                const authoritativeGameLocation =
+                  ownerSpatialProjection?.ownerMode === "game"
+                    ? formatOwnerSpatialBreadcrumb(ownerSpatialProjection)
+                    : null;
+                let newLocation =
+                  authoritativeGameLocation ??
+                  coerceGameStateTextValue(gs.location) ??
+                  coerceGameStateTextValue(prevSnap?.location);
                 let newWeather = coerceGameStateTextValue(gs.weather) ?? coerceGameStateTextValue(prevSnap?.weather);
                 let newTemperature =
                   coerceGameStateTextValue(gs.temperature) ?? coerceGameStateTextValue(prevSnap?.temperature);
@@ -6926,7 +7076,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 );
                 newDate = coerceGameStateTextValue(lockedWorldStatePatch.date);
                 newTime = coerceGameStateTextValue(lockedWorldStatePatch.time);
-                newLocation = coerceGameStateTextValue(lockedWorldStatePatch.location);
+                newLocation = authoritativeGameLocation ?? coerceGameStateTextValue(lockedWorldStatePatch.location);
                 newWeather = coerceGameStateTextValue(lockedWorldStatePatch.weather);
                 newTemperature = coerceGameStateTextValue(lockedWorldStatePatch.temperature);
                 const newWorldCustomFields = normalizeWorldCustomFields(lockedWorldStatePatch.worldCustomFields);
@@ -6972,7 +7122,10 @@ export async function generateRoutes(app: FastifyInstance) {
                 reply.raw.write(`data: ${JSON.stringify({ type: "game_state_patch", data: worldStatePatch })}\n\n`);
 
                 const existingGameMap = (chatMeta.gameMap as GameMap | null) ?? null;
-                const syncedMeta = syncGameMapMetaPartyPosition(chatMeta, newLocation);
+                const syncedMeta =
+                  ownerSpatialProjection?.ownerMode === "game"
+                    ? chatMeta
+                    : syncGameMapMetaPartyPosition(chatMeta, newLocation);
                 const syncedGameMap = (syncedMeta.gameMap as GameMap | null) ?? null;
                 if (syncedGameMap && syncedGameMap !== existingGameMap) {
                   Object.assign(chatMeta, syncedMeta);
@@ -7029,6 +7182,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   (allowLatestGameStateFallback ? await gameStateStore.getLatest(input.chatId) : null);
                 const oldChars = parseJsonField<any[]>(previousCharacterSnapshot?.presentCharacters, []);
                 preserveTrackerCharacterUiFields(chars, oldChars);
+                preserveTrackerCharacterUiFields(chars, characterTrackerHistory);
                 const characterLockState = previousCharacterSnapshot
                   ? parseGameStateRow(previousCharacterSnapshot as Record<string, unknown>)
                   : null;
@@ -7045,6 +7199,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 // 2. Fall back to stored NPC avatars (per-chat generated/uploaded)
                 const NPC_AVATAR_DIR = join(DATA_DIR, "avatars", "npc");
                 const storedNpcAvatarByName = new Map<string, string>();
+                const cardCharacterIds = applyTrackerCharacterCardIdentity(chars, charInfo);
                 const gameNpcs = sanitizeGameNpcAvatarUrls((chatMeta.gameNpcs as GameNpc[]) ?? []);
                 if (gameNpcs !== chatMeta.gameNpcs) {
                   chatMeta.gameNpcs = gameNpcs;
@@ -7056,6 +7211,7 @@ export async function generateRoutes(app: FastifyInstance) {
 
                 for (const char of chars) {
                   if (isManualTrackerCharacterId(char.characterId)) continue;
+                  if (cardCharacterIds.has(String(char.characterId))) continue;
                   const name = (char.name as string) ?? "";
                   // Try matching against the chat's character cards (case-insensitive)
                   const matched = charInfo.find((c) => normalizeTextForMatch(c.name) === normalizeTextForMatch(name));

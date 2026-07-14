@@ -18,6 +18,7 @@ import { startSceneWithPromptPreferences } from "../lib/scene-generation";
 import { agentKeys } from "./use-agents";
 import { discardPendingGameStatePatch } from "./use-game-state-patcher";
 import { turnGameKeys } from "./turn-game-keys";
+import { spatialContextKeys } from "./use-spatial-context";
 import type { PendingAgentWriteApproval, PendingCardUpdate } from "../stores/agent.store";
 import type { DelayedCharacterInfo } from "../stores/chat.store";
 import {
@@ -33,6 +34,8 @@ import {
   type EditableCharacterCardField,
   type MariGuidedPlanStep,
   type MariSuggestionChip,
+  type PendingSpatialTransition,
+  type SpatialContextResponse,
   type ThinkingTagPair,
 } from "@marinara-engine/shared";
 
@@ -261,6 +264,68 @@ function latestAssistantMessage(messages: Iterable<Message>): Message | null {
   return latest;
 }
 
+function resolveNotifiedCharacterId(
+  message: Message | null,
+  forCharacterId: string | undefined,
+  fallbackCharacterId: string | null,
+): string | null {
+  return message?.characterId ?? forCharacterId ?? fallbackCharacterId;
+}
+
+function getCachedMessages(qc: QueryClient, chatId: string): Message[] {
+  return qc.getQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId))?.pages.flat() ?? [];
+}
+
+function assistantMessageFingerprint(message: Message): string {
+  return JSON.stringify([
+    message.content,
+    message.activeSwipeIndex,
+    message.swipeCount ?? null,
+    message.extra?.displayText ?? null,
+    message.extra?.proseGuardianRewrittenAt ?? null,
+  ]);
+}
+
+type AssistantMessageSnapshot = {
+  cacheWasLoaded: boolean;
+  fingerprints: ReadonlyMap<string, string>;
+};
+
+function snapshotAssistantMessages(qc: QueryClient, chatId: string): AssistantMessageSnapshot {
+  const cached = qc.getQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId));
+  return {
+    cacheWasLoaded: cached !== undefined,
+    fingerprints: new Map(
+      (cached?.pages.flat() ?? [])
+        .filter((message) => message.role === "assistant")
+        .map((message) => [message.id, assistantMessageFingerprint(message)]),
+    ),
+  };
+}
+
+function latestChangedAssistantMessage(
+  qc: QueryClient,
+  chatId: string,
+  snapshot: AssistantMessageSnapshot,
+): Message | null {
+  if (!snapshot.cacheWasLoaded) return null;
+  return latestAssistantMessage(
+    getCachedMessages(qc, chatId).filter(
+      (message) =>
+        message.role === "assistant" && snapshot.fingerprints.get(message.id) !== assistantMessageFingerprint(message),
+    ),
+  );
+}
+
+function replyNotificationTitle(mode: Chat["mode"] | undefined, characterName: string | null): string | undefined {
+  if (mode === "game") return "Game turn is ready";
+  if (characterName) return undefined;
+  if (mode === "roleplay") return "Roleplay reply is ready";
+  if (mode === "visual_novel") return "Visual Novel reply is ready";
+  if (mode === "conversation") return "New message is ready";
+  return "Reply is ready";
+}
+
 /**
  * Build one or more PendingCardUpdate batches from a character_card_update
  * agent result. Each batch is scoped to a single characterId so the approval
@@ -440,6 +505,7 @@ import { lorebookKeys } from "./use-lorebooks";
 import { presetKeys } from "./use-presets";
 import { conversationCallKeys } from "./use-conversation-calls";
 import { playConfiguredNotificationPing } from "../lib/notification-sound";
+import { showLocalMessageNotification, showNativeMessageNotification } from "../lib/local-notifications";
 import { playConversationCallRingingSoundOnce } from "../lib/conversation-call-sounds";
 import { messageHasPendingPostProcessing } from "../lib/chat-message-extra";
 import { stripGmTagsKeepReadables } from "../lib/game-tag-parser";
@@ -1030,6 +1096,8 @@ export function useGenerate() {
       impersonatePromptTemplate?: string;
       /** When true, this generation drives the active turn-game's bot seats instead of a chat reply. */
       turnGameBots?: boolean;
+      /** Structured Roleplay/Game movement committed atomically with this owner turn. */
+      pendingSpatialTransition?: PendingSpatialTransition;
     }) => {
       // Prevent concurrent generations for the same chat. Different chats may
       // keep generating in the background while the user navigates elsewhere.
@@ -1079,6 +1147,7 @@ export function useGenerate() {
       // message after it is upserted into the cache. Cancel early so the
       // post-save refresh owns the query lifecycle for this generation.
       await qc.cancelQueries({ queryKey: chatKeys.messages(params.chatId), exact: true });
+      const assistantMessagesBeforeGeneration = snapshotAssistantMessages(qc, params.chatId);
       if (params.regenerateMessageId) {
         forgetRecentMessageContentEdit(params.chatId, params.regenerateMessageId);
       }
@@ -1086,7 +1155,7 @@ export function useGenerate() {
       const pendingAttachments = params.attachments ?? [];
 
       // Optimistically show the user message in the chat immediately
-      if ((params.userMessage || pendingAttachments.length > 0) && !params.impersonate) {
+      if ((params.userMessage || pendingAttachments.length > 0 || params.pendingSpatialTransition) && !params.impersonate) {
         // Build persona snapshot for per-message persona tracking
         const cachedPersonas = qc.getQueryData<
           Array<{
@@ -1188,6 +1257,8 @@ export function useGenerate() {
       let gameTurnLoadedSoundPlayed = false;
       let sawDoneEvent = false;
       let passiveStreamRecovered = false;
+      let spatialTransitionCommitted = false;
+      let passiveStreamSettled = false;
       let typingActive = false;
       let typewriterDone: (() => void) | null = null;
       let rafId = 0;
@@ -1433,6 +1504,21 @@ export function useGenerate() {
           abortController.signal,
         )) {
           switch (event.type) {
+            case "spatial_transition_committed": {
+              const transitionData = event.data as
+                | { chatId?: string; commandId?: string; currentLocationId?: string; definitionRevision?: number }
+                | undefined;
+              if (transitionData?.chatId === params.chatId && transitionData.commandId) {
+                spatialTransitionCommitted = true;
+                useChatStore
+                  .getState()
+                  .clearPendingSpatialTransition(params.chatId, transitionData.commandId);
+                void qc.invalidateQueries({ queryKey: spatialContextKeys.detail(params.chatId) });
+                void qc.invalidateQueries({ queryKey: chatKeys.detail(params.chatId) });
+              }
+              break;
+            }
+
             case "token": {
               const isFirstToken = !receivedContent;
               receivedContent = true;
@@ -2488,11 +2574,12 @@ export function useGenerate() {
         flushLeadingSpeakerPrefix();
         flushTypewriterBuffer();
         // Abort is intentional — don't log or toast
-        if (isAbortError(error)) return receivedContent;
+        if (isAbortError(error)) return receivedContent || spatialTransitionCommitted;
         if (isPassiveStreamDisconnect(error, pageWasHiddenDuringStream, abortController.signal)) {
           passiveStreamRecovered = true;
           if (isActiveChat()) useChatStore.getState().setGenerationPhase("Finishing in background...");
           const settled = await waitForServerGenerationToSettle(params.chatId, abortController.signal);
+          passiveStreamSettled = settled;
           if (!abortController.signal.aborted) {
             await refreshMessagesAuthoritatively(qc, params.chatId, persistedMessages.values());
             if (!settled) {
@@ -2501,11 +2588,38 @@ export function useGenerate() {
               );
             }
           }
-          return abortController.signal.aborted ? receivedContent : true;
+          return abortController.signal.aborted ? receivedContent || spatialTransitionCommitted : true;
+        }
+        if (params.pendingSpatialTransition) {
+          const payload = error instanceof ApiError && error.payload && typeof error.payload === "object"
+            ? (error.payload as Record<string, unknown>)
+            : null;
+          const spatialErrorCode = typeof payload?.code === "string" ? payload.code : null;
+          if (spatialErrorCode === "spatial_transition_already_applied") {
+            spatialTransitionCommitted = true;
+          } else if (!spatialErrorCode?.startsWith("spatial_")) {
+            try {
+              const current = await api.get<SpatialContextResponse>(`/chats/${params.chatId}/spatial-context`);
+              qc.setQueryData(spatialContextKeys.detail(params.chatId), current);
+              spatialTransitionCommitted =
+                current.currentLocationId === params.pendingSpatialTransition.destinationId;
+            } catch {
+              /* Preserve the pending command when current state cannot be confirmed. */
+            }
+          }
+          if (spatialTransitionCommitted) {
+            useChatStore
+              .getState()
+              .clearPendingSpatialTransition(params.chatId, params.pendingSpatialTransition.commandId);
+            void qc.invalidateQueries({ queryKey: chatKeys.detail(params.chatId) });
+            return true;
+          }
+          useChatStore.getState().setPendingSpatialTransitionStatus(params.chatId, "needs_review");
         }
         const msg = error instanceof Error ? error.message : "Generation failed";
         showError(msg);
         window.dispatchEvent(new CustomEvent("marinara:generation-error", { detail: { chatId: params.chatId } }));
+        return false;
       } finally {
         // Stream has terminated (done, error, abort, or unexpected throw) —
         // guarantee the Mari indicator clears even if the end SSE never arrived.
@@ -2569,7 +2683,11 @@ export function useGenerate() {
                 ? rawIds
                 : [];
           const notifiedMessage = latestAssistantMessage(persistedMessages.values());
-          const notifiedCharacterId = notifiedMessage?.characterId ?? parsedIds[0] ?? null;
+          const notifiedCharacterId = resolveNotifiedCharacterId(
+            notifiedMessage,
+            params.forCharacterId,
+            parsedIds[0] ?? null,
+          );
           if (notifiedCharacterId) {
             const identity = resolveCachedCharacterIdentity(qc, notifiedCharacterId);
             useChatStore
@@ -2701,6 +2819,45 @@ export function useGenerate() {
           }
         }
 
+        const completedReply =
+          !abortController.signal.aborted &&
+          !params.impersonate &&
+          !params.turnGameBots &&
+          ((sawDoneEvent && receivedContent) || passiveStreamSettled);
+        if (completedReply) {
+          const notifiedMessage =
+            latestAssistantMessage(persistedForRefresh) ??
+            latestChangedAssistantMessage(qc, params.chatId, assistantMessagesBeforeGeneration);
+          if (notifiedMessage) {
+            const chat = getCachedChatForGeneration(qc, params.chatId);
+            const fallbackCharacterId = parseChatCharacterIds(chat?.characterIds)[0] ?? null;
+            const notifiedCharacterId = resolveNotifiedCharacterId(
+              notifiedMessage,
+              params.forCharacterId,
+              fallbackCharacterId,
+            );
+            const characterName = notifiedCharacterId ? getCachedCharacterName(qc, notifiedCharacterId) : null;
+            const uiState = useUIStore.getState();
+            const notification = {
+              characterName,
+              title: replyNotificationTitle(chat?.mode ?? chatModeForGeneration, characterName),
+              tag: `marinara-chat-${params.chatId}`,
+            };
+            void showLocalMessageNotification({
+              ...notification,
+              enabled: params.autonomous
+                ? uiState.conversationBrowserNotifications
+                : uiState.generationBrowserNotifications,
+            });
+            showNativeMessageNotification({
+              ...notification,
+              enabled: params.autonomous
+                ? uiState.conversationMobileNotifications
+                : uiState.generationMobileNotifications,
+            });
+          }
+        }
+
         // Always notify game surface that generation completed for this chat.
         // Dispatched unconditionally — GameSurface uses lastProcessedMsgRef
         // to prevent duplicate processing.
@@ -2762,7 +2919,7 @@ export function useGenerate() {
           }
         }
       }
-      return receivedContent || passiveStreamRecovered;
+      return receivedContent || passiveStreamRecovered || spatialTransitionCommitted;
     },
     [
       qc,
