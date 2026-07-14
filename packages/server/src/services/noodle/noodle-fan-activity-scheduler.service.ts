@@ -19,7 +19,7 @@ import { createConnectionsStorage } from "../storage/connections.storage.js";
 import { createCharactersStorage } from "../storage/characters.storage.js";
 import { parseFanActivitySettings, simulateNoodlerFanActivity } from "../../routes/noodle.routes.js";
 import { isNoodleRefreshLocked, withNoodleRefreshLock } from "./noodle-refresh-lock.js";
-import type { NoodleAccount, NoodleFanActivityIntensity } from "@marinara-engine/shared";
+import type { NoodleAccount, NoodleAccountSubscription, NoodleFanActivityIntensity } from "@marinara-engine/shared";
 
 const NOODLE_FAN_ACTIVITY_SCHEDULER_POLL_MS = 60_000;
 const NOODLE_FAN_ACTIVITY_SCHEDULER_INITIAL_DELAY_MS = 30_000;
@@ -68,10 +68,21 @@ export function startNoodleFanActivityScheduler(app: FastifyInstance) {
     });
   };
 
-  const runDueAccount = async (account: NoodleAccount, fanSettings: ReturnType<typeof parseFanActivitySettings>) => {
+  const runDueAccount = async (
+    account: NoodleAccount,
+    fanSettings: ReturnType<typeof parseFanActivitySettings>,
+    shared: { allAccounts: NoodleAccount[]; allSubscriptions: NoodleAccountSubscription[] },
+  ) => {
     if (isNoodleRefreshLocked(account.id)) return; // Manual trigger or guided post in flight; try again next tick.
     const result = await withNoodleRefreshLock(account.id, () =>
-      simulateNoodlerFanActivity({ noodle, connections, characters, privateAccount: account }),
+      simulateNoodlerFanActivity({
+        noodle,
+        connections,
+        characters,
+        privateAccount: account,
+        allAccounts: shared.allAccounts,
+        allSubscriptions: shared.allSubscriptions,
+      }),
     );
     const nextRunAt = new Date(Date.now() + jitteredIntervalMs(fanSettings.intensity)).toISOString();
     await persistFanActivitySettings(account, nextRunAt);
@@ -100,6 +111,7 @@ export function startNoodleFanActivityScheduler(app: FastifyInstance) {
 
       const privateAccounts = await noodle.listPrivateAccounts();
       const now = Date.now();
+      const dueAccounts: { account: NoodleAccount; fanSettings: ReturnType<typeof parseFanActivitySettings> }[] = [];
       for (const account of privateAccounts) {
         const fanSettings = parseFanActivitySettings(account);
         if (!fanSettings.enabled || !fanSettings.autoSchedule) continue;
@@ -116,7 +128,20 @@ export function startNoodleFanActivityScheduler(app: FastifyInstance) {
         }
 
         if (Date.parse(fanSettings.nextRunAt) <= now) {
-          await runDueAccount(account, fanSettings);
+          dueAccounts.push({ account, fanSettings });
+        }
+      }
+
+      if (dueAccounts.length > 0) {
+        // Load once per tick and share across every due account this tick,
+        // instead of each simulateNoodlerFanActivity call re-querying the
+        // full accounts/subscriptions tables.
+        const shared = {
+          allAccounts: await noodle.listAccounts(),
+          allSubscriptions: await noodle.listSubscriptions(),
+        };
+        for (const { account, fanSettings } of dueAccounts) {
+          await runDueAccount(account, fanSettings, shared);
         }
       }
     } catch (error) {

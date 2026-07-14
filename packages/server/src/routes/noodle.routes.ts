@@ -30,6 +30,7 @@ import {
   readNoodlePollFromMetadata,
   type APIProvider,
   type NoodleAccount,
+  type NoodleAccountSubscription,
   type NoodleBootstrap,
   type NoodleFanActivityIntensity,
   type NoodleFanActivitySettings,
@@ -1230,7 +1231,11 @@ async function buildRefreshPrompt(input: {
     ].join("\n");
 
   const context = buildContext(attachedImageKeys, visionManifest, captionedImages);
-  const textOnlyContext = buildContext(new Set(), "", captionedImages);
+  // textOnlyContext is only ever sent as a fallback when a provider rejects
+  // vision input (see the retry below). With no image attachments the two
+  // builds are identical anyway, so skip the redundant rebuild of this large
+  // prompt in the common (no-image) case.
+  const textOnlyContext = attachedImageKeys.size > 0 ? buildContext(new Set(), "", captionedImages) : context;
 
   const outputFormat = [
     NOODLE_JSON_OUTPUT_HEADING,
@@ -1458,7 +1463,8 @@ async function generatePrivateAccountStageIdentity(input: {
         appearance:
           "concrete physical appearance description for an image generator: hair, build, distinguishing features, typical outfit/style. Must describe a specific look, not just adjectives like 'attractive'.",
         personality: "private stage voice/persona for posts, which may contrast with the public personality",
-        dynamic: "private roleplay dynamic or creator vibe, such as confident, coy, submissive but articulate, bratty, anonymous, etc.",
+        dynamic:
+          "a specific, distinctive private creator vibe in your own words — not a single stock adjective. Combine two or three concrete traits (how they tease, how formal or playful their voice is, what they're confident or insecure about, a verbal tic or running bit) so this persona reads as a different person from other NoodleR creators, not an interchangeable pick from a short list.",
       },
       null,
       2,
@@ -1623,7 +1629,43 @@ export async function ensurePrivateAccountIdentity(input: {
     const conn = connectionId ? await connections.getWithKey(connectionId) : null;
     let stageIdentityFailed = false;
     let avatarFailed = false;
-    if (conn) {
+    // Previous attempt's text identity already succeeded and only the
+    // avatar failed — reuse the persisted name/bio/appearance instead of
+    // paying for another LLM call to regenerate text that already worked.
+    // Only applies to a plain retry (no requested stage-profile edit),
+    // since an edit means the caller wants fresh text.
+    const avatarOnlyRetry =
+      !input.requestedStageProfile &&
+      privateAccount.settings.stageIdentityGenerationFailed !== true &&
+      privateAccount.settings.avatarGenerationFailed === true &&
+      typeof privateAccount.settings.stageAppearanceGenerated === "string" &&
+      (privateAccount.settings.stageAppearanceGenerated as string).length > 0;
+    if (avatarOnlyRetry) {
+      const imageConnection = settings.imageGenerationConnectionId
+        ? await connections.getWithKey(settings.imageGenerationConnectionId)
+        : await connections.getDefaultForImageGeneration();
+      if (imageConnection) {
+        const avatarUrl = await generatePrivateAccountAvatar({
+          displayName: privateAccount.displayName,
+          bio: privateAccount.bio,
+          appearance: privateAccount.settings.stageAppearanceGenerated as string,
+          imageConnection,
+          app,
+          debugMode: false,
+        }).catch((error) => {
+          logger.warn(error, "[noodle] Failed to regenerate NoodleR avatar for %s", privateAccount.displayName);
+          return null;
+        });
+        await noodle.updateAccount(privateAccount.id, {
+          ...(avatarUrl ? { avatarUrl } : {}),
+          settings: { ...privateAccount.settings, avatarGenerationFailed: !avatarUrl },
+        });
+      } else {
+        await noodle.updateAccount(privateAccount.id, {
+          settings: { ...privateAccount.settings, avatarGenerationFailed: true },
+        });
+      }
+    } else if (conn) {
       const baseUrl = resolveBaseUrl(conn);
       const provider = createLLMProvider(
         conn.provider,
@@ -1677,6 +1719,9 @@ export async function ensurePrivateAccountIdentity(input: {
             ...writePrivateStageProfileSettings(privateAccount.settings, identity.stageProfile),
             stageIdentityGenerationFailed: false,
             avatarGenerationFailed: avatarFailed,
+            // Persisted so a later avatar-only retry (avatarOnlyRetry above)
+            // can regenerate just the image without another LLM call.
+            stageAppearanceGenerated: identity.appearance,
           },
         });
       } else {
@@ -1741,11 +1786,11 @@ async function generateNoodlerReaction(input: {
     {
       role: "user",
       content: [
-        `Creator bio: ${input.creator.bio || "(no bio set)"}`,
+        formatPrivateStagePromptBlock(parsePrivateStageProfile(input.creator)),
         `Fan display name: ${input.subscriberDisplayName}`,
         `Fan action: ${input.kind === "subscribe" ? "just subscribed to this account" : "just unlocked this pay-per-view post"}`,
         `The post they're replying under: ${input.triggerPost.content || "(image post)"}`,
-        "Write the creator's short thank-you reply now.",
+        "Write the creator's short thank-you reply now, in their stage voice/dynamic above — react to this specific post and action, not a generic thanks.",
       ].join("\n"),
     },
   ];
@@ -1856,6 +1901,13 @@ export async function simulateNoodlerFanActivity(input: {
   connections: ReturnType<typeof createConnectionsStorage>;
   characters: ReturnType<typeof createCharactersStorage>;
   privateAccount: NoodleAccount;
+  // Callers looping over multiple accounts in one pass (the fan-activity
+  // scheduler's poll tick) can preload these once and share them across
+  // every due account instead of each call re-querying the full accounts/
+  // subscriptions tables. Defaults to querying, so single-account callers
+  // (manual "Simulate fan activity now") are unaffected.
+  allAccounts?: NoodleAccount[];
+  allSubscriptions?: NoodleAccountSubscription[];
 }): Promise<NoodleFanActivityResult> {
   if (input.privateAccount.visibility !== "private") {
     return { ok: false, error: "Fan activity only runs on a NoodleR private account." };
@@ -1876,13 +1928,13 @@ export async function simulateNoodlerFanActivity(input: {
     return { ok: false, error: "This NoodleR page has no posts yet for fans to react to." };
   }
 
-  const allAccounts = await input.noodle.listAccounts();
+  const allAccounts = input.allAccounts ?? (await input.noodle.listAccounts());
   const fillerFans = allAccounts.filter((account) => account.kind === "random_user");
   if (fillerFans.length === 0) {
     return { ok: false, error: "Enable at least one random-user filler account for NoodleR fans to use." };
   }
 
-  const subscriptions = await input.noodle.listSubscriptions();
+  const subscriptions = input.allSubscriptions ?? (await input.noodle.listSubscriptions());
   const alreadySubscribed = new Set(
     subscriptions
       .filter((subscription) => subscription.creatorAccountId === input.privateAccount.id)
@@ -1918,6 +1970,7 @@ export async function simulateNoodlerFanActivity(input: {
         formatPrivateStagePromptBlock(stageProfile),
         `Choose at most ${cap} actions total from the fans reacting to the posts listed below.`,
         "Each action is one of: like (content must be null), comment (a short one-sentence in-character fan reaction; content required), subscribe (a fan who isn't already a subscriber subscribes; postId may be null), unlock (a fan unlocks a pay-per-post they haven't unlocked yet; only valid for posts marked access=ppv).",
+        "Ground each fan's comment in their own bio below — their vocabulary, tone, and what they'd realistically fixate on should differ fan to fan. Do not reuse similar phrasing or sentence structure across different fans in this batch; if two fans would plausibly react the same way, vary the wording so they still read as distinct people.",
         "Never write as the creator, and never have a fan say the creator's real/public name.",
         "Return JSON only. No prose outside the JSON object.",
       ].join("\n"),
