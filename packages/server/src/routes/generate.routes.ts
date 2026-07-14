@@ -3032,7 +3032,9 @@ export async function generateRoutes(app: FastifyInstance) {
           agentSlice.filter((m: any) => m.role === "assistant"),
         );
         const characterTrackerHistory = resolvedAgents.some((agent) => agent.type === "character-tracker")
-          ? collectLatestTrackerCharacterHistory(await gameStateStore.getRecent(input.chatId))
+          ? collectLatestTrackerCharacterHistory(
+              await gameStateStore.getRecent(input.chatId, 100, latestGameState?.createdAt),
+            )
           : [];
         const visibleHistorySnapshot =
           latestGameState &&
@@ -7179,6 +7181,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   trackerBaseGameStateSnapshot ??
                   (allowLatestGameStateFallback ? await gameStateStore.getLatest(input.chatId) : null);
                 const oldChars = parseJsonField<any[]>(previousCharacterSnapshot?.presentCharacters, []);
+                preserveTrackerCharacterUiFields(chars, oldChars);
                 preserveTrackerCharacterUiFields(chars, characterTrackerHistory);
                 const characterLockState = previousCharacterSnapshot
                   ? parseGameStateRow(previousCharacterSnapshot as Record<string, unknown>)

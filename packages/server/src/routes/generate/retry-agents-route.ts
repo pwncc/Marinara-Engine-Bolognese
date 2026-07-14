@@ -78,6 +78,7 @@ import {
   type IllustratorPromptReviewOverride,
 } from "../../services/image/illustrator-prompt-review.js";
 import { createGameStateStorage } from "../../services/storage/game-state.storage.js";
+import { normalizeCharacterRpgStats } from "../../services/generation/character-prompt-context.js";
 import { createLorebooksStorage } from "../../services/storage/lorebooks.storage.js";
 import { syncGameMapMetaPartyPosition } from "../../services/game/map-position.service.js";
 import {
@@ -611,7 +612,7 @@ async function buildRetryAgentContext(args: {
       postHistoryInstructions: cardPromptText(charData.post_history_instructions) || undefined,
       avatarPath: typeof charRow.avatarPath === "string" ? charRow.avatarPath : null,
       avatarCrop: extensions.avatarCrop ?? null,
-      rpgStats: extensions.rpgStats as AgentContext["characters"][number]["rpgStats"],
+      rpgStats: normalizeCharacterRpgStats(extensions.rpgStats),
     });
   }
 
@@ -2731,9 +2732,10 @@ async function applyRetryResultEffects(args: {
             previousCharacters = [];
           }
         }
+        preserveTrackerCharacterUiFields(presentCharacters, previousCharacters);
         preserveTrackerCharacterUiFields(
           presentCharacters,
-          agentContext.characterTrackerHistory?.length ? agentContext.characterTrackerHistory : previousCharacters,
+          (agentContext.characterTrackerHistory ?? []) as unknown as Array<Record<string, unknown>>,
         );
         applyTrackerCharacterCardIdentity(presentCharacters, agentContext.characters);
         const lockedCharacterPatch = applyTrackerFieldLocksToGameStatePatch(

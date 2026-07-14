@@ -2158,7 +2158,7 @@ function buildLoreBlock(context: AgentContext): string {
         if (pools.length > 0) {
           parts.push(`Configured RPG pools: ${pools.map((pool) => `${pool.name}: ${pool.value}/${pool.max}`).join(", ")}`);
         }
-        if (char.rpgStats.attributes.length > 0) {
+        if (Array.isArray(char.rpgStats.attributes) && char.rpgStats.attributes.length > 0) {
           parts.push(
             `Configured RPG attributes: ${char.rpgStats.attributes
               .map((attribute) => `${attribute.name}: ${attribute.value}`)

@@ -1389,6 +1389,9 @@ function mergeTrackerStats(previous: unknown, next: unknown) {
   ];
 }
 
+const MAX_TRACKER_CHARACTER_HISTORY = 50;
+
+/** Collect the most recently seen distinct tracker characters within a prompt-safe bound. */
 export function collectLatestTrackerCharacterHistory(
   snapshots: Array<{ presentCharacters?: unknown }>,
 ): Array<Record<string, unknown>> {
@@ -1405,6 +1408,7 @@ export function collectLatestTrackerCharacterHistory(
       history.push(value);
       if (id) seenIds.add(id);
       if (name) seenNames.add(name);
+      if (history.length >= MAX_TRACKER_CHARACTER_HISTORY) return history;
     }
   }
   return history;

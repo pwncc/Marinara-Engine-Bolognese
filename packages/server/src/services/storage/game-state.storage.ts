@@ -149,8 +149,12 @@ export function createGameStateStorage(db: DB) {
         .from(gameStateSnapshots)
         .where(
           throughCreatedAt
-            ? and(eq(gameStateSnapshots.chatId, chatId), lte(gameStateSnapshots.createdAt, throughCreatedAt))
-            : eq(gameStateSnapshots.chatId, chatId),
+            ? and(
+                eq(gameStateSnapshots.chatId, chatId),
+                eq(gameStateSnapshots.committed, 1),
+                lte(gameStateSnapshots.createdAt, throughCreatedAt),
+              )
+            : and(eq(gameStateSnapshots.chatId, chatId), eq(gameStateSnapshots.committed, 1)),
         )
         .orderBy(desc(gameStateSnapshots.createdAt))
         .limit(Math.max(1, Math.min(500, limit)));
