@@ -190,7 +190,7 @@ const NOODLE_MEDIA_PICKER_TABS: ConversationMediaPickerTab[] = [
   { id: "stickers", label: "Stickers" },
 ];
 
-type NoodlePrivatePostAccess = Exclude<NoodlePostAccess, "public">;
+type NoodlePrivatePostAccess = NoodlePostAccess;
 type NoodleConfirmAction =
   | {
       kind: "delete-post";
@@ -844,7 +844,6 @@ export function NoodleView() {
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [mobileAccountSwitcherOpen, setMobileAccountSwitcherOpen] = useState(false);
-  const [mobilePersonaPickerOpen, setMobilePersonaPickerOpen] = useState(false);
   const [personaAccountLimit, setPersonaAccountLimit] = useState(NOODLE_PERSONA_SWITCHER_PAGE_SIZE);
   const [activeComposerTool, setActiveComposerTool] = useState<ComposerTool | null>(null);
   const [mediaPickerTab, setMediaPickerTab] = useState<ConversationMediaPickerTabId>("emoji");
@@ -4890,7 +4889,8 @@ export function NoodleView() {
     personaAccount,
     settings,
     onOpenMobileDrawer: () => setMobileDrawerOpen(true),
-    onOpenPersonaPicker: () => setMobilePersonaPickerOpen(true),
+    onToggleMobileAccountSwitcher: () => setMobileAccountSwitcherOpen((current) => !current),
+    mobileAccountSwitcherOpen,
     onBackToHome: openMobileHomeTimeline,
     postSearch,
     onPostSearchChange: setPostSearch,
@@ -4967,7 +4967,8 @@ export function NoodleView() {
     activeNoodleView: activeNoodleView === "noodler" ? "noodler" : "noodler-verification",
     personaAccount,
     onBackToHome: openMobileHomeTimeline,
-    onOpenPersonaPicker: () => setMobilePersonaPickerOpen(true),
+    onToggleMobileAccountSwitcher: () => setMobileAccountSwitcherOpen((current) => !current),
+    mobileAccountSwitcherOpen,
     onEnableNoodlerFromVerification: enableNoodlerFromVerification,
     hasSettings: Boolean(settings),
     updateSettingsPending: updateSettings.isPending,
@@ -5181,67 +5182,6 @@ export function NoodleView() {
           </motion.div>
         )}
       </AnimatePresence>
-      {mobilePersonaPickerOpen && (
-        <>
-          <div
-            className="absolute inset-0 z-[70] lg:hidden"
-            onClick={() => setMobilePersonaPickerOpen(false)}
-            aria-hidden="true"
-          />
-          <div className="absolute right-2 top-[3.6rem] z-[75] w-72 overflow-hidden rounded-2xl border border-[var(--noodle-divider)] bg-[var(--background)] p-2 shadow-2xl shadow-black/30 lg:hidden">
-            <p className={cn(labelClass, "px-2 pb-2")}>Switch account</p>
-            {sortedPersonaAccounts.length > 0 ? (
-              <div className="max-h-72 space-y-1 overflow-y-auto">
-                {visiblePersonaAccounts.map((account) => {
-                  const selected = account.id === personaAccount?.id;
-                  return (
-                    <button
-                      key={account.id}
-                      data-noodle-persona-id={account.entityId}
-                      type="button"
-                      onClick={() => {
-                        setSelectedPersonaId(account.entityId);
-                        setViewedProfileAccountId(null);
-                        setProfileEditing(false);
-                        setProfileTab("posts");
-                        setProfileConnectionTab(null);
-                        setMobilePersonaPickerOpen(false);
-                      }}
-                      className={cn(
-                        "flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition-colors hover:bg-[var(--accent)]",
-                        selected && "bg-[var(--noodle-blue)]/10",
-                      )}
-                    >
-                      <Avatar account={account} size="sm" />
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-center gap-1.5">
-                          <span className="block truncate text-sm font-semibold">{account.displayName}</span>
-                          {isNoodlerEnabled && Boolean(account.linkedAccountId) && <NoodlerBadge />}
-                        </span>
-                        <span className="block truncate text-xs text-[var(--muted-foreground)]">
-                          @{account.handle}
-                        </span>
-                      </span>
-                      {selected && <span className="h-2 w-2 rounded-full bg-[var(--noodle-blue)]" />}
-                    </button>
-                  );
-                })}
-                {hasMorePersonaAccounts && (
-                  <button
-                    type="button"
-                    onClick={() => setPersonaAccountLimit((current) => current + NOODLE_PERSONA_SWITCHER_PAGE_SIZE)}
-                    className="mt-1 h-9 w-full rounded-lg text-xs font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10"
-                  >
-                    Load more ({visiblePersonaAccounts.length} of {sortedPersonaAccounts.length})
-                  </button>
-                )}
-              </div>
-            ) : (
-              <p className="px-2 py-3 text-xs text-[var(--muted-foreground)]">No persona accounts yet.</p>
-            )}
-          </div>
-        </>
-      )}
       <div className="flex min-h-0 flex-1 justify-center overflow-hidden">
         <div className="flex min-h-0 w-full max-w-[1264px] justify-center">
           <aside className="hidden w-[17rem] shrink-0 border-r border-[var(--noodle-divider)] bg-[var(--background)] lg:flex lg:flex-col [&_svg]:!text-[var(--noodle-blue)]">
@@ -5977,7 +5917,7 @@ export function NoodleView() {
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
                         {(
                           [
-                            { value: "public", label: "Public" },
+                            { value: "public", label: "Free" },
                             {
                               value: "subscriber",
                               label:
@@ -6247,6 +6187,69 @@ export function NoodleView() {
         </div>
       </nav>
 
+      {mobileAccountSwitcherOpen && !mobileDrawerOpen && (
+        <>
+          <button
+            type="button"
+            aria-label="Close account switcher"
+            className="absolute inset-0 z-40 lg:hidden"
+            onClick={() => setMobileAccountSwitcherOpen(false)}
+          />
+          <div className="absolute left-2 top-[3.6rem] z-[55] w-72 overflow-hidden rounded-2xl border border-[var(--noodle-divider)] bg-[var(--background)] p-2 shadow-2xl shadow-black/35 lg:hidden">
+            <p className={cn(labelClass, "px-2 pb-2")}>Switch account</p>
+            {sortedPersonaAccounts.length > 0 ? (
+              <div className="max-h-72 space-y-1 overflow-y-auto">
+                {visiblePersonaAccounts.map((account) => {
+                  const selected = account.id === personaAccount?.id;
+                  return (
+                    <button
+                      key={account.id}
+                      data-noodle-persona-id={account.entityId}
+                      type="button"
+                      onClick={() => {
+                        setSelectedPersonaId(account.entityId);
+                        setViewedProfileAccountId(null);
+                        setProfileEditing(false);
+                        setProfileTab("posts");
+                        setProfileConnectionTab(null);
+                        setMobileAccountSwitcherOpen(false);
+                      }}
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition-colors hover:bg-[var(--accent)]",
+                        selected && "bg-[var(--noodle-blue)]/10",
+                      )}
+                    >
+                      <Avatar account={account} size="sm" />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1.5">
+                          <span className="block truncate text-sm font-semibold">{account.displayName}</span>
+                          {isNoodlerEnabled && Boolean(account.linkedAccountId) && <NoodlerBadge />}
+                        </span>
+                        <span className="block truncate text-xs text-[var(--muted-foreground)]">
+                          @{account.handle}
+                        </span>
+                      </span>
+                      {selected && <span className="h-2 w-2 rounded-full bg-[var(--noodle-blue)]" />}
+                    </button>
+                  );
+                })}
+                {hasMorePersonaAccounts && (
+                  <button
+                    type="button"
+                    onClick={() => setPersonaAccountLimit((current) => current + NOODLE_PERSONA_SWITCHER_PAGE_SIZE)}
+                    className="mt-1 h-9 w-full rounded-lg text-xs font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10"
+                  >
+                    Load more ({visiblePersonaAccounts.length} of {sortedPersonaAccounts.length})
+                  </button>
+                )}
+              </div>
+            ) : (
+              <p className="px-2 py-3 text-xs text-[var(--muted-foreground)]">No persona accounts yet.</p>
+            )}
+          </div>
+        </>
+      )}
+
       {composeOpen && (
         <div className="absolute inset-0 z-[70] flex items-start justify-center bg-black/45 px-3 py-12 sm:px-4 sm:py-16">
           <button
@@ -6504,6 +6507,7 @@ export function NoodleView() {
                   onChange={(event) => setPrivateGuideAccess(event.target.value as NoodlePrivatePostAccess)}
                   className={fieldClass}
                 >
+                  <option value="public">Free</option>
                   <option value="subscriber">Subscribers only</option>
                   <option value="ppv">Pay-per-post</option>
                 </select>

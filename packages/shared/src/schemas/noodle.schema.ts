@@ -311,7 +311,7 @@ export const noodleRefreshSchema = z.object({
   targetAccountId: z.string().min(1).optional(),
   privatePostGuide: z
     .object({
-      access: z.enum(["subscriber", "ppv"]).optional(),
+      access: noodlePostAccessSchema.optional(),
       includeText: z.boolean().optional(),
       includeImage: z.boolean().optional(),
       theme: z.string().trim().max(120).optional(),

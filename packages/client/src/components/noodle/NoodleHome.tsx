@@ -60,7 +60,8 @@ export interface NoodleHomeProps {
 
   // Mobile chrome
   onOpenMobileDrawer: () => void;
-  onOpenPersonaPicker: () => void;
+  onToggleMobileAccountSwitcher: () => void;
+  mobileAccountSwitcherOpen: boolean;
   onBackToHome: () => void;
 
   // Search / account lookup
@@ -155,7 +156,8 @@ export function NoodleHome(props: NoodleHomeProps) {
     personaAccount,
     settings,
     onOpenMobileDrawer,
-    onOpenPersonaPicker,
+    onToggleMobileAccountSwitcher,
+    mobileAccountSwitcherOpen,
     onBackToHome,
     postSearch,
     onPostSearchChange,
@@ -398,21 +400,13 @@ export function NoodleHome(props: NoodleHomeProps) {
         data-component="NoodleHome.MobileHeader"
       >
         <button
+          data-component="NoodleView.MobileAccountSwitcher"
           type="button"
-          onClick={onOpenMobileDrawer}
-          className="flex h-10 w-10 items-center justify-center rounded-full transition-colors hover:bg-[var(--accent)]"
-          title="Open menu"
-          aria-label="Open Noodle menu"
-        >
-          <Menu size={22} />
-        </button>
-        <NoodleLogo className="mx-auto h-9 w-14" />
-        <button
-          type="button"
-          onClick={onOpenPersonaPicker}
+          onClick={onToggleMobileAccountSwitcher}
+          aria-label="Switch persona account"
+          aria-expanded={mobileAccountSwitcherOpen}
           className="flex h-10 w-10 items-center justify-center rounded-full transition-colors hover:bg-[var(--accent)]"
           title="Switch persona"
-          aria-label="Switch persona account"
         >
           {personaAccount ? (
             <Avatar account={personaAccount} size="sm" />
@@ -421,6 +415,16 @@ export function NoodleHome(props: NoodleHomeProps) {
               <AtSign size={18} />
             </span>
           )}
+        </button>
+        <NoodleLogo className="mx-auto h-9 w-14" />
+        <button
+          type="button"
+          onClick={onOpenMobileDrawer}
+          className="flex h-10 w-10 items-center justify-center rounded-full transition-colors hover:bg-[var(--accent)]"
+          title="Open menu"
+          aria-label="Open Noodle menu"
+        >
+          <Menu size={22} />
         </button>
       </div>
 
