@@ -7,6 +7,7 @@ import {
   Library,
   List,
   Lock,
+  LockKeyhole,
   MessageCircle,
   MessagesSquare,
   Theater,
@@ -33,6 +34,7 @@ const ICONS: Record<AchievementDefinition["icon"], LucideIcon> = {
   character: UserRound,
   lorebook: BookOpen,
   persona: Library,
+  noodler: LockKeyhole,
 };
 
 const CATEGORY_LABELS: Record<AchievementDefinition["category"], string> = {

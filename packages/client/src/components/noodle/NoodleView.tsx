@@ -120,6 +120,7 @@ import {
   useUnsubscribeNoodleAccount,
 } from "../../hooks/use-noodler";
 import { useUIStore } from "../../stores/ui.store";
+import { useTrackAchievement } from "../../hooks/use-achievements";
 
 type RawCharacter = { id?: unknown; data?: unknown; avatarPath?: unknown };
 type RawCharacterGroup = { id?: unknown; name?: unknown; description?: unknown; characterIds?: unknown };
@@ -1098,6 +1099,7 @@ export function NoodleView() {
   const unsubscribeAccount = useUnsubscribeNoodleAccount();
   const unlockPost = useUnlockNoodlePost();
   const uploadGlobalImages = useUploadGlobalGalleryImages();
+  const trackAchievement = useTrackAchievement();
   const prefersReducedMotion = useReducedMotion();
   const imageFileRef = useRef<HTMLInputElement | null>(null);
   const inlineComposerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1192,6 +1194,7 @@ export function NoodleView() {
   const [editingReplyContent, setEditingReplyContent] = useState("");
   const [confirmAction, setConfirmAction] = useState<NoodleConfirmAction | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
+  const [noodlerVerificationOpen, setNoodlerVerificationOpen] = useState(false);
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [mobileAccountSwitcherOpen, setMobileAccountSwitcherOpen] = useState(false);
@@ -1333,10 +1336,11 @@ export function NoodleView() {
       postUnlocks.filter((unlock) => unlock.accountId === personaAccount.id).map((unlock) => unlock.postId),
     );
   }, [personaAccount, postUnlocks]);
+  const isNoodlerEnabled = settings?.enableNoodler === true;
   const noodlerHubQuery = useNoodlerHub(
     personaAccount?.kind,
     personaAccount?.entityId,
-    activeNoodleView === "noodler" && Boolean(personaAccount),
+    activeNoodleView === "noodler" && isNoodlerEnabled && Boolean(personaAccount),
   );
   const noodlerHub = noodlerHubQuery.data;
   const privateAccounts = useMemo(
@@ -1453,7 +1457,8 @@ export function NoodleView() {
     });
   }, [latestPrivatePostByCreatorId, noodlerHub, noodlerUnseenCountByAccountId]);
   const isNoodlerScopedView =
-    activeNoodleView === "noodler" || (activeNoodleView === "profile" && viewedProfileAccount?.visibility === "private");
+    isNoodlerEnabled &&
+    (activeNoodleView === "noodler" || (activeNoodleView === "profile" && viewedProfileAccount?.visibility === "private"));
   const activeNoodleMode: NoodleMode = isNoodlerScopedView ? "noodler" : "noodle";
   const activeNoodleModeMeta = NOODLE_MODE_META[activeNoodleMode];
   const composeActionLabel = activeNoodleMode === "noodler" ? "NoodleR Post" : "Post";
@@ -1576,6 +1581,25 @@ export function NoodleView() {
     updateSettings.mutate(patch, {
       onError: (error) => toast.error(error instanceof Error ? error.message : "Could not update Noodle settings."),
     });
+  };
+
+  const enableNoodlerFromVerification = () => {
+    updateSettings.mutate(
+      { enableNoodler: true },
+      {
+        onSuccess: () => {
+          toast.success("Just kidding. NoodleR enabled.");
+          trackAchievement.mutate("noodler_discovered");
+          setNoodlerVerificationOpen(false);
+          setActiveNoodleView("noodler");
+          setAccountSwitcherOpen(false);
+          setMobileDrawerOpen(false);
+          setActiveComposerTool(null);
+          setProfileConnectionTab(null);
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not enable NoodleR."),
+      },
+    );
   };
 
   const beginRefreshTimeEdit = (scheduledTime: string) => {
@@ -2380,6 +2404,12 @@ export function NoodleView() {
 
   const openProfile = (account: NoodleAccount | null) => {
     if (!account) return;
+    if (account.visibility === "private" && !isNoodlerEnabled) {
+      setNoodlerVerificationOpen(true);
+      setAccountSwitcherOpen(false);
+      setMobileDrawerOpen(false);
+      return;
+    }
     markNoodlerAccountViewed(account);
     setViewedProfileAccountId(account.id === personaAccount?.id ? null : account.id);
     setProfileEditing(false);
@@ -3075,7 +3105,24 @@ export function NoodleView() {
     setProfileConnectionTab(null);
   };
 
+  const setNoodlerEnabled = (enabled: boolean) => {
+    if (enabled) {
+      setNoodlerVerificationOpen(true);
+      return;
+    }
+    saveSettings({ enableNoodler: false, enableNoodlerFanActivityScheduler: false });
+    if (activeNoodleMode === "noodler") openHomeTimeline();
+  };
+
   const openNoodlerHub = () => {
+    if (!isNoodlerEnabled) {
+      setNoodlerVerificationOpen(true);
+      setAccountSwitcherOpen(false);
+      setMobileDrawerOpen(false);
+      setActiveComposerTool(null);
+      setProfileConnectionTab(null);
+      return;
+    }
     setActiveNoodleView("noodler");
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
@@ -3559,6 +3606,26 @@ export function NoodleView() {
           </Section>
 
           <Section
+            title="NoodleR Access"
+            help="Controls whether the private NoodleR side of Noodle is available from the mode switcher and mobile navigation."
+          >
+            <div className="space-y-3">
+              <ToggleSetting
+                label="Enable NoodleR"
+                help="Unlocks the private creator network mode. The first activation runs a completely serious verification screen."
+                checked={isNoodlerEnabled}
+                disabled={updateSettings.isPending}
+                onChange={setNoodlerEnabled}
+              />
+              {!isNoodlerEnabled && (
+                <p className="rounded-md border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/5 px-3 py-2 text-xs leading-5 text-[var(--muted-foreground)]">
+                  NoodleR stays tucked away until this is enabled. Attempts to enter NoodleR will open verification first.
+                </p>
+              )}
+            </div>
+          </Section>
+
+          <Section
             title="NoodleR Fan Activity"
             help="Global kill switch for unattended fan activity across every NoodleR (private) page. Off by default. Even a page with its own auto-schedule toggle on stays dormant until this is also on; turning this off freezes every page's scheduled activity at once."
           >
@@ -3567,7 +3634,7 @@ export function NoodleView() {
                 label="Enable NoodleR fan activity"
                 help="Lets the fan-activity scheduler run unattended for any NoodleR page that has both fan activity and its own auto-schedule toggle turned on. Manual 'Simulate fan activity now' is unaffected by this switch either way."
                 checked={settings.enableNoodlerFanActivityScheduler}
-                disabled={updateSettings.isPending}
+                disabled={updateSettings.isPending || !isNoodlerEnabled}
                 onChange={(checked) => saveSettings({ enableNoodlerFanActivityScheduler: checked })}
               />
             </div>
@@ -5211,6 +5278,88 @@ export function NoodleView() {
         />
       )}
       <AnimatePresence>
+        {noodlerVerificationOpen && (
+          <motion.div
+            initial={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 12 }}
+            animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+            exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 12 }}
+            transition={{ duration: prefersReducedMotion ? 0.1 : 0.2, ease: [0.16, 1, 0.3, 1] }}
+            className="absolute inset-0 z-[90] flex min-h-0 flex-col bg-[var(--background)] text-[var(--foreground)]"
+            data-component="NoodleView.NoodlerVerification"
+          >
+            <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--noodle-divider)] px-4">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-black text-[var(--noodle-blue)]">NoodleR Verification</p>
+                <p className="truncate text-xs text-[var(--muted-foreground)]">Private creator network access</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNoodlerVerificationOpen(false)}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10"
+                title="Close verification"
+                aria-label="Close verification"
+              >
+                <X size={19} />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8">
+              <div className="mx-auto flex min-h-full max-w-2xl flex-col justify-center">
+                <div className="mb-7 flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--noodle-blue)]/15 text-[var(--noodle-blue)] ring-1 ring-[var(--noodle-blue)]/30">
+                  <Lock size={30} />
+                </div>
+                <h2 className="max-w-xl text-2xl font-black leading-tight sm:text-3xl">Verify your NoodleR eligibility.</h2>
+                <p className="mt-3 max-w-xl text-sm leading-6 text-[var(--muted-foreground)]">
+                  Before entering NoodleR, please prepare the following highly official materials for our totally
+                  rigorous access desk.
+                </p>
+
+                <div className="mt-7 grid gap-2 sm:grid-cols-2">
+                  {[
+                    { icon: User, title: "Government ID", detail: "Passport, license, or wizard guild card." },
+                    { icon: ImageIcon, title: "Photo pass", detail: "A crisp selfie with maximum seriousness." },
+                    { icon: AtSign, title: "Handle match", detail: "Your @handle must look confident." },
+                    { icon: Check, title: "Sauce consent", detail: "Confirm you understand private pages are private." },
+                  ].map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <div
+                        key={item.title}
+                        className="rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] px-3 py-3"
+                      >
+                        <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
+                          <Icon size={16} />
+                        </span>
+                        <p className="mt-2 text-sm font-bold">{item.title}</p>
+                        <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">{item.detail}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-8 flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={enableNoodlerFromVerification}
+                    disabled={!settings || updateSettings.isPending}
+                    className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--noodle-blue)] px-5 text-sm font-black text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {updateSettings.isPending ? <Loader2 size={17} className="animate-spin" /> : <Check size={17} />}
+                    {updateSettings.isPending ? "Verifying" : "Start verification"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNoodlerVerificationOpen(false)}
+                    className="inline-flex h-11 items-center justify-center rounded-lg border border-[var(--noodle-divider)] px-5 text-sm font-bold transition-colors hover:bg-[var(--accent)]"
+                  >
+                    Maybe later
+                  </button>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
         {mobileDrawerOpen && (
           <motion.div
             initial={prefersReducedMotion ? { opacity: 0 } : { x: "-100%" }}
@@ -5340,7 +5489,7 @@ export function NoodleView() {
                               <span className="min-w-0 flex-1">
                                 <span className="flex items-center gap-1.5">
                                   <span className="block truncate text-sm font-semibold">{account.displayName}</span>
-                                  {Boolean(account.linkedAccountId) && <NoodlerBadge />}
+                                  {isNoodlerEnabled && Boolean(account.linkedAccountId) && <NoodlerBadge />}
                                 </span>
                                 <span className="block truncate text-xs text-[var(--muted-foreground)]">
                                   @{account.handle}
@@ -5494,7 +5643,7 @@ export function NoodleView() {
                               <span className="min-w-0 flex-1">
                                 <span className="flex items-center gap-1.5">
                                   <span className="block truncate text-xs font-semibold">{account.displayName}</span>
-                                  {Boolean(account.linkedAccountId) && <NoodlerBadge />}
+                                  {isNoodlerEnabled && Boolean(account.linkedAccountId) && <NoodlerBadge />}
                                 </span>
                                 <span className="block truncate text-[0.68rem] text-[var(--muted-foreground)]">
                                   @{account.handle}
@@ -5536,7 +5685,7 @@ export function NoodleView() {
                   <div className="min-w-0 flex-1">
                     <p className="flex items-center gap-1.5 truncate text-sm font-semibold">
                       {personaAccount?.displayName ?? "Noodle Account"}
-                      {Boolean(personaAccount?.linkedAccountId) && <NoodlerBadge />}
+                      {isNoodlerEnabled && Boolean(personaAccount?.linkedAccountId) && <NoodlerBadge />}
                     </p>
                     <p className="truncate text-xs text-[var(--muted-foreground)]">
                       {personaAccount ? `@${personaAccount.handle}` : "Pick a persona"}
@@ -6085,12 +6234,13 @@ export function NoodleView() {
                         </button>
                       ) : null}
                       {viewedProfileAccount &&
+                        isNoodlerEnabled &&
                         viewedProfileAccount.visibility === "public" &&
                         (viewedProfileAccount.kind === "persona" || viewedProfileAccount.kind === "character") &&
                         (viewedProfileAccount.linkedAccountId ? (
                           <button
                             type="button"
-                            onClick={() => setViewedProfileAccountId(viewedProfileAccount.linkedAccountId)}
+                            onClick={() => openProfile(accountById.get(viewedProfileAccount.linkedAccountId ?? "") ?? null)}
                             className="mb-1 h-9 rounded-full border border-[var(--noodle-divider)] px-5 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)]"
                             title="View private NoodleR account"
                           >
@@ -6164,10 +6314,10 @@ export function NoodleView() {
                       <div className="mt-3">
                         <h3 className="flex items-center gap-1.5 text-xl font-bold leading-tight">
                           {profilePreviewAccount.displayName}
-                          {viewedProfileAccount?.visibility === "private" ? (
+                          {viewedProfileAccount?.visibility === "private" && isNoodlerEnabled ? (
                             <NoodlerPrivateBadge />
                           ) : (
-                            Boolean(viewedProfileAccount?.linkedAccountId) && <NoodlerBadge />
+                            isNoodlerEnabled && Boolean(viewedProfileAccount?.linkedAccountId) && <NoodlerBadge />
                           )}
                         </h3>
                         <p className="text-sm text-[var(--muted-foreground)]">@{profileDisplayHandle || "noodle"}</p>

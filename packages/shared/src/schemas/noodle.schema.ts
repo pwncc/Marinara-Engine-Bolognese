@@ -42,6 +42,7 @@ export const DEFAULT_NOODLE_SETTINGS = {
   theme: "system",
   generationConnectionId: null,
   layout: "timeline",
+  enableNoodler: false,
   enableNoodlerFanActivityScheduler: false,
 } as const;
 
@@ -91,6 +92,7 @@ export const noodleSettingsSchema = z.object({
   theme: noodleThemeSchema.default(DEFAULT_NOODLE_SETTINGS.theme),
   generationConnectionId: z.string().min(1).nullable().default(DEFAULT_NOODLE_SETTINGS.generationConnectionId),
   layout: noodleLayoutSchema.default(DEFAULT_NOODLE_SETTINGS.layout),
+  enableNoodler: z.boolean().default(DEFAULT_NOODLE_SETTINGS.enableNoodler),
   enableNoodlerFanActivityScheduler: z
     .boolean()
     .default(DEFAULT_NOODLE_SETTINGS.enableNoodlerFanActivityScheduler),

@@ -4,6 +4,37 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+### Added
+
+- Added **NoodleGram** as a Noodle layout option: an image-first grid view for the main feed and profile post/media views, alongside the existing timeline layout.
+- Added NoodleR post access controls, subscription flows, paid unlocks, and private accounts for persona and character-linked creators.
+- Added guided NoodleR private-post generation, including creator confirmation, character post generation, prompt review in a modal, and explicit subscription/PPV access behavior.
+- Added generated NoodleR stage identities with separate display names, handles, bios, banners, avatars, private identity anchors, and persona-linked context inheritance for private creator accounts.
+- Added a NoodleR discovery hub with private creator cards, unseen activity counts, Noodle/NoodleR mode switching, distinct public/private badges, and private profile navigation.
+- Added NoodleR fan activity: bounded autonomous subscriber/comment generation, per-page fan activity controls, a global scheduler kill switch, manual simulation, and scheduler documentation.
+- Added separate client hooks and server routes for NoodleR APIs so private creator hub behavior is isolated from the public Noodle timeline surfaces.
+- Added an opt-in **NoodleR Access** setting with a verification gate before private NoodleR pages, badges, hub loading, fan activity scheduling, or private profile links become available.
+- Added real feed pagination beyond the initial Noodle bootstrap window so older timeline posts can be loaded instead of stopping at the first batch.
+- Added editable random-user filler rosters for Noodle so supporting non-character accounts are no longer hardcoded.
+- Added NoodleR planning docs covering the grid layout, subscription/unlock model, private accounts, fan activity, and completeness follow-up work.
+
+### Changed
+
+- Split the NoodleR hub out from the main Noodle timeline, moved NoodleR-specific client data fetching into `use-noodler`, and split private-server endpoints into `noodler.routes.ts`.
+- Replaced the global Noodle refresh lock with per-scope locking so public Noodle and private NoodleR refreshes do not block each other unnecessarily.
+- Scoped private NoodleR prompt context to the linked creator account and let persona-linked private accounts inherit the real persona context when generating.
+- Changed NoodleR subscription behavior so subscriptions bypass subscriber-only access but paid unlocks remain explicit unless **subscription includes PPV** is enabled on the creator account.
+- Prioritized real character appearance over timeline scene ideas when building NoodleR image prompts.
+- Simplified the Game/spatial-context surface by removing the experimental hierarchical spatial-context system, tactical-combat engine/UI/assets, and their dedicated regression/e2e coverage from this branch.
+
+### Fixed
+
+- Fixed NoodleR digest generation leaking private account context, and added deterministic private-post identity-leak backstops so creator text cannot borrow the viewer persona's identity.
+- Fixed NoodleR private post generation borrowing the wrong identity, stage profile generation failures hiding without recovery, and stage avatar/profile failures lacking a retry path.
+- Fixed NoodleR generated posts so private prompt context is constrained to the linked author instead of unrelated accounts.
+- Fixed NoodleR badges and private account affordances appearing when NoodleR is disabled.
+- Fixed NoodleR fan activity to stay bounded, respect the global scheduler switch, and avoid unattended activity unless both global and page-level controls allow it.
+
 ## [2.2.2]
 
 ### Changed

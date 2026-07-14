@@ -14,7 +14,7 @@ Your progress is saved locally, inside the profile you are using. A different pr
 
 The **Achievements** button lives on the Home screen. The Home screen is what you see when no chat is open. The button sits just under the Professor Mari chat box, and it shows a trophy icon.
 
-Under the label, the button shows a live count, like **12 of 23 unlocked**. While it is still loading, it reads **Checking the collection...** instead.
+Under the label, the button shows a live count, like **12 of 24 unlocked**. While it is still loading, it reads **Checking the collection...** instead.
 
 To open the panel, follow these steps:
 
@@ -28,9 +28,9 @@ Each card shows a badge icon, a title, a category label, and a short description
 
 The button and the panel only appear when the **Achievements** setting is turned on. See the setting section below. There is no other menu or page that shows achievements.
 
-## The 23 achievements
+## The 24 achievements
 
-There are 23 achievements, split into four categories: **Milestone**, **Community**, **Creation**, and **Collection**.
+There are 24 achievements, split into four categories: **Milestone**, **Community**, **Creation**, and **Collection**.
 
 Some achievements are single unlocks. The **Creation** and **Collection** ones are ranked, with three tiers marked **I**, **II**, and **III**. The tiers unlock at 5, then 25, then 100. So the badge title can read something like **Hoarder II** once you reach the second tier.
 
@@ -38,6 +38,7 @@ Some achievements are single unlocks. The **Creation** and **Collection** ones a
 |---|---|---|
 | **Diligent Student** | Milestone | Finish or skip the first-time tutorial. |
 | **Hello World** | Milestone | Send your first message to Professor Mari from the Home screen. |
+| **Absolutely Verified** | Milestone | Discover NoodleR by completing its very serious verification. |
 | **One Of Us** | Community | Click the **Discord** link in the Home screen footer. |
 | **Based Backer** | Community | Click the **Support** link (it opens Ko-fi) in the Home screen footer. |
 | **Backseat Appreciator** | Community | Click the **Credits** button in the Home screen footer. |

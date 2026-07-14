@@ -5,6 +5,7 @@ export const ACHIEVEMENT_EVENTS = [
   "discord_clicked",
   "kofi_clicked",
   "credits_viewed",
+  "noodler_discovered",
   "prof_mari_message_sent",
   "chat_created",
   "library_changed",
@@ -74,6 +75,13 @@ export const ACHIEVEMENT_DEFINITIONS: AchievementDefinition[] = [
     category: "milestone",
     icon: "mari",
   },
+  {
+    id: "noodler_discovered",
+    title: "Absolutely Verified",
+    description: "Discovered NoodleR after completing its very serious verification.",
+    category: "milestone",
+    icon: "noodler",
+  },
   ...rankedAchievements(
     "who_needs_irl_friends",
     "Who Needs IRL Friends",
@@ -119,5 +127,6 @@ export const ACHIEVEMENT_DIRECT_EVENT_IDS: Partial<Record<AchievementEvent, stri
   discord_clicked: "one_of_us",
   kofi_clicked: "based_backer",
   credits_viewed: "backseat_appreciator",
+  noodler_discovered: "noodler_discovered",
   prof_mari_message_sent: "hello_world",
 };

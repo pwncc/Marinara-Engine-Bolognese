@@ -11,7 +11,8 @@ export type AchievementIconKey =
   | "game"
   | "character"
   | "lorebook"
-  | "persona";
+  | "persona"
+  | "noodler";
 
 export type AchievementCategory = "community" | "collection" | "creation" | "milestone";
 
@@ -64,6 +65,7 @@ export type AchievementEvent =
   | "discord_clicked"
   | "kofi_clicked"
   | "credits_viewed"
+  | "noodler_discovered"
   | "prof_mari_message_sent"
   | "chat_created"
   | "library_changed";
