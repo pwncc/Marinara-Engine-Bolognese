@@ -113,9 +113,29 @@ export function useUpdateNoodleSettings() {
       if (context?.previous) qc.setQueryData(noodleKeys.bootstrap(), context.previous);
     },
     onSuccess: (settings) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
-        current ? { ...current, settings } : current,
-      );
+      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) => {
+        if (!current) return current;
+        // Evict private accounts/posts/subscriptions/postUnlocks from the
+        // cache immediately on disable, rather than waiting for the
+        // onSettled refetch (which now returns server-scoped data — see
+        // bootstrap() — but there's a window before it resolves where
+        // stale private rows would otherwise still be resident).
+        if (settings.enableNoodler) return { ...current, settings };
+        const visibleAccountIds = new Set(
+          current.accounts.filter((account) => account.visibility !== "private").map((account) => account.id),
+        );
+        const visiblePosts = current.posts.filter((post) => visibleAccountIds.has(post.authorAccountId));
+        const visiblePostIds = new Set(visiblePosts.map((post) => post.id));
+        return {
+          ...current,
+          settings,
+          accounts: current.accounts.filter((account) => visibleAccountIds.has(account.id)),
+          posts: visiblePosts,
+          interactions: current.interactions.filter((interaction) => visiblePostIds.has(interaction.postId)),
+          subscriptions: [],
+          postUnlocks: [],
+        };
+      });
     },
     onSettled: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
   });
