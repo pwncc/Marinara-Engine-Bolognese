@@ -55,7 +55,8 @@ export function normalizeCharacterRpgStats(value: unknown): RPGStatsConfig | und
     ? raw.attributes
         .filter(
           (attribute): attribute is { name: string; value: number } =>
-            !!attribute &&
+            typeof attribute === "object" &&
+            attribute !== null &&
             typeof attribute.name === "string" &&
             !!attribute.name.trim() &&
             typeof attribute.value === "number" &&
