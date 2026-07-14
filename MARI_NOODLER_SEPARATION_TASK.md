@@ -248,15 +248,21 @@ move with it.
   linked account exists yet, and `canSubmitPost` now also requires a linked account when
   `activeNoodleMode === "noodler"` so the modal can't silently post publicly under a "New NoodleR
   post" title.
-- **Also discovered, not fixed:** the same access-defaulting bug the inline composer had (access
-  selector only offered when an image is attached) is still present in **two** places sharing the
-  same `composerAccess`/`attachedImageUrl` state: the inline composer now living in
-  `NoodleHome.tsx` (~L473-500, still a bare `<select>`) and the full-screen modal in
-  `NoodleView.tsx` (same pattern, near the `authorAccountId` fix above). Phase 6's chip-styled,
-  always-visible access selector was only ever applied to `submitPrivatePost`'s creator-tools
-  composer (`NoodlerHome.tsx`) — these two share one fix (same state, same handler) but it's a UI
-  redesign across two files, not a one-line change, so left as Phase 6 follow-up rather than
-  scope-creeping a Phase 5/bugfix pass.
+- **Access-defaulting bug in the two remaining composers — investigated and fixed.** Traced why
+  `activeNoodleMode`/`activeNoodleView` stay in sync (`openProfile`/`openOwnProfile`/
+  `transitionNoodleMode` in `NoodleView.tsx` always set both together) to establish that
+  `NoodleHome.tsx`'s inline composer only ever renders while `activeNoodleMode === "noodle"` — so
+  its access selector was not just gated wrong, it was **dead code**: public-feed posts have no
+  subscription mechanic to gate against, so `composerAccess`/`onComposerAccessChange` could never
+  do anything there. Removed that selector and the now-unused prop plumbing entirely from
+  `NoodleHome.tsx`/`NoodleHomeProps`/`noodleHomeProps` rather than fixing a selector that can never
+  matter. The full-screen modal in `NoodleView.tsx` (shared between modes, triggered from
+  chrome that's reachable regardless of `activeNoodleMode`) is the one place this selector is ever
+  actually relevant — replaced its bare `<select>` (gated behind `attachedImageUrl`) with the same
+  always-visible `.mari-suggestion-chip` row `submitPrivatePost`'s creator-tools composer already
+  uses, shown whenever `activeNoodleMode === "noodler"` and a `personaLinkedNoodlerAccount` exists
+  (independent of whether an image is attached), including the same
+  `subscriptionPrice`-aware "Subscribers · $X/mo" label fallback.
 
 Original plan text follows for reference (some of it — chip reuse, pricing fields, composer
 chips — is now done; treat the rest as still-open):

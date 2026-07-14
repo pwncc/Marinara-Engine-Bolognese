@@ -4867,8 +4867,6 @@ export function NoodleView() {
     renderDraftPoll,
     attachedImageUrl,
     onAttachedImageUrlChange: setAttachedImageUrl,
-    composerAccess,
-    onComposerAccessChange: setComposerAccess,
     imageToolRef,
     pollToolRef,
     mediaToolRef,
@@ -5666,18 +5664,36 @@ export function NoodleView() {
                           <X size={14} />
                         </button>
                       </div>
-                      <div className="flex items-center gap-2 border-t border-[var(--noodle-divider)] px-3 py-2">
-                        <span className="text-[0.7rem] font-semibold text-[var(--muted-foreground)]">Access</span>
-                        <select
-                          value={composerAccess}
-                          onChange={(event) => setComposerAccess(event.target.value as NoodlePostAccess)}
-                          className="h-7 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs"
+                    </div>
+                  )}
+                  {activeNoodleMode === "noodler" && personaLinkedNoodlerAccount && (
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      {(
+                        [
+                          { value: "public", label: "Public" },
+                          {
+                            value: "subscriber",
+                            label:
+                              typeof personaLinkedNoodlerAccount.settings?.subscriptionPrice === "number"
+                                ? `Subscribers · $${(personaLinkedNoodlerAccount.settings.subscriptionPrice as number).toFixed(2)}/mo`
+                                : "Subscribers only",
+                          },
+                          { value: "ppv", label: "Pay-per-view" },
+                        ] as const
+                      ).map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setComposerAccess(option.value)}
+                          style={{ "--chip-tint": "var(--noodle-blue)" } as CSSProperties}
+                          className={cn(
+                            "mari-suggestion-chip",
+                            composerAccess === option.value && "mari-suggestion-chip--selected",
+                          )}
                         >
-                          <option value="public">Public</option>
-                          <option value="subscriber">Subscribers only</option>
-                          <option value="ppv">Pay-per-post</option>
-                        </select>
-                      </div>
+                          {option.label}
+                        </button>
+                      ))}
                     </div>
                   )}
                 </div>

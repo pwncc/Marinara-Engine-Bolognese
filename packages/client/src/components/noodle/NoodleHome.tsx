@@ -109,8 +109,6 @@ export interface NoodleHomeProps {
   renderDraftPoll: () => React.ReactNode;
   attachedImageUrl: string;
   onAttachedImageUrlChange: (url: string) => void;
-  composerAccess: string;
-  onComposerAccessChange: (access: "public" | "subscriber" | "ppv") => void;
   imageToolRef: RefObject<HTMLDivElement | null>;
   pollToolRef: RefObject<HTMLDivElement | null>;
   mediaToolRef: RefObject<HTMLDivElement | null>;
@@ -195,8 +193,6 @@ export function NoodleHome(props: NoodleHomeProps) {
     renderDraftPoll,
     attachedImageUrl,
     onAttachedImageUrlChange,
-    composerAccess,
-    onComposerAccessChange,
     imageToolRef,
     pollToolRef,
     mediaToolRef,
@@ -483,18 +479,6 @@ export function NoodleHome(props: NoodleHomeProps) {
                     >
                       <X size={14} />
                     </button>
-                  </div>
-                  <div className="flex items-center gap-2 border-t border-[var(--noodle-divider)] px-3 py-2">
-                    <span className="text-[0.7rem] font-semibold text-[var(--muted-foreground)]">Access</span>
-                    <select
-                      value={composerAccess}
-                      onChange={(event) => onComposerAccessChange(event.target.value as "public" | "subscriber" | "ppv")}
-                      className="h-7 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs"
-                    >
-                      <option value="public">Public</option>
-                      <option value="subscriber">Subscribers only</option>
-                      <option value="ppv">Pay-per-post</option>
-                    </select>
                   </div>
                 </div>
               )}
