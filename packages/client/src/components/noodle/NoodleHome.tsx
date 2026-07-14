@@ -12,6 +12,7 @@ import {
   ImageIcon,
   ListChecks,
   Loader2,
+  Menu,
   MessageCircle,
   RefreshCw,
   Search,
@@ -59,6 +60,7 @@ export interface NoodleHomeProps {
 
   // Mobile chrome
   onOpenMobileDrawer: () => void;
+  onOpenPersonaPicker: () => void;
   onBackToHome: () => void;
 
   // Search / account lookup
@@ -153,6 +155,7 @@ export function NoodleHome(props: NoodleHomeProps) {
     personaAccount,
     settings,
     onOpenMobileDrawer,
+    onOpenPersonaPicker,
     onBackToHome,
     postSearch,
     onPostSearchChange,
@@ -398,8 +401,18 @@ export function NoodleHome(props: NoodleHomeProps) {
           type="button"
           onClick={onOpenMobileDrawer}
           className="flex h-10 w-10 items-center justify-center rounded-full transition-colors hover:bg-[var(--accent)]"
-          title="Open account menu"
-          aria-label="Open Noodle account menu"
+          title="Open menu"
+          aria-label="Open Noodle menu"
+        >
+          <Menu size={22} />
+        </button>
+        <NoodleLogo className="mx-auto h-9 w-14" />
+        <button
+          type="button"
+          onClick={onOpenPersonaPicker}
+          className="flex h-10 w-10 items-center justify-center rounded-full transition-colors hover:bg-[var(--accent)]"
+          title="Switch persona"
+          aria-label="Switch persona account"
         >
           {personaAccount ? (
             <Avatar account={personaAccount} size="sm" />
@@ -409,8 +422,6 @@ export function NoodleHome(props: NoodleHomeProps) {
             </span>
           )}
         </button>
-        <NoodleLogo className="mx-auto h-9 w-14" />
-        <span aria-hidden="true" />
       </div>
 
       {isAccountSearch ? (

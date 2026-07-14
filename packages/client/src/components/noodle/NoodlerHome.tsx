@@ -10,7 +10,7 @@ import { AtSign, Check, ImageIcon, Loader2, Lock, User } from "lucide-react";
 import { toast } from "sonner";
 import type { NoodleAccount } from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
-import { MobileTimelineBackButton, type NoodlerHubTab, type NoodlerTimelineItem } from "./noodle-shared";
+import { Avatar, MobileTimelineBackButton, type NoodlerHubTab, type NoodlerTimelineItem } from "./noodle-shared";
 
 const NOODLER_HUB_TABS: Array<{ id: NoodlerHubTab; label: string }> = [
   { id: "timeline", label: "Timeline" },
@@ -30,6 +30,7 @@ export interface NoodlerHomeProps {
 
   // Verification screen
   onBackToHome: () => void;
+  onOpenPersonaPicker: () => void;
   onEnableNoodlerFromVerification: () => void;
   hasSettings: boolean;
   updateSettingsPending: boolean;
@@ -52,6 +53,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
     activeNoodleView,
     personaAccount,
     onBackToHome,
+    onOpenPersonaPicker,
     onEnableNoodlerFromVerification,
     hasSettings,
     updateSettingsPending,
@@ -74,10 +76,25 @@ export function NoodlerHome(props: NoodlerHomeProps) {
           <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
             <MobileTimelineBackButton label="Back to Noodle" onClick={onBackToHome} />
             <Lock size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <h2 className="truncate text-lg font-bold">NoodleR Verification</h2>
               <p className="truncate text-xs text-[var(--muted-foreground)]">Private creator network access</p>
             </div>
+            <button
+              type="button"
+              onClick={onOpenPersonaPicker}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--accent)] lg:hidden"
+              title="Switch persona"
+              aria-label="Switch persona account"
+            >
+              {personaAccount ? (
+                <Avatar account={personaAccount} size="sm" />
+              ) : (
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 ring-1 ring-[var(--noodle-blue)]/25">
+                  <AtSign size={18} />
+                </span>
+              )}
+            </button>
           </div>
         </div>
 
@@ -188,12 +205,27 @@ export function NoodlerHome(props: NoodlerHomeProps) {
         <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
           <MobileTimelineBackButton label="Back to Noodle" onClick={onBackToHome} />
           <Lock size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h2 className="truncate text-lg font-bold">NoodleR</h2>
             <p className="truncate text-xs text-[var(--muted-foreground)]">
               {personaAccount ? `Private creator network · @${personaAccount.handle}` : "Choose a persona account"}
             </p>
           </div>
+          <button
+            type="button"
+            onClick={onOpenPersonaPicker}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--accent)] lg:hidden"
+            title="Switch persona"
+            aria-label="Switch persona account"
+          >
+            {personaAccount ? (
+              <Avatar account={personaAccount} size="sm" />
+            ) : (
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 ring-1 ring-[var(--noodle-blue)]/25">
+                <AtSign size={18} />
+              </span>
+            )}
+          </button>
         </div>
       </div>
       {!personaAccount ? (
