@@ -1122,9 +1122,15 @@ export function AppShell() {
         </Suspense>
       )}
       <ProfessorMariFloatingAssistantHost active={professorMariFloatingActive} />
-      <SpotifyMobileWidget />
-      <YouTubeMobileWidget />
-      <LocalMusicMobileWidget />
+      <div
+        data-component="MobileMusicWidgetLayer"
+        className={spatialMapDetailChatId ? "hidden" : "contents"}
+        aria-hidden={spatialMapDetailChatId ? true : undefined}
+      >
+        <SpotifyMobileWidget />
+        <YouTubeMobileWidget />
+        <LocalMusicMobileWidget />
+      </div>
     </div>
   );
 }

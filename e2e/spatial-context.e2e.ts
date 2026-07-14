@@ -428,6 +428,10 @@ test("AI map expansion preserves a campaign map and its current location", async
               rightPanelOpen: false,
               sidebarOpen: false,
               spatialMapDetailChatId: chatId,
+              musicPlayerEnabled: true,
+              musicPlayerSource: "custom",
+              spotifyMobileWidgetCollapsed: true,
+              spotifyMobileWidgetPosition: { x: 16, y: 96 },
             },
             version: 72,
           }),
@@ -445,6 +449,11 @@ test("AI map expansion preserves a campaign map and its current location", async
       const drawer = page.locator(".mari-chat-settings-drawer");
       await drawer.getByText("Hierarchical map", { exact: true }).click();
       await drawer.getByRole("button", { name: "Edit hierarchical map" }).click();
+    } else {
+      const mobileMusicLayer = page.locator('[data-component="MobileMusicWidgetLayer"]');
+      await expect(mobileMusicLayer.locator(".fixed")).toHaveCount(1);
+      await expect(mobileMusicLayer).toHaveCSS("display", "none");
+      await expect(page.getByRole("button", { name: "Expand with AI" })).toBeVisible();
     }
 
     await page.getByRole("button", { name: "Expand with AI" }).click();
@@ -485,6 +494,13 @@ test("AI map expansion preserves a campaign map and its current location", async
       "ai_riverside",
       "ai_minnow",
     ]);
+
+    if (mobile) {
+      await page.getByRole("button", { name: "Back to chat" }).click();
+      const mobileMusicLayer = page.locator('[data-component="MobileMusicWidgetLayer"]');
+      await expect(mobileMusicLayer).toHaveCSS("display", "contents");
+      await expect(mobileMusicLayer.locator(".fixed")).toBeVisible();
+    }
   } finally {
     if (!mobile) await page.request.delete(`/api/chats/${chat.id}`);
   }
