@@ -169,7 +169,7 @@ type TimelineTab = "main" | "following";
 type NoodlerHubTab = "timeline" | "subscriptions" | "discover" | "owned";
 type NoodleMode = "noodle" | "noodler";
 type NoodlePrivatePostAccess = Exclude<NoodlePostAccess, "public">;
-type NoodleViewId = "home" | "search" | "notifications" | "profile" | "settings" | "noodler";
+type NoodleViewId = "home" | "search" | "notifications" | "profile" | "settings" | "noodler" | "noodler-verification";
 type NoodleNotificationFocusTarget = {
   postId: string;
   interactionId: string | null;
@@ -873,8 +873,9 @@ function ToggleSetting({
   );
 }
 
-function BrowserChrome({ mode }: { mode: NoodleMode }) {
+function BrowserChrome({ mode, path }: { mode: NoodleMode; path: string }) {
   const meta = NOODLE_MODE_META[mode];
+  const host = mode === "noodler" ? "noodler.local" : "noodle.local";
   return (
     <div className="hidden h-11 shrink-0 items-center gap-2 border-b border-[var(--noodle-divider)] bg-[var(--background)] px-3 lg:flex">
       <div className="hidden items-center gap-1.5 sm:flex" aria-hidden="true">
@@ -896,10 +897,8 @@ function BrowserChrome({ mode }: { mode: NoodleMode }) {
       <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-full border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--card)] px-3 text-xs shadow-sm">
         <Lock size={13} className="hidden shrink-0 text-[var(--noodle-blue)] sm:block" />
         <Search size={14} className="shrink-0 text-[var(--noodle-blue)] sm:hidden" />
-        <span className="truncate text-[var(--foreground)] sm:hidden">
-          {mode === "noodler" ? "noodler.local/hub" : "noodle.local/home"}
-        </span>
-        <span className="hidden truncate text-[var(--foreground)] sm:inline">{meta.url}</span>
+        <span className="truncate text-[var(--foreground)] sm:hidden">{`${host}${path}`}</span>
+        <span className="hidden truncate text-[var(--foreground)] sm:inline">{`${meta.url}${path}`}</span>
         <span className="hidden rounded-full bg-[var(--noodle-blue)]/15 px-2 py-0.5 font-semibold text-[var(--noodle-blue)] sm:inline-flex">
           {meta.label}
         </span>
@@ -1194,7 +1193,6 @@ export function NoodleView() {
   const [editingReplyContent, setEditingReplyContent] = useState("");
   const [confirmAction, setConfirmAction] = useState<NoodleConfirmAction | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
-  const [noodlerVerificationOpen, setNoodlerVerificationOpen] = useState(false);
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [mobileAccountSwitcherOpen, setMobileAccountSwitcherOpen] = useState(false);
@@ -1459,10 +1457,24 @@ export function NoodleView() {
   const isNoodlerScopedView =
     isNoodlerEnabled &&
     (activeNoodleView === "noodler" || (activeNoodleView === "profile" && viewedProfileAccount?.visibility === "private"));
-  const activeNoodleMode: NoodleMode = isNoodlerScopedView ? "noodler" : "noodle";
+  const activeNoodleMode: NoodleMode = isNoodlerScopedView || activeNoodleView === "noodler-verification" ? "noodler" : "noodle";
   const activeNoodleModeMeta = NOODLE_MODE_META[activeNoodleMode];
   const composeActionLabel = activeNoodleMode === "noodler" ? "NoodleR Post" : "Post";
   const composePlaceholder = activeNoodleMode === "noodler" ? "Post to NoodleR..." : "What's simmering?";
+  const browserPath =
+    activeNoodleView === "noodler-verification"
+      ? "/verify"
+      : activeNoodleView === "noodler"
+        ? "/hub"
+        : activeNoodleView === "notifications"
+          ? "/notifications"
+          : activeNoodleView === "settings"
+            ? "/settings"
+            : activeNoodleView === "profile"
+              ? "/profile"
+              : activeNoodleView === "search"
+                ? "/search"
+                : "/home";
   const canRevealPostAccess = (post: NoodlePost) => {
     if (post.access === "public") return true;
     if (post.authorAccountId === personaAccount?.id) return true;
@@ -1590,7 +1602,6 @@ export function NoodleView() {
         onSuccess: () => {
           toast.success("Just kidding. NoodleR enabled.");
           trackAchievement.mutate("noodler_discovered");
-          setNoodlerVerificationOpen(false);
           setActiveNoodleView("noodler");
           setAccountSwitcherOpen(false);
           setMobileDrawerOpen(false);
@@ -2405,7 +2416,7 @@ export function NoodleView() {
   const openProfile = (account: NoodleAccount | null) => {
     if (!account) return;
     if (account.visibility === "private" && !isNoodlerEnabled) {
-      setNoodlerVerificationOpen(true);
+      setActiveNoodleView("noodler-verification");
       setAccountSwitcherOpen(false);
       setMobileDrawerOpen(false);
       return;
@@ -3107,7 +3118,7 @@ export function NoodleView() {
 
   const setNoodlerEnabled = (enabled: boolean) => {
     if (enabled) {
-      setNoodlerVerificationOpen(true);
+      setActiveNoodleView("noodler-verification");
       return;
     }
     saveSettings({ enableNoodler: false, enableNoodlerFanActivityScheduler: false });
@@ -3116,7 +3127,7 @@ export function NoodleView() {
 
   const openNoodlerHub = () => {
     if (!isNoodlerEnabled) {
-      setNoodlerVerificationOpen(true);
+      setActiveNoodleView("noodler-verification");
       setAccountSwitcherOpen(false);
       setMobileDrawerOpen(false);
       setActiveComposerTool(null);
@@ -3622,6 +3633,14 @@ export function NoodleView() {
                   NoodleR stays tucked away until this is enabled. Attempts to enter NoodleR will open verification first.
                 </p>
               )}
+              <button
+                type="button"
+                onClick={() => setActiveNoodleView("noodler-verification")}
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-[var(--noodle-divider)] px-3 text-xs font-bold transition-colors hover:bg-[var(--accent)]"
+              >
+                <Lock size={14} />
+                Test verification screen
+              </button>
             </div>
           </Section>
 
@@ -5261,12 +5280,12 @@ export function NoodleView() {
       data-component="NoodleView"
       style={
         {
-          "--noodle-blue": isNoodlerScopedView ? NOODLER_BLUE : NOODLE_BLUE,
+          "--noodle-blue": activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
           "--noodle-divider": "var(--marinara-chat-chrome-panel-divider)",
         } as CSSProperties
       }
     >
-      <BrowserChrome mode={activeNoodleMode} />
+      <BrowserChrome mode={activeNoodleMode} path={browserPath} />
       <input ref={imageFileRef} type="file" accept="image/*" className="hidden" onChange={handleImageFile} />
       <input ref={replyImageFileRef} type="file" accept="image/*" className="hidden" onChange={handleReplyImageFile} />
       {imageLightbox && (
@@ -5277,88 +5296,6 @@ export function NoodleView() {
           onClose={() => setImageLightbox(null)}
         />
       )}
-      <AnimatePresence>
-        {noodlerVerificationOpen && (
-          <motion.div
-            initial={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 12 }}
-            animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
-            exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 12 }}
-            transition={{ duration: prefersReducedMotion ? 0.1 : 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute inset-0 z-[90] flex min-h-0 flex-col bg-[var(--background)] text-[var(--foreground)]"
-            data-component="NoodleView.NoodlerVerification"
-          >
-            <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--noodle-divider)] px-4">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-black text-[var(--noodle-blue)]">NoodleR Verification</p>
-                <p className="truncate text-xs text-[var(--muted-foreground)]">Private creator network access</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setNoodlerVerificationOpen(false)}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10"
-                title="Close verification"
-                aria-label="Close verification"
-              >
-                <X size={19} />
-              </button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8">
-              <div className="mx-auto flex min-h-full max-w-2xl flex-col justify-center">
-                <div className="mb-7 flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--noodle-blue)]/15 text-[var(--noodle-blue)] ring-1 ring-[var(--noodle-blue)]/30">
-                  <Lock size={30} />
-                </div>
-                <h2 className="max-w-xl text-2xl font-black leading-tight sm:text-3xl">Verify your NoodleR eligibility.</h2>
-                <p className="mt-3 max-w-xl text-sm leading-6 text-[var(--muted-foreground)]">
-                  Before entering NoodleR, please prepare the following highly official materials for our totally
-                  rigorous access desk.
-                </p>
-
-                <div className="mt-7 grid gap-2 sm:grid-cols-2">
-                  {[
-                    { icon: User, title: "Government ID", detail: "Passport, license, or wizard guild card." },
-                    { icon: ImageIcon, title: "Photo pass", detail: "A crisp selfie with maximum seriousness." },
-                    { icon: AtSign, title: "Handle match", detail: "Your @handle must look confident." },
-                    { icon: Check, title: "Sauce consent", detail: "Confirm you understand private pages are private." },
-                  ].map((item) => {
-                    const Icon = item.icon;
-                    return (
-                      <div
-                        key={item.title}
-                        className="rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] px-3 py-3"
-                      >
-                        <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
-                          <Icon size={16} />
-                        </span>
-                        <p className="mt-2 text-sm font-bold">{item.title}</p>
-                        <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">{item.detail}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                <div className="mt-8 flex flex-col gap-2 sm:flex-row">
-                  <button
-                    type="button"
-                    onClick={enableNoodlerFromVerification}
-                    disabled={!settings || updateSettings.isPending}
-                    className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--noodle-blue)] px-5 text-sm font-black text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {updateSettings.isPending ? <Loader2 size={17} className="animate-spin" /> : <Check size={17} />}
-                    {updateSettings.isPending ? "Verifying" : "Start verification"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setNoodlerVerificationOpen(false)}
-                    className="inline-flex h-11 items-center justify-center rounded-lg border border-[var(--noodle-divider)] px-5 text-sm font-bold transition-colors hover:bg-[var(--accent)]"
-                  >
-                    Maybe later
-                  </button>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
       <AnimatePresence>
         {mobileDrawerOpen && (
           <motion.div
@@ -5380,7 +5317,7 @@ export function NoodleView() {
               )}
               style={
                 {
-                  "--noodle-blue": isNoodlerScopedView ? NOODLER_BLUE : NOODLE_BLUE,
+                  "--noodle-blue": activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
                   "--noodle-divider": "var(--marinara-chat-chrome-panel-divider)",
                 } as CSSProperties
               }
@@ -5890,7 +5827,119 @@ export function NoodleView() {
                 </div>
               )}
 
-              {activeNoodleView === "search" ? (
+              {activeNoodleView === "noodler-verification" ? (
+                <div className="min-h-full" data-component="NoodleView.NoodlerVerification">
+                  <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
+                    <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
+                      <MobileTimelineBackButton label="Back to Noodle" onClick={openMobileHomeTimeline} />
+                      <Lock size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
+                      <div className="min-w-0">
+                        <h2 className="truncate text-lg font-bold">NoodleR Verification</h2>
+                        <p className="truncate text-xs text-[var(--muted-foreground)]">Private creator network access</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <section className="px-4 py-6 sm:px-6 sm:py-8">
+                    <div className="rounded-lg border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/8 px-4 py-4">
+                      <div className="flex items-start gap-3">
+                        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[var(--noodle-blue)] text-zinc-950">
+                          <Lock size={22} />
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-black uppercase tracking-normal text-[var(--noodle-blue)]">
+                            Verification Desk
+                          </p>
+                          <h3 className="mt-1 text-2xl font-black leading-tight">Verify your NoodleR eligibility.</h3>
+                          <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--muted-foreground)]">
+                            Our extremely official access desk needs to confirm that you are emotionally prepared for
+                            private pages, fan unlocks, and the color pink doing important work.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                      {[
+                        { icon: User, title: "Government ID", detail: "Passport, license, or wizard guild card." },
+                        { icon: ImageIcon, title: "Photo pass", detail: "A crisp selfie with maximum seriousness." },
+                        { icon: AtSign, title: "Handle match", detail: "Your @handle must look confident under pressure." },
+                        { icon: Check, title: "Sauce consent", detail: "Confirm private pages are private and snacks are optional." },
+                      ].map((item, index) => {
+                        const Icon = item.icon;
+                        return (
+                          <article key={item.title} className="rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] p-3">
+                            <div className="flex items-start gap-3">
+                              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
+                                <Icon size={17} />
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="truncate text-sm font-bold">{item.title}</p>
+                                  <span className="shrink-0 rounded-full bg-[var(--noodle-blue)]/10 px-2 py-0.5 text-[0.65rem] font-bold text-[var(--noodle-blue)]">
+                                    Step {index + 1}
+                                  </span>
+                                </div>
+                                <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">{item.detail}</p>
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+
+                    <div className="mt-5 rounded-lg border border-dashed border-[var(--noodle-blue)]/45 bg-[var(--background)] p-4">
+                      <p className="text-sm font-bold">Upload packet</p>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                        {["Front of ID", "Back of ID", "Photo pass"].map((label) => (
+                          <button
+                            key={label}
+                            type="button"
+                            onClick={() => toast.info("No upload needed. The desk is mostly decorative.")}
+                            className="flex h-24 flex-col items-center justify-center gap-2 rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] text-xs font-bold text-[var(--muted-foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:text-[var(--foreground)]"
+                          >
+                            <ImageIcon size={18} />
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="mt-5 rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-bold">Review status</span>
+                        <span className="rounded-full bg-[var(--noodle-blue)]/10 px-2 py-1 text-xs font-black text-[var(--noodle-blue)]">
+                          Ready instantly
+                        </span>
+                      </div>
+                      <div className="mt-3 space-y-2 text-xs leading-5 text-[var(--muted-foreground)]">
+                        <p>1. Confirm the documents exist in spirit.</p>
+                        <p>2. Click start verification.</p>
+                        <p>3. Receive immediate NoodleR access after a brief and legally meaningless pause.</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-6 flex flex-col gap-2 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={enableNoodlerFromVerification}
+                        disabled={!settings || updateSettings.isPending}
+                        className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--noodle-blue)] px-5 text-sm font-black text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {updateSettings.isPending ? <Loader2 size={17} className="animate-spin" /> : <Check size={17} />}
+                        {updateSettings.isPending ? "Verifying" : "Start verification"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={openMobileHomeTimeline}
+                        className="inline-flex h-11 items-center justify-center rounded-lg border border-[var(--noodle-divider)] px-5 text-sm font-bold transition-colors hover:bg-[var(--accent)]"
+                      >
+                        Maybe later
+                      </button>
+                    </div>
+                  </section>
+                </div>
+              ) : activeNoodleView === "search" ? (
                 mobileSearchContent
               ) : activeNoodleView === "notifications" ? (
                 <div className="min-h-full">
@@ -6815,7 +6864,7 @@ export function NoodleView() {
               )}
             </div>
           </main>
-          {activeNoodleView === "settings" ? (
+          {activeNoodleView === "settings" || activeNoodleView === "noodler-verification" ? (
             <aside className="hidden w-[22rem] shrink-0 px-4 py-3 xl:block" aria-hidden="true" />
           ) : (
             rightRailContent
@@ -6879,11 +6928,11 @@ export function NoodleView() {
             type="button"
             onClick={openNoodlerHub}
             aria-label="NoodleR"
-            aria-current={activeNoodleView === "noodler" ? "page" : undefined}
+            aria-current={activeNoodleView === "noodler" || activeNoodleView === "noodler-verification" ? "page" : undefined}
             className="relative flex items-center justify-center transition-colors hover:bg-[var(--accent)]"
           >
-            <Lock size={22} strokeWidth={activeNoodleView === "noodler" ? 2.8 : 2} />
-            {activeNoodleView === "noodler" && (
+            <Lock size={22} strokeWidth={activeNoodleView === "noodler" || activeNoodleView === "noodler-verification" ? 2.8 : 2} />
+            {(activeNoodleView === "noodler" || activeNoodleView === "noodler-verification") && (
               <span className="absolute top-1 h-1 w-1 rounded-full bg-[var(--noodle-blue)]" />
             )}
           </button>
