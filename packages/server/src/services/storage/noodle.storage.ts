@@ -730,6 +730,16 @@ export function createNoodleStorage(db: DB) {
       return rows[0] ? mapPost(rows[0]) : null;
     },
 
+    async listRecentPostsByAuthor(authorAccountId: string, limit = 8): Promise<NoodlePost[]> {
+      const rows = await db
+        .select()
+        .from(noodlePosts)
+        .where(eq(noodlePosts.authorAccountId, authorAccountId))
+        .orderBy(desc(noodlePosts.createdAt))
+        .limit(Math.max(1, Math.min(50, Math.floor(limit))));
+      return rows.map(mapPost);
+    },
+
     async listPostsBefore(before: string, options: { limit?: number } = {}): Promise<NoodlePost[]> {
       const query = db
         .select()

@@ -40,6 +40,7 @@ import { corsDelegate } from "./config/cors-config.js";
 import { sidecarProcessService } from "./services/sidecar/sidecar-process.service.js";
 import { startServerAutonomousScheduler } from "./services/conversation/server-autonomous-scheduler.service.js";
 import { startNoodleRefreshScheduler } from "./services/noodle/noodle-refresh-scheduler.service.js";
+import { startNoodleFanActivityScheduler } from "./services/noodle/noodle-fan-activity-scheduler.service.js";
 import { serverExtensionRuntime } from "./services/extensions/server-extension-runtime.js";
 import { runWithGenerationFallbackNotifier } from "./services/generation/fallback-notification.js";
 import { createReplyFallbackNotifier } from "./routes/generate/fallback-notification.js";
@@ -165,6 +166,9 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
 
   // ── Automatic Noodle timeline refresh scheduler ──
   startNoodleRefreshScheduler(app);
+
+  // ── Automatic NoodleR fan-activity scheduler (separate lock scope) ──
+  startNoodleFanActivityScheduler(app);
 
   // ── Sidecar bootstrap (background, skipped in lite mode) ──
   if (!isLite) {

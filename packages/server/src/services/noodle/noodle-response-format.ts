@@ -104,15 +104,38 @@ const profilesSchema = {
   additionalProperties: false,
 } as const;
 
+const fanActivitySchema = {
+  type: "object",
+  properties: {
+    actions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          actorHandle: { type: "string" },
+          postId: nullableString,
+          type: { type: "string", enum: ["like", "comment", "subscribe", "unlock"] },
+          content: nullableString,
+        },
+        required: ["actorHandle", "postId", "type", "content"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["actions"],
+  additionalProperties: false,
+} as const;
+
 export function noodleResponseFormat(
   model: string,
-  kind: "timeline" | "profiles",
+  kind: "timeline" | "profiles" | "fan_activity",
 ): { type: string; [key: string]: unknown } {
   if (!isOpenAIGpt56Model(model)) return { type: "json_object" };
+  const schemaByKind = { timeline: timelineSchema, profiles: profilesSchema, fan_activity: fanActivitySchema };
   return {
     type: "json_schema",
-    name: kind === "timeline" ? "noodle_timeline" : "noodle_profiles",
-    schema: kind === "timeline" ? timelineSchema : profilesSchema,
+    name: kind === "timeline" ? "noodle_timeline" : kind === "profiles" ? "noodle_profiles" : "noodle_fan_activity",
+    schema: schemaByKind[kind],
     strict: true,
   };
 }

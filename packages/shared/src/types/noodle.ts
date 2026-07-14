@@ -14,6 +14,16 @@ export type NoodleCarryoverMode = "off" | "conversation" | "roleplay" | "game" |
 export type NoodleCarryoverTarget = "conversation" | "roleplay" | "game";
 export type NoodleParticipantSelectionMode = "all" | "random_range" | "exact";
 export type NoodleAvatarCrop = PersonaAvatarCrop | LegacyPersonaAvatarCrop;
+export type NoodleFanActivityIntensity = "low" | "medium" | "high";
+
+export interface NoodleFanActivitySettings {
+  enabled: boolean;
+  intensity: NoodleFanActivityIntensity;
+  autoSchedule: boolean;
+  // ISO timestamp for the scheduler's next unattended run on this account.
+  // Only meaningful while enabled + autoSchedule are both true.
+  nextRunAt: string | null;
+}
 
 export interface NoodlePollOption {
   id: string;
@@ -54,6 +64,9 @@ export interface NoodleSettings {
   theme: NoodleTheme;
   generationConnectionId: string | null;
   layout: NoodleLayout;
+  // Global kill switch for the NoodleR fan-activity scheduler. Off by default;
+  // even accounts with fanActivity.autoSchedule on stay dormant until this is on.
+  enableNoodlerFanActivityScheduler: boolean;
 }
 
 export interface NoodleAccount {

@@ -14,6 +14,7 @@ import {
   noodleBulkInviteSchema,
   noodleCreateInteractionSchema,
   noodleCreatePostSchema,
+  noodleFanActivitySettingsSchema,
   noodleFillerProfileCreateSchema,
   noodleFillerProfileUpdateSchema,
   noodleInviteSchema,
@@ -33,6 +34,8 @@ import {
   type APIProvider,
   type NoodleAccount,
   type NoodleBootstrap,
+  type NoodleFanActivityIntensity,
+  type NoodleFanActivitySettings,
   type NoodleInteraction,
   type NoodleInteractionType,
   type NoodlePost,
@@ -110,6 +113,7 @@ import {
   acquireNoodleRefreshLock,
   isNoodleRefreshLocked,
   releaseNoodleRefreshLock,
+  withNoodleRefreshLock,
 } from "../services/noodle/noodle-refresh-lock.js";
 import { normalizeNoodleHandle } from "../services/noodle/noodle-handle.js";
 
@@ -1813,6 +1817,216 @@ async function tryGenerateNoodlerReaction(input: {
   }
 }
 
+// Hard ceiling on generated actions per run, regardless of what the model
+// returns — the intensity dial only controls this cap, never the model's
+// own judgment of "how much." Keeps worst-case generation cost and noise
+// bounded even if the model ignores the prompt's own count instruction.
+const NOODLE_FAN_ACTIVITY_INTENSITY_CAPS: Record<NoodleFanActivityIntensity, number> = {
+  low: 3,
+  medium: 6,
+  high: 10,
+};
+
+export function parseFanActivitySettings(account: NoodleAccount): NoodleFanActivitySettings {
+  return noodleFanActivitySettingsSchema.parse(parseRecord(account.settings.fanActivity));
+}
+
+const noodleFanActivityResponseSchema = z.object({
+  actions: z
+    .array(
+      z.object({
+        actorHandle: z.string().trim().min(1),
+        postId: z.string().trim().min(1).nullable(),
+        type: z.enum(["like", "comment", "subscribe", "unlock"]),
+        content: z.string().trim().max(500).nullable(),
+      }),
+    )
+    .default([]),
+});
+
+type NoodleFanActivityResult =
+  | { ok: true; interactionsCreated: number; newSubscribers: number }
+  | { ok: false; error: string };
+
+// Fan-side activity only: likes, comments, subscribes, and unlocks from the
+// existing filler/random-user roster reacting to a NoodleR account's already
+// existing posts. This can never write a noodlePosts row — that stays a
+// manual/guided creator action (see openGuidedPrivatePost on the client) —
+// and it never touches noodleActivityDigests, since digest creation already
+// refuses any run involving a private account.
+export async function simulateNoodlerFanActivity(input: {
+  noodle: ReturnType<typeof createNoodleStorage>;
+  connections: ReturnType<typeof createConnectionsStorage>;
+  characters: ReturnType<typeof createCharactersStorage>;
+  privateAccount: NoodleAccount;
+}): Promise<NoodleFanActivityResult> {
+  if (input.privateAccount.visibility !== "private") {
+    return { ok: false, error: "Fan activity only runs on a NoodleR private account." };
+  }
+  const fanSettings = parseFanActivitySettings(input.privateAccount);
+  if (!fanSettings.enabled) {
+    return { ok: false, error: "Turn on fan activity for this NoodleR page first." };
+  }
+
+  const settings = await input.noodle.getSettings();
+  const connectionId = settings.generationConnectionId;
+  const conn = connectionId ? await input.connections.getWithKey(connectionId) : null;
+  if (!conn) return { ok: false, error: "Choose a generation connection for Noodle first." };
+
+  await ensureRandomUserAccounts(input.noodle);
+  const posts = await input.noodle.listRecentPostsByAuthor(input.privateAccount.id, 8);
+  if (posts.length === 0) {
+    return { ok: false, error: "This NoodleR page has no posts yet for fans to react to." };
+  }
+
+  const allAccounts = await input.noodle.listAccounts();
+  const fillerFans = allAccounts.filter((account) => account.kind === "random_user");
+  if (fillerFans.length === 0) {
+    return { ok: false, error: "Enable at least one random-user filler account for NoodleR fans to use." };
+  }
+
+  const subscriptions = await input.noodle.listSubscriptions();
+  const alreadySubscribed = new Set(
+    subscriptions
+      .filter((subscription) => subscription.creatorAccountId === input.privateAccount.id)
+      .map((subscription) => subscription.subscriberAccountId),
+  );
+
+  const cap = NOODLE_FAN_ACTIVITY_INTENSITY_CAPS[fanSettings.intensity];
+  const fanPool = shuffle(fillerFans).slice(0, Math.min(fillerFans.length, cap));
+  const stageProfile = parsePrivateStageProfile(input.privateAccount);
+  const linkedContext = await resolveNoodleLinkedAuthorContext({
+    account: input.privateAccount,
+    characters: input.characters,
+  });
+
+  const baseUrl = resolveBaseUrl(conn);
+  const provider = createLLMProvider(
+    conn.provider,
+    baseUrl,
+    conn.apiKey,
+    conn.maxContext,
+    conn.openrouterProvider,
+    conn.maxTokensOverride,
+    conn.claudeFastMode === "true",
+    conn.treatAsLocalEndpoint === "true",
+  );
+
+  const messages: ChatMessage[] = [
+    {
+      role: "system",
+      content: [
+        `You simulate short, believable fan activity on ${stageProfile.stageName}'s NoodleR (private, subscriber-only) page.`,
+        NOODLE_ADULT_PLATFORM_POLICY,
+        formatPrivateStagePromptBlock(stageProfile),
+        `Choose at most ${cap} actions total from the fans reacting to the posts listed below.`,
+        "Each action is one of: like (content must be null), comment (a short one-sentence in-character fan reaction; content required), subscribe (a fan who isn't already a subscriber subscribes; postId may be null), unlock (a fan unlocks a pay-per-post they haven't unlocked yet; only valid for posts marked access=ppv).",
+        "Never write as the creator, and never have a fan say the creator's real/public name.",
+        "Return JSON only. No prose outside the JSON object.",
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: [
+        "# Fans available (actorHandle must be one of these)",
+        ...fanPool.map((fan) => `- ${fan.handle}: ${fan.displayName}${fan.bio ? ` — ${fan.bio}` : ""}`),
+        "",
+        "# Recent posts (postId must be one of these)",
+        ...posts.map((post) => `- ${post.id} [access=${post.access}]: ${post.content || "(image post)"}`),
+        "",
+        `Return at most ${cap} actions.`,
+      ].join("\n"),
+    },
+  ];
+
+  const maxTokens = clampGenerationMaxOutputTokens({
+    provider: conn.provider as APIProvider,
+    model: conn.model,
+    maxTokens: 700,
+    maxTokensOverride: conn.maxTokensOverride,
+  });
+
+  let content: string;
+  try {
+    const result = await provider.chatComplete(messages, {
+      model: conn.model,
+      maxTokens,
+      temperature: 0.9,
+      topP: 0.9,
+      stream: false,
+      debugMode: false,
+      responseFormat: noodleResponseFormat(conn.model, "fan_activity"),
+    });
+    content = result.content ?? "";
+  } catch (error) {
+    logger.warn(error, "[noodle] Failed to generate NoodleR fan activity for %s", input.privateAccount.displayName);
+    return { ok: false, error: "Fan activity generation failed. Try again in a moment." };
+  }
+
+  const parsed = noodleFanActivityResponseSchema.safeParse(parseGameJsonish(content));
+  if (!parsed.success) {
+    return { ok: false, error: "Could not parse generated fan activity." };
+  }
+
+  const postsById = new Map(posts.map((post) => [post.id, post]));
+  const fansByHandle = new Map(fanPool.map((fan) => [fan.handle.toLowerCase(), fan]));
+
+  let interactionsCreated = 0;
+  let newSubscribers = 0;
+  for (const action of parsed.data.actions.slice(0, cap)) {
+    const fan = fansByHandle.get(action.actorHandle.trim().toLowerCase());
+    if (!fan) continue;
+
+    if (action.type === "subscribe") {
+      if (alreadySubscribed.has(fan.id)) continue;
+      const subscription = await input.noodle.subscribe(fan.id, input.privateAccount.id);
+      if (subscription) {
+        alreadySubscribed.add(fan.id);
+        newSubscribers += 1;
+      }
+      continue;
+    }
+
+    const post = action.postId ? postsById.get(action.postId) : null;
+    if (!post) continue;
+
+    if (action.type === "unlock") {
+      if (post.access !== "ppv") continue;
+      await input.noodle.unlockPost(fan.id, post.id);
+      interactionsCreated += 1;
+      continue;
+    }
+
+    if (action.type === "like") {
+      const interaction = await input.noodle.createInteraction(post.id, {
+        actorAccountId: fan.id,
+        type: "like",
+        content: null,
+        imageUrl: null,
+        parentInteractionId: null,
+      });
+      if (interaction) interactionsCreated += 1;
+      continue;
+    }
+
+    if (action.type === "comment" && action.content) {
+      const sanitizedContent = linkedContext
+        ? enforceNoodlerIdentityBlocklist(action.content, linkedContext, stageProfile).sanitized
+        : action.content;
+      const interaction = await input.noodle.createInteraction(post.id, {
+        actorAccountId: fan.id,
+        type: "reply",
+        content: sanitizedContent,
+        imageUrl: null,
+        parentInteractionId: null,
+      });
+      if (interaction) interactionsCreated += 1;
+    }
+  }
+
+  return { ok: true, interactionsCreated, newSubscribers };
+}
+
 function interactionDigestVerb(type: NoodleInteractionType) {
   if (type === "reply") return "replied on";
   if (type === "repost") return "reposted";
@@ -2171,13 +2385,14 @@ export async function noodleRoutes(app: FastifyInstance) {
         parsed.data.settings?.location !== undefined);
     const updated = await noodle.updateAccount(id, {
       ...parsed.data,
-      ...(profileFieldsChanged
+      ...(parsed.data.settings !== undefined
         ? {
             settings: {
               ...existing.settings,
               ...parsed.data.settings,
-              ...(parsed.data.avatarUrl !== undefined ? { avatarCrop: null } : {}),
-              profileManuallyEdited: true,
+              ...(profileFieldsChanged
+                ? { ...(parsed.data.avatarUrl !== undefined ? { avatarCrop: null } : {}), profileManuallyEdited: true }
+                : {}),
             },
           }
         : {}),
@@ -2356,6 +2571,22 @@ export async function noodleRoutes(app: FastifyInstance) {
       publicAccount,
       privateAccount,
     });
+  });
+
+  app.post("/accounts/:id/private/simulate-fans", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const privateAccount = await noodle.getAccountById(id);
+    if (!privateAccount || privateAccount.visibility !== "private") {
+      return reply.code(404).send({ error: "NoodleR profile not found" });
+    }
+    if (isNoodleRefreshLocked(privateAccount.id)) {
+      return reply.code(409).send({ error: "Wait for the current NoodleR activity to finish." });
+    }
+    const result = await withNoodleRefreshLock(privateAccount.id, () =>
+      simulateNoodlerFanActivity({ noodle, connections, characters, privateAccount }),
+    );
+    if (!result.ok) return reply.code(400).send({ error: result.error });
+    return result;
   });
 
   app.get("/noodler/hub", async (req, reply) => {

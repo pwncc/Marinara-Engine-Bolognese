@@ -42,6 +42,7 @@ export const DEFAULT_NOODLE_SETTINGS = {
   theme: "system",
   generationConnectionId: null,
   layout: "timeline",
+  enableNoodlerFanActivityScheduler: false,
 } as const;
 
 export const noodleSettingsSchema = z.object({
@@ -90,6 +91,9 @@ export const noodleSettingsSchema = z.object({
   theme: noodleThemeSchema.default(DEFAULT_NOODLE_SETTINGS.theme),
   generationConnectionId: z.string().min(1).nullable().default(DEFAULT_NOODLE_SETTINGS.generationConnectionId),
   layout: noodleLayoutSchema.default(DEFAULT_NOODLE_SETTINGS.layout),
+  enableNoodlerFanActivityScheduler: z
+    .boolean()
+    .default(DEFAULT_NOODLE_SETTINGS.enableNoodlerFanActivityScheduler),
 });
 
 export const noodleSettingsUpdateSchema = noodleSettingsSchema.partial();
@@ -263,6 +267,15 @@ export const noodlePrivateStageProfileSchema = z.object({
 
 export const noodlePrivateAccountCreateSchema = z.object({
   stageProfile: noodlePrivateStageProfileSchema.partial().optional(),
+});
+
+export const noodleFanActivityIntensitySchema = z.enum(["low", "medium", "high"]);
+
+export const noodleFanActivitySettingsSchema = z.object({
+  enabled: z.boolean().default(false),
+  intensity: noodleFanActivityIntensitySchema.default("low"),
+  autoSchedule: z.boolean().default(false),
+  nextRunAt: z.string().nullable().default(null),
 });
 
 export const noodleInteractionUpdateSchema = noodleInteractionOwnerSchema

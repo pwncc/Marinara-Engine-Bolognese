@@ -162,6 +162,18 @@ export function useUnsubscribeNoodleAccount() {
   });
 }
 
+export function useSimulateNoodlerFanActivity() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (privateAccountId: string) =>
+      api.post<{ interactionsCreated: number; newSubscribers: number }>(
+        `/noodle/accounts/${encodeURIComponent(privateAccountId)}/private/simulate-fans`,
+        {},
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
+  });
+}
+
 export function useUnlockNoodlePost() {
   const qc = useQueryClient();
   return useMutation({

@@ -38,6 +38,16 @@ When **Refreshes/day** is above 0, Marinara splits the day into equal windows an
 
 Automatic refreshes run inside the Marinara server. The Noodle page does not need to stay open, but Marinara itself must be running. If a refresh fails, the schedule shows the error and retries later, waiting longer after repeated failures. If several planned times are missed, one successful catch-up refresh covers them instead of flooding the timeline.
 
+## NoodleR Fan Activity
+
+The **NoodleR Fan Activity** section holds one global switch: **Enable NoodleR fan activity**, off by default. This is the kill switch for unattended fan activity (subscribers, likes, comments, and pay-per-post unlocks from your random-user roster) across every NoodleR (private) page.
+
+Turning this on does not, by itself, make anything happen. Each NoodleR page has its own **Fan activity** section (in that page's profile settings) with an enabled toggle, an intensity dial, and an auto-schedule toggle. A page only gets unattended fan activity when all three are true: this global switch is on, that page's fan activity is enabled, and that page's auto-schedule is on. Turn the global switch off and every page's scheduled activity freezes at once, regardless of individual page settings. Turn one page's auto-schedule off and only that page stops, independent of every other page and the global switch.
+
+The manual **Simulate fan activity now** button on a NoodleR page is unaffected by any of this — it runs immediately whenever fan activity is enabled for that page, whether or not scheduling is on.
+
+Scheduled runs respect the same intensity caps as manual runs (up to 3/6/10 actions for low/medium/high), and additionally cap how often they run unattended: low runs at most once a day, medium up to three times a day, high up to six times a day, each spread out with some randomness rather than firing back-to-back.
+
 ## Active Accounts
 
 The **Active Accounts** section sets how many eligible accounts take part in one refresh. Eligible accounts are your invited characters, folder-included characters, and random users if you turned them on.
@@ -149,6 +159,7 @@ This table lists every Noodle setting with its default and range.
 |---|---|---|
 | **Generation connection** | none | any text connection (required for refresh) |
 | **Refreshes/day** | 2 | 0 to 24 (0 turns automatic refreshes off) |
+| **Enable NoodleR fan activity** | off | on or off (global kill switch; also needs each page's own fan activity + auto-schedule on) |
 | **Active selection** | Random range | Random range, Exact count, All invited |
 | **Min active** | 2 | 1 to 100 (Random range only) |
 | **Max active** | 5 | 1 to 100 (Random range only) |

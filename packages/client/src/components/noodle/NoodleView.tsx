@@ -114,6 +114,7 @@ import {
   useDeletePrivateNoodleAccount,
   useNoodlerHub,
   useRetryPrivateIdentityGeneration,
+  useSimulateNoodlerFanActivity,
   useSubscribeNoodleAccount,
   useUnlockNoodlePost,
   useUnsubscribeNoodleAccount,
@@ -284,6 +285,23 @@ function readPrivateStageSetting(account: NoodleAccount | null, key: string) {
 function readPrivateIdentityDisclosure(account: NoodleAccount | null): NoodlePrivateIdentityDisclosure {
   const value = readPrivateStageSetting(account, "identityDisclosure");
   return value === "open" || value === "secret" ? value : "hinted";
+}
+
+function fanActivitySettingsFromAccount(account: NoodleAccount | null | undefined) {
+  return parseRecord(account?.settings?.fanActivity);
+}
+
+function readFanActivityEnabled(account: NoodleAccount | null | undefined) {
+  return fanActivitySettingsFromAccount(account).enabled === true;
+}
+
+function readFanActivityIntensity(account: NoodleAccount | null | undefined): "low" | "medium" | "high" {
+  const value = fanActivitySettingsFromAccount(account).intensity;
+  return value === "medium" || value === "high" ? value : "low";
+}
+
+function readFanActivityAutoSchedule(account: NoodleAccount | null | undefined) {
+  return fanActivitySettingsFromAccount(account).autoSchedule === true;
 }
 
 function hasGeneratedProfile(account: NoodleAccount | null) {
@@ -987,6 +1005,7 @@ export function NoodleView() {
   const createPrivateAccount = useCreatePrivateNoodleAccount();
   const deletePrivateAccount = useDeletePrivateNoodleAccount();
   const retryPrivateIdentity = useRetryPrivateIdentityGeneration();
+  const simulateFanActivity = useSimulateNoodlerFanActivity();
   const loadOlderPosts = useLoadOlderNoodlePosts();
   const [fillerAccountsExpanded, setFillerAccountsExpanded] = useState(false);
   const [newFillerAccountName, setNewFillerAccountName] = useState("");
@@ -3323,6 +3342,21 @@ export function NoodleView() {
                   )}
                 </div>
               )}
+            </div>
+          </Section>
+
+          <Section
+            title="NoodleR Fan Activity"
+            help="Global kill switch for unattended fan activity across every NoodleR (private) page. Off by default. Even a page with its own auto-schedule toggle on stays dormant until this is also on; turning this off freezes every page's scheduled activity at once."
+          >
+            <div className="space-y-3">
+              <ToggleSetting
+                label="Enable NoodleR fan activity"
+                help="Lets the fan-activity scheduler run unattended for any NoodleR page that has both fan activity and its own auto-schedule toggle turned on. Manual 'Simulate fan activity now' is unaffected by this switch either way."
+                checked={settings.enableNoodlerFanActivityScheduler}
+                disabled={updateSettings.isPending}
+                onChange={(checked) => saveSettings({ enableNoodlerFanActivityScheduler: checked })}
+              />
             </div>
           </Section>
 
@@ -6044,6 +6078,108 @@ export function NoodleView() {
                           Post
                         </button>
                       </div>
+                    </div>
+                  )}
+                  {viewedProfileAccount?.visibility === "private" && (
+                    <div className="border-t border-[var(--noodle-divider)] p-4">
+                      <div className="mb-3">
+                        <h4 className="text-sm font-bold text-[var(--foreground)]">Fan activity</h4>
+                        <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                          Lets existing filler accounts like, comment on, subscribe to, and unlock this page's posts on
+                          their own. Fans never write new posts — only you do that.
+                        </p>
+                      </div>
+                      <label className="mb-3 flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={readFanActivityEnabled(viewedProfileAccount)}
+                          onChange={(event) =>
+                            viewedProfileAccount &&
+                            updateAccount.mutate({
+                              id: viewedProfileAccount.id,
+                              settings: {
+                                fanActivity: {
+                                  ...fanActivitySettingsFromAccount(viewedProfileAccount),
+                                  enabled: event.target.checked,
+                                },
+                              },
+                            })
+                          }
+                          disabled={updateAccount.isPending}
+                        />
+                        <span>Turn on fan activity for this page. Off by default.</span>
+                      </label>
+                      {readFanActivityEnabled(viewedProfileAccount) && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <select
+                            value={readFanActivityIntensity(viewedProfileAccount)}
+                            onChange={(event) =>
+                              viewedProfileAccount &&
+                              updateAccount.mutate({
+                                id: viewedProfileAccount.id,
+                                settings: {
+                                  fanActivity: {
+                                    ...fanActivitySettingsFromAccount(viewedProfileAccount),
+                                    intensity: event.target.value,
+                                  },
+                                },
+                              })
+                            }
+                            disabled={updateAccount.isPending}
+                            className="h-8 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs"
+                          >
+                            <option value="low">Low (up to 3 actions/run)</option>
+                            <option value="medium">Medium (up to 6 actions/run)</option>
+                            <option value="high">High (up to 10 actions/run)</option>
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              viewedProfileAccount &&
+                              simulateFanActivity.mutate(viewedProfileAccount.id, {
+                                onSuccess: (result) =>
+                                  toast.success(
+                                    result.interactionsCreated === 0 && result.newSubscribers === 0
+                                      ? "No fan activity was generated this time."
+                                      : `Fan activity: ${result.interactionsCreated} interaction${result.interactionsCreated === 1 ? "" : "s"}, ${result.newSubscribers} new subscriber${result.newSubscribers === 1 ? "" : "s"}.`,
+                                  ),
+                                onError: (error) =>
+                                  toast.error(error instanceof Error ? error.message : "Could not simulate fan activity."),
+                              })
+                            }
+                            disabled={simulateFanActivity.isPending}
+                            className="ml-auto h-8 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {simulateFanActivity.isPending ? "Simulating…" : "Simulate fan activity now"}
+                          </button>
+                          <label className="mt-1 flex w-full items-start gap-2 text-xs text-[var(--muted-foreground)]">
+                            <input
+                              type="checkbox"
+                              className="mt-0.5"
+                              checked={readFanActivityAutoSchedule(viewedProfileAccount)}
+                              onChange={(event) =>
+                                viewedProfileAccount &&
+                                updateAccount.mutate({
+                                  id: viewedProfileAccount.id,
+                                  settings: {
+                                    fanActivity: {
+                                      ...fanActivitySettingsFromAccount(viewedProfileAccount),
+                                      autoSchedule: event.target.checked,
+                                    },
+                                  },
+                                })
+                              }
+                              disabled={updateAccount.isPending}
+                            />
+                            <span>
+                              Run fan activity on a schedule, unattended. Also needs "Enable NoodleR fan activity" on
+                              in Noodle settings — this only opts this page in, it doesn't turn scheduling on by
+                              itself.
+                            </span>
+                          </label>
+                        </div>
+                      )}
                     </div>
                   )}
                   <div className="border-t border-[var(--noodle-divider)]">
