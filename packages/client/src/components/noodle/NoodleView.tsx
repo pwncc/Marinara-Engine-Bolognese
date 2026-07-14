@@ -5852,8 +5852,8 @@ export function NoodleView() {
                           </p>
                           <h3 className="mt-1 text-2xl font-black leading-tight">Verify your NoodleR eligibility.</h3>
                           <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--muted-foreground)]">
-                            Our extremely official access desk needs to confirm that you are emotionally prepared for
-                            private pages, fan unlocks, and the color pink doing important work.
+                            NoodleR uses private creator pages, subscriptions, and paid unlocks. This quick check marks
+                            the feature as intentionally enabled before those controls appear.
                           </p>
                         </div>
                       </div>
@@ -5861,10 +5861,10 @@ export function NoodleView() {
 
                     <div className="mt-5 grid gap-3 sm:grid-cols-2">
                       {[
-                        { icon: User, title: "Government ID", detail: "Passport, license, or wizard guild card." },
-                        { icon: ImageIcon, title: "Photo pass", detail: "A crisp selfie with maximum seriousness." },
-                        { icon: AtSign, title: "Handle match", detail: "Your @handle must look confident under pressure." },
-                        { icon: Check, title: "Sauce consent", detail: "Confirm private pages are private and snacks are optional." },
+                        { icon: User, title: "Government ID", detail: "Passport, license, or anything that looks official enough." },
+                        { icon: ImageIcon, title: "Photo pass", detail: "A current profile photo for the badge desk." },
+                        { icon: AtSign, title: "Handle match", detail: "Confirm the Noodle account requesting access." },
+                        { icon: Check, title: "Access notice", detail: "Acknowledge that NoodleR profiles are private pages." },
                       ].map((item, index) => {
                         const Icon = item.icon;
                         return (
@@ -5895,7 +5895,7 @@ export function NoodleView() {
                           <button
                             key={label}
                             type="button"
-                            onClick={() => toast.info("No upload needed. The desk is mostly decorative.")}
+                            onClick={() => toast.info("No upload needed. This verification desk is only a preview.")}
                             className="flex h-24 flex-col items-center justify-center gap-2 rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] text-xs font-bold text-[var(--muted-foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:text-[var(--foreground)]"
                           >
                             <ImageIcon size={18} />
@@ -5913,9 +5913,9 @@ export function NoodleView() {
                         </span>
                       </div>
                       <div className="mt-3 space-y-2 text-xs leading-5 text-[var(--muted-foreground)]">
-                        <p>1. Confirm the documents exist in spirit.</p>
+                        <p>1. Review the requested materials.</p>
                         <p>2. Click start verification.</p>
-                        <p>3. Receive immediate NoodleR access after a brief and legally meaningless pause.</p>
+                        <p>3. NoodleR unlocks immediately after the very short review.</p>
                       </div>
                     </div>
 
