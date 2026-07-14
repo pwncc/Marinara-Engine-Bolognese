@@ -198,6 +198,34 @@ function normalizeHandle(name: string, fallback: string) {
   return base || "noodle";
 }
 
+// normalizeHandle only sanitizes formatting; nothing else in this file (or the
+// schema — no unique index on `handle`) prevents two accounts from ending up
+// with the same handle. Handle-keyed lookups (e.g. @mention resolution during
+// timeline refresh) silently pick whichever account comes later, so callers
+// that assign a handle should route through this to append a numeric suffix
+// on collision instead.
+async function resolveUniqueHandle(
+  db: DB,
+  name: string,
+  fallback: string,
+  excludeAccountId?: string,
+): Promise<string> {
+  const base = normalizeHandle(name, fallback);
+  const rows = await db.select({ id: noodleAccounts.id, handle: noodleAccounts.handle }).from(noodleAccounts);
+  const taken = new Set(
+    rows.filter((row) => row.id !== excludeAccountId).map((row) => row.handle.toLowerCase()),
+  );
+  if (!taken.has(base.toLowerCase())) return base;
+  const trimmedBase = base.slice(0, 32);
+  let suffix = 2;
+  let candidate = `${trimmedBase}_${suffix}`;
+  while (taken.has(candidate.toLowerCase())) {
+    suffix += 1;
+    candidate = `${trimmedBase}_${suffix}`;
+  }
+  return candidate;
+}
+
 function normalizeAccountKind(kind: string): NoodleAccountKind {
   if (kind === "character" || kind === "random_user") return kind;
   return "persona";
@@ -568,11 +596,12 @@ export function createNoodleStorage(db: DB) {
       if (publicAccount.kind !== "persona" && publicAccount.kind !== "character") return null;
       const timestamp = now();
       const id = newId();
+      const handle = await resolveUniqueHandle(db, `${publicAccount.handle}_private`, publicAccount.entityId);
       await db.insert(noodleAccounts).values({
         id,
         kind: publicAccount.kind,
         entityId: publicAccount.entityId,
-        handle: normalizeHandle(`${publicAccount.handle}_private`, publicAccount.entityId),
+        handle,
         displayName: publicAccount.displayName,
         bio: "",
         avatarUrl: null,
@@ -688,11 +717,12 @@ export function createNoodleStorage(db: DB) {
       const timestamp = now();
       const id = newId();
       const displayName = input.displayName.trim() || (input.kind === "persona" ? "User" : "Character");
+      const handle = await resolveUniqueHandle(db, displayName, input.entityId);
       await db.insert(noodleAccounts).values({
         id,
         kind: input.kind,
         entityId: input.entityId,
-        handle: normalizeHandle(displayName, input.entityId),
+        handle,
         displayName,
         bio: input.bio?.trim() ?? "",
         avatarUrl: input.avatarUrl ?? null,
@@ -707,10 +737,12 @@ export function createNoodleStorage(db: DB) {
     async updateAccount(id: string, input: Partial<NoodleAccount>): Promise<NoodleAccount | null> {
       const existing = await this.getAccountById(id);
       if (!existing) return null;
+      const handle =
+        input.handle !== undefined ? await resolveUniqueHandle(db, input.handle, existing.entityId, id) : undefined;
       await db
         .update(noodleAccounts)
         .set({
-          ...(input.handle !== undefined && { handle: normalizeHandle(input.handle, existing.entityId) }),
+          ...(handle !== undefined && { handle }),
           ...(input.displayName !== undefined && { displayName: input.displayName.trim().slice(0, 120) }),
           ...(input.bio !== undefined && { bio: input.bio.slice(0, 500) }),
           ...(input.avatarUrl !== undefined && { avatarUrl: input.avatarUrl }),

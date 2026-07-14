@@ -340,6 +340,7 @@ function identityDisclosureInstruction(disclosure: NoodlePrivateIdentityDisclosu
 type NoodleLinkedAuthorContext = {
   sourceKind: "character" | "persona";
   publicName: string;
+  publicHandle: string;
   visualDescription: string;
   personalityDescription: string;
   avatarPath: string | null;
@@ -355,6 +356,7 @@ async function resolveNoodleLinkedAuthorContext(input: {
     return {
       sourceKind: "character",
       publicName: characterNameFromRow(row),
+      publicHandle: input.account.handle,
       visualDescription: characterAppearanceFromRow(row),
       personalityDescription: characterPersonalityFromRow(row),
       avatarPath: row.avatarPath ?? null,
@@ -366,6 +368,7 @@ async function resolveNoodleLinkedAuthorContext(input: {
     return {
       sourceKind: "persona",
       publicName: personaNameFromRow(row),
+      publicHandle: input.account.handle,
       visualDescription: personaAppearanceFromRow(row),
       personalityDescription: personaPersonalityFromRow(row),
       avatarPath: row.avatarPath ?? null,
@@ -402,6 +405,33 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// What gets blocked scales with the disclosure level so "hinted" and "secret"
+// are observably different, not the same redaction behind two labels:
+//  - "hinted" only redacts the exact public display name, deliberately
+//    leaving room for the subtle allusions/in-jokes its own prompt
+//    instruction (identityDisclosureInstruction) says are allowed.
+//  - "secret" additionally redacts the public handle (bare and @-prefixed)
+//    and each individual name token, since its instruction promises the
+//    handle stays hidden too and a bare first name would otherwise slip
+//    past the full-name-only \b...\b match.
+function blockedPublicNames(context: NoodleLinkedAuthorContext, profile: NoodlePrivateStageProfile): string[] {
+  const publicName = context.publicName.trim();
+  if (profile.identityDisclosure === "open" || !publicName) return [];
+  const names = [publicName];
+  if (profile.identityDisclosure === "secret") {
+    for (const token of publicName.split(/\s+/)) {
+      if (token.length > 1) names.push(token);
+    }
+  }
+  return names;
+}
+
+function blockedPublicHandles(context: NoodleLinkedAuthorContext, profile: NoodlePrivateStageProfile): string[] {
+  if (profile.identityDisclosure !== "secret") return [];
+  const handle = context.publicHandle.trim();
+  return handle ? [handle] : [];
+}
+
 export function sanitizePrivateNoodlerImageIdea(
   draftPrompt: string,
   context: NoodleLinkedAuthorContext,
@@ -409,14 +439,16 @@ export function sanitizePrivateNoodlerImageIdea(
 ) {
   let sanitized = draftPrompt;
   const replacement = profile.stageName || "the private creator";
-  const blockedNames = new Set<string>();
-  if (profile.identityDisclosure !== "open") blockedNames.add(context.publicName);
+  const blockedNames = new Set<string>(blockedPublicNames(context, profile));
   if (context.publicName.toLowerCase() !== "professor mari") blockedNames.add("Professor Mari");
   if (!/\bmari\b/iu.test(context.publicName)) blockedNames.add("Mari");
   for (const name of blockedNames) {
     const clean = name.trim();
     if (!clean) continue;
     sanitized = sanitized.replace(new RegExp(`\\b${escapeRegExp(clean)}\\b`, "giu"), replacement);
+  }
+  for (const handle of new Set(blockedPublicHandles(context, profile))) {
+    sanitized = sanitized.replace(new RegExp(`@?\\b${escapeRegExp(handle)}\\b`, "giu"), replacement);
   }
   return sanitized
     .split("\n")
@@ -436,13 +468,25 @@ export function enforceNoodlerIdentityBlocklist(
   context: NoodleLinkedAuthorContext,
   profile: NoodlePrivateStageProfile,
 ): { sanitized: string; redactionsApplied: boolean } {
-  if (profile.identityDisclosure === "open" || !context.publicName.trim()) {
+  const names = blockedPublicNames(context, profile);
+  const handles = blockedPublicHandles(context, profile);
+  if (names.length === 0 && handles.length === 0) {
     return { sanitized: content, redactionsApplied: false };
   }
   const replacement = profile.stageName || "the private creator";
-  const pattern = new RegExp(`\\b${escapeRegExp(context.publicName.trim())}\\b`, "giu");
-  const redactionsApplied = pattern.test(content);
-  return { sanitized: redactionsApplied ? content.replace(pattern, replacement) : content, redactionsApplied };
+  let sanitized = content;
+  let redactionsApplied = false;
+  for (const name of new Set(names)) {
+    const pattern = new RegExp(`\\b${escapeRegExp(name)}\\b`, "giu");
+    if (pattern.test(sanitized)) redactionsApplied = true;
+    sanitized = sanitized.replace(pattern, replacement);
+  }
+  for (const handle of new Set(handles)) {
+    const pattern = new RegExp(`@?\\b${escapeRegExp(handle)}\\b`, "giu");
+    if (pattern.test(sanitized)) redactionsApplied = true;
+    sanitized = sanitized.replace(pattern, replacement);
+  }
+  return { sanitized, redactionsApplied };
 }
 
 function galleryImageUrl(filePath: string, fallbackChatId: string) {
@@ -1447,6 +1491,7 @@ async function generatePrivateAccountStageIdentity(input: {
   bio: string;
   appearance: string;
   stageProfile: NoodlePrivateStageProfile;
+  linkedContext: NoodleLinkedAuthorContext | null;
 } | null> {
   const linkedContext = await resolveNoodleLinkedAuthorContext({
     account: input.publicAccount,
@@ -1557,6 +1602,7 @@ async function generatePrivateAccountStageIdentity(input: {
       stageAppearanceOverride: input.requestedStageProfile?.stageAppearanceOverride?.trim() || "",
       preserveLinkedAppearance: input.requestedStageProfile?.preserveLinkedAppearance ?? true,
     }),
+    linkedContext,
   };
 }
 
@@ -1702,20 +1748,35 @@ export async function ensurePrivateAccountIdentity(input: {
         return null;
       });
       if (identity) {
+        // The ongoing post/image pipeline already runs everything through the
+        // identity-disclosure blocklist (see enforceNoodlerIdentityBlocklist /
+        // sanitizePrivateNoodlerImageIdea call sites below); apply the same
+        // backstop here so a "hinted"/"secret" profile can't ship with the
+        // linked public name baked into its own display name/bio/appearance
+        // from the very first generation, before any post ever gets written.
+        const sanitizedName = identity.linkedContext
+          ? enforceNoodlerIdentityBlocklist(identity.name, identity.linkedContext, identity.stageProfile).sanitized
+          : identity.name;
+        const sanitizedBio = identity.linkedContext
+          ? enforceNoodlerIdentityBlocklist(identity.bio, identity.linkedContext, identity.stageProfile).sanitized
+          : identity.bio;
+        const sanitizedAppearance = identity.linkedContext
+          ? sanitizePrivateNoodlerImageIdea(identity.appearance, identity.linkedContext, identity.stageProfile)
+          : identity.appearance;
         let avatarUrl: string | null = null;
         const imageConnection = settings.imageGenerationConnectionId
           ? await connections.getWithKey(settings.imageGenerationConnectionId)
           : await connections.getDefaultForImageGeneration();
         if (imageConnection) {
           avatarUrl = await generatePrivateAccountAvatar({
-            displayName: identity.name,
-            bio: identity.bio,
-            appearance: identity.appearance,
+            displayName: sanitizedName,
+            bio: sanitizedBio,
+            appearance: sanitizedAppearance,
             imageConnection,
             app,
             debugMode: false,
           }).catch((error) => {
-            logger.warn(error, "[noodle] Failed to generate NoodleR avatar for %s", identity.name);
+            logger.warn(error, "[noodle] Failed to generate NoodleR avatar for %s", sanitizedName);
             avatarFailed = true;
             return null;
           });
@@ -1724,8 +1785,8 @@ export async function ensurePrivateAccountIdentity(input: {
         }
         await noodle.updateAccount(privateAccount.id, {
           handle: identity.handle,
-          displayName: identity.name,
-          bio: identity.bio,
+          displayName: sanitizedName,
+          bio: sanitizedBio,
           ...(avatarUrl ? { avatarUrl } : {}),
           settings: {
             ...writePrivateStageProfileSettings(privateAccount.settings, identity.stageProfile),
@@ -1733,7 +1794,7 @@ export async function ensurePrivateAccountIdentity(input: {
             avatarGenerationFailed: avatarFailed,
             // Persisted so a later avatar-only retry (avatarOnlyRetry above)
             // can regenerate just the image without another LLM call.
-            stageAppearanceGenerated: identity.appearance,
+            stageAppearanceGenerated: sanitizedAppearance,
           },
         });
       } else {
