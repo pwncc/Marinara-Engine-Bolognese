@@ -201,9 +201,48 @@ but haven't been eyeballed in a running app.
 
 ---
 
-## Phase 6 — NoodleR UX redesign (creator-platform framing)
+## Phase 6 — NoodleR UX redesign (creator-platform framing) — PARTIALLY DONE
 
-Do this in `NoodlerHome.tsx` after Phase 5 lands, so the redesign happens once, not twice.
+Status: the composer access-gating bug is fixed (text-only posts no longer silently default to
+public), the composer's access selector is now always-visible `.mari-suggestion-chip` buttons
+instead of a conditionally-rendered `<select>`, and simulated display-only pricing
+(`subscriptionPrice` on `NoodleAccount.settings`, `ppvPrice` on `NoodlePost.metadata` — new
+optional field on `noodleCreatePostSchema`, no DB migration) is wired through the composer,
+creator-tools "Subscription price" field, all Subscribe buttons, and both locked-post overlay
+captions. `subscribeLabel`/`unlockLabel` helpers in `noodle-shared.tsx` are the single source of
+truth for that price-or-fallback formatting. tsc is clean across shared/server/client (shared
+must be rebuilt — `pnpm --filter @marinara-engine/shared build` — before the server picks up new
+shared-schema fields, since server consumes `packages/shared/dist`, not source). Not verified in
+a browser.
+
+This landed only in `NoodleView.tsx` (composer, profile view, locked-post overlays), **not** in
+`NoodlerHome.tsx`, because Phase 5 didn't extract the composer/profile view there — see Phase 5's
+status note. Whoever finishes the Phase 5 extraction should expect this pricing/composer code to
+move with it.
+
+**Not done, for whoever continues this:**
+- Badge restyle (`NoodlerBadge`/`NoodlerPrivateBadge` → `.mari-chat-mode-badge`): skipped
+  deliberately — the existing badges already use the same `--noodle-blue`/`NOODLER_BLUE`
+  accent-swap convention as everything else and read fine; switching CSS-class families risked an
+  unstyled badge that couldn't be caught without a browser. Revisit if there's a concrete reason.
+- "Earnings" stat block on the owner's hub/profile (computed display, no new stored field).
+- Discover-card layout beyond the price now shown on its existing Subscribe button.
+- A dedicated Settings "Monetization" grouping: `subscriptionPrice` ended up living in the
+  per-profile creator-tools panel instead of the global Settings panel, since it's a
+  per-creator-account value, not a single global default — a deliberate deviation from the
+  original plan text below. `SettingControls`/`ToggleSetting` reuse still applies if a global
+  *default* price is wanted later.
+- **Also discovered, not fixed:** the shared full-screen compose modal (`"New NoodleR post"` /
+  `"New post"` title, `composerAccess` state, submit path is `submitPost` around
+  `packages/client/src/components/noodle/NoodleView.tsx` — grep `composerAccess`) has the exact
+  same access-defaulting bug as the inline composer did, AND — more concerning — its submit call
+  never sets `authorAccountId`, so it's unclear whether posting through it while in NoodleR mode
+  actually targets the private account at all, despite the modal's title changing to "New NoodleR
+  post". This needs investigation with a live app before touching; left untouched here rather than
+  guess.
+
+Original plan text follows for reference (some of it — chip reuse, pricing fields, composer
+chips — is now done; treat the rest as still-open):
 
 **Note on line anchors below:** Phase 5 only partially landed (see its section above) — the hub
 tabs (`renderNoodlerDiscoverCard`, `NOODLER_HUB_TABS`, subscribe/unlock rows) now live in
