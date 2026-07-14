@@ -1602,11 +1602,7 @@ export function NoodleView() {
         onSuccess: () => {
           toast.success("Just kidding. NoodleR enabled.");
           trackAchievement.mutate("noodler_discovered");
-          setActiveNoodleView("noodler");
-          setAccountSwitcherOpen(false);
-          setMobileDrawerOpen(false);
-          setActiveComposerTool(null);
-          setProfileConnectionTab(null);
+          transitionNoodleMode("noodler");
         },
         onError: (error) => toast.error(error instanceof Error ? error.message : "Could not enable NoodleR."),
       },
@@ -3029,14 +3025,32 @@ export function NoodleView() {
     });
   }, []);
 
-  const openHomeTimeline = useCallback(() => {
-    setActiveNoodleView("home");
+  // Single place responsible for clearing NoodleR-scoped state (viewed
+  // profile, hub tab) whenever the mode changes or NoodleR access is
+  // revoked, so a stale private profile/tab can never survive a mode
+  // switch. All mode-changing navigation should go through this instead of
+  // hand-rolling a subset of these resets.
+  const resetNoodleModeTransientState = useCallback(() => {
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
     setActiveComposerTool(null);
     setProfileConnectionTab(null);
+    setViewedProfileAccountId(null);
+    setNoodlerHubTab("timeline");
+  }, []);
+
+  const transitionNoodleMode = useCallback(
+    (next: NoodleMode) => {
+      resetNoodleModeTransientState();
+      setActiveNoodleView(next === "noodler" ? "noodler" : "home");
+    },
+    [resetNoodleModeTransientState],
+  );
+
+  const openHomeTimeline = useCallback(() => {
+    transitionNoodleMode("noodle");
     scrollTimelineToTop();
-  }, [scrollTimelineToTop]);
+  }, [transitionNoodleMode, scrollTimelineToTop]);
 
   const openMobileHomeTimeline = () => {
     setPostSearch("");
@@ -3122,23 +3136,19 @@ export function NoodleView() {
       return;
     }
     saveSettings({ enableNoodler: false, enableNoodlerFanActivityScheduler: false });
-    if (activeNoodleMode === "noodler") openHomeTimeline();
+    // Always reset, not just when currently in NoodleR mode — otherwise a
+    // stale viewedProfileAccountId/noodlerHubTab from an earlier visit can
+    // survive disabling the feature.
+    transitionNoodleMode("noodle");
   };
 
   const openNoodlerHub = () => {
     if (!isNoodlerEnabled) {
+      resetNoodleModeTransientState();
       setActiveNoodleView("noodler-verification");
-      setAccountSwitcherOpen(false);
-      setMobileDrawerOpen(false);
-      setActiveComposerTool(null);
-      setProfileConnectionTab(null);
       return;
     }
-    setActiveNoodleView("noodler");
-    setAccountSwitcherOpen(false);
-    setMobileDrawerOpen(false);
-    setActiveComposerTool(null);
-    setProfileConnectionTab(null);
+    transitionNoodleMode("noodler");
   };
 
   const normalizedInviteSearch = inviteSearch.trim().toLowerCase();
