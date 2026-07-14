@@ -6,7 +6,7 @@
 // fetching, and mutation handlers still live in the NoodleView
 // shell and are passed down as props.
 // ──────────────────────────────────────────────
-import { AtSign, Check, ImageIcon, Loader2, Lock, Trash2, User } from "lucide-react";
+import { AtSign, Check, ImageIcon, Loader2, Trash2, User } from "lucide-react";
 import { toast } from "sonner";
 import type { ChangeEvent, CSSProperties, ReactNode, RefObject } from "react";
 import type {
@@ -29,6 +29,7 @@ import {
   readFanActivityAutoSchedule,
   fanActivitySettingsFromAccount,
   MobileTimelineBackButton,
+  NoodlerMark,
   NoodlerPrivateBadge,
   ProfileHeaderChrome,
   ProfileTabsAndGrid,
@@ -106,7 +107,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
         <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
           <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
             <MobileTimelineBackButton label="Back to Noodle" onClick={onBackToHome} />
-            <Lock size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
+            <NoodlerMark size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
             <div className="min-w-0 flex-1">
               <h2 className="truncate text-lg font-bold">NoodleR Verification</h2>
               <p className="truncate text-xs text-[var(--muted-foreground)]">Private creator network access</p>
@@ -118,7 +119,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
           <div className="rounded-lg border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/8 px-4 py-4">
             <div className="flex items-start gap-3">
               <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[var(--noodle-blue)] text-zinc-950">
-                <Lock size={22} />
+                <NoodlerMark size={22} />
               </span>
               <div className="min-w-0">
                 <p className="text-xs font-black uppercase tracking-normal text-[var(--noodle-blue)]">Verification Desk</p>
@@ -220,7 +221,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
       <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
         <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
           <MobileTimelineBackButton label="Back to Noodle" onClick={onBackToHome} />
-          <Lock size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
+          <NoodlerMark size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-lg font-bold">NoodleR</h2>
             <p className="truncate text-xs text-[var(--muted-foreground)]">
@@ -260,7 +261,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               <div>{noodlerTimelineItems.map(renderNoodlerTimelineItem)}</div>
             ) : privateAccountsCount > 0 ? (
               <div className="px-8 py-14 text-center">
-                <Lock size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
+                <NoodlerMark size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
                 <p className="text-base font-bold">Nothing here yet.</p>
                 <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
                   NoodleR posts, comments, subscribers, and unlocks will show here.
@@ -268,7 +269,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               </div>
             ) : (
               <div className="px-8 py-14 text-center">
-                <Lock size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
+                <NoodlerMark size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
                 <p className="text-base font-bold">No NoodleR accounts yet.</p>
                 <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
                   Create a private page from a persona or character profile.
@@ -480,6 +481,8 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
     renderPostArticle,
   } = props;
 
+  const linkedAccountKindLabel = viewedProfileAccount?.kind === "character" ? "character" : "persona";
+
   return (
     <div className="border-b border-[var(--noodle-divider)]">
       <ProfileHeaderChrome
@@ -567,14 +570,22 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
         onOpenFollowers={onOpenFollowers}
       />
 
-      {viewedProfileAccount?.kind === "character" && (
+      {viewingOwnPrivateAccount && viewedProfileAccount && (
         <div className="border-t border-[var(--noodle-divider)] p-4">
+          <div className="mb-4">
+            <h4 className="text-sm font-bold text-[var(--foreground)]">NoodleR creator tools</h4>
+            <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+              Manage your stage identity, generate a post with AI, or post manually. Timeline refreshes will not
+              post here automatically.
+            </p>
+          </div>
           <div className="mb-4 rounded-lg border border-[var(--noodle-divider)] p-3">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <h4 className="text-sm font-bold text-[var(--foreground)]">Stage profile</h4>
+                <h5 className="text-sm font-bold text-[var(--foreground)]">Stage profile</h5>
                 <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">
-                  Controls the private creator identity while the linked character keeps the visual anchor.
+                  Controls the private creator identity while the linked {linkedAccountKindLabel} keeps the visual
+                  anchor.
                 </p>
               </div>
               <button
@@ -636,7 +647,7 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
                   <textarea
                     value={stageProfileAppearanceOverride}
                     onChange={(event) => onStageProfileAppearanceOverrideChange(event.target.value)}
-                    placeholder="Optional styling, outfit, or presentation notes. The linked character's body/face is still preserved."
+                    placeholder={`Optional styling, outfit, or presentation notes. The linked ${linkedAccountKindLabel}'s body/face is still preserved.`}
                     className={cn(textareaClass, "min-h-20 resize-none")}
                   />
                 </label>
@@ -689,11 +700,12 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
               </div>
             )}
           </div>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+
+          <div className="mb-4 flex flex-col gap-3 rounded-lg border border-[var(--noodle-divider)] p-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
-              <h4 className="text-sm font-bold text-[var(--foreground)]">NoodleR creator tools</h4>
+              <h5 className="text-sm font-bold text-[var(--foreground)]">Generate with AI</h5>
               <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                Guide one private character post. Timeline refreshes will not post here automatically.
+                One guided post — choose access, theme, and whether to include text and/or an image.
               </p>
             </div>
             <button
@@ -705,17 +717,7 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
               Generate guided post
             </button>
           </div>
-        </div>
-      )}
 
-      {viewingOwnPrivateAccount && (
-        <div className="border-t border-[var(--noodle-divider)] p-4">
-          <div className="mb-3">
-            <h4 className="text-sm font-bold text-[var(--foreground)]">NoodleR creator tools</h4>
-            <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-              Post from your private profile. Add an image URL to choose subscriber or pay-per-post access.
-            </p>
-          </div>
           {(viewedProfileAccount?.settings?.stageIdentityGenerationFailed === true ||
             viewedProfileAccount?.settings?.avatarGenerationFailed === true) && (
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--destructive)]/40 bg-[var(--destructive)]/10 px-3 py-2 text-xs text-[var(--destructive)]">
@@ -838,7 +840,7 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
         </div>
       )}
 
-      {viewedProfileAccount && (
+      {viewingOwnPrivateAccount && viewedProfileAccount && (
         <div className="border-t border-[var(--noodle-divider)] p-4">
           <div className="mb-3">
             <h4 className="text-sm font-bold text-[var(--foreground)]">Fan activity</h4>

@@ -222,11 +222,35 @@ This landed only in `NoodleView.tsx` (composer, profile view, locked-post overla
 status note. Whoever finishes the Phase 5 extraction should expect this pricing/composer code to
 move with it.
 
-**Not done, for whoever continues this:**
-- Badge restyle (`NoodlerBadge`/`NoodlerPrivateBadge` → `.mari-chat-mode-badge`): skipped
-  deliberately — the existing badges already use the same `--noodle-blue`/`NOODLER_BLUE`
-  accent-swap convention as everything else and read fine; switching CSS-class families risked an
-  unstyled badge that couldn't be caught without a browser. Revisit if there's a concrete reason.
+**Done since the above was written:**
+- **Badge/logo restyle to an "R" mark.** Added `NoodlerMark` (`noodle-shared.tsx`) — a plain bold
+  "R" glyph — and swapped it in everywhere Lock previously stood in for the NoodleR brand:
+  `NoodlerBadge`, `NoodlerPrivateBadge` (now a plain "R" circle instead of a lock-icon + "NoodleR"
+  text pill), `NoodleModeSwitcher`'s NoodleR mode button, the verification screen and hub header
+  icons, the two hub empty-states, and the bottom-nav NoodleR tab icon. Left untouched: the
+  Lock icon in `BrowserChrome`'s fake address bar (a generic https-padlock affordance, not a
+  NoodleR brand mark) and the Lock icon used for "unlock" notification/interaction rows in
+  `NoodleView.tsx` (means "this content was unlocked", unrelated meaning). Not verified in a
+  browser.
+- **Post creation reworked for persona-kind private accounts.** The AI-guided post generator
+  (text + image) and the stage-profile editor were previously gated on
+  `viewedProfileAccount?.kind === "character"` in `NoodlerHome.tsx`, so a NoodleR page linked to
+  your own persona (rather than a character) could only ever get the manual composer. Traced the
+  server generation pipeline (`resolveNoodleLinkedAuthorContext`,
+  `packages/server/src/routes/noodle.routes.ts` — see the comment above
+  `personaAuthorAccounts` at ~L1033 explicitly anticipating "single-account NoodleR generation
+  targeting a persona-linked private account, guided or not") and confirmed it already fully
+  supports persona-kind accounts; the `character`-only gate was purely a client-side restriction
+  with no corresponding feature-support reason. Removed the kind check. While doing this, found
+  and fixed **two real ownership-check gaps**: the stage-profile/guided-generation block and the
+  fan-activity panel were both gated only on `viewedProfileAccount`/its `kind`, not on
+  `viewingOwnPrivateAccount` — meaning any signed-in viewer of *anyone's* character-kind private
+  page could see (and interact with) another creator's stage-profile editor, guided-generation
+  button, and fan-activity controls. Both are now gated on `viewingOwnPrivateAccount`. Also merged
+  the two previously-separate "NoodleR creator tools" headings (stage profile + guided generation
+  in one block, manual composer in another) into a single section, and generalized copy that
+  assumed "character" (e.g. "the linked character keeps the visual anchor") to branch on the
+  viewed account's actual kind. Not verified in a browser.
 - "Earnings" stat block on the owner's hub/profile (computed display, no new stored field).
 - Discover-card layout beyond the price now shown on its existing Subscribe button.
 - A dedicated Settings "Monetization" grouping: `subscriptionPrice` ended up living in the

@@ -132,6 +132,7 @@ import {
   NoodleToolButton,
   NoodleToolPopover,
   NoodlerBadge,
+  NoodlerMark,
   NoodlerPrivateBadge,
   fieldClass,
   iconButtonClass,
@@ -5586,7 +5587,7 @@ export function NoodleView() {
             aria-current={activeNoodleView === "noodler" || activeNoodleView === "noodler-verification" ? "page" : undefined}
             className="relative flex items-center justify-center transition-colors hover:bg-[var(--accent)]"
           >
-            <Lock size={22} strokeWidth={activeNoodleView === "noodler" || activeNoodleView === "noodler-verification" ? 2.8 : 2} />
+            <NoodlerMark size={22} />
             {(activeNoodleView === "noodler" || activeNoodleView === "noodler-verification") && (
               <span className="absolute top-1 h-1 w-1 rounded-full bg-[var(--noodle-blue)]" />
             )}
@@ -5777,8 +5778,10 @@ export function NoodleView() {
                 <option value="secret">Secret</option>
               </select>
               <p className="text-[11px] leading-4 text-[var(--muted-foreground)]">
-                "Secret" filters the linked name out of generated posts/images — it's AI-generated content
-                moderation, not a hard guarantee it can never slip through.
+                "Open" lets generated posts reuse the linked name/handle directly. "Hinted" keeps the linked
+                name out of generated text but still allows subtle allusions and in-jokes. "Secret" also filters
+                out the linked handle and first name — it's AI-generated content moderation, not a hard
+                guarantee it can never slip through.
               </p>
             </label>
             <label className="block space-y-1.5">

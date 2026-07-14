@@ -232,6 +232,19 @@ export function NoodleLogo({ className }: { className?: string }) {
   return <img src={NOODLE_LOGO_SRC} alt="" className={cn("object-contain", className)} />;
 }
 
+/** NoodleR's mark: a bold "R" glyph, used everywhere Noodle uses an icon for NoodleR-branded chrome. */
+export function NoodlerMark({ size = 16, className }: { size?: number; className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn("inline-flex shrink-0 items-center justify-center font-black leading-none", className)}
+      style={{ width: size, height: size, fontSize: Math.round(size * 0.82) }}
+    >
+      R
+    </span>
+  );
+}
+
 export function NoodlerBadge({ className }: { className?: string }) {
   return (
     <span
@@ -242,7 +255,7 @@ export function NoodlerBadge({ className }: { className?: string }) {
         className,
       )}
     >
-      <Lock size={10} strokeWidth={2.6} />
+      <NoodlerMark size={10} />
     </span>
   );
 }
@@ -253,12 +266,11 @@ export function NoodlerPrivateBadge({ className }: { className?: string }) {
       title="Private NoodleR account"
       aria-label="Private NoodleR account"
       className={cn(
-        "inline-flex shrink-0 items-center gap-0.5 rounded-full bg-[var(--noodle-blue)] px-1.5 py-0.5 text-[0.6rem] font-black leading-none text-zinc-950",
+        "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--noodle-blue)] text-zinc-950",
         className,
       )}
     >
-      <Lock size={9} strokeWidth={3} />
-      NoodleR
+      <NoodlerMark size={12} />
     </span>
   );
 }
@@ -292,9 +304,13 @@ export function NoodleModeSwitcher({
   onOpenNoodle: () => void;
   onOpenNoodler: () => void;
 }) {
-  const modes: Array<{ id: NoodleMode; icon: typeof Home; onClick: () => void }> = [
+  const modes: Array<{
+    id: NoodleMode;
+    icon: (props: { size?: number; className?: string }) => ReactNode;
+    onClick: () => void;
+  }> = [
     { id: "noodle", icon: Home, onClick: onOpenNoodle },
-    { id: "noodler", icon: Lock, onClick: onOpenNoodler },
+    { id: "noodler", icon: NoodlerMark, onClick: onOpenNoodler },
   ];
   return (
     <div className="grid grid-cols-2 gap-1 rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] p-1">
