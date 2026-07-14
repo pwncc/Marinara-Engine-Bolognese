@@ -150,32 +150,34 @@ bootstrap cache entry before the refetch resolves.
 
 ---
 
-## Phase 5 — Client: file split (`NoodleHome.tsx` / `NoodlerHome.tsx`) — PARTIALLY DONE
+## Phase 5 — Client: file split (`NoodleHome.tsx` / `NoodlerHome.tsx`) — DONE (profile view; settings sections still open)
 
-Status: `NoodleHome.tsx` (home timeline/search/notifications), `NoodlerHome.tsx` (NoodleR hub
-tabs — timeline/subscriptions/discover/owned, lazy-loaded from `NoodleView.tsx` via `lazy()`),
-and `noodle-shared.tsx` (types, constants, `Avatar`, badges, and other genuinely shared bits)
-have been extracted and merged. `pnpm check`-equivalent (scoped tsc + eslint, plus a full client
-`tsc --noEmit` pass) was clean at merge time; **not verified in a browser** — no dev server was
-available in this environment, so a manual click-through on desktop and mobile is still owed
-before this ships.
+Status: `NoodleHome.tsx` (home timeline/search/notifications, plus the new `PublicProfileView`),
+`NoodlerHome.tsx` (NoodleR hub tabs — timeline/subscriptions/discover/owned, lazy-loaded from
+`NoodleView.tsx` via `lazy()` — plus the new `PrivateProfileView`), and `noodle-shared.tsx`
+(types, constants, `Avatar`, badges, and other genuinely shared bits) have been extracted and
+merged. The profile view split (previously the main open item) is now complete: `NoodleView.tsx`
+builds two prop objects — `publicProfileViewProps` (typed `PublicProfileViewProps`) and
+`profileViewProps` (typed `PrivateProfileViewProps`, threaded through `noodlerHomeProps`) — from
+its existing local state/handlers and renders `<PublicProfileView>` or routes to
+`NoodlerHome`'s `<PrivateProfileView>` depending on `activeNoodleMode`, instead of one shared
+code path branching on `viewedProfileAccount.visibility`. Along the way, fixed a latent bug where
+`noodlerHomeProps.activeNoodleView` never actually passed through `"profile"` (it only ever
+computed `"noodler"` or `"noodler-verification"`), so `NoodlerHome`'s private-profile branch was
+unreachable until now. `tsc --noEmit` (full client pass) and `eslint` on all four touched files
+are clean, including removal of several imports that were only used by the inline JSX this
+extraction removed. **Not verified in a browser** — no dev server was available in this
+environment, so a manual click-through on desktop and mobile (own public profile edit, someone
+else's public profile + follow, own private profile creator tools/fan-activity, someone else's
+private profile + subscribe) is still owed before this ships.
 
-**Not done — remaining work for whoever picks this up next:** `NoodleView.tsx` is still ~6,558
-lines, not a "thin shell." The private/public profile view, the private composer, and the
-NoodleR settings sections (NoodleR Access, NoodleR Fan Activity) are still in `NoodleView.tsx`,
-not extracted into `NoodlerHome.tsx`/`NoodleHome.tsx`. This was a deliberate call by the
-extraction pass, not an oversight — those pieces are more entangled with state/logic shared
-across both modes than the hub/timeline views were, and forcing a split without careful
-untangling risked exactly the kind of duplicated-state-that-drifts-out-of-sync bug this whole
-effort exists to prevent. If you pick this up:
-- Grep `NoodleView.tsx` for the profile view (`activeNoodleView === "profile"`), the private
-  composer (`privateComposerText`/`privateComposerAccess`), and the settings sections ("NoodleR
-  Access"/"NoodleR Fan Activity") to find current locations.
-- The profile view in particular renders both public and private profiles from one code path
-  branching on `viewedProfileAccount.visibility` — decide whether to split it by mode (risking
-  duplication of the shared banner/avatar/tab chrome) or leave it in the shell and pass it as a
-  prop/children into both `NoodleHome`/`NoodlerHome` (avoids duplication, keeps the shell fatter).
-  Either is defensible; document whichever you pick.
+**Not done — remaining work for whoever picks this up next:** the private composer's shared
+full-screen compose modal had its `authorAccountId` bug fixed as part of this same pass (see
+Phase 6 status below), but the NoodleR settings sections ("NoodleR Access", "NoodleR Fan
+Activity") are still inline in `NoodleView.tsx`'s `settingsContent`, not extracted. This wasn't
+attempted in this pass — it's lower-entanglement than the profile view was (mostly toggle/select
+rows against `SettingControls`/`ToggleSetting`) and can reasonably stay in the shell, or be
+pulled into a small `NoodlerSettings.tsx` later; either is defensible.
 - Original plan for reference (kept below for anyone doing the rest of this extraction):
 
 <details>

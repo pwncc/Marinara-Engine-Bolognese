@@ -19,17 +19,22 @@ import {
   Smile,
   X,
 } from "lucide-react";
-import type { ChangeEvent, RefObject } from "react";
+import type { ChangeEvent, ReactNode, RefObject } from "react";
 import type { NoodleAccount, NoodlePost, NoodleSettings } from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
+import type { AvatarCropValue } from "../../lib/utils";
 import {
   Avatar,
   MobileTimelineBackButton,
   NoodleLogo,
+  NoodlerBadge,
   NoodleToolButton,
+  ProfileHeaderChrome,
+  ProfileTabsAndGrid,
   type ActiveComposerMention,
   type ComposerTool,
   type NotificationTab,
+  type ProfileTab,
   type TimelineTab,
 } from "./noodle-shared";
 
@@ -623,5 +628,211 @@ export function NoodleHome(props: NoodleHomeProps) {
         </div>
       )}
     </>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Public profile view (activeNoodleMode === "noodle"). Renders the
+// shared ProfileHeaderChrome with the public-mode action row (Edit
+// Profile / Follow, plus Create/Open NoodleR when applicable) and
+// the public post grid. Private-only panels (creator tools,
+// subscribe, fan activity) live in NoodlerHome's PrivateProfileView
+// instead — see MARI_NOODLER_SEPARATION_TASK.md Phase 5/6.
+// ──────────────────────────────────────────────
+export interface PublicProfileViewProps {
+  onBackToHome: () => void;
+  viewedProfileAccount: NoodleAccount | null;
+  profileDisplayHandle: string;
+  canEditViewedProfile: boolean;
+  profileUploadTarget: "avatar" | "banner" | null;
+  bannerFileRef: RefObject<HTMLInputElement | null>;
+  avatarFileRef: RefObject<HTMLInputElement | null>;
+  onProfileImageFile: (target: "avatar" | "banner", event: ChangeEvent<HTMLInputElement>) => void;
+  profileBannerPreview: string;
+  profilePreviewAccount: { displayName: string; avatarUrl: string | null; avatarCrop: AvatarCropValue | null };
+  isEditingProfile: boolean;
+  onEditToggle: () => void;
+  canSaveProfile: boolean;
+  updateAccountPending: boolean;
+  profileName: string;
+  onProfileNameChange: (value: string) => void;
+  profileHandle: string;
+  onProfileHandleChange: (value: string) => void;
+  profileBio: string;
+  onProfileBioChange: (value: string) => void;
+  profileLocation: string;
+  onProfileLocationChange: (value: string) => void;
+  profileBioPreview: string;
+  noodleCustomEmojiMap: Map<string, string>;
+  profileLocationPreview: string;
+  profileFollowingCount: number;
+  profileFollowerCount: number;
+  onOpenFollowing: () => void;
+  onOpenFollowers: () => void;
+
+  // Non-edit action: Follow
+  canFollowViewedProfile: boolean;
+  viewedProfileFollowed: boolean;
+  onUpdateFollowedAccount: (account: NoodleAccount, followed: boolean) => void;
+
+  // Extra action: Create/Open NoodleR (public accounts only)
+  isNoodlerEnabled: boolean;
+  linkedNoodlerAccount: NoodleAccount | null;
+  onOpenLinkedNoodler: (account: NoodleAccount) => void;
+  onCreateNoodler: (account: NoodleAccount) => void;
+  createPrivateAccountPending: boolean;
+
+  // Tabs and grid
+  profileTab: ProfileTab;
+  onProfileTabChange: (tab: ProfileTab) => void;
+  profileVisiblePosts: NoodlePost[];
+  isGridLayout: boolean;
+  renderPostGrid: (posts: NoodlePost[]) => ReactNode;
+  renderPostArticle: (post: NoodlePost) => ReactNode;
+}
+
+export function PublicProfileView(props: PublicProfileViewProps) {
+  const {
+    onBackToHome,
+    viewedProfileAccount,
+    profileDisplayHandle,
+    canEditViewedProfile,
+    profileUploadTarget,
+    bannerFileRef,
+    avatarFileRef,
+    onProfileImageFile,
+    profileBannerPreview,
+    profilePreviewAccount,
+    isEditingProfile,
+    onEditToggle,
+    canSaveProfile,
+    updateAccountPending,
+    profileName,
+    onProfileNameChange,
+    profileHandle,
+    onProfileHandleChange,
+    profileBio,
+    onProfileBioChange,
+    profileLocation,
+    onProfileLocationChange,
+    profileBioPreview,
+    noodleCustomEmojiMap,
+    profileLocationPreview,
+    profileFollowingCount,
+    profileFollowerCount,
+    onOpenFollowing,
+    onOpenFollowers,
+    canFollowViewedProfile,
+    viewedProfileFollowed,
+    onUpdateFollowedAccount,
+    isNoodlerEnabled,
+    linkedNoodlerAccount,
+    onOpenLinkedNoodler,
+    onCreateNoodler,
+    createPrivateAccountPending,
+    profileTab,
+    onProfileTabChange,
+    profileVisiblePosts,
+    isGridLayout,
+    renderPostGrid,
+    renderPostArticle,
+  } = props;
+
+  const canShowNoodlerCta =
+    isNoodlerEnabled &&
+    Boolean(viewedProfileAccount) &&
+    (viewedProfileAccount?.kind === "persona" || viewedProfileAccount?.kind === "character");
+
+  return (
+    <div className="border-b border-[var(--noodle-divider)]">
+      <ProfileHeaderChrome
+        onBackToHome={onBackToHome}
+        profileDisplayHandle={profileDisplayHandle}
+        canEditViewedProfile={canEditViewedProfile}
+        hasViewedProfileAccount={Boolean(viewedProfileAccount)}
+        profileUploadTarget={profileUploadTarget}
+        onBannerClick={() => {
+          if (canEditViewedProfile) bannerFileRef.current?.click();
+        }}
+        onAvatarClick={() => {
+          if (canEditViewedProfile) avatarFileRef.current?.click();
+        }}
+        profileBannerPreview={profileBannerPreview}
+        profilePreviewAccount={profilePreviewAccount}
+        bannerFileRef={bannerFileRef}
+        avatarFileRef={avatarFileRef}
+        onProfileImageFile={onProfileImageFile}
+        isEditingProfile={isEditingProfile}
+        onEditToggle={onEditToggle}
+        canSaveProfile={canSaveProfile}
+        updateAccountPending={updateAccountPending}
+        nonEditAction={
+          canFollowViewedProfile && viewedProfileAccount ? (
+            <button
+              type="button"
+              onClick={() => onUpdateFollowedAccount(viewedProfileAccount, !viewedProfileFollowed)}
+              disabled={updateAccountPending}
+              className={cn(
+                "mb-1 h-9 rounded-full px-5 text-xs font-bold transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50",
+                viewedProfileFollowed
+                  ? "border border-[var(--noodle-divider)] text-[var(--foreground)]"
+                  : "bg-[var(--foreground)] text-[var(--background)]",
+              )}
+            >
+              {viewedProfileFollowed ? "Following" : "Follow"}
+            </button>
+          ) : null
+        }
+        extraActionButtons={
+          canShowNoodlerCta && viewedProfileAccount ? (
+            linkedNoodlerAccount ? (
+              <button
+                type="button"
+                onClick={() => onOpenLinkedNoodler(linkedNoodlerAccount)}
+                className="mb-1 h-9 rounded-full border border-[var(--noodle-divider)] px-5 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)]"
+                title="View private NoodleR account"
+              >
+                Open NoodleR
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onCreateNoodler(viewedProfileAccount)}
+                disabled={createPrivateAccountPending}
+                className="mb-1 h-9 rounded-full border border-[var(--noodle-divider)] px-5 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                title="Create a private NoodleR account linked to this profile"
+              >
+                {createPrivateAccountPending ? "Creating…" : "Create NoodleR"}
+              </button>
+            )
+          ) : null
+        }
+        profileName={profileName}
+        onProfileNameChange={onProfileNameChange}
+        profileHandle={profileHandle}
+        onProfileHandleChange={onProfileHandleChange}
+        profileBio={profileBio}
+        onProfileBioChange={onProfileBioChange}
+        profileLocation={profileLocation}
+        onProfileLocationChange={onProfileLocationChange}
+        badge={isNoodlerEnabled && Boolean(viewedProfileAccount?.linkedAccountId) ? <NoodlerBadge /> : undefined}
+        profileBioPreview={profileBioPreview}
+        noodleCustomEmojiMap={noodleCustomEmojiMap}
+        emojiKeyPrefix={`noodle-profile-bio-${viewedProfileAccount?.id ?? "preview"}`}
+        profileLocationPreview={profileLocationPreview}
+        profileFollowingCount={profileFollowingCount}
+        profileFollowerCount={profileFollowerCount}
+        onOpenFollowing={onOpenFollowing}
+        onOpenFollowers={onOpenFollowers}
+      />
+      <ProfileTabsAndGrid
+        activeTab={profileTab}
+        onTabChange={onProfileTabChange}
+        posts={profileVisiblePosts}
+        isGridLayout={isGridLayout}
+        renderPostGrid={renderPostGrid}
+        renderPostArticle={renderPostArticle}
+      />
+    </div>
   );
 }

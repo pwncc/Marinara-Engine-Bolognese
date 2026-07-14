@@ -3,19 +3,30 @@
 // primitives shared between NoodleView (shell),
 // NoodleHome (public feed), and NoodlerHome (private hub).
 // ──────────────────────────────────────────────
-import { ChevronLeft, ChevronRight, Lock, RefreshCw, Search, X, Home } from "lucide-react";
+import { ChevronLeft, ChevronRight, Lock, MapPin, RefreshCw, Search, X, Home } from "lucide-react";
 import { createPortal } from "react-dom";
-import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  Fragment,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+  type RefObject,
+  type CSSProperties,
+} from "react";
 import type {
   NoodleAccount,
   NoodleInteraction,
   NoodleInteractionType,
   NoodlePost,
+  NoodlePrivateIdentityDisclosure,
   NoodleTextMention,
 } from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
 import type { AvatarCropValue } from "../../lib/utils";
 import { getAvatarCropStyle } from "../../lib/utils";
+import { renderInlineWithCustomEmojis } from "../../lib/custom-emoji-render";
 import type { ChatImage } from "../../hooks/use-gallery";
 
 export type ComposerTool = "image" | "poll" | "media";
@@ -57,6 +68,12 @@ export const NOODLER_BLUE = "#FF6FAE";
 export const NOODLE_ICON_SCOPE_CLASS = "[&_svg]:!text-[var(--noodle-blue)]";
 export const NOODLE_LOGO_SRC = "/noodle-klusek.png";
 
+export const PROFILE_TABS: Array<{ id: ProfileTab; label: string }> = [
+  { id: "posts", label: "Posts" },
+  { id: "likes", label: "Likes" },
+  { id: "media", label: "Media" },
+];
+
 export const NOODLE_MODE_META: Record<NoodleMode, { label: string; url: string; tagline: string }> = {
   noodle: {
     label: "Noodle",
@@ -69,6 +86,53 @@ export const NOODLE_MODE_META: Record<NoodleMode, { label: string; url: string; 
     tagline: "Private creator network",
   },
 };
+
+export function parseRecord(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+export function readString(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+export function privateStageProfileFromAccount(account: NoodleAccount | null) {
+  return parseRecord(account?.settings?.stageProfile);
+}
+
+export function readPrivateStageSetting(account: NoodleAccount | null, key: string) {
+  return readString(privateStageProfileFromAccount(account)[key]).trim();
+}
+
+export function readPrivateIdentityDisclosure(account: NoodleAccount | null): NoodlePrivateIdentityDisclosure {
+  const value = readPrivateStageSetting(account, "identityDisclosure");
+  return value === "open" || value === "secret" ? value : "hinted";
+}
+
+export function fanActivitySettingsFromAccount(account: NoodleAccount | null | undefined) {
+  return parseRecord(account?.settings?.fanActivity);
+}
+
+export function readFanActivityEnabled(account: NoodleAccount | null | undefined) {
+  return fanActivitySettingsFromAccount(account).enabled === true;
+}
+
+export function readFanActivityIntensity(account: NoodleAccount | null | undefined): "low" | "medium" | "high" {
+  const value = fanActivitySettingsFromAccount(account).intensity;
+  return value === "medium" || value === "high" ? value : "low";
+}
+
+export function readFanActivityAutoSchedule(account: NoodleAccount | null | undefined) {
+  return fanActivitySettingsFromAccount(account).autoSchedule === true;
+}
 
 export function initials(name: string) {
   return (
@@ -417,5 +481,320 @@ export function NoodleToolButton({
     >
       {children}
     </button>
+  );
+}
+
+export function NoodleCustomEmojiText({
+  text,
+  emojiMap,
+  keyPrefix,
+}: {
+  text: string;
+  emojiMap: Map<string, string>;
+  keyPrefix: string;
+}) {
+  return (
+    <>
+      {renderInlineWithCustomEmojis(text, keyPrefix, emojiMap, (segment, key) => [
+        <Fragment key={key}>{segment}</Fragment>,
+      ])}
+    </>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Profile view chrome shared between the public profile
+// (rendered by NoodleHome's PublicProfileView) and the private
+// profile (rendered by NoodlerHome's PrivateProfileView). Purely
+// presentational: which mode-specific actions/panels render around
+// this chrome is decided by the caller via slots, not by this
+// component reading account visibility itself.
+// ──────────────────────────────────────────────
+export interface ProfileHeaderChromeProps {
+  onBackToHome: () => void;
+  profileDisplayHandle: string;
+  canEditViewedProfile: boolean;
+  hasViewedProfileAccount: boolean;
+  profileUploadTarget: "avatar" | "banner" | null;
+  onBannerClick: () => void;
+  onAvatarClick: () => void;
+  profileBannerPreview: string;
+  profilePreviewAccount: { displayName: string; avatarUrl: string | null; avatarCrop: AvatarCropValue | null };
+  bannerFileRef: RefObject<HTMLInputElement | null>;
+  avatarFileRef: RefObject<HTMLInputElement | null>;
+  onProfileImageFile: (target: "avatar" | "banner", event: ChangeEvent<HTMLInputElement>) => void;
+  isEditingProfile: boolean;
+  onEditToggle: () => void;
+  canSaveProfile: boolean;
+  updateAccountPending: boolean;
+  /** Rendered instead of the Edit button when the viewer can't edit this profile — e.g. Follow or Subscribe. */
+  nonEditAction: ReactNode;
+  /** Extra buttons after the primary action — e.g. Create/Open NoodleR, Delete NoodleR profile. */
+  extraActionButtons?: ReactNode;
+  profileName: string;
+  onProfileNameChange: (value: string) => void;
+  profileHandle: string;
+  onProfileHandleChange: (value: string) => void;
+  profileBio: string;
+  onProfileBioChange: (value: string) => void;
+  profileLocation: string;
+  onProfileLocationChange: (value: string) => void;
+  /** e.g. NoodlerBadge / NoodlerPrivateBadge next to the display name. */
+  badge?: ReactNode;
+  profileBioPreview: string;
+  noodleCustomEmojiMap: Map<string, string>;
+  emojiKeyPrefix: string;
+  profileLocationPreview: string;
+  /** Mode-specific chips rendered below the location line — e.g. identity/dynamic chips on private profiles. */
+  belowBioContent?: ReactNode;
+  profileFollowingCount: number;
+  profileFollowerCount: number;
+  onOpenFollowing: () => void;
+  onOpenFollowers: () => void;
+}
+
+export function ProfileHeaderChrome(props: ProfileHeaderChromeProps) {
+  const {
+    onBackToHome,
+    profileDisplayHandle,
+    canEditViewedProfile,
+    hasViewedProfileAccount,
+    profileUploadTarget,
+    onBannerClick,
+    onAvatarClick,
+    profileBannerPreview,
+    profilePreviewAccount,
+    bannerFileRef,
+    avatarFileRef,
+    onProfileImageFile,
+    isEditingProfile,
+    onEditToggle,
+    canSaveProfile,
+    updateAccountPending,
+    nonEditAction,
+    extraActionButtons,
+    profileName,
+    onProfileNameChange,
+    profileHandle,
+    onProfileHandleChange,
+    profileBio,
+    onProfileBioChange,
+    profileLocation,
+    onProfileLocationChange,
+    badge,
+    profileBioPreview,
+    noodleCustomEmojiMap,
+    emojiKeyPrefix,
+    profileLocationPreview,
+    belowBioContent,
+    profileFollowingCount,
+    profileFollowerCount,
+    onOpenFollowing,
+    onOpenFollowers,
+  } = props;
+
+  return (
+    <>
+      <div className="sticky top-0 z-20 flex min-h-14 items-center gap-3 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 px-2 py-2 backdrop-blur lg:hidden">
+        <MobileTimelineBackButton onClick={onBackToHome} />
+        <div className="min-w-0">
+          <h2 className="truncate text-base font-bold">Profile</h2>
+          <p className="truncate text-xs text-[var(--muted-foreground)]">@{profileDisplayHandle || "noodle"}</p>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onBannerClick}
+        disabled={!canEditViewedProfile || profileUploadTarget === "banner"}
+        className={cn(
+          "relative block h-40 w-full overflow-hidden bg-[var(--noodle-blue)]/15 text-left disabled:cursor-default",
+          profileUploadTarget === "banner" && "cursor-wait opacity-80",
+        )}
+        title={canEditViewedProfile ? "Upload banner" : undefined}
+      >
+        {profileBannerPreview ? (
+          <img src={profileBannerPreview} alt="" className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full items-center justify-center bg-[var(--noodle-blue)]/10">
+            <NoodleLogo className="h-20 w-32 opacity-70" />
+          </div>
+        )}
+        {profileUploadTarget === "banner" && (
+          <span className="absolute bottom-3 right-3 rounded-full bg-[var(--marinara-chat-chrome-panel-bg)] px-3 py-1.5 text-xs font-semibold text-[var(--noodle-blue)] shadow-lg ring-1 ring-[var(--marinara-chat-chrome-panel-border)]">
+            Uploading...
+          </span>
+        )}
+      </button>
+      <input
+        ref={bannerFileRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(event) => onProfileImageFile("banner", event)}
+      />
+
+      <div className="px-4 pb-5">
+        <div className="-mt-10 flex items-end justify-between gap-3">
+          <button
+            type="button"
+            onClick={onAvatarClick}
+            disabled={!canEditViewedProfile || profileUploadTarget === "avatar"}
+            className={cn(
+              "relative rounded-full bg-[var(--background)] p-1 text-left disabled:cursor-default",
+              profileUploadTarget === "avatar" && "cursor-wait opacity-80",
+            )}
+            title={canEditViewedProfile ? "Upload avatar" : undefined}
+          >
+            <Avatar account={profilePreviewAccount} size="lg" />
+            {profileUploadTarget === "avatar" && (
+              <span className="absolute inset-1 flex items-center justify-center rounded-full bg-black/50 text-[0.625rem] font-semibold text-white">
+                Uploading
+              </span>
+            )}
+          </button>
+          <input
+            ref={avatarFileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(event) => onProfileImageFile("avatar", event)}
+          />
+          {canEditViewedProfile ? (
+            <button
+              type="button"
+              onClick={onEditToggle}
+              disabled={isEditingProfile ? !canSaveProfile || updateAccountPending : !hasViewedProfileAccount}
+              className="mb-1 h-9 rounded-full bg-[var(--noodle-blue)] px-5 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isEditingProfile ? (updateAccountPending ? "Saving" : "Save") : "Edit Profile"}
+            </button>
+          ) : (
+            nonEditAction
+          )}
+          {extraActionButtons}
+        </div>
+
+        {isEditingProfile ? (
+          <div className="mt-3 space-y-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block space-y-1.5">
+                <span className={labelClass}>Display name</span>
+                <input
+                  value={profileName}
+                  onChange={(event) => onProfileNameChange(event.target.value)}
+                  className={fieldClass}
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className={labelClass}>@name</span>
+                <input
+                  value={profileHandle}
+                  onChange={(event) => onProfileHandleChange(event.target.value)}
+                  className={fieldClass}
+                  placeholder="@mari"
+                />
+              </label>
+            </div>
+            <label className="block space-y-1.5">
+              <span className={labelClass}>Bio</span>
+              <textarea
+                value={profileBio}
+                onChange={(event) => onProfileBioChange(event.target.value)}
+                className={cn(fieldClass, "h-24 resize-none py-2")}
+              />
+            </label>
+            <label className="block space-y-1.5">
+              <span className={labelClass}>Location</span>
+              <input
+                value={profileLocation}
+                onChange={(event) => onProfileLocationChange(event.target.value)}
+                className={fieldClass}
+                placeholder="Somewhere cozy"
+              />
+            </label>
+          </div>
+        ) : (
+          <div className="mt-3">
+            <h3 className="flex items-center gap-1.5 text-xl font-bold leading-tight">
+              {profilePreviewAccount.displayName}
+              {badge}
+            </h3>
+            <p className="text-sm text-[var(--muted-foreground)]">@{profileDisplayHandle || "noodle"}</p>
+            {profileBioPreview && (
+              <p className="mt-3 whitespace-pre-wrap text-sm leading-6">
+                <NoodleCustomEmojiText text={profileBioPreview} emojiMap={noodleCustomEmojiMap} keyPrefix={emojiKeyPrefix} />
+              </p>
+            )}
+            {profileLocationPreview && (
+              <p className="mt-3 flex items-center gap-1.5 text-sm text-[var(--muted-foreground)]">
+                <MapPin size={15} className="text-[var(--noodle-blue)]" />
+                {profileLocationPreview}
+              </p>
+            )}
+            {belowBioContent}
+            <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm text-[var(--muted-foreground)]">
+              <button type="button" onClick={onOpenFollowing} className="transition-colors hover:text-[var(--noodle-blue)]">
+                <span className="font-bold text-[var(--foreground)]">{profileFollowingCount}</span> Following
+              </button>
+              <button type="button" onClick={onOpenFollowers} className="transition-colors hover:text-[var(--noodle-blue)]">
+                <span className="font-bold text-[var(--foreground)]">{profileFollowerCount}</span> Followers
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+export interface ProfileTabsAndGridProps {
+  activeTab: ProfileTab;
+  onTabChange: (tab: ProfileTab) => void;
+  posts: NoodlePost[];
+  isGridLayout: boolean;
+  renderPostGrid: (posts: NoodlePost[]) => ReactNode;
+  renderPostArticle: (post: NoodlePost) => ReactNode;
+}
+
+export function ProfileTabsAndGrid({
+  activeTab,
+  onTabChange,
+  posts,
+  isGridLayout,
+  renderPostGrid,
+  renderPostArticle,
+}: ProfileTabsAndGridProps) {
+  return (
+    <div className="border-t border-[var(--noodle-divider)]">
+      <div className="grid grid-cols-3 border-b border-[var(--noodle-divider)]">
+        {PROFILE_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => onTabChange(tab.id)}
+            className={cn(
+              "relative flex h-12 items-center justify-center text-sm font-semibold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+              activeTab === tab.id && "text-[var(--foreground)]",
+            )}
+          >
+            {tab.label}
+            {activeTab === tab.id && (
+              <span className="absolute bottom-0 left-1/2 h-1 w-12 -translate-x-1/2 rounded-full bg-[var(--noodle-blue)]" />
+            )}
+          </button>
+        ))}
+      </div>
+      {posts.length > 0 ? (
+        isGridLayout ? (
+          renderPostGrid(posts)
+        ) : (
+          <div>{posts.map(renderPostArticle)}</div>
+        )
+      ) : (
+        <div className="px-8 py-14 text-center">
+          <p className="text-sm font-semibold text-[var(--muted-foreground)]">Nothing boiling here yet.</p>
+        </div>
+      )}
+    </div>
   );
 }
