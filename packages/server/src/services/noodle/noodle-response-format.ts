@@ -104,6 +104,20 @@ const profilesSchema = {
   additionalProperties: false,
 } as const;
 
+const privateIdentitySchema = {
+  type: "object",
+  properties: {
+    name: { type: "string" },
+    handle: { type: "string" },
+    bio: { type: "string" },
+    appearance: { type: "string" },
+    personality: { type: "string" },
+    dynamic: { type: "string" },
+  },
+  required: ["name", "handle", "bio", "appearance", "personality", "dynamic"],
+  additionalProperties: false,
+} as const;
+
 const fanActivitySchema = {
   type: "object",
   properties: {
@@ -128,13 +142,25 @@ const fanActivitySchema = {
 
 export function noodleResponseFormat(
   model: string,
-  kind: "timeline" | "profiles" | "fan_activity",
+  kind: "timeline" | "profiles" | "private_identity" | "fan_activity",
 ): { type: string; [key: string]: unknown } {
   if (!isOpenAIGpt56Model(model)) return { type: "json_object" };
-  const schemaByKind = { timeline: timelineSchema, profiles: profilesSchema, fan_activity: fanActivitySchema };
+  const schemaByKind = {
+    timeline: timelineSchema,
+    profiles: profilesSchema,
+    private_identity: privateIdentitySchema,
+    fan_activity: fanActivitySchema,
+  };
   return {
     type: "json_schema",
-    name: kind === "timeline" ? "noodle_timeline" : kind === "profiles" ? "noodle_profiles" : "noodle_fan_activity",
+    name:
+      kind === "timeline"
+        ? "noodle_timeline"
+        : kind === "profiles"
+          ? "noodle_profiles"
+          : kind === "private_identity"
+            ? "noodle_private_identity"
+            : "noodle_fan_activity",
     schema: schemaByKind[kind],
     strict: true,
   };

@@ -1581,7 +1581,7 @@ async function generatePrivateAccountStageIdentity(input: {
     topP: 0.9,
     stream: false,
     debugMode: input.debugMode,
-    responseFormat: noodleResponseFormat(input.connection.model, "profiles"),
+    responseFormat: noodleResponseFormat(input.connection.model, "private_identity"),
   });
   const parsed = noodlePrivateIdentitySchema.safeParse(parseGameJsonish(result.content ?? ""));
   if (!parsed.success) {
