@@ -36,6 +36,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Fixed
 
+- Fixed concluded Conversation scene summaries bypassing daily and weekly compaction because narrator history is represented as system-role prompt messages. Past scene summaries now fold into their normal day/week summaries and stay out of the verbatim recent-message tail, while current-day scene context and genuine system instructions remain intact ([#3641](https://github.com/Pasta-Devs/Marinara-Engine/issues/3641)).
 - Replaced stale Spotify, YouTube, or Custom player controls with clear **Download Music DJ Agent to configure** guidance and a direct **Download Agents** action on desktop and mobile whenever the always-available **Music Player** toggle is enabled without Music DJ installed.
 - Fixed Conversation selfie prompt generation ignoring the per-chat **Prompt Model** selection. Automatic character selfies and Gallery selfies now route their prompt-writing request through the selected text connection, including its provider, model, caching behavior, and local-sidecar support (#3638).
 - Applied downloaded package artwork to matching installed agents in the Agents sidebar, while preserving user-uploaded pictures and the star fallback for missing or failed images.
