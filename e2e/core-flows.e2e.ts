@@ -725,6 +725,9 @@ test("home shell and primary topbar panels open without client errors", async ({
   await expect(page.locator('[data-component="TopBar"]')).toBeVisible();
   await expect(page.getByRole("heading", { name: "Marinara Engine" })).toBeVisible();
 
+  const charactersButton = page.locator('[data-tour="panel-characters"]');
+  await expect(charactersButton.locator("svg")).toHaveClass(/mari-topbar-accent-icon/);
+
   for (const selector of [
     '[data-tour="sidebar-toggle"]',
     '[data-tour="panel-bot-browser"]',
@@ -738,10 +741,34 @@ test("home shell and primary topbar panels open without client errors", async ({
   ]) {
     await page.locator(selector).click();
     await expect(page.locator('[data-component="TopBar"]')).toBeVisible();
+    if (selector === '[data-tour="panel-characters"]') {
+      await expect(page.locator('[data-component="RightPanelHeaderIcon"]')).toHaveClass(
+        /mari-panel-gradient--characters/,
+      );
+    }
   }
 
   const health = await page.request.get("/api/health");
   expect(health.ok()).toBeTruthy();
+  expect(errors).toEqual([]);
+});
+
+test("Card Browser labels and the Persona full library stay available across viewports", async ({ page }) => {
+  const errors = collectUnexpectedErrors(page);
+  await page.goto("/");
+
+  await page.locator('[data-tour="panel-bot-browser"]').click();
+  await expect(page.getByText("Card Browser", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Download Cards" })).toBeVisible();
+
+  await page.locator('[data-tour="panel-personas"]').click();
+  const openPersonaLibrary = page.getByRole("button", { name: "Open Full Library" });
+  await expect(openPersonaLibrary).toBeVisible();
+  await openPersonaLibrary.click();
+
+  await expect(page.getByText("Persona Library", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Browse your personas" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New persona" })).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -1390,7 +1417,8 @@ test("Conversation feature packages expose commands and settings without per-cha
     expect(
       await illustratorSettings.evaluate(
         (illustrator, calls) =>
-          calls instanceof Node && Boolean(illustrator.compareDocumentPosition(calls) & Node.DOCUMENT_POSITION_FOLLOWING),
+          calls instanceof Node &&
+          Boolean(illustrator.compareDocumentPosition(calls) & Node.DOCUMENT_POSITION_FOLLOWING),
         callsSettingsHandle,
       ),
     ).toBe(true);

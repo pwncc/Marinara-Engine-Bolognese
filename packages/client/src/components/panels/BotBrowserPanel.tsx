@@ -62,7 +62,13 @@ export function BotBrowserPanel() {
   }, [parsed, search]);
 
   const sorted = useMemo(
-    () => sortBasicPanelItems(filtered, sort, (char) => char.name, (char) => char.createdAt || char.updatedAt),
+    () =>
+      sortBasicPanelItems(
+        filtered,
+        sort,
+        (char) => char.name,
+        (char) => char.createdAt || char.updatedAt,
+      ),
     [filtered, sort],
   );
 
@@ -106,7 +112,7 @@ export function BotBrowserPanel() {
 
   return (
     <div className="flex flex-col gap-2 p-3">
-      {/* Browse online button */}
+      {/* Download cards button */}
       <button
         onClick={openBotBrowser}
         className={cn(
@@ -115,7 +121,7 @@ export function BotBrowserPanel() {
         )}
       >
         <Bot size="0.875rem" />
-        Browse Online
+        Download Cards
       </button>
 
       {/* Search + Sort */}

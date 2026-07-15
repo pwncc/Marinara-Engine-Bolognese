@@ -387,6 +387,7 @@ export function AppShell() {
 
   const characterDetailId = useUIStore((s) => s.characterDetailId);
   const characterLibraryOpen = useUIStore((s) => s.characterLibraryOpen);
+  const cardLibraryKind = useUIStore((s) => s.cardLibraryKind);
   const agentCatalogOpen = useUIStore((s) => s.agentCatalogOpen);
   const lorebookDetailId = useUIStore((s) => s.lorebookDetailId);
   const presetDetailId = useUIStore((s) => s.presetDetailId);
@@ -561,7 +562,7 @@ export function AppShell() {
   ) : characterDetailId ? (
     <CharacterEditor />
   ) : characterLibraryOpen ? (
-    <CharacterLibraryView />
+    <CharacterLibraryView key={cardLibraryKind} />
   ) : agentCatalogOpen ? (
     <AgentCatalogView />
   ) : lorebookDetailId ? (
@@ -918,7 +919,7 @@ export function AppShell() {
         <div className="flex-shrink-0 md:hidden h-[env(safe-area-inset-top)] bg-[var(--marinara-topbar-surface)] backdrop-blur-sm" />
         <TopBar />
         <div className="mari-app-background-paint relative flex flex-1 flex-col overflow-hidden">
-          {/* Bot Browser — kept mounted once opened so state persists across close/reopen */}
+          {/* Card Browser — kept mounted once opened so state persists across close/reopen */}
           <MountOnceWhenOpened open={botBrowserOpen} overlay>
             <BotBrowserView />
           </MountOnceWhenOpened>
@@ -1057,9 +1058,7 @@ export function AppShell() {
               inert={!rightPanelOpen}
               className={cn(
                 "mari-right-panel mari-shell-panel-motion mari-shell-panel-edge mari-shell-panel-edge--left absolute inset-y-0 right-0 overflow-hidden bg-[var(--background)]/95",
-                rightPanelOpen
-                  ? "mari-shell-panel-enter-right"
-                  : "mari-shell-panel-exit-right pointer-events-none",
+                rightPanelOpen ? "mari-shell-panel-enter-right" : "mari-shell-panel-exit-right pointer-events-none",
               )}
               style={{ width: liveRightPanelWidth }}
             >

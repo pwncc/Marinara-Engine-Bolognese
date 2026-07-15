@@ -14,11 +14,13 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Published first-party downloadable agents in the new [Pasta-Devs/Marinara-Agents](https://github.com/Pasta-Devs/Marinara-Agents) repository as individually verified packages. Its README now lists every Writer, Tracker, and Misc package, while repository contribution rules, issue and PR templates, catalog validation, protected review flow, and automatic CodeRabbit review keep future package work complete and reviewable. Conversation mode's About Me profile and `update_about_me` tool remain built into the Engine and are not downloadable agents.
 - Moved Hierarchical Maps, Conversation audio/video calls, UNO, Chess, Poker, 8-Ball Pool, Tic-Tac-Toe, and Rock-Paper-Scissors into optional packages with package-owned server runtimes and responsive client surfaces. Maps can be enabled as an agent in Roleplay and during or after Game creation.
 - Added a default-on Noodle setting that can exclude Professor Mari from account discovery and future generated activity without deleting existing timeline history ([#3598](https://github.com/Pasta-Devs/Marinara-Engine/issues/3598)).
-
+- Added **Open Full Library** to Personas, with the same responsive card grid, search, sorting, preview pane, paging, scroll restoration, and editor return flow as the Character Library.
 - Added separate opt-in browser and Android generation-completion notifications for manually started Conversation, Roleplay, Visual Novel, and Game replies that finish while Marinara is unfocused, without changing autonomous-message background notification preferences (#3588).
 
 ### Changed
 
+- Renamed **Bot Browser** to **Card Browser** throughout the interface, documentation, onboarding tutorial, and Professor Mari guidance, and renamed **Browse Online** to **Download Cards**.
+- Updated the Character and Persona full libraries to use the chroma text color selected in Settings for headings, counts, descriptions, metadata, tags, previews, and empty states instead of legacy fixed-color text.
 - Made Local Whisper a Conversation Calls-owned download. Connections now shows Local Speech Model controls only while the Conversation Calls package is installed, and uninstalling Conversation Calls removes every downloaded Whisper model and its saved selection to reclaim disk space. Reinstalling Calls makes the models available to download again.
 - Removed the retired database compatibility stack, including its runtime backend switch, startup migrations, one-time importer and repair readers, old migration scripts, database-file backup handling, and external ORM/runtime dependencies. Storage schemas and query expressions are now file-native throughout the Engine.
 - Made file-native primary and natural-key constraints enforceable during atomic inserts and updates, preventing concurrent custom-media names, Noodle toggles, and lorebook links from persisting ambiguous duplicates.
@@ -31,6 +33,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Fixed
 
+- Restored the Characters sidebar header icon to the same pink-to-rose gradient used by the New Character action while keeping its topbar icon on the selected chroma accent.
 - Calibrated Lorebook semantic similarity against an unrelated-text baseline so embedding models whose raw cosine scores cluster around 0.97 no longer inject unrelated entries at every usable threshold or suppress relevant entries near 1.0 (#3627).
 - Replaced the nested presence animation used by expandable right-sidebar folders with an accessible grid transition, preventing Connections and Lorebooks folders from crashing the app shell with React hook-order errors (#3630).
 - Recognized OpenRouter's positive-form `No endpoints found that support image input` rejection as a non-vision model response, allowing Noodle timeline refreshes to retry once with the existing text-only prompt (#3631).

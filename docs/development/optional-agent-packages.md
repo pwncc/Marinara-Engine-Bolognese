@@ -78,7 +78,7 @@ Every uninstall requires confirmation. Affected chats fall back to their ordinar
 
 ## Catalog interface
 
-The Agents panel contains a `Download Agents` control matching Bot Browser's `Browse Online` affordance. It opens a full-screen responsive library with search, package kinds, compatibility information, install/update state, permissions, storage cost, documentation, and uninstall controls.
+The Agents panel contains a `Download Agents` control matching the Card Browser's `Download Cards` affordance. It opens a full-screen responsive library with search, package kinds, compatibility information, install/update state, permissions, storage cost, documentation, and uninstall controls.
 
 Desktop uses a browse list with an adjacent detail region. Mobile uses one pane with explicit back navigation and touch-sized actions. Empty, offline, incompatible, corrupt-download, interrupted-install, update, rollback, and restart-required states are first-class.
 
