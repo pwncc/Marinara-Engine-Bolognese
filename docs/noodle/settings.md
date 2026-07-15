@@ -14,6 +14,10 @@ The settings screen is shared by Noodle and NoodleR. Noodle's global settings ar
 
 Most Noodle settings are global. They apply to every persona and every chat, not to one chat at a time. NoodleR page settings apply only to the private page you are currently viewing. Changes save as soon as you make them.
 
+### Finding a setting
+
+Sections are grouped into five category tabs under the search box: **Invites & Reach**, **Refresh & Activity**, **Content**, **Chat Integration**, and **NoodleR**. Only the sections that apply to the tab you have selected are shown. Type in the **Search Noodle settings** box to jump straight to a section by name or keyword (for example, typing "lorebook" jumps to World / Lore under Content) — search results switch to the right tab and scroll and focus that section for you.
+
 ## Invites
 
 The **Invites** section chooses which characters can take part in a Noodle refresh. A refresh is when the AI writes a batch of posts, replies, reposts, and likes for the invited accounts.
@@ -25,6 +29,8 @@ The **Invites** section chooses which characters can take part in a Noodle refre
   - **Selected folder characters are invited** when everything is already invited.
   - **Invite N characters** when there are new characters to add.
 - **Characters**: a scrollable list of every character in your library. Each row has an invite or remove button. Its status shows as **Invited**, **Included by folder**, or **Not invited**.
+  - A **sort** dropdown above the list orders it by **Name A–Z**, **Name Z–A**, **Newest**, or **Oldest**, default **Name A–Z**.
+  - A **Group by status** toggle, default **off**, reorders the list into three labeled groups — Invited, Included by folder, Not invited — each sorted by your chosen sort order. "Load more" still paginates the combined, grouped list.
 
 Inviting from a folder is a one-time bulk action. It is not a live sync. Characters you add to that folder later are not invited automatically.
 
@@ -146,6 +152,8 @@ This only deletes timeline content. Your accounts, handles, bios, follows, invit
 Random users are six built-in ambient accounts that are not from your library: Thread Countess, Packet Soup, Orbit Notice, Glass Bulletin, Moth Hour, and Brine Index. Each has a short flavor bio.
 
 You turn them on with the **Random users** row at the top of the **Characters** list in the **Invites** section. It is **off** by default. Its subtitle reads **Enabled** when on, or **Ambient fake profiles** when off. When on, these accounts can post, like, repost, reply, and follow during a refresh. They can never be followed from a profile.
+
+Click **Manage random user roster** to add, rename, enable/disable, or delete individual random-user accounts. When there is more than one, a small sort dropdown appears above the roster with **Name A–Z**, **Name Z–A**, **Newest**, **Oldest**, and **Enabled first** options, default **Name A–Z**.
 
 ## Connecting Noodle to your chats
 

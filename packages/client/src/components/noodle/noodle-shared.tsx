@@ -12,11 +12,15 @@ import {
   Loader2,
   Lock,
   MapPin,
+  MessageCircle,
   RefreshCw,
   Search,
   Smile,
+  Sparkles,
+  UserPlus,
   X,
   Home,
+  type LucideIcon,
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import {
@@ -114,6 +118,145 @@ export const NOODLE_MODE_META: Record<NoodleMode, { label: string; url: string; 
     tagline: "Private creator network",
   },
 };
+
+export type NoodleSettingsTabId = "invites" | "refresh" | "content" | "chat" | "noodler";
+
+export const NOODLE_SETTINGS_TABS: ReadonlyArray<{
+  id: NoodleSettingsTabId;
+  label: string;
+  icon: LucideIcon;
+  description: string;
+}> = [
+  { id: "invites", label: "Invites & Reach", icon: UserPlus, description: "Who can participate and how many at once." },
+  { id: "refresh", label: "Refresh & Activity", icon: RefreshCw, description: "Generation connection, schedule, and per-refresh caps." },
+  { id: "content", label: "Content", icon: Sparkles, description: "Images, appearance, tone, and lore." },
+  { id: "chat", label: "Chat Integration", icon: MessageCircle, description: "Carrying Noodle activity into chats." },
+  { id: "noodler", label: "NoodleR", icon: Lock, description: "Private creator network access and per-page settings." },
+];
+
+export type NoodleSettingsSectionMeta = {
+  id: string;
+  tab: NoodleSettingsTabId;
+  label: string;
+  description: string;
+  aliases: string[];
+};
+
+export const NOODLE_SETTINGS_SECTIONS: readonly NoodleSettingsSectionMeta[] = [
+  {
+    id: "invites",
+    tab: "invites",
+    label: "Invites",
+    description: "Choose who can participate in Noodle refreshes.",
+    aliases: ["professor mari", "characters", "folders", "random users", "filler"],
+  },
+  {
+    id: "active-accounts",
+    tab: "invites",
+    label: "Active Accounts",
+    description: "How many eligible characters or random users are active per refresh.",
+    aliases: ["participants", "min active", "max active", "exact count"],
+  },
+  {
+    id: "refresh",
+    tab: "refresh",
+    label: "Refresh",
+    description: "The model connection and how often Noodle creates a fresh timeline update.",
+    aliases: ["generation connection", "refreshes per day", "schedule"],
+  },
+  {
+    id: "activity",
+    tab: "refresh",
+    label: "Activity",
+    description: "Limits how much generated Noodle activity one refresh may create.",
+    aliases: ["posts", "replies", "reposts", "likes"],
+  },
+  {
+    id: "reset-noodle",
+    tab: "refresh",
+    label: "Reset Noodle",
+    description: "Clears timeline content while keeping profiles, follows, invites, and settings.",
+    aliases: ["reset", "clear timeline", "danger"],
+  },
+  {
+    id: "image-generation",
+    tab: "content",
+    label: "Image Generation",
+    description: "Generated post images and gallery image reuse.",
+    aliases: ["images", "connection", "prompt", "avatar references"],
+  },
+  {
+    id: "image-understanding",
+    tab: "content",
+    label: "Image Understanding",
+    description: "Lets a vision-capable connection describe timeline images.",
+    aliases: ["captioning", "vision"],
+  },
+  {
+    id: "appearance",
+    tab: "content",
+    label: "Appearance",
+    description: "How the timeline and profiles render posts.",
+    aliases: ["layout", "timeline", "grid"],
+  },
+  {
+    id: "timeline-writing",
+    tab: "content",
+    label: "Timeline Writing",
+    description: "Tunes how the refresh writer approaches tone and long-term memory.",
+    aliases: ["tone", "continuity", "voice"],
+  },
+  {
+    id: "world-lore",
+    tab: "content",
+    label: "World / Lore",
+    description: "Lets Noodle refreshes pull matching lorebook entries into the timeline prompt.",
+    aliases: ["lorebook", "lore", "world"],
+  },
+  {
+    id: "carryover",
+    tab: "chat",
+    label: "Carryover",
+    description: "Whether recent Noodle activity is appended to chat, roleplay, or game context.",
+    aliases: ["conversations", "roleplays", "games", "context"],
+  },
+  {
+    id: "noodler-access",
+    tab: "noodler",
+    label: "NoodleR Access",
+    description: "Whether the private NoodleR side of Noodle is available.",
+    aliases: ["enable noodler", "global persona", "verification"],
+  },
+  {
+    id: "noodler-fan-activity-global",
+    tab: "noodler",
+    label: "NoodleR Fan Activity",
+    description: "Global kill switch for unattended fan activity across every NoodleR page.",
+    aliases: ["fan activity", "scheduler"],
+  },
+  {
+    id: "noodler-page",
+    tab: "noodler",
+    label: "NoodleR page settings",
+    description: "Page identity, monetization, privacy, fan activity, and automatic posting for this page.",
+    aliases: ["stage name", "persona", "monetization", "subscription", "privacy", "automatic posting"],
+  },
+];
+
+export function getNoodleSettingsSectionAnchorId(id: string) {
+  return `noodle-settings-section-${id}`;
+}
+
+export function searchNoodleSettings(query: string): NoodleSettingsSectionMeta[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return [];
+  return NOODLE_SETTINGS_SECTIONS.filter(
+    (section) =>
+      section.label.toLowerCase().includes(normalized) ||
+      section.description.toLowerCase().includes(normalized) ||
+      section.aliases.some((alias) => alias.toLowerCase().includes(normalized)),
+  );
+}
 
 export function parseRecord(value: unknown): Record<string, unknown> {
   if (!value) return {};

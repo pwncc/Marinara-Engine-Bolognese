@@ -4,8 +4,10 @@
 import {
   AtSign,
   AlertTriangle,
+  ArrowUpDown,
   Bell,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Dices,
@@ -14,6 +16,7 @@ import {
   Heart,
   Home,
   Image as ImageIcon,
+  Layers,
   ListChecks,
   Loader2,
   Lock,
@@ -68,6 +71,7 @@ import {
   type NoodleSettingsUpdateInput,
 } from "@marinara-engine/shared";
 import { cn, parseAvatarCropJson, type AvatarCropValue } from "../../lib/utils";
+import { BASIC_PANEL_SORT_OPTIONS, normalizeBasicPanelSort, sortBasicPanelItems, type BasicPanelSort } from "../../lib/panel-sort";
 import { useActivePersona, useCharacterGroups, useCharacters, usePersonas } from "../../hooks/use-characters";
 import { useConnections } from "../../hooks/use-connections";
 import { useNoodleCustomEmojiMap } from "../../hooks/use-noodle-custom-emojis";
@@ -164,6 +168,11 @@ import {
   autoPostSettingsFromAccount,
   readAutoPostEnabled,
   readAutoPostIntensity,
+  NOODLE_SETTINGS_TABS,
+  getNoodleSettingsSectionAnchorId,
+  searchNoodleSettings,
+  type NoodleSettingsTabId,
+  type NoodleSettingsSectionMeta,
   type ActiveComposerMention,
   type ComposerTool,
   type NoodleMode,
@@ -182,7 +191,8 @@ import type { PrivateProfileViewProps } from "./NoodlerHome";
 
 const NoodlerHome = lazy(() => import("./NoodlerHome").then((module) => ({ default: module.NoodlerHome })));
 
-type RawCharacter = { id?: unknown; data?: unknown; avatarPath?: unknown };
+type RawCharacter = { id?: unknown; data?: unknown; avatarPath?: unknown; createdAt?: unknown };
+type NoodleInviteStatus = "invited" | "folder" | "not-invited";
 type RawCharacterGroup = { id?: unknown; name?: unknown; description?: unknown; characterIds?: unknown };
 type RawPersona = { id?: unknown; createdAt?: unknown; updatedAt?: unknown };
 
@@ -604,9 +614,19 @@ function FieldLabel({ children, help }: { children: React.ReactNode; help?: Reac
   );
 }
 
-function Section({ title, help, children }: { title: string; help?: React.ReactNode; children: React.ReactNode }) {
+function Section({
+  id,
+  title,
+  help,
+  children,
+}: {
+  id?: string;
+  title: string;
+  help?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
-    <section className="border-b border-[var(--noodle-divider)] p-4 last:border-b-0">
+    <section id={id} className="scroll-mt-3 border-b border-[var(--noodle-divider)] p-4 last:border-b-0">
       <h3 className="mb-3 flex items-center gap-2 text-xs font-semibold text-[var(--foreground)]">
         <Settings2 size={13} className="text-[var(--noodle-blue)]" />
         {title}
@@ -682,7 +702,8 @@ export function NoodleView() {
   const [fillerAccountsExpanded, setFillerAccountsExpanded] = useState(false);
   const [newFillerAccountName, setNewFillerAccountName] = useState("");
   const fillerProfilesQuery = useNoodleFillerProfiles(fillerAccountsExpanded);
-  const fillerProfiles = fillerProfilesQuery.data ?? [];
+  const fillerProfilesData = fillerProfilesQuery.data;
+  const fillerProfiles = useMemo(() => fillerProfilesData ?? [], [fillerProfilesData]);
   const createFillerProfile = useCreateNoodleFillerProfile();
   const updateFillerProfile = useUpdateNoodleFillerProfile();
   const deleteFillerProfile = useDeleteNoodleFillerProfile();
@@ -769,6 +790,49 @@ export function NoodleView() {
   const [inviteSearch, setInviteSearch] = useState("");
   const [inviteFoldersOpen, setInviteFoldersOpen] = useState(false);
   const [inviteCharacterLimit, setInviteCharacterLimit] = useState(NOODLE_INVITE_PAGE_SIZE);
+  const [noodleInviteSort, setNoodleInviteSort] = useState<BasicPanelSort>("name-asc");
+  const [noodleInviteGroupByStatus, setNoodleInviteGroupByStatus] = useState(false);
+  const [noodleFillerSort, setNoodleFillerSort] = useState<BasicPanelSort | "enabled-first">("name-asc");
+  const sortedFillerProfiles = useMemo(() => {
+    if (noodleFillerSort === "enabled-first") {
+      return sortBasicPanelItems(
+        fillerProfiles,
+        "name-asc",
+        (profile) => profile.displayName,
+        (profile) => profile.createdAt,
+      ).sort((left, right) => Number(right.enabled) - Number(left.enabled));
+    }
+    return sortBasicPanelItems(
+      fillerProfiles,
+      noodleFillerSort,
+      (profile) => profile.displayName,
+      (profile) => profile.createdAt,
+    );
+  }, [fillerProfiles, noodleFillerSort]);
+  const [noodlerPageSectionsOpen, setNoodlerPageSectionsOpen] = useState(true);
+  const [noodleSettingsSearch, setNoodleSettingsSearch] = useState("");
+  const rawNoodleSettingsTab = useUIStore((state) => state.noodleSettingsTab);
+  const setNoodleSettingsTabState = useUIStore((state) => state.setNoodleSettingsTab);
+  const noodleSettingsTab: NoodleSettingsTabId = NOODLE_SETTINGS_TABS.some((tab) => tab.id === rawNoodleSettingsTab)
+    ? (rawNoodleSettingsTab as NoodleSettingsTabId)
+    : "invites";
+  const noodleSettingsPanelRef = useRef<HTMLDivElement | null>(null);
+  const setNoodleSettingsTab = (tab: NoodleSettingsTabId) => setNoodleSettingsTabState(tab);
+  const jumpToNoodleSettingsSection = useCallback((section: NoodleSettingsSectionMeta) => {
+    setNoodleSettingsTabState(section.tab);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const panel = noodleSettingsPanelRef.current;
+        const target = document.getElementById(getNoodleSettingsSectionAnchorId(section.id));
+        if (!panel || !target) return;
+        panel.scrollTo({ top: Math.max(0, target.offsetTop - 12), behavior: "smooth" });
+        const focusTarget = target.querySelector<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        );
+        focusTarget?.focus({ preventScroll: true });
+      });
+    });
+  }, [setNoodleSettingsTabState]);
   const [replyPostId, setReplyPostId] = useState<string | null>(null);
   const [replyParentInteractionId, setReplyParentInteractionId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
@@ -3050,15 +3114,46 @@ export function NoodleView() {
   const normalizedInviteSearch = inviteSearch.trim().toLowerCase();
   const filteredCharacters = useMemo(
     () =>
-      characters
-        .filter((character) => readString(character.id))
-        .filter((character) => (settings?.allowProfessorMari ?? true) || readString(character.id) !== PROFESSOR_MARI_ID)
-        .filter((character) => characterName(character).toLowerCase().includes(normalizedInviteSearch))
-        .sort((left, right) => characterName(left).localeCompare(characterName(right))),
-    [characters, normalizedInviteSearch, settings?.allowProfessorMari],
+      sortBasicPanelItems(
+        characters
+          .filter((character) => readString(character.id))
+          .filter(
+            (character) => (settings?.allowProfessorMari ?? true) || readString(character.id) !== PROFESSOR_MARI_ID,
+          )
+          .filter((character) => characterName(character).toLowerCase().includes(normalizedInviteSearch)),
+        noodleInviteSort,
+        (character) => characterName(character),
+        (character) => readString(character.createdAt),
+      ),
+    [characters, normalizedInviteSearch, settings?.allowProfessorMari, noodleInviteSort],
   );
-  const visibleInviteCharacters = filteredCharacters.slice(0, inviteCharacterLimit);
-  const hasMoreInviteCharacters = filteredCharacters.length > visibleInviteCharacters.length;
+  const inviteStatusFor = useCallback(
+    (character: RawCharacter): NoodleInviteStatus => {
+      const id = readString(character.id);
+      const account = characterAccountByEntity.get(id);
+      if (account?.invited === true) return "invited";
+      if (folderInvitedCharacterIds.has(id)) return "folder";
+      return "not-invited";
+    },
+    [characterAccountByEntity, folderInvitedCharacterIds],
+  );
+  const INVITE_STATUS_LABELS: Record<NoodleInviteStatus, string> = {
+    invited: "Invited",
+    folder: "Included by folder",
+    "not-invited": "Not invited",
+  };
+  const orderedInviteCharacters = useMemo(() => {
+    if (!noodleInviteGroupByStatus) return filteredCharacters;
+    const buckets: Record<NoodleInviteStatus, RawCharacter[]> = {
+      invited: [],
+      folder: [],
+      "not-invited": [],
+    };
+    for (const character of filteredCharacters) buckets[inviteStatusFor(character)].push(character);
+    return [...buckets.invited, ...buckets.folder, ...buckets["not-invited"]];
+  }, [filteredCharacters, noodleInviteGroupByStatus, inviteStatusFor]);
+  const visibleInviteCharacters = orderedInviteCharacters.slice(0, inviteCharacterLimit);
+  const hasMoreInviteCharacters = orderedInviteCharacters.length > visibleInviteCharacters.length;
   const filteredCharacterGroups = useMemo(
     () =>
       characterGroups
@@ -3145,7 +3240,9 @@ export function NoodleView() {
 
   const settingsContent = (
     <>
+      {noodleSettingsTab === "invites" && (
       <Section
+        id={getNoodleSettingsSectionAnchorId("invites")}
         title="Invites"
         help="Choose who can participate in Noodle refreshes. Direct character invites, selected character folders, and optional random users form the pool the generator can draw from."
       >
@@ -3274,6 +3371,43 @@ export function NoodleView() {
                 Uninvite everybody
               </button>
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="inline-flex min-w-0 flex-1 items-center gap-1.5">
+                <ArrowUpDown size={12} className="shrink-0 text-[var(--muted-foreground)]" />
+                <select
+                  value={noodleInviteSort}
+                  onChange={(event) => setNoodleInviteSort(normalizeBasicPanelSort(event.target.value))}
+                  className={cn(fieldClass, "h-7 text-[0.68rem]")}
+                  aria-label="Sort characters"
+                >
+                  {BASIC_PANEL_SORT_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option === "name-asc"
+                        ? "Name A–Z"
+                        : option === "name-desc"
+                          ? "Name Z–A"
+                          : option === "newest"
+                            ? "Newest"
+                            : "Oldest"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={() => setNoodleInviteGroupByStatus((open) => !open)}
+                aria-pressed={noodleInviteGroupByStatus}
+                className={cn(
+                  "inline-flex h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-[0.68rem] font-semibold transition-colors",
+                  noodleInviteGroupByStatus
+                    ? "border-[var(--noodle-blue)]/40 bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]"
+                    : "border-[var(--marinara-chat-chrome-panel-border)] text-[var(--muted-foreground)] hover:bg-[var(--accent)]",
+                )}
+              >
+                <Layers size={12} />
+                Group by status
+              </button>
+            </div>
             <div className="max-h-96 overflow-y-auto rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] [scrollbar-gutter:stable]">
               <button
                 type="button"
@@ -3307,7 +3441,24 @@ export function NoodleView() {
                   {fillerProfilesQuery.isLoading && (
                     <p className="text-[0.68rem] text-[var(--muted-foreground)]">Loading…</p>
                   )}
-                  {fillerProfiles.map((profile) => (
+                  {fillerProfiles.length > 1 && (
+                    <label className="flex items-center gap-1.5 pb-0.5">
+                      <ArrowUpDown size={11} className="shrink-0 text-[var(--muted-foreground)]" />
+                      <select
+                        value={noodleFillerSort}
+                        onChange={(event) => setNoodleFillerSort(event.target.value as BasicPanelSort | "enabled-first")}
+                        className={cn(fieldClass, "h-6 text-[0.625rem]")}
+                        aria-label="Sort random user roster"
+                      >
+                        <option value="name-asc">Name A–Z</option>
+                        <option value="name-desc">Name Z–A</option>
+                        <option value="newest">Newest</option>
+                        <option value="oldest">Oldest</option>
+                        <option value="enabled-first">Enabled first</option>
+                      </select>
+                    </label>
+                  )}
+                  {sortedFillerProfiles.map((profile) => (
                     <div key={profile.id} className="flex items-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] p-1.5">
                       <input
                         type="checkbox"
@@ -3360,17 +3511,23 @@ export function NoodleView() {
                   </div>
                 </div>
               )}
-              {visibleInviteCharacters.map((character) => {
+              {visibleInviteCharacters.map((character, index) => {
                 const id = readString(character.id);
                 const name = characterName(character);
                 const account = characterAccountByEntity.get(id);
                 const invited = account?.invited === true;
                 const includedByFolder = folderInvitedCharacterIds.has(id);
+                const status = inviteStatusFor(character);
+                const previousStatus = index > 0 ? inviteStatusFor(visibleInviteCharacters[index - 1]) : null;
+                const showGroupHeader = noodleInviteGroupByStatus && status !== previousStatus;
                 return (
-                  <div
-                    key={id}
-                    className="flex items-center gap-2 border-b border-[var(--marinara-chat-chrome-panel-border)] p-2 last:border-b-0"
-                  >
+                  <Fragment key={id}>
+                    {showGroupHeader && (
+                      <p className="border-b border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--accent)]/40 px-3 py-1.5 text-[0.68rem] font-semibold text-[var(--muted-foreground)]">
+                        {INVITE_STATUS_LABELS[status]}
+                      </p>
+                    )}
+                    <div className="flex items-center gap-2 border-b border-[var(--marinara-chat-chrome-panel-border)] p-2 last:border-b-0">
                     <Avatar
                       account={{
                         displayName: name,
@@ -3404,10 +3561,11 @@ export function NoodleView() {
                     >
                       {invited ? <UserMinus size={15} /> : <UserPlus size={15} />}
                     </button>
-                  </div>
+                    </div>
+                  </Fragment>
                 );
               })}
-              {filteredCharacters.length === 0 && (
+              {orderedInviteCharacters.length === 0 && (
                 <p className="px-3 py-3 text-center text-xs text-[var(--muted-foreground)]">No matching characters.</p>
               )}
               {hasMoreInviteCharacters && (
@@ -3416,17 +3574,20 @@ export function NoodleView() {
                   onClick={() => setInviteCharacterLimit((limit) => limit + NOODLE_INVITE_PAGE_SIZE)}
                   className="w-full px-3 py-2 text-xs font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10"
                 >
-                  Load more ({visibleInviteCharacters.length} of {filteredCharacters.length})
+                  Load more ({visibleInviteCharacters.length} of {orderedInviteCharacters.length})
                 </button>
               )}
             </div>
           </div>
         </div>
       </Section>
+      )}
 
       {settings && (
         <>
+          {noodleSettingsTab === "refresh" && (
           <Section
+            id={getNoodleSettingsSectionAnchorId("refresh")}
             title="Refresh"
             help="Controls the model connection and how often Noodle can create a fresh timeline update."
           >
@@ -3571,8 +3732,12 @@ export function NoodleView() {
               )}
             </div>
           </Section>
+          )}
 
+          {noodleSettingsTab === "noodler" && (
+          <>
           <Section
+            id={getNoodleSettingsSectionAnchorId("noodler-access")}
             title="NoodleR Access"
             help="Controls whether the private NoodleR side of Noodle is available from the mode switcher and mobile navigation."
           >
@@ -3615,6 +3780,7 @@ export function NoodleView() {
 
           {isNoodlerEnabled && (
             <Section
+              id={getNoodleSettingsSectionAnchorId("noodler-fan-activity-global")}
               title="NoodleR Fan Activity"
               help="Global kill switch for unattended fan activity across every NoodleR (private) page. Off by default. Even a page with its own auto-schedule toggle on stays dormant until this is also on; turning this off freezes every page's scheduled activity at once."
             >
@@ -3632,8 +3798,23 @@ export function NoodleView() {
 
           {isNoodlerEnabled &&
             (viewedProfileAccount && viewingOwnPrivateAccount ? (
-              <>
-                <Section title="NoodleR page" help="Page-specific creator settings for the NoodleR profile you are viewing.">
+              <div id={getNoodleSettingsSectionAnchorId("noodler-page")} className="scroll-mt-3">
+                <button
+                  type="button"
+                  onClick={() => setNoodlerPageSectionsOpen((open) => !open)}
+                  className="flex w-full items-center gap-2 border-b border-[var(--noodle-divider)] p-4 text-left text-xs font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)]"
+                  aria-expanded={noodlerPageSectionsOpen}
+                >
+                  <Settings2 size={13} className="text-[var(--noodle-blue)]" />
+                  <span className="flex-1">NoodleR page settings</span>
+                  <ChevronDown
+                    size={14}
+                    className={cn("shrink-0 transition-transform", noodlerPageSectionsOpen && "rotate-180")}
+                  />
+                </button>
+                {noodlerPageSectionsOpen && (
+                  <>
+                    <Section title="NoodleR page" help="Page-specific creator settings for the NoodleR profile you are viewing.">
                   <div className="space-y-3">
                     <div className="grid gap-3 sm:grid-cols-2">
                       <label className="block space-y-1.5">
@@ -4037,16 +4218,26 @@ export function NoodleView() {
                     )}
                   </div>
                 </Section>
-              </>
+                  </>
+                )}
+              </div>
             ) : (
-              <Section title="NoodleR page" help="Create a NoodleR page to manage stage identity, pricing, and fan activity here.">
+              <Section
+                id={getNoodleSettingsSectionAnchorId("noodler-page")}
+                title="NoodleR page"
+                help="Create a NoodleR page to manage stage identity, pricing, and fan activity here."
+              >
                 <p className="text-xs leading-5 text-[var(--muted-foreground)]">
                   Create a NoodleR page from your public profile to unlock page-specific creator settings.
                 </p>
               </Section>
             ))}
+          </>
+          )}
 
+          {noodleSettingsTab === "invites" && (
           <Section
+            id={getNoodleSettingsSectionAnchorId("active-accounts")}
             title="Active Accounts"
             help="Controls how many eligible characters or random users are active during one generation of the timeline."
           >
@@ -4102,8 +4293,14 @@ export function NoodleView() {
               )}
             </div>
           </Section>
+          )}
 
-          <Section title="Activity" help="Limits how much generated Noodle activity one refresh may create.">
+          {noodleSettingsTab === "refresh" && (
+          <Section
+            id={getNoodleSettingsSectionAnchorId("activity")}
+            title="Activity"
+            help="Limits how much generated Noodle activity one refresh may create."
+          >
             <div className="grid grid-cols-2 gap-2">
               <NumberSetting
                 label="Posts"
@@ -4139,8 +4336,12 @@ export function NoodleView() {
               />
             </div>
           </Section>
+          )}
 
+          {noodleSettingsTab === "content" && (
+          <>
           <Section
+            id={getNoodleSettingsSectionAnchorId("image-generation")}
             title="Image Generation"
             help="Controls generated post images and whether characters can reuse existing gallery images."
           >
@@ -4221,6 +4422,7 @@ export function NoodleView() {
           </Section>
 
           <Section
+            id={getNoodleSettingsSectionAnchorId("image-understanding")}
             title="Image Understanding"
             help="Lets a vision-capable connection describe timeline images for the Noodle writer, including text-only models."
           >
@@ -4254,7 +4456,11 @@ export function NoodleView() {
             </div>
           </Section>
 
-          <Section title="Appearance" help="Controls how the timeline and profiles render posts.">
+          <Section
+            id={getNoodleSettingsSectionAnchorId("appearance")}
+            title="Appearance"
+            help="Controls how the timeline and profiles render posts."
+          >
             <label className="block space-y-1.5">
               <FieldLabel help="Timeline shows posts as Twitter-style cards. Grid shows an image-first, Instagram-style grid on the main feed and on profile tabs (posts without an image are skipped in Grid).">
                 Feed layout
@@ -4271,6 +4477,7 @@ export function NoodleView() {
           </Section>
 
           <Section
+            id={getNoodleSettingsSectionAnchorId("timeline-writing")}
             title="Timeline Writing"
             help="Tunes how the refresh writer approaches tone and long-term memory. Off by default; existing timelines keep their current behavior until you turn this on."
           >
@@ -4286,6 +4493,7 @@ export function NoodleView() {
           </Section>
 
           <Section
+            id={getNoodleSettingsSectionAnchorId("world-lore")}
             title="World / Lore"
             help="Lets Noodle refreshes pull matching lorebook entries into the timeline prompt, the same lorebook system used by chat generation."
           >
@@ -4299,8 +4507,12 @@ export function NoodleView() {
               />
             </div>
           </Section>
+          </>
+          )}
 
+          {noodleSettingsTab === "chat" && (
           <Section
+            id={getNoodleSettingsSectionAnchorId("carryover")}
             title="Carryover"
             help="Controls whether recent Noodle activity is appended to chat, roleplay, or game context."
           >
@@ -4350,8 +4562,11 @@ export function NoodleView() {
               </div>
             </div>
           </Section>
+          )}
 
+          {noodleSettingsTab === "refresh" && (
           <Section
+            id={getNoodleSettingsSectionAnchorId("reset-noodle")}
             title="Reset Noodle"
             help="Clears timeline content while keeping profiles, follows, invites, and Noodle settings."
           >
@@ -4369,6 +4584,7 @@ export function NoodleView() {
               {resetNoodleTimeline.isPending ? "Resetting Noodle" : "Reset Noodle Timeline"}
             </button>
           </Section>
+          )}
         </>
       )}
     </>
@@ -6568,7 +6784,7 @@ export function NoodleView() {
                   <NoodlerHome {...noodlerHomeProps} />
                 </Suspense>
               ) : activeNoodleView === "settings" ? (
-                <div className="min-h-full">
+                <div className="flex min-h-full flex-col">
                   <div className="border-b border-[var(--noodle-divider)] px-2 py-3 lg:px-4 lg:py-5">
                     <div className="flex items-center gap-3">
                       <MobileTimelineBackButton
@@ -6588,7 +6804,93 @@ export function NoodleView() {
                       </div>
                     </div>
                   </div>
-                  {settingsContent}
+
+                  <div className="shrink-0 border-b border-[var(--noodle-divider)] px-2 py-2 lg:px-4">
+                    <label className="relative block">
+                      <Search
+                        size={14}
+                        className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]"
+                      />
+                      <input
+                        value={noodleSettingsSearch}
+                        onChange={(event) => setNoodleSettingsSearch(event.target.value)}
+                        placeholder="Search Noodle settings"
+                        className={cn(fieldClass, "pl-8 pr-8")}
+                      />
+                      {noodleSettingsSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setNoodleSettingsSearch("")}
+                          aria-label="Clear settings search"
+                          className="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                    </label>
+                    {noodleSettingsSearch.trim() && (
+                      <div className="mt-2 max-h-40 overflow-y-auto rounded-md border border-[var(--noodle-divider)] bg-[var(--background)] p-1.5">
+                        {searchNoodleSettings(noodleSettingsSearch).length ? (
+                          <div className="grid gap-1">
+                            {searchNoodleSettings(noodleSettingsSearch).map((section) => (
+                              <button
+                                key={section.id}
+                                type="button"
+                                onClick={() => jumpToNoodleSettingsSection(section)}
+                                className="grid min-w-0 gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--accent)]"
+                              >
+                                <span className="truncate text-xs font-semibold text-[var(--foreground)]">
+                                  {section.label}
+                                </span>
+                                <span className="truncate text-[0.68rem] text-[var(--muted-foreground)]">
+                                  {NOODLE_SETTINGS_TABS.find((tab) => tab.id === section.tab)?.label} /{" "}
+                                  {section.description}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="px-2 py-2 text-[0.68rem] text-[var(--muted-foreground)]">
+                            No matching settings.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div
+                    role="tablist"
+                    aria-label="Noodle settings categories"
+                    className="grid shrink-0 grid-cols-5 gap-1 border-b border-[var(--noodle-divider)] p-1.5"
+                  >
+                    {NOODLE_SETTINGS_TABS.map((tab) => {
+                      const Icon = tab.icon;
+                      const active = noodleSettingsTab === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          role="tab"
+                          aria-selected={active}
+                          onClick={() => setNoodleSettingsTab(tab.id)}
+                          title={tab.description}
+                          className={cn(
+                            "flex min-h-12 flex-col items-center justify-center gap-1 rounded-md px-1 py-1 text-center text-[0.625rem] font-semibold leading-tight transition-colors",
+                            active
+                              ? "bg-[var(--noodle-blue)]/12 text-[var(--foreground)]"
+                              : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+                          )}
+                        >
+                          <Icon size={14} className={active ? "text-[var(--noodle-blue)]" : undefined} />
+                          <span className="w-full truncate px-0.5">{tab.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div ref={noodleSettingsPanelRef} className="min-h-0 flex-1 overflow-y-auto">
+                    {settingsContent}
+                  </div>
                 </div>
               ) : activeNoodleView === "notifications" && activeNoodleMode === "noodler" ? (
                 noodlerNotificationsContent
