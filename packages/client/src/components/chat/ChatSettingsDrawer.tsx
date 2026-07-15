@@ -8025,7 +8025,7 @@ export function ChatSettingsDrawer({
                         </div>
                         <AgentSettingsToggle
                           label="Use Storyboard Template"
-                          description="Off sends the planned scene directly."
+                          description="Off bypasses the storyboard prompt template while keeping final prompt processing."
                           enabled={gameStoryboardUsePromptTemplate}
                           onToggle={() =>
                             updateMeta.mutate({

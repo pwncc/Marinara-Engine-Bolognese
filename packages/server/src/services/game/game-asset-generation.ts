@@ -1030,7 +1030,11 @@ async function buildSceneIllustrationRawPrompt(req: SceneIllustrationGenRequest)
     artDirectionLine: styleHint ? `Art direction: ${styleHint}.` : "",
     imagePromptInstructionsLine,
   };
-  const directPromptWithAppearance = [directScenePrompt, sceneIllustrationVars.appearanceNotesBlock]
+  const directPromptWithAppearance = [
+    directScenePrompt,
+    sceneIllustrationVars.finalVisibilityRuleLine,
+    sceneIllustrationVars.appearanceNotesBlock,
+  ]
     .filter(Boolean)
     .join("\n");
   const hasStoryboardImagePromptSelection =

@@ -560,7 +560,18 @@ async function buildStoryboardCharacterContext(args: {
   const gameNpcs = Array.isArray(args.meta.gameNpcs) ? (args.meta.gameNpcs as GameNpc[]) : [];
   for (const npc of gameNpcs) addUniqueCharacterName(allowedCharacterNames, seenAllowedNames, npc.name);
 
-  return { ...maps, allowedCharacterNames: allowedCharacterNames.slice(0, 40), personaName, trackedNpcs };
+  const cappedAllowedCharacterNames = allowedCharacterNames.slice(0, 40);
+  if (
+    personaName &&
+    !cappedAllowedCharacterNames.some(
+      (name) => normalizeAvatarLookupName(name) === normalizeAvatarLookupName(personaName),
+    )
+  ) {
+    if (cappedAllowedCharacterNames.length >= 40) cappedAllowedCharacterNames.pop();
+    cappedAllowedCharacterNames.push(personaName);
+  }
+
+  return { ...maps, allowedCharacterNames: cappedAllowedCharacterNames, personaName, trackedNpcs };
 }
 
 function collectIllustrationCharacterAssets(opts: {
@@ -11361,7 +11372,7 @@ export async function gameRoutes(app: FastifyInstance) {
           charAvatarByName,
           charDescriptionByName,
           includeReferenceImages: false,
-          includeCharacterDescriptions: true,
+          includeCharacterDescriptions: includeCharacterAppearance,
           maxReferenceImages: 0,
         });
         const characterAppearanceContextBlock = buildGameIllustratorAppearanceContextBlock(
@@ -11773,7 +11784,7 @@ export async function gameRoutes(app: FastifyInstance) {
             charAvatarByName,
             charDescriptionByName,
             includeReferenceImages: false,
-            includeCharacterDescriptions: true,
+            includeCharacterDescriptions: includeCharacterAppearance,
             maxReferenceImages: 0,
           });
           const characterAppearanceContextBlock = buildGameIllustratorAppearanceContextBlock(

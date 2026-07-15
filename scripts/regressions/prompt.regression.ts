@@ -1703,12 +1703,15 @@ const cases: RegressionCase[] = [
         imgApiKey: "",
       });
       assert.match(directCompiled.prompt, /^Lyra standing in a moonlit forest/u);
+      assert.match(
+        directCompiled.prompt,
+        /Final visibility rule: Only depict these named visible characters: Lyra/iu,
+      );
       assert.match(directCompiled.prompt, /Character appearance notes:\s*Lyra's Appearance:/u);
       assert.match(directCompiled.prompt, /User image instructions: Keep the moon visible/u);
-      assert.doesNotMatch(directCompiled.prompt, /Final visibility rule|Only depict these named visible characters/iu);
       assert.doesNotMatch(
         directCompiled.prompt,
-        /Scene moment:|Narrative purpose:|Characters:|Reference handling:|Art direction:/iu,
+        /(?:^|\n)(?:Scene moment|Narrative purpose|Characters|Reference handling|Art direction):/iu,
       );
 
       const chatSettingsSource = readFileSync(
@@ -1729,8 +1732,8 @@ const cases: RegressionCase[] = [
       assert.doesNotMatch(gameSurfaceSource, /useGamePromptTemplate/u);
       assert.match(gameRouteSource, /characterAppearanceContextBlock:\s*storyboardAppearanceContextBlock/u);
       assert.equal(gameRouteSource.match(/^\s+characterAppearanceContextBlock,\s*$/gmu)?.length, 2);
-      assert.equal(gameRouteSource.match(/includeCharacterDescriptions:\s*true,/gu)?.length, 3);
-      assert.equal(gameRouteSource.match(/includeCharacterDescriptions:\s*includeCharacterAppearance,/gu)?.length, 3);
+      assert.equal(gameRouteSource.match(/includeCharacterDescriptions:\s*true,/gu)?.length, 1);
+      assert.equal(gameRouteSource.match(/includeCharacterDescriptions:\s*includeCharacterAppearance,/gu)?.length, 5);
       assert.doesNotMatch(
         gameRouteSource,
         /const storyboardAppearanceCharacterNames\s*=\s*includeCharacterAppearance/gu,

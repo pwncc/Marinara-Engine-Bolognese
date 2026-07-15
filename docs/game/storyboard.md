@@ -84,6 +84,7 @@ All of these live in the **Storyboards** card. Open **Chat Settings**, go to **A
 | **Viewer Display** | Floating | Floating panel or full background |
 | **Illustration Planner** | Still Keyframes | Plans finished still keyframes and their image descriptions |
 | **Animation Planner** | Comic Page Animation | Plans animation-ready source images and motion directions |
+| **Use Storyboard Template** | On | Formats planned scenes with the selected Storyboard Illustration Prompt. Turn it off for direct NovelAI tag prompts |
 | **Storyboard Illustration Prompt** | Game Scene Illustration | Formats each planned keyframe for the image model |
 | **Storyboard Video Prompt** | Same as Game Video Prompt | Motion prompt used only for storyboard keyframe clips |
 
