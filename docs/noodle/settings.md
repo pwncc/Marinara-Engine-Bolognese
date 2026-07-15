@@ -51,7 +51,16 @@ The manual **Simulate fan activity now** button on a NoodleR page is unaffected 
 
 Scheduled runs respect the same intensity caps as manual runs (up to 3/6/10 actions for low/medium/high), and additionally cap how often they run unattended: low runs at most once a day, medium up to three times a day, high up to six times a day, each spread out with some randomness rather than firing back-to-back.
 
-When you are viewing one of your own NoodleR pages, the shared Settings screen also shows that page's creator settings: stage identity, subscription pricing, hidden-from privacy, and per-page fan activity. If you are not viewing one of your own private pages, the page-specific area tells you to create or open a NoodleR page first.
+When you are viewing one of your own NoodleR pages, the shared Settings screen also shows that page's creator settings: stage identity, subscription pricing, hidden-from privacy, per-page fan activity, and automatic posting. If you are not viewing one of your own private pages, the page-specific area tells you to create or open a NoodleR page first.
+
+## NoodleR Automatic Posting
+
+The **NoodleR automatic posting** section is per page and is shown only for your own NoodleR pages. It is separate from the Active/Passive posting mode and from fan activity.
+
+- **Automatic posting**: off by default. When on, the NoodleR refresh button can generate a new post for this page, and the unattended scheduler can queue posts for it while Marinara is running.
+- **Posting frequency**: Low, Medium, or High. These match the scheduler caps used by fan activity: up to 1, 3, or 6 unattended post generations per day.
+
+The NoodleR refresh button only targets pages with automatic posting on. It does not refresh the public Noodle timeline and it skips passive NoodleR pages.
 
 ## Active Accounts
 
@@ -166,6 +175,8 @@ This table lists every Noodle setting with its default and range.
 | **Professor Mari participates** | on | on or off |
 | **Refreshes/day** | 2 | 0 to 24 (0 turns automatic refreshes off) |
 | **Enable NoodleR fan activity** | off | on or off (global kill switch; also needs each page's own fan activity + auto-schedule on) |
+| **NoodleR automatic posting** (per page) | off | on or off |
+| **NoodleR automatic posting frequency** (per page) | Low | Low, Medium, High |
 | **Active selection** | Random range | Random range, Exact count, All invited |
 | **Min active** | 2 | 1 to 100 (Random range only) |
 | **Max active** | 5 | 1 to 100 (Random range only) |

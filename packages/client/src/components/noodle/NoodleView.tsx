@@ -161,6 +161,9 @@ import {
   readFanActivityIntensity,
   readFanActivityAutoSchedule,
   fanActivitySettingsFromAccount,
+  autoPostSettingsFromAccount,
+  readAutoPostEnabled,
+  readAutoPostIntensity,
   type ActiveComposerMention,
   type ComposerTool,
   type NoodleMode,
@@ -2754,6 +2757,43 @@ export function NoodleView() {
     );
   };
 
+  const triggerNoodlerRefresh = async () => {
+    if (imagePromptReviewItems.length > 0) return;
+    if (!settings?.generationConnectionId) {
+      toast.error("Choose a generation connection for Noodle first.");
+      return;
+    }
+    const eligibleAccounts = privateAccounts.filter(
+      (account) => readAutoPostEnabled(account) && readPrivatePostingMode(account) === "active",
+    );
+    if (eligibleAccounts.length === 0) {
+      toast.info("No NoodleR pages have automatic posting enabled.");
+      return;
+    }
+    try {
+      let createdCount = 0;
+      for (const account of eligibleAccounts) {
+        const result = await refreshNoodle.mutateAsync({
+          targetAccountId: account.id,
+          connectionId: settings.generationConnectionId,
+        });
+        createdCount += result.createdPostIds?.length ?? 0;
+        if (result.imagePromptReviewItems.length > 0) {
+          setImagePromptReviewItems(result.imagePromptReviewItems);
+          toast.success("NoodleR refresh started. Review image prompts to finish pending images.");
+          return;
+        }
+      }
+      toast.success(
+        createdCount > 0
+          ? `NoodleR refreshed ${createdCount} automatic post${createdCount === 1 ? "" : "s"}.`
+          : "NoodleR refresh finished.",
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not refresh NoodleR.");
+    }
+  };
+
   const generateGuidedPrivatePost = (account: NoodleAccount) => {
     if (!privateGuideIncludeText && !privateGuideIncludeImage) {
       toast.error("Enable text, image, or both for the NoodleR post.");
@@ -3928,6 +3968,63 @@ export function NoodleView() {
                           </span>
                         </label>
                       </div>
+                    )}
+                  </div>
+                </Section>
+
+                <Section
+                  title="NoodleR automatic posting"
+                  help="Lets the NoodleR refresh button and unattended scheduler generate new posts for this page. Off by default."
+                >
+                  <div className="space-y-3">
+                    <label className="flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={readAutoPostEnabled(viewedProfileAccount)}
+                        onChange={(event) =>
+                          updateAccount.mutate({
+                            id: viewedProfileAccount.id,
+                            settings: {
+                              autoPost: {
+                                ...autoPostSettingsFromAccount(viewedProfileAccount),
+                                enabled: event.target.checked,
+                                nextRunAt: null,
+                              },
+                            },
+                          })
+                        }
+                        disabled={updateAccount.isPending}
+                      />
+                      <span>
+                        Include this page when refreshing NoodleR automatically. Passive pages still never post.
+                      </span>
+                    </label>
+                    {readAutoPostEnabled(viewedProfileAccount) && (
+                      <label className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                        <span className="font-semibold text-[var(--foreground)]">Posting frequency</span>
+                        <select
+                          value={readAutoPostIntensity(viewedProfileAccount)}
+                          onChange={(event) =>
+                            updateAccount.mutate({
+                              id: viewedProfileAccount.id,
+                              settings: {
+                                autoPost: {
+                                  ...autoPostSettingsFromAccount(viewedProfileAccount),
+                                  intensity: event.target.value,
+                                  nextRunAt: null,
+                                },
+                              },
+                            })
+                          }
+                          disabled={updateAccount.isPending}
+                          className="h-8 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs"
+                        >
+                          <option value="low">Low (up to 1 post/day)</option>
+                          <option value="medium">Medium (up to 3 posts/day)</option>
+                          <option value="high">High (up to 6 posts/day)</option>
+                        </select>
+                      </label>
                     )}
                   </div>
                 </Section>
@@ -5751,7 +5848,7 @@ export function NoodleView() {
     canSubmitPost,
     createPostPending: createPost.isPending,
     renderComposerToolPopovers,
-    onTriggerRefresh: triggerRefresh,
+    onTriggerRefresh: triggerNoodlerRefresh,
     refreshNoodlePending: refreshNoodle.isPending,
     imagePromptReviewItemsCount: imagePromptReviewItems.length,
     notificationTab,

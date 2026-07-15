@@ -166,6 +166,19 @@ export function readFanActivityAutoSchedule(account: NoodleAccount | null | unde
   return fanActivitySettingsFromAccount(account).autoSchedule === true;
 }
 
+export function autoPostSettingsFromAccount(account: NoodleAccount | null | undefined) {
+  return parseRecord(account?.settings?.autoPost);
+}
+
+export function readAutoPostEnabled(account: NoodleAccount | null | undefined) {
+  return autoPostSettingsFromAccount(account).enabled === true;
+}
+
+export function readAutoPostIntensity(account: NoodleAccount | null | undefined): "low" | "medium" | "high" {
+  const value = autoPostSettingsFromAccount(account).intensity;
+  return value === "medium" || value === "high" ? value : "low";
+}
+
 export function initials(name: string) {
   return (
     name

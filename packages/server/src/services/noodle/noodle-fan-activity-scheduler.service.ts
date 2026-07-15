@@ -41,6 +41,12 @@ function jitteredIntervalMs(intensity: NoodleFanActivityIntensity): number {
   return Math.max(60_000, baseMs + jitter);
 }
 
+function readPrivatePostingMode(account: NoodleAccount): "active" | "passive" {
+  const stageProfile = account.settings.stageProfile;
+  if (!stageProfile || typeof stageProfile !== "object" || Array.isArray(stageProfile)) return "active";
+  return (stageProfile as Record<string, unknown>).postingMode === "passive" ? "passive" : "active";
+}
+
 export function startNoodleFanActivityScheduler(app: FastifyInstance) {
   const noodle = createNoodleStorage(app.db);
   const connections = createConnectionsStorage(app.db);
@@ -173,7 +179,7 @@ export function startNoodleFanActivityScheduler(app: FastifyInstance) {
         }
 
         const autoPostSettings = parseAutoPostSettings(account);
-        if (autoPostSettings.enabled) {
+        if (autoPostSettings.enabled && readPrivatePostingMode(account) === "active") {
           if (!autoPostSettings.nextRunAt) {
             // Same burst-avoidance as fan activity: don't run immediately
             // the moment auto-post is switched on.
