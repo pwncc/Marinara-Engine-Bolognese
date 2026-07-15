@@ -34,6 +34,7 @@ import type {
   NoodleInteraction,
   NoodleInteractionType,
   NoodlePost,
+  NoodlePostingMode,
   NoodlePrivateIdentityDisclosure,
   NoodleTextMention,
 } from "@marinara-engine/shared";
@@ -57,6 +58,17 @@ export type NoodleNotificationFocusTarget = {
   interactionId: string | null;
 };
 export type ActiveComposerMention = NoodleTextMention & { query: string };
+export type PrivateStageDraft = {
+  publicAccountId: string;
+  identityDisclosure: NoodlePrivateIdentityDisclosure;
+  stageName: string;
+  stageBio: string;
+  stagePersonality: string;
+  stageDynamic: string;
+  stageAppearanceOverride?: string;
+  postingMode: NoodlePostingMode;
+  ageAcknowledged: boolean;
+};
 export type NoodlerTimelineItem =
   | { id: string; kind: "post"; createdAt: string; post: NoodlePost }
   | {
@@ -130,6 +142,10 @@ export function readPrivateStageSetting(account: NoodleAccount | null, key: stri
 export function readPrivateIdentityDisclosure(account: NoodleAccount | null): NoodlePrivateIdentityDisclosure {
   const value = readPrivateStageSetting(account, "identityDisclosure");
   return value === "open" || value === "secret" ? value : "hinted";
+}
+
+export function readPrivatePostingMode(account: NoodleAccount | null): NoodlePostingMode {
+  return readPrivateStageSetting(account, "postingMode") === "passive" ? "passive" : "active";
 }
 
 export function fanActivitySettingsFromAccount(account: NoodleAccount | null | undefined) {

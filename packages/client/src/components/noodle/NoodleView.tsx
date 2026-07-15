@@ -30,6 +30,7 @@ import {
   User,
   UserMinus,
   UserPlus,
+  Globe2,
 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
@@ -61,6 +62,7 @@ import {
   type NoodlePostAccess,
   type NoodlePoll,
   type NoodlePollInput,
+  type NoodlePostingMode,
   type NoodlePrivateIdentityDisclosure,
   type NoodlePrivateStageProfileInput,
   type NoodleRefreshSchedulerStatus,
@@ -154,7 +156,9 @@ import {
   readString,
   readPrivateStageSetting,
   readPrivateIdentityDisclosure,
+  readPrivatePostingMode,
   readFanActivityEnabled,
+  type PrivateStageDraft,
   readFanActivityIntensity,
   readFanActivityAutoSchedule,
   fanActivitySettingsFromAccount,
@@ -179,15 +183,6 @@ const NoodlerHome = lazy(() => import("./NoodlerHome").then((module) => ({ defau
 type RawCharacter = { id?: unknown; data?: unknown; avatarPath?: unknown };
 type RawCharacterGroup = { id?: unknown; name?: unknown; description?: unknown; characterIds?: unknown };
 type RawPersona = { id?: unknown; createdAt?: unknown; updatedAt?: unknown };
-type PrivateStageDraft = {
-  publicAccountId: string;
-  identityDisclosure: NoodlePrivateIdentityDisclosure;
-  stageName: string;
-  stageBio: string;
-  stagePersonality: string;
-  stageDynamic: string;
-  stageAppearanceOverride?: string;
-};
 
 const NOODLE_NOTIFICATIONS_READ_AT_KEY = "notificationsReadAt";
 const NOODLER_NOTIFICATIONS_READ_AT_KEY = "noodlerNotificationsReadAt";
@@ -818,6 +813,7 @@ export function NoodleView() {
   const [stageProfilePersonality, setStageProfilePersonality] = useState("");
   const [stageProfileDynamic, setStageProfileDynamic] = useState("");
   const [stageProfileAppearanceOverride, setStageProfileAppearanceOverride] = useState("");
+  const [stageProfilePostingMode, setStageProfilePostingMode] = useState<NoodlePostingMode>("active");
   const [imageUrlDraft, setImageUrlDraft] = useState("");
   const [imageGenerationPromptDraft, setImageGenerationPromptDraft] = useState("");
   const [pollQuestion, setPollQuestion] = useState("");
@@ -1095,8 +1091,16 @@ export function NoodleView() {
       .slice(0, 4);
   }, [latestPrivatePostByCreatorId, noodlerHub, subscriberCountByCreatorId]);
   const activeNoodleModeMeta = NOODLE_MODE_META[activeNoodleMode];
-  const composeActionLabel = activeNoodleMode === "noodler" ? "NoodleR Post" : "Post";
-  const composePlaceholder = activeNoodleMode === "noodler" ? "Post to NoodleR..." : "What's simmering?";
+  const composeActionLabel = isGlobalPersonaSelected
+    ? "Pick a persona to post"
+    : activeNoodleMode === "noodler"
+      ? "NoodleR Post"
+      : "Post";
+  const composePlaceholder = isGlobalPersonaSelected
+    ? "Switch to a persona account to post."
+    : activeNoodleMode === "noodler"
+      ? "Post to NoodleR..."
+      : "What's simmering?";
   const browserPath =
     activeNoodleView === "noodler-verification"
       ? "/verify"
@@ -1213,6 +1217,7 @@ export function NoodleView() {
     setStageProfilePersonality(readPrivateStageSetting(viewedProfileAccount, "stagePersonality"));
     setStageProfileDynamic(readPrivateStageSetting(viewedProfileAccount, "stageDynamic"));
     setStageProfileAppearanceOverride(readPrivateStageSetting(viewedProfileAccount, "stageAppearanceOverride"));
+    setStageProfilePostingMode(readPrivatePostingMode(viewedProfileAccount));
   }, [viewedProfileAccount]);
 
   useEffect(() => {
@@ -1305,6 +1310,8 @@ export function NoodleView() {
       stageBio: account.bio ?? "",
       stagePersonality: "",
       stageDynamic: "",
+      postingMode: "active",
+      ageAcknowledged: false,
     });
   };
 
@@ -1318,6 +1325,7 @@ export function NoodleView() {
       stagePersonality: privateStageDraft.stagePersonality.trim(),
       stageDynamic: privateStageDraft.stageDynamic.trim(),
       preserveLinkedAppearance: true,
+      postingMode: privateStageDraft.postingMode,
     };
     createPrivateAccount.mutate(
       { publicAccountId: privateStageDraft.publicAccountId, input: { stageProfile } },
@@ -1342,6 +1350,7 @@ export function NoodleView() {
       stageDynamic: stageProfileDynamic.trim(),
       stageAppearanceOverride: stageProfileAppearanceOverride.trim(),
       preserveLinkedAppearance: true,
+      postingMode: stageProfilePostingMode,
     };
     updateAccount.mutate(
       {
@@ -2200,6 +2209,7 @@ export function NoodleView() {
   };
 
   const openOwnProfile = () => {
+    if (isGlobalPersonaSelected) return;
     setProfileEditing(false);
     setProfileTab("posts");
     setProfileConnectionTab(null);
@@ -2910,6 +2920,7 @@ export function NoodleView() {
   };
 
   const openNotifications = () => {
+    if (isGlobalPersonaSelected) return;
     if (personaAccount) {
       const readAtKey =
         activeNoodleMode === "noodler" ? NOODLER_NOTIFICATIONS_READ_AT_KEY : NOODLE_NOTIFICATIONS_READ_AT_KEY;
@@ -3523,6 +3534,13 @@ export function NoodleView() {
                 disabled={updateSettings.isPending}
                 onChange={setNoodlerEnabled}
               />
+              <ToggleSetting
+                label="Allow global feed persona"
+                help="Adds a 'Global' entry to the account switcher that shows every post across all personas, in both Noodle and NoodleR."
+                checked={settings?.allowGlobalPersona === true}
+                disabled={updateSettings.isPending}
+                onChange={(enabled) => saveSettings({ allowGlobalPersona: enabled })}
+              />
               {!isNoodlerEnabled && (
                 <p className="rounded-md border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/5 px-3 py-2 text-xs leading-5 text-[var(--muted-foreground)]">
                   NoodleR stays tucked away until this is enabled. Attempts to enter NoodleR will open verification first.
@@ -3887,6 +3905,13 @@ export function NoodleView() {
             disabled={updateSettings.isPending}
             onChange={setNoodlerEnabled}
           />
+          <ToggleSetting
+            label="Allow global feed persona"
+            help="Adds a 'Global' entry to the account switcher that shows every post across all personas, in both Noodle and NoodleR."
+            checked={settings?.allowGlobalPersona === true}
+            disabled={updateSettings.isPending}
+            onChange={(enabled) => saveSettings({ allowGlobalPersona: enabled })}
+          />
         </div>
       </Section>
 
@@ -3968,6 +3993,34 @@ export function NoodleView() {
                   className={cn(textareaClass, "min-h-20 resize-none")}
                 />
               </label>
+              <div className="space-y-1.5">
+                <FieldLabel help="Active accounts also post themselves. Passive accounts are lurk-only and never post — this is unrelated to AI auto-posting, which stays off regardless.">
+                  Posting mode
+                </FieldLabel>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {(
+                    [
+                      { value: "active" as const, title: "Active", detail: "This account posts too." },
+                      { value: "passive" as const, title: "Passive", detail: "Lurk only — never posts." },
+                    ]
+                  ).map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setStageProfilePostingMode(option.value)}
+                      className={cn(
+                        "rounded-md border p-2.5 text-left transition-colors",
+                        stageProfilePostingMode === option.value
+                          ? "border-[var(--noodle-blue)] bg-[var(--noodle-blue)]/10"
+                          : "border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] hover:border-[var(--noodle-blue)]/50",
+                      )}
+                    >
+                      <p className="text-xs font-bold">{option.title}</p>
+                      <p className="mt-0.5 text-[11px] leading-4 text-[var(--muted-foreground)]">{option.detail}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="flex justify-end">
                 <button
                   type="button"
@@ -5891,12 +5944,19 @@ export function NoodleView() {
     onTriggerRefresh: triggerRefresh,
     refreshNoodlePending: refreshNoodle.isPending,
     hasNoodlerAccount: Boolean(personaLinkedNoodlerAccount),
+    noodlerPostingMode: readPrivatePostingMode(personaLinkedNoodlerAccount),
     onOpenOwnProfile: openOwnProfile,
     showNoodlerSignup: activeNoodleMode === "noodler" && !viewedProfileAccountId && !personaLinkedNoodlerAccount,
-    onStartNoodlerSignup: () => {
+    stageDraft: privateStageDraft,
+    onStartStageDraft: () => {
       if (personaAccount) openPrivateStageSetup(personaAccount);
     },
-    startNoodlerSignupPending: createPrivateAccount.isPending,
+    onStageDraftChange: (patch: Partial<PrivateStageDraft>) => {
+      setPrivateStageDraft((draft) => (draft ? { ...draft, ...patch } : draft));
+    },
+    onSubmitStageDraft: createPrivateStageAccount,
+    onCancelStageDraft: () => setPrivateStageDraft(null),
+    stageDraftPending: createPrivateAccount.isPending,
     profileViewProps,
   };
 
@@ -6688,110 +6748,6 @@ export function NoodleView() {
             </div>
           </section>
         </div>
-      )}
-      {privateStageDraft && (
-        <Modal
-          open={Boolean(privateStageDraft)}
-          onClose={() => {
-            if (!createPrivateAccount.isPending) setPrivateStageDraft(null);
-          }}
-          title="Create NoodleR"
-          width="max-w-lg"
-          panelClassName={NOODLE_ICON_SCOPE_CLASS}
-          panelStyle={{ "--noodle-blue": NOODLE_BLUE } as CSSProperties}
-        >
-          <div className="space-y-4">
-            <label className="block space-y-1.5">
-              <span className={labelClass}>Identity</span>
-              <select
-                value={privateStageDraft.identityDisclosure}
-                onChange={(event) =>
-                  setPrivateStageDraft((draft) =>
-                    draft
-                      ? { ...draft, identityDisclosure: event.target.value as NoodlePrivateIdentityDisclosure }
-                      : draft,
-                  )
-                }
-                className={fieldClass}
-              >
-                <option value="open">Open</option>
-                <option value="hinted">Hinted</option>
-                <option value="secret">Secret</option>
-              </select>
-              <p className="text-[11px] leading-4 text-[var(--muted-foreground)]">
-                "Open" lets generated posts reuse the linked name/handle directly. "Hinted" keeps the linked
-                name out of generated text but still allows subtle allusions and in-jokes. "Secret" also filters
-                out the linked handle and first name — it's AI-generated content moderation, not a hard
-                guarantee it can never slip through.
-              </p>
-            </label>
-            <label className="block space-y-1.5">
-              <span className={labelClass}>Stage name</span>
-              <input
-                value={privateStageDraft.stageName}
-                onChange={(event) =>
-                  setPrivateStageDraft((draft) => (draft ? { ...draft, stageName: event.target.value } : draft))
-                }
-                placeholder="Leave blank for a generated alias"
-                className={fieldClass}
-              />
-            </label>
-            <label className="block space-y-1.5">
-              <span className={labelClass}>Private persona</span>
-              <textarea
-                value={privateStageDraft.stagePersonality}
-                onChange={(event) =>
-                  setPrivateStageDraft((draft) =>
-                    draft ? { ...draft, stagePersonality: event.target.value } : draft,
-                  )
-                }
-                placeholder="Submissive but well-spoken, bratty, anonymous, polished, confident..."
-                className={cn(textareaClass, "min-h-24 resize-none")}
-              />
-            </label>
-            <label className="block space-y-1.5">
-              <span className={labelClass}>Dynamic</span>
-              <input
-                value={privateStageDraft.stageDynamic}
-                onChange={(event) =>
-                  setPrivateStageDraft((draft) => (draft ? { ...draft, stageDynamic: event.target.value } : draft))
-                }
-                placeholder="soft-spoken tease, controlled submissive, confident domme"
-                className={fieldClass}
-              />
-            </label>
-            <label className="block space-y-1.5">
-              <span className={labelClass}>Bio</span>
-              <textarea
-                value={privateStageDraft.stageBio}
-                onChange={(event) =>
-                  setPrivateStageDraft((draft) => (draft ? { ...draft, stageBio: event.target.value } : draft))
-                }
-                placeholder="Leave blank for a generated private profile bio"
-                className={cn(textareaClass, "min-h-20 resize-none")}
-              />
-            </label>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setPrivateStageDraft(null)}
-                disabled={createPrivateAccount.isPending}
-                className="h-9 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] px-4 text-xs font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={createPrivateStageAccount}
-                disabled={createPrivateAccount.isPending}
-                className="flex h-9 items-center justify-center gap-2 rounded-md bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {createPrivateAccount.isPending && <Loader2 size={14} className="animate-spin" />}
-                {createPrivateAccount.isPending ? "Creating" : "Create"}
-              </button>
-            </div>
-          </div>
-        </Modal>
       )}
       {privateGuideAccount && (
         <Modal

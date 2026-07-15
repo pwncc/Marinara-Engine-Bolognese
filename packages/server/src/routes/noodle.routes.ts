@@ -319,6 +319,7 @@ function defaultPrivateStageProfile(account: Pick<NoodleAccount, "displayName" |
     stageDynamic: "",
     stageAppearanceOverride: "",
     preserveLinkedAppearance: true,
+    postingMode: "active",
   };
 }
 
@@ -1600,6 +1601,7 @@ async function generatePrivateAccountStageIdentity(input: {
       stageDynamic: input.requestedStageProfile?.stageDynamic?.trim() || parsed.data.dynamic,
       stageAppearanceOverride: input.requestedStageProfile?.stageAppearanceOverride?.trim() || "",
       preserveLinkedAppearance: input.requestedStageProfile?.preserveLinkedAppearance ?? true,
+      postingMode: input.requestedStageProfile?.postingMode ?? "active",
     }),
     linkedContext,
   };

@@ -7,9 +7,8 @@
 // shell and are passed down as props.
 // ──────────────────────────────────────────────
 import { AtSign, Check, ImageIcon, Loader2, Menu, Trash2, User } from "lucide-react";
-import { toast } from "sonner";
 import type { ChangeEvent, CSSProperties, ReactNode, RefObject } from "react";
-import type { NoodleAccount, NoodlePost, NoodlePostAccess } from "@marinara-engine/shared";
+import type { NoodleAccount, NoodlePost, NoodlePostAccess, NoodlePostingMode } from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
 import type { AvatarCropValue } from "../../lib/utils";
 import {
@@ -18,6 +17,7 @@ import {
   subscribeLabel,
   readPrivateIdentityDisclosure,
   readPrivateStageSetting,
+  Avatar,
   InlineComposer,
   MobileTimelineBackButton,
   NoodlerMark,
@@ -29,6 +29,7 @@ import {
   type ComposerTool,
   type NoodlerHubTab,
   type NoodlerTimelineItem,
+  type PrivateStageDraft,
   type ProfileTab,
 } from "./noodle-shared";
 
@@ -106,16 +107,23 @@ export interface NoodlerHomeProps {
   }) => React.ReactNode;
   onTriggerRefresh: () => void;
   refreshNoodlePending: boolean;
-  // Whether the current persona already has a linked NoodleR creator
-  // account. Gates the Hub timeline composer and the Profile tab sign-up.
+  // Whether the current persona already has a linked NoodleR account.
+  // Gates the Hub timeline composer and the Profile tab sign-up.
   hasNoodlerAccount: boolean;
+  // Active accounts post themselves; passive accounts are lurk-only.
+  // Gates the Hub timeline composer alongside hasNoodlerAccount.
+  noodlerPostingMode: NoodlePostingMode;
 
   // Private profile (activeNoodleView === "profile" && activeNoodleMode === "noodler")
   // When true, the persona has no NoodleR account yet — show the sign-up
   // screen instead of PrivateProfileView.
   showNoodlerSignup: boolean;
-  onStartNoodlerSignup: () => void;
-  startNoodlerSignupPending: boolean;
+  stageDraft: PrivateStageDraft | null;
+  onStartStageDraft: () => void;
+  onStageDraftChange: (patch: Partial<PrivateStageDraft>) => void;
+  onSubmitStageDraft: () => void;
+  onCancelStageDraft: () => void;
+  stageDraftPending: boolean;
   onOpenOwnProfile: () => void;
   profileViewProps?: PrivateProfileViewProps;
 }
@@ -171,9 +179,14 @@ export function NoodlerHome(props: NoodlerHomeProps) {
     onTriggerRefresh,
     refreshNoodlePending,
     hasNoodlerAccount,
+    noodlerPostingMode,
     showNoodlerSignup,
-    onStartNoodlerSignup,
-    startNoodlerSignupPending,
+    stageDraft,
+    onStartStageDraft,
+    onStageDraftChange,
+    onSubmitStageDraft,
+    onCancelStageDraft,
+    stageDraftPending,
     onOpenOwnProfile,
     profileViewProps,
   } = props;
@@ -181,40 +194,53 @@ export function NoodlerHome(props: NoodlerHomeProps) {
 
   if (activeNoodleView === "profile") {
     if (showNoodlerSignup) {
-      return (
-        <div className="min-h-full" data-component="NoodlerHome.ProfileSignup">
-          <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
-            <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
-              <MobileTimelineBackButton label="Back to Hub" onClick={onBackToHome} />
-              <NoodlerMark size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
-              <div className="min-w-0 flex-1">
-                <h2 className="truncate text-lg font-bold">Your NoodleR profile</h2>
-                <p className="truncate text-xs text-[var(--muted-foreground)]">
-                  {personaAccount ? `@${personaAccount.handle}` : "Choose a persona account"}
-                </p>
+      if (!stageDraft) {
+        return (
+          <div className="min-h-full" data-component="NoodlerHome.ProfileSignup">
+            <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
+              <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
+                <MobileTimelineBackButton label="Back to Hub" onClick={onBackToHome} />
+                <NoodlerMark size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
+                <div className="min-w-0 flex-1">
+                  <h2 className="truncate text-lg font-bold">Your NoodleR profile</h2>
+                  <p className="truncate text-xs text-[var(--muted-foreground)]">
+                    {personaAccount ? `@${personaAccount.handle}` : "Choose a persona account"}
+                  </p>
+                </div>
               </div>
             </div>
+            <div className="flex flex-col items-center px-6 py-16 text-center">
+              <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[var(--noodle-blue)] text-zinc-950">
+                <NoodlerMark size={26} />
+              </span>
+              <h3 className="mt-4 text-xl font-black">Create your NoodleR profile</h3>
+              <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
+                This is where you post as your NoodleR persona — subscriptions, pay-per-view unlocks, and all.
+                Set it up once to start posting to the Hub.
+              </p>
+              <button
+                type="button"
+                onClick={onStartStageDraft}
+                disabled={!personaAccount}
+                className="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--noodle-blue)] px-6 text-sm font-black text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <NoodlerMark size={17} />
+                Build your NoodleR ID
+              </button>
+            </div>
           </div>
-          <div className="flex flex-col items-center px-6 py-16 text-center">
-            <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[var(--noodle-blue)] text-zinc-950">
-              <NoodlerMark size={26} />
-            </span>
-            <h3 className="mt-4 text-xl font-black">Create your NoodleR creator profile</h3>
-            <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-              This is where you post as your NoodleR creator persona — subscriptions, pay-per-view unlocks, and
-              all. Set it up once to start posting to the Hub.
-            </p>
-            <button
-              type="button"
-              onClick={onStartNoodlerSignup}
-              disabled={!personaAccount || startNoodlerSignupPending}
-              className="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--noodle-blue)] px-6 text-sm font-black text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {startNoodlerSignupPending ? <Loader2 size={17} className="animate-spin" /> : <NoodlerMark size={17} />}
-              {startNoodlerSignupPending ? "Creating" : "Create NoodleR creator profile"}
-            </button>
-          </div>
-        </div>
+        );
+      }
+      return (
+        <NoodlerIdBuilder
+          personaAccount={personaAccount}
+          draft={stageDraft}
+          onChange={onStageDraftChange}
+          onSubmit={onSubmitStageDraft}
+          onCancel={onCancelStageDraft}
+          pending={stageDraftPending}
+          onBack={onBackToHome}
+        />
       );
     }
     return profileViewProps ? <PrivateProfileView {...profileViewProps} /> : null;
@@ -228,10 +254,8 @@ export function NoodlerHome(props: NoodlerHomeProps) {
             <MobileTimelineBackButton label="Back to Noodle" onClick={onBackToHome} />
             <NoodlerMark size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
             <div className="min-w-0 flex-1">
-              <h2 className="truncate text-lg font-bold">NoodleR Verification</h2>
-              <p className="truncate text-xs text-[var(--muted-foreground)]">
-                Private, paid, adult-content creator network
-              </p>
+              <h2 className="truncate text-lg font-bold">Meet NoodleR</h2>
+              <p className="truncate text-xs text-[var(--muted-foreground)]">Noodle's private, adult-gated corner</p>
             </div>
           </div>
         </div>
@@ -243,12 +267,12 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                 <NoodlerMark size={22} />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-black uppercase tracking-normal text-[var(--noodle-blue)]">Verification Desk</p>
-                <h3 className="mt-1 text-2xl font-black leading-tight">Verify your NoodleR eligibility.</h3>
+                <p className="text-xs font-black uppercase tracking-normal text-[var(--noodle-blue)]">What is NoodleR?</p>
+                <h3 className="mt-1 text-2xl font-black leading-tight">Noodle's private, 18+ corner.</h3>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--muted-foreground)]">
-                  NoodleR is Noodle's private, paid corner for adult creator content — subscriptions and per-post
-                  unlocks, kept out of the main Noodle timeline entirely. This quick check marks the feature as
-                  intentionally enabled before those controls appear.
+                  NoodleR is a separate, opt-in space for adult creator content — subscriptions and per-post
+                  unlocks, kept entirely out of the main Noodle timeline. It's off by default; turning it on for
+                  this install is the only step required to see it.
                 </p>
               </div>
             </div>
@@ -256,13 +280,25 @@ export function NoodlerHome(props: NoodlerHomeProps) {
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             {[
-              { icon: User, title: "Government ID", detail: "Passport, license, or anything that looks official enough." },
-              { icon: ImageIcon, title: "Photo pass", detail: "A current profile photo for the badge desk." },
-              { icon: AtSign, title: "Handle match", detail: "Confirm the Noodle account requesting access." },
+              {
+                icon: User,
+                title: "Private by default",
+                detail: "NoodleR accounts and posts never show up in the main Noodle feed.",
+              },
+              {
+                icon: ImageIcon,
+                title: "Subscriptions & unlocks",
+                detail: "Pages can be subscriber-only or unlock individual posts, unlike free-to-view Noodle posts.",
+              },
+              {
+                icon: AtSign,
+                title: "Its own profile",
+                detail: "Posting here requires setting up a dedicated NoodleR profile, separate from your Noodle handle.",
+              },
               {
                 icon: Check,
-                title: "18+ acknowledgment",
-                detail: "Confirm you're here for adult creator content and you're of age.",
+                title: "18+ content",
+                detail: "This corner exists for adult creator content — only turn it on if that's what you want.",
               },
             ].map((item, index) => {
               const Icon = item.icon;
@@ -276,7 +312,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                       <div className="flex items-center justify-between gap-2">
                         <p className="truncate text-sm font-bold">{item.title}</p>
                         <span className="shrink-0 rounded-full bg-[var(--noodle-blue)]/10 px-2 py-0.5 text-[0.65rem] font-bold text-[var(--noodle-blue)]">
-                          Step {index + 1}
+                          {index + 1}
                         </span>
                       </div>
                       <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">{item.detail}</p>
@@ -287,37 +323,6 @@ export function NoodlerHome(props: NoodlerHomeProps) {
             })}
           </div>
 
-          <div className="mt-5 rounded-lg border border-dashed border-[var(--noodle-blue)]/45 bg-[var(--background)] p-4">
-            <p className="text-sm font-bold">Upload packet</p>
-            <div className="mt-3 grid gap-2 sm:grid-cols-3">
-              {["Front of ID", "Back of ID", "Photo pass"].map((label) => (
-                <button
-                  key={label}
-                  type="button"
-                  onClick={() => toast.info("No upload needed. This verification desk is only a preview.")}
-                  className="flex h-24 flex-col items-center justify-center gap-2 rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] text-xs font-bold text-[var(--muted-foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:text-[var(--foreground)]"
-                >
-                  <ImageIcon size={18} />
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="mt-5 rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] p-4">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-sm font-bold">Review status</span>
-              <span className="rounded-full bg-[var(--noodle-blue)]/10 px-2 py-1 text-xs font-black text-[var(--noodle-blue)]">
-                Ready instantly
-              </span>
-            </div>
-            <div className="mt-3 space-y-2 text-xs leading-5 text-[var(--muted-foreground)]">
-              <p>1. Review the requested materials.</p>
-              <p>2. Click start verification.</p>
-              <p>3. NoodleR unlocks immediately after the very short review.</p>
-            </div>
-          </div>
-
           <div className="mt-6 flex flex-col gap-2 sm:flex-row">
             <button
               type="button"
@@ -326,7 +331,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--noodle-blue)] px-5 text-sm font-black text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {updateSettingsPending ? <Loader2 size={17} className="animate-spin" /> : <Check size={17} />}
-              {updateSettingsPending ? "Verifying" : "Start verification"}
+              {updateSettingsPending ? "Enabling" : "Enable NoodleR for this install"}
             </button>
             <button
               type="button"
@@ -360,7 +365,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
         <NoodlerMark size={26} className="mx-auto text-[var(--noodle-blue)]" />
         <div aria-hidden="true" />
       </div>
-      {!personaAccount ? (
+      {!personaAccount && !isGlobalPersonaSelected ? (
         <p className="px-4 py-6 text-sm text-[var(--muted-foreground)]">Choose a persona account first.</p>
       ) : noodlerHubLoading ? (
         <div className="flex justify-center py-14">
@@ -368,8 +373,13 @@ export function NoodlerHome(props: NoodlerHomeProps) {
         </div>
       ) : (
         <>
-          <div className="sticky top-14 z-20 grid grid-cols-4 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur lg:top-0">
-            {NOODLER_HUB_TABS.map((tab) => (
+          <div
+            className={cn(
+              "sticky top-14 z-20 grid border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur lg:top-0",
+              isGlobalPersonaSelected ? "grid-cols-1" : "grid-cols-4",
+            )}
+          >
+            {NOODLER_HUB_TABS.filter((tab) => !isGlobalPersonaSelected || tab.id === "timeline").map((tab) => (
               <button
                 key={tab.id}
                 type="button"
@@ -388,7 +398,43 @@ export function NoodlerHome(props: NoodlerHomeProps) {
           </div>
           {activeNoodlerHubTab === "timeline" ? (
             <>
-              {hasNoodlerAccount ? (
+              {isGlobalPersonaSelected ? (
+                <div
+                  className="border-b border-[var(--noodle-divider)] px-4 py-3 text-sm text-[var(--muted-foreground)]"
+                  data-component="NoodlerHome.GlobalComposerNotice"
+                >
+                  Global mode is view-only. Switch to a persona account to post.
+                </div>
+              ) : !hasNoodlerAccount ? (
+                <div
+                  className="border-b border-[var(--noodle-divider)] px-4 py-3 text-sm text-[var(--muted-foreground)]"
+                  data-component="NoodlerHome.NoAccountComposerNotice"
+                >
+                  <button
+                    type="button"
+                    onClick={onOpenOwnProfile}
+                    className="font-bold text-[var(--noodle-blue)] hover:underline"
+                  >
+                    Create a NoodleR profile
+                  </button>{" "}
+                  to post yourself.
+                </div>
+              ) : noodlerPostingMode === "passive" ? (
+                <div
+                  className="border-b border-[var(--noodle-divider)] px-4 py-3 text-sm text-[var(--muted-foreground)]"
+                  data-component="NoodlerHome.PassiveComposerNotice"
+                >
+                  This account is passive — lurk only.{" "}
+                  <button
+                    type="button"
+                    onClick={onOpenOwnProfile}
+                    className="font-bold text-[var(--noodle-blue)] hover:underline"
+                  >
+                    Switch to active
+                  </button>{" "}
+                  in your NoodleR settings to post.
+                </div>
+              ) : (
                 <>
                   <InlineComposer
                     personaAccount={personaAccount}
@@ -423,20 +469,6 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                   />
                   <RefreshTimelineButton onTriggerRefresh={onTriggerRefresh} refreshNoodlePending={refreshNoodlePending} />
                 </>
-              ) : (
-                <div
-                  className="border-b border-[var(--noodle-divider)] px-4 py-3 text-sm text-[var(--muted-foreground)]"
-                  data-component="NoodlerHome.NoAccountComposerNotice"
-                >
-                  <button
-                    type="button"
-                    onClick={onOpenOwnProfile}
-                    className="font-bold text-[var(--noodle-blue)] hover:underline"
-                  >
-                    Create a NoodleR creator profile
-                  </button>{" "}
-                  to post yourself.
-                </div>
               )}
               {suggestedNoodlerCreators.length > 0 && (
                 <section
@@ -499,6 +531,229 @@ export function NoodlerHome(props: NoodlerHomeProps) {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// NoodleR ID builder: the profile-creation flow, themed as a faux
+// government-ID card the user fills out. Flavor only — nothing here
+// is real identity verification. Completing it creates the actual
+// NoodleR account (via onSubmit -> createPrivateAccount).
+// ──────────────────────────────────────────────
+function NoodlerIdBuilder({
+  personaAccount,
+  draft,
+  onChange,
+  onSubmit,
+  onCancel,
+  pending,
+  onBack,
+}: {
+  personaAccount: NoodleAccount | null;
+  draft: PrivateStageDraft;
+  onChange: (patch: Partial<PrivateStageDraft>) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+  pending: boolean;
+  onBack: () => void;
+}) {
+  const canSubmit = draft.ageAcknowledged && draft.stageName.trim().length > 0 && !pending;
+
+  return (
+    <div className="min-h-full" data-component="NoodlerHome.IdBuilder">
+      <style>{`
+        @keyframes noodler-id-scan {
+          0% { transform: translateY(-100%); opacity: 0; }
+          15% { opacity: 1; }
+          85% { opacity: 1; }
+          100% { transform: translateY(100%); opacity: 0; }
+        }
+        @keyframes noodler-id-stamp {
+          0%, 60% { opacity: 0; transform: scale(1.4) rotate(-12deg); }
+          75% { opacity: 1; transform: scale(0.95) rotate(-12deg); }
+          100% { opacity: 1; transform: scale(1) rotate(-12deg); }
+        }
+      `}</style>
+      <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
+        <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
+          <MobileTimelineBackButton label="Back to Hub" onClick={onBack} />
+          <NoodlerMark size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-lg font-bold">Build your NoodleR ID</h2>
+            <p className="truncate text-xs text-[var(--muted-foreground)]">
+              {personaAccount ? `@${personaAccount.handle}` : "Choose a persona account"}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <section className="mx-auto max-w-xl px-4 py-6 sm:px-6 sm:py-8">
+        {/* ID card mockup: live-updates as the fields below change */}
+        <div className="relative overflow-hidden rounded-xl border border-[var(--noodle-divider)] bg-[var(--card)] p-4 shadow-sm">
+          <div className="flex items-start gap-4">
+            {personaAccount && <Avatar account={personaAccount} size="lg" />}
+            <div className="min-w-0 flex-1">
+              <p className="text-[0.65rem] font-black uppercase tracking-widest text-[var(--noodle-blue)]">
+                NoodleR ID
+              </p>
+              <p className="mt-1 truncate text-lg font-black leading-tight">{draft.stageName.trim() || "Unnamed"}</p>
+              <p className="mt-0.5 truncate text-xs text-[var(--muted-foreground)]">
+                {draft.stageBio.trim() || "No bio yet"}
+              </p>
+              <p className="mt-2 text-[0.65rem] font-bold uppercase tracking-wide text-[var(--muted-foreground)]">
+                Disclosure: {draft.identityDisclosure} &middot; {draft.postingMode === "active" ? "Active" : "Passive"}
+              </p>
+            </div>
+          </div>
+          {pending && (
+            <>
+              <div
+                className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-[var(--noodle-blue)]/50 to-transparent"
+                style={{ animation: "noodler-id-scan 900ms ease-in-out" }}
+              />
+              <div
+                className="pointer-events-none absolute right-4 top-4 flex h-12 w-12 items-center justify-center rounded-full border-2 border-[var(--noodle-blue)] text-[var(--noodle-blue)]"
+                style={{ animation: "noodler-id-stamp 900ms ease-in-out forwards" }}
+              >
+                <Check size={22} />
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="mt-5 space-y-4">
+          <label className="block space-y-1.5">
+            <span className="text-[0.68rem] font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">
+              Name on ID
+            </span>
+            <input
+              value={draft.stageName}
+              onChange={(event) => onChange({ stageName: event.target.value })}
+              placeholder="Leave blank for a generated alias"
+              className={fieldClass}
+            />
+          </label>
+
+          <label className="block space-y-1.5">
+            <span className="text-[0.68rem] font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">
+              Bio
+            </span>
+            <textarea
+              value={draft.stageBio}
+              onChange={(event) => onChange({ stageBio: event.target.value })}
+              placeholder="Leave blank for a generated private profile bio"
+              className={cn(textareaClass, "min-h-20 resize-none")}
+            />
+          </label>
+
+          <label className="block space-y-1.5">
+            <span className="text-[0.68rem] font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">
+              Private persona
+            </span>
+            <textarea
+              value={draft.stagePersonality}
+              onChange={(event) => onChange({ stagePersonality: event.target.value })}
+              placeholder="Submissive but well-spoken, bratty, anonymous, polished, confident..."
+              className={cn(textareaClass, "min-h-24 resize-none")}
+            />
+          </label>
+
+          <label className="block space-y-1.5">
+            <span className="text-[0.68rem] font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">
+              Dynamic
+            </span>
+            <input
+              value={draft.stageDynamic}
+              onChange={(event) => onChange({ stageDynamic: event.target.value })}
+              placeholder="soft-spoken tease, controlled submissive, confident domme"
+              className={fieldClass}
+            />
+          </label>
+
+          <label className="block space-y-1.5">
+            <span className="text-[0.68rem] font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">
+              Disclosure level
+            </span>
+            <select
+              value={draft.identityDisclosure}
+              onChange={(event) => onChange({ identityDisclosure: event.target.value as PrivateStageDraft["identityDisclosure"] })}
+              className={fieldClass}
+            >
+              <option value="open">Open</option>
+              <option value="hinted">Hinted</option>
+              <option value="secret">Secret</option>
+            </select>
+            <p className="text-[11px] leading-4 text-[var(--muted-foreground)]">
+              "Open" lets generated posts reuse the linked name/handle directly. "Hinted" keeps the linked name
+              out of generated text but still allows subtle allusions and in-jokes. "Secret" also filters out
+              the linked handle and first name — it's AI-generated content moderation, not a hard guarantee it
+              can never slip through.
+            </p>
+          </label>
+
+          <div className="space-y-1.5">
+            <span className="text-[0.68rem] font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">
+              How will this account participate?
+            </span>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {(
+                [
+                  { value: "active" as const, title: "Active", detail: "This account posts too — you'll be able to publish from it." },
+                  { value: "passive" as const, title: "Passive", detail: "Lurk only — this account never posts, just browses and subscribes." },
+                ]
+              ).map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => onChange({ postingMode: option.value })}
+                  className={cn(
+                    "rounded-lg border p-3 text-left transition-colors",
+                    draft.postingMode === option.value
+                      ? "border-[var(--noodle-blue)] bg-[var(--noodle-blue)]/10"
+                      : "border-[var(--noodle-divider)] bg-[var(--card)] hover:border-[var(--noodle-blue)]/50",
+                  )}
+                >
+                  <p className="text-sm font-bold">{option.title}</p>
+                  <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">{option.detail}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <label className="flex items-start gap-2.5 rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] p-3">
+            <input
+              type="checkbox"
+              checked={draft.ageAcknowledged}
+              onChange={(event) => onChange({ ageAcknowledged: event.target.checked })}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--noodle-blue)]"
+            />
+            <span className="text-xs leading-5 text-[var(--muted-foreground)]">
+              I confirm I'm here for adult creator content and I'm of age.
+            </span>
+          </label>
+        </div>
+
+        <div className="mt-6 flex flex-col gap-2 sm:flex-row">
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={!canSubmit}
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--noodle-blue)] px-6 text-sm font-black text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {pending ? <Loader2 size={17} className="animate-spin" /> : <Check size={17} />}
+            {pending ? "Scanning" : "Create NoodleR profile"}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={pending}
+            className="inline-flex h-11 items-center justify-center rounded-lg border border-[var(--noodle-divider)] px-5 text-sm font-bold transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
