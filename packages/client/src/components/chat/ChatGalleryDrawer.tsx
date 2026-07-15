@@ -2,7 +2,7 @@
 // Chat: Gallery Drawer — per-chat image gallery
 // ──────────────────────────────────────────────
 import { Image, X } from "lucide-react";
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 import { cn } from "../../lib/utils";
 import { ChatGallery } from "./ChatGallery";
 import {
@@ -41,6 +41,11 @@ interface ChatGalleryDrawerProps {
   onAnimateImage?: (image: ChatImage) => void | Promise<void>;
 }
 
+type GalleryChatMetadata = Chat["metadata"] & {
+  imageGenConnectionId?: string | null;
+  enableSpriteGeneration?: boolean;
+};
+
 export function ChatGalleryDrawer({
   chat,
   open,
@@ -56,7 +61,10 @@ export function ChatGalleryDrawer({
   onAnimateImage,
 }: ChatGalleryDrawerProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const chatMetadata = parseChatMetadata(chat.metadata);
+  const chatMetadata = useMemo(
+    () => parseChatMetadata(chat.metadata) as GalleryChatMetadata,
+    [chat.metadata],
+  );
   const { data: installedCapabilities = [] } = useInstalledCapabilityPackages(open);
   const illustratorInstalled = installedCapabilities.some(
     (item) => item.id === "illustrator" && item.status === "active",
@@ -65,16 +73,14 @@ export function ChatGalleryDrawer({
   const conversationSelfiesEnabled =
     chatMetadata.characterCommands !== false &&
     conversationSelfieToggle !== false &&
-    (conversationSelfieToggle === true ||
-      (typeof chatMetadata.imageGenConnectionId === "string" && chatMetadata.imageGenConnectionId.length > 0));
+    (conversationSelfieToggle === true || !!chatMetadata.imageGenConnectionId);
   const illustratorEnabledForChat =
     chat.mode === "conversation"
       ? conversationSelfiesEnabled
       : chat.mode === "game"
         ? chatMetadata.enableSpriteGeneration === true
         : chatMetadata.enableAgents === true &&
-          Array.isArray(chatMetadata.activeAgentIds) &&
-          chatMetadata.activeAgentIds.includes("illustrator");
+          chatMetadata.activeAgentIds?.includes("illustrator");
   const illustratorAvailable = illustratorInstalled && illustratorEnabledForChat;
 
   useEffect(() => {
