@@ -41,7 +41,7 @@ function buildProgress(
   if (!definition) return null;
 
   const target = definition.target ?? null;
-  const progress = definition.metric ? counts[definition.metric] ?? 0 : unlockedRow ? 1 : 0;
+  const progress = definition.metric ? (counts[definition.metric] ?? 0) : unlockedRow ? 1 : 0;
 
   return {
     id,
@@ -61,16 +61,9 @@ function collectMetricUnlockIds(counts: AchievementCounts) {
 
 function isDuplicateUnlockError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  const maybeCode = (error as { code?: unknown }).code;
-  const code = typeof maybeCode === "string" ? maybeCode.toUpperCase() : "";
   const message = error.message.toLowerCase();
   return (
-    code === "23505" ||
-    code === "SQLITE_CONSTRAINT_PRIMARYKEY" ||
-    code === "SQLITE_CONSTRAINT_UNIQUE" ||
-    message.includes("duplicate key value violates unique constraint") ||
-    message.includes("duplicate primary key") ||
-    (message.includes("unique") && message.includes("achievement_unlocks"))
+    message.includes("duplicate primary key") || (message.includes("unique") && message.includes("achievement_unlocks"))
   );
 }
 

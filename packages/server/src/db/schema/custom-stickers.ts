@@ -1,9 +1,9 @@
 // ──────────────────────────────────────────────
 // Schema: Custom Stickers (global pool, managed in the sticker selector)
 // ──────────────────────────────────────────────
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { fileTable, text, integer } from "../file-schema.js";
 
-export const customStickers = sqliteTable("custom_stickers", {
+export const customStickers = fileTable("custom_stickers", {
   id: text("id").primaryKey(),
   /** Slug used in `sticker:name:` tokens — unique within the global pool */
   name: text("name").notNull().unique(),

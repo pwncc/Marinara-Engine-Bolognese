@@ -1,9 +1,9 @@
 // ──────────────────────────────────────────────
 // Schema: Custom Emojis (global pool, managed in the emoji picker)
 // ──────────────────────────────────────────────
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { fileTable, text, integer } from "../file-schema.js";
 
-export const customEmojis = sqliteTable("custom_emojis", {
+export const customEmojis = fileTable("custom_emojis", {
   id: text("id").primaryKey(),
   /** Slug used in `:name:` tokens — unique within the global pool */
   name: text("name").notNull().unique(),

@@ -65,13 +65,9 @@ function dimensionTooLarge(value: number | null): boolean {
 
 function isUniqueNameError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  const maybeCode = (error as { code?: unknown }).code;
-  const code = typeof maybeCode === "string" ? maybeCode.toUpperCase() : "";
   const message = error.message.toLowerCase();
   return (
-    code === "23505" ||
-    code === "SQLITE_CONSTRAINT_UNIQUE" ||
-    message.includes("duplicate key value violates unique constraint") ||
+    message.includes("duplicate primary key") ||
     (message.includes("unique") && message.includes("custom_stickers") && message.includes("name"))
   );
 }

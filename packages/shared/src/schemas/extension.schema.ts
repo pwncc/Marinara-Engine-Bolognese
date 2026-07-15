@@ -4,13 +4,13 @@
 import { z } from "zod";
 import { cssByteLimit, cssByteMessage } from "./css-size.js";
 
-// Generous-but-finite size caps. CSS and JS are stored as TEXT in SQLite
-// and emitted verbatim into the page, so an unbounded payload would be a
+// Generous-but-finite size caps. CSS and JS are persisted as text and emitted
+// verbatim into the page, so an unbounded payload would be a
 // real DoS surface even past basicAuth.
 const MAX_EXTENSION_JS_BYTES = 1024 * 1024; // 1 MiB
 
 // `z.string().max(n)` counts UTF-16 code units, so a CSS file full of
-// multi-byte characters could blow past the SQLite-row budget while still
+// multi-byte characters could blow past the storage budget while still
 // passing validation. Measure actual UTF-8 bytes instead. Inlined rather
 // than calling `TextEncoder` so the shared package stays runtime-agnostic
 // (the `dom`/`node` libs aren't enabled in `tsconfig.base.json`).

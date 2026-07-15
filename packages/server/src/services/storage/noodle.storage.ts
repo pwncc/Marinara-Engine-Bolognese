@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Storage: Noodle Fake Social Media
 // ──────────────────────────────────────────────
-import { and, desc, eq, gt, inArray, isNull, lt } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, lt } from "../../db/file-query.js";
 import {
   DEFAULT_NOODLE_SETTINGS,
   noodleSettingsSchema,
@@ -171,7 +171,7 @@ function isToggleInteractionType(type: NoodleInteractionType) {
 
 function isUniqueConstraintError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  return /SQLITE_CONSTRAINT|unique constraint failed|constraint failed/i.test(message);
+  return /duplicate primary key|unique constraint|constraint failed/i.test(message);
 }
 
 export function normalizeNoodleSettings(raw: unknown): NoodleSettings {
@@ -740,9 +740,7 @@ export function createNoodleStorage(db: DB) {
       const existing = rows[0];
       if (!existing) return null;
       await db.transaction(async (tx) => {
-        await tx
-          .delete(noodleActivityDigests)
-          .where(eq(noodleActivityDigests.sourceInteractionId, existing.id));
+        await tx.delete(noodleActivityDigests).where(eq(noodleActivityDigests.sourceInteractionId, existing.id));
         await tx.delete(noodleInteractions).where(eq(noodleInteractions.id, existing.id));
       });
       return mapInteraction(existing);

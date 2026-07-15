@@ -12,7 +12,11 @@ import { DATA_DIR } from "../utils/data-dir.js";
 import { assertInsideDir } from "../utils/security.js";
 import { readImageDimensionsFromBuffer, readImageDimensionsFromFile } from "../utils/image-metadata.js";
 import { logger } from "../lib/logger.js";
-import { CUSTOM_EMOJI_NAME_PATTERN, CUSTOM_EMOJI_MAX_DIMENSION, updateCustomEmojiSchema } from "@marinara-engine/shared";
+import {
+  CUSTOM_EMOJI_NAME_PATTERN,
+  CUSTOM_EMOJI_MAX_DIMENSION,
+  updateCustomEmojiSchema,
+} from "@marinara-engine/shared";
 
 const CUSTOM_EMOJIS_ROOT = join(DATA_DIR, "custom-emojis");
 const ALLOWED_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"]);
@@ -61,13 +65,9 @@ function dimensionTooLarge(value: number | null): boolean {
 
 function isUniqueNameError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  const maybeCode = (error as { code?: unknown }).code;
-  const code = typeof maybeCode === "string" ? maybeCode.toUpperCase() : "";
   const message = error.message.toLowerCase();
   return (
-    code === "23505" ||
-    code === "SQLITE_CONSTRAINT_UNIQUE" ||
-    message.includes("duplicate key value violates unique constraint") ||
+    message.includes("duplicate primary key") ||
     (message.includes("unique") && message.includes("custom_emojis") && message.includes("name"))
   );
 }
@@ -126,7 +126,9 @@ export async function customEmojisRoutes(app: FastifyInstance) {
       cleanup();
       return reply
         .status(400)
-        .send({ error: `Custom emojis must be at most ${CUSTOM_EMOJI_MAX_DIMENSION}x${CUSTOM_EMOJI_MAX_DIMENSION}px.` });
+        .send({
+          error: `Custom emojis must be at most ${CUSTOM_EMOJI_MAX_DIMENSION}x${CUSTOM_EMOJI_MAX_DIMENSION}px.`,
+        });
     }
     try {
       const dimensions = await readImageDimensionsFromFile(filePath);
@@ -141,7 +143,9 @@ export async function customEmojisRoutes(app: FastifyInstance) {
       cleanup();
       return reply
         .status(400)
-        .send({ error: `Custom emojis must be at most ${CUSTOM_EMOJI_MAX_DIMENSION}x${CUSTOM_EMOJI_MAX_DIMENSION}px.` });
+        .send({
+          error: `Custom emojis must be at most ${CUSTOM_EMOJI_MAX_DIMENSION}x${CUSTOM_EMOJI_MAX_DIMENSION}px.`,
+        });
     }
     if (await storage.getByName(name)) {
       cleanup();
