@@ -57,7 +57,54 @@ export function mentionedAccountMetadata(accounts: NoodleAccount[]) {
 
 export type CreateManualNoodlePostResult =
   | { post: NoodlePost }
-  | { error: "account_not_found" | "cannot_quote_private" };
+  | { error: "account_not_found" | "cannot_quote_private" | "noodler_disabled" | "posting_disabled" };
+
+function parseRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function readPrivatePostingMode(account: NoodleAccount): "active" | "passive" {
+  return parseRecord(account.settings.stageProfile).postingMode === "passive" ? "passive" : "active";
+}
+
+function readAutoPostEnabled(account: NoodleAccount): boolean {
+  return parseRecord(account.settings.autoPost).enabled === true;
+}
+
+function readCharacterName(data: unknown): string {
+  const parsed = typeof data === "string" ? safeParseRecord(data) : parseRecord(data);
+  const name = parsed.name;
+  return typeof name === "string" && name.trim() ? name.trim() : "Character";
+}
+
+function safeParseRecord(value: string): Record<string, unknown> {
+  try {
+    return parseRecord(JSON.parse(value));
+  } catch {
+    return {};
+  }
+}
+
+async function ensureCharacterNoodleAccount(
+  noodle: ReturnType<typeof createNoodleStorage>,
+  characters: ReturnType<typeof createCharactersStorage>,
+  characterId: string,
+): Promise<NoodleAccount | null> {
+  const existing = await noodle.getAccountByEntity("character", characterId);
+  if (existing) return existing;
+  const row = await characters.getById(characterId);
+  if (!row) return null;
+  return noodle.upsertAccountFromProfile({
+    kind: "character",
+    entityId: characterId,
+    displayName: readCharacterName(row.data),
+    avatarUrl: row.avatarPath ?? null,
+    avatarCrop: null,
+    invited: true,
+    syncIdentity: true,
+  });
+}
 
 /**
  * Resolve the account for a "noodle" (public) or "noodler" (private) post target
@@ -82,7 +129,15 @@ export async function createManualNoodlePost(
   characters: ReturnType<typeof createCharactersStorage>,
   params: NoodleCreatePostInput,
 ): Promise<CreateManualNoodlePostResult> {
+  if (params.target === "noodler") {
+    const settings = await noodle.getSettings();
+    if (!settings.enableNoodler) return { error: "noodler_disabled" };
+  }
+
   let account: NoodleAccount | null = null;
+  if (params.target && params.authorKind === "character") {
+    await ensureCharacterNoodleAccount(noodle, characters, params.authorEntityId);
+  }
   if (params.authorAccountId) {
     account = await noodle.getAccountById(params.authorAccountId);
   } else if (params.target) {
@@ -95,6 +150,12 @@ export async function createManualNoodlePost(
     account = await resolvePersonaAccount(noodle, characters, params.authorEntityId);
   }
   if (!account) return { error: "account_not_found" };
+
+  if (params.target === "noodler" && account.visibility === "private") {
+    if (readPrivatePostingMode(account) === "passive" || !readAutoPostEnabled(account)) {
+      return { error: "posting_disabled" };
+    }
+  }
 
   if (account.visibility === "public" && (params.parentPostId || params.quotePostId)) {
     const referencedPostId = params.parentPostId || params.quotePostId!;

@@ -616,6 +616,9 @@ function buildNoodlePostCommand(target: "noodle" | "noodler"): SlashCommand {
         if (error instanceof ApiError && error.status === 404) {
           return { handled: true, feedback: `${character.name} doesn't have a ${label} profile yet.` };
         }
+        if (error instanceof ApiError && error.status === 403) {
+          return { handled: true, feedback: `${character.name} is not allowed to post to ${label} right now.` };
+        }
         const message = error instanceof Error ? error.message : "Unknown error";
         return { handled: true, feedback: `Failed to post to ${label}: ${message}` };
       }

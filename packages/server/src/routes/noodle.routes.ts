@@ -2703,6 +2703,12 @@ export async function noodleRoutes(app: FastifyInstance) {
       if (result.error === "cannot_quote_private") {
         return reply.code(403).send({ error: "Cannot quote or reply to a private Noodle post from a public account." });
       }
+      if (result.error === "noodler_disabled") {
+        return reply.code(403).send({ error: "NoodleR is disabled." });
+      }
+      if (result.error === "posting_disabled") {
+        return reply.code(403).send({ error: "This NoodleR profile is not allowed to post automatically." });
+      }
       return reply.code(404).send({ error: "Noodle account not found" });
     }
     return result.post;
