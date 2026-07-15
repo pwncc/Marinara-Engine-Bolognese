@@ -126,6 +126,7 @@ import {
   parseCharacterCommands,
   parseCharacterCommandsBySpeaker,
   parseDirectMessageCommands,
+  parseNoodlePostCommands,
   type CharacterCommand,
   type DirectMessageCommand,
 } from "../services/conversation/character-commands.js";
@@ -330,6 +331,7 @@ import { handleConversationCallCommand } from "../services/generation/conversati
 import { handleConversationMusicCommand } from "../services/generation/conversation-music-command-runtime.js";
 import { handleConversationReactCommand } from "../services/generation/conversation-react-command-runtime.js";
 import { handleRoleplayDmCommand } from "../services/generation/roleplay-dm-command-runtime.js";
+import { handleNoodlePostCommand } from "../services/generation/noodle-post-command-runtime.js";
 import { handleConversationScheduleCommand } from "../services/generation/conversation-schedule-command-runtime.js";
 import { handleConversationCrossPostCommand } from "../services/generation/conversation-cross-post-command-runtime.js";
 import { handleHapticCommand } from "../services/generation/haptic-command-runtime.js";
@@ -2944,6 +2946,34 @@ export async function generateRoutes(app: FastifyInstance) {
           );
         }
 
+        const roleplayNoodlePostCommandsEnabled =
+          (chatMode === "roleplay" || chatMode === "visual_novel") &&
+          chatMeta.roleplayNoodlePostCommandsEnabled === true &&
+          !input.impersonate;
+        if (roleplayNoodlePostCommandsEnabled) {
+          const noodlePostCommandReminder = resolvePromptMacros(
+            [
+              `<noodle_post_commands>`,
+              `Optional hidden command, use only when it naturally fits the scene:`,
+              `- [noodle_post: target="noodle" content="short post text"] - only if your character would organically post something on Noodle (a social media app) right now. Use target="noodler" instead of "noodle" to post to your private/subscriber NoodleR account instead of your public Noodle account.`,
+              `Marinara strips this command from the roleplay reply before it's shown; if your character has no Noodle/NoodleR profile the post is silently skipped.`,
+              `Do not also narrate the exact same post text in the roleplay prose unless the user should see it in both places.`,
+              `</noodle_post_commands>`,
+            ].join("\n"),
+          );
+          const lastUserIdx = findLastIndex(finalMessages, "user");
+          if (lastUserIdx >= 0) {
+            const target = finalMessages[lastUserIdx]!;
+            finalMessages[lastUserIdx] = { ...target, content: `${target.content}\n\n${noodlePostCommandReminder}` };
+          } else {
+            finalMessages.push({ role: "user" as const, content: noodlePostCommandReminder });
+          }
+          logger.debug(
+            "[generate/roleplay] Injected Noodle post command reminder (%d chars) into last user message",
+            noodlePostCommandReminder.length,
+          );
+        }
+
         if (input.continueMessageId) {
           finalMessages.push({ role: "user" as const, content: CONTINUE_ASSISTANT_MESSAGE_PROMPT });
           logger.debug("[generate] Injected continuation prompt for assistant message %s", input.continueMessageId);
@@ -5541,6 +5571,18 @@ export async function generateRoutes(app: FastifyInstance) {
               for (const target of skippedTargets) {
                 logger.warn('[generate] Skipped roleplay DM command for cardless target "%s"', target);
               }
+            }
+          }
+          if (roleplayNoodlePostCommandsEnabled) {
+            const parsed = parseNoodlePostCommands(fullResponse);
+            if (parsed.commands.length > 0) {
+              parsedCommands = [...parsedCommands, ...parsed.commands];
+              fullResponse = parsed.cleanContent;
+              contentReplaced = true;
+              logger.info(
+                "[generate] Parsed %d roleplay Noodle post command(s)",
+                parsed.commands.length,
+              );
             }
           }
 
@@ -8392,6 +8434,12 @@ export async function generateRoutes(app: FastifyInstance) {
                       })}\n\n`,
                     );
                   },
+                });
+
+                await handleNoodlePostCommand({
+                  command,
+                  characterId,
+                  db: app.db,
                 });
 
                 await handleHapticCommand({

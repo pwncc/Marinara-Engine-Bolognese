@@ -5951,6 +5951,45 @@ export function ChatSettingsDrawer({
                     />
                   </div>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    updateMeta.mutate({
+                      id: chat.id,
+                      roleplayNoodlePostCommandsEnabled: metadata.roleplayNoodlePostCommandsEnabled !== true,
+                    })
+                  }
+                  className={cn(
+                    "flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left transition-all",
+                    metadata.roleplayNoodlePostCommandsEnabled === true
+                      ? "bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]/30"
+                      : "bg-[var(--secondary)] hover:bg-[var(--accent)]",
+                  )}
+                >
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[0.6875rem] font-medium">Allow in-character Noodle posts</span>
+                    <p className="text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
+                      Adds a short hidden command reminder so characters can post to their own Noodle or NoodleR
+                      profile when it naturally fits the scene. Skipped silently if they don't have one.
+                    </p>
+                  </div>
+                  <div
+                    className={cn(
+                      "h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
+                      metadata.roleplayNoodlePostCommandsEnabled === true
+                        ? "bg-[var(--primary)]"
+                        : "bg-[var(--muted-foreground)]/50",
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                        metadata.roleplayNoodlePostCommandsEnabled === true && "translate-x-3.5",
+                      )}
+                    />
+                  </div>
+                </button>
                 <DiscordMirrorControls
                   className="space-y-2"
                   webhookUrl={(metadata.discordWebhookUrl as string) ?? ""}

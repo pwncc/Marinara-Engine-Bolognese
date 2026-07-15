@@ -121,6 +121,12 @@ import {
 } from "../services/noodle/noodle-refresh-lock.js";
 import { normalizeNoodleHandle } from "../services/noodle/noodle-handle.js";
 import { resolveNoodleAvatarCropAfterProfileUpdate } from "../services/noodle/noodle-profile-avatar.js";
+import {
+  createManualNoodlePost,
+  mentionedAccountMetadata,
+  mentionedCharacterAccounts,
+  resolvePersonaAccount,
+} from "../services/noodle/noodle-manual-post.js";
 
 const NOODLE_ROUTE_DIR = dirname(fileURLToPath(import.meta.url));
 const CLIENT_PUBLIC_DIR = resolve(NOODLE_ROUTE_DIR, "../../../client/public");
@@ -515,21 +521,6 @@ function isProfileGenerated(account: NoodleAccount) {
   return readBoolSetting(account.settings, "profileGenerated");
 }
 
-function mentionedCharacterAccounts(accounts: NoodleAccount[], content: string): NoodleAccount[] {
-  const mentionedHandles = new Set(extractNoodleMentionHandles(content));
-  if (mentionedHandles.size === 0) return [];
-  return accounts.filter(
-    (account) => account.kind === "character" && mentionedHandles.has(account.handle.toLowerCase()),
-  );
-}
-
-function mentionedAccountMetadata(accounts: NoodleAccount[]) {
-  return {
-    mentionedAccountIds: accounts.map((account) => account.id),
-    mentionedEntityIds: accounts.map((account) => account.entityId),
-  };
-}
-
 function generatedProfileSettings(settings: Record<string, unknown>, location: string, bannerUrl: string | null) {
   return {
     ...settings,
@@ -795,26 +786,6 @@ async function bootstrapVisibleNoodle(
     });
   }
   return filterExcludedNoodleAccounts(filterStalePersonaAccounts(await noodle.bootstrap(), livePersonaIds), settings);
-}
-
-export async function resolvePersonaAccount(
-  noodle: ReturnType<typeof createNoodleStorage>,
-  characters: ReturnType<typeof createCharactersStorage>,
-  personaId?: string,
-) {
-  const personas = await characters.listPersonas();
-  const persona =
-    personas.find((p) => p.id === personaId) ?? personas.find((p) => p.isActive === "true") ?? personas[0];
-  if (!persona) return null;
-  return noodle.upsertAccountFromProfile({
-    kind: "persona",
-    entityId: persona.id,
-    displayName: persona.convoDisplayName || persona.name || "User",
-    avatarUrl: persona.avatarPath ?? null,
-    avatarCrop: parseNoodleAvatarCrop(persona.avatarCrop),
-    bio: persona.aboutMe || persona.description || "",
-    invited: true,
-  });
 }
 
 const NOODLE_CHAT_CONTEXT_MESSAGE_LIMIT = 8;
@@ -1828,18 +1799,32 @@ export async function ensurePrivateAccountIdentity(input: {
       } else {
         stageIdentityFailed = true;
       }
-    } else if (input.requestedStageProfile) {
+    } else {
+      // No generation connection configured. Fall back to the linked public
+      // account's real name/bio rather than leaving the placeholder values
+      // createPrivateAccount() inserted (own displayName, blank bio). Only
+      // let submitted fields the user actually filled in override that —
+      // the client always sends stageBio/stagePersonality/stageDynamic as
+      // "" (not omitted) when left blank, so blank strings must be dropped
+      // instead of allowed to clobber the real defaults.
+      const submitted = Object.fromEntries(
+        Object.entries(input.requestedStageProfile ?? {}).filter(
+          ([, value]) => !(typeof value === "string" && value.trim() === ""),
+        ),
+      );
       const profile = noodlePrivateStageProfileSchema.parse({
         ...defaultPrivateStageProfile(publicAccount),
-        ...input.requestedStageProfile,
+        ...submitted,
       });
       await noodle.updateAccount(privateAccount.id, {
         displayName: profile.stageName,
         bio: profile.stageBio,
         settings: writePrivateStageProfileSettings(privateAccount.settings, profile),
       });
-    } else {
-      stageIdentityFailed = true;
+      // A manually-submitted stage profile is a deliberate choice, not a
+      // failure. Only the no-connection retry path (no requestedStageProfile
+      // at all) should surface as a generation failure to the UI.
+      if (!input.requestedStageProfile) stageIdentityFailed = true;
     }
     if (stageIdentityFailed) {
       await noodle.updateAccount(privateAccount.id, {
@@ -2664,46 +2649,14 @@ export async function noodleRoutes(app: FastifyInstance) {
   app.post("/posts", async (req, reply) => {
     const parsed = noodleCreatePostSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
-    let account = parsed.data.authorAccountId
-      ? await noodle.getAccountById(parsed.data.authorAccountId)
-      : await noodle.getAccountByEntity(parsed.data.authorKind, parsed.data.authorEntityId);
-    if (!account && !parsed.data.authorAccountId && parsed.data.authorKind === "persona") {
-      account = await resolvePersonaAccount(noodle, characters, parsed.data.authorEntityId);
-    }
-    if (!account) return reply.code(404).send({ error: "Noodle account not found" });
-    if (account.visibility === "public" && (parsed.data.parentPostId || parsed.data.quotePostId)) {
-      const referencedPostId = parsed.data.parentPostId || parsed.data.quotePostId!;
-      const referencedPost = await noodle.getPostById(referencedPostId);
-      const referencedAuthor = referencedPost ? await noodle.getAccountById(referencedPost.authorAccountId) : null;
-      if (referencedAuthor?.visibility === "private") {
+    const result = await createManualNoodlePost(noodle, characters, parsed.data);
+    if ("error" in result) {
+      if (result.error === "cannot_quote_private") {
         return reply.code(403).send({ error: "Cannot quote or reply to a private Noodle post from a public account." });
       }
+      return reply.code(404).send({ error: "Noodle account not found" });
     }
-    const mentionedAccounts = mentionedCharacterAccounts(await noodle.listAccounts(), parsed.data.content);
-    const poll = parsed.data.poll ? createNoodlePoll(parsed.data.poll) : null;
-    const post = await noodle.createPost({
-      authorAccountId: account.id,
-      content: parsed.data.content,
-      imageUrl: parsed.data.imageUrl ?? null,
-      imagePrompt: parsed.data.imagePrompt ?? null,
-      parentPostId: parsed.data.parentPostId ?? null,
-      quotePostId: parsed.data.quotePostId ?? null,
-      source: "manual",
-      access: parsed.data.access ?? "public",
-      metadata: {
-        ...mentionedAccountMetadata(mentionedAccounts),
-        ...(poll ? { poll } : {}),
-        ...(parsed.data.access === "ppv" && parsed.data.ppvPrice != null ? { ppvPrice: parsed.data.ppvPrice } : {}),
-      },
-    });
-    if (!post) return reply.code(404).send({ error: "Noodle author not found" });
-    const digest = await noodle.createDigest({
-      accountIds: [account.id, ...mentionedAccounts.map((mentionedAccount) => mentionedAccount.id)],
-      content: `${account.displayName} posted on Noodle: ${post.content}`,
-      sourcePostId: post.id,
-    });
-    if (!digest) return post;
-    return (await noodle.updatePostMedia(post.id, { metadata: { activityDigestId: digest.id } })) ?? post;
+    return result.post;
   });
 
   app.patch("/posts/:id", async (req, reply) => {

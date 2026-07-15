@@ -171,12 +171,19 @@ export const noodlePollSchema = z.object({
     .max(4),
 });
 
+export const noodlePostTargetSchema = z.enum(["noodle", "noodler"]);
+
 export const noodleCreatePostSchema = z.object({
   authorKind: noodleAccountKindSchema,
   authorEntityId: z.string().min(1),
   // Overrides authorKind/authorEntityId resolution — needed to post as a private
   // (NoodleR) account, which shares kind+entityId with its linked public account.
   authorAccountId: z.string().min(1).optional(),
+  // Convenience alternative to authorAccountId for callers (slash commands, the
+  // in-character roleplay post action) that only know "post publicly" vs "post to
+  // my NoodleR" and don't have the private account id on hand — resolved server-side
+  // via the public account's linkedAccountId. Ignored if authorAccountId is set.
+  target: noodlePostTargetSchema.optional(),
   content: z.string().min(1).max(4000),
   imageUrl: z.string().max(2000).nullable().optional(),
   imagePrompt: z.string().max(2000).nullable().optional(),

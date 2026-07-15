@@ -26,6 +26,7 @@
 // - <influence>text</influence> (OOC influence for connected roleplay, one-shot)
 // - <note>text</note> (durable note for connected roleplay, persists until cleared)
 // - [dm: character="CharName", message="text"] (Roleplay-only: open a direct-message conversation)
+// - [noodle_post: target="noodle"|"noodler", content="text"] (Roleplay-only: post as this character on Noodle/NoodleR)
 //
 // Assistant commands (Professor Mari):
 // - [create_persona: name="...", description="...", personality="...", appearance="..."]
@@ -151,6 +152,14 @@ export interface DirectMessageCommand {
   /** Resolved by the generation route once the target is verified as a real character card. */
   resolvedCharacterId?: string;
   resolvedCharacterName?: string;
+}
+
+export interface NoodlePostCommand {
+  type: "noodle_post";
+  /** "noodle" (public) or "noodler" (private/subscriber) — defaults to "noodle". */
+  target: "noodle" | "noodler";
+  /** Post text the character wants to publish. */
+  content: string;
 }
 
 export interface HapticCommand {
@@ -406,6 +415,7 @@ export type CharacterCommand =
   | InfluenceCommand
   | NoteCommand
   | DirectMessageCommand
+  | NoodlePostCommand
   | HapticCommand
   | SpotifyCommand
   | YouTubeCommand
@@ -489,6 +499,7 @@ function parseReactBody(body: string): { emoji: string; targetCharacter?: string
   return emoji.includes('"') ? null : { emoji };
 }
 const DIRECT_MESSAGE_RE = new RegExp(`\\[dm:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
+const NOODLE_POST_RE = new RegExp(`\\[noodle_post:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
 const INFLUENCE_RE = /<influence>([\s\S]*?)<\/influence>/gi;
 const NOTE_RE = /<note>([\s\S]*?)<\/note>/gi;
 const INFLUENCE_BRACKET_RE = new RegExp(`\\[influence:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
@@ -1547,6 +1558,30 @@ export function parseDirectMessageCommands(content: string): {
 
   const cleanContent = content
     .replace(DIRECT_MESSAGE_RE, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return { cleanContent, commands };
+}
+
+/** Parse Roleplay-only in-character Noodle/NoodleR post commands, without enabling the wider Conversation command set. */
+export function parseNoodlePostCommands(content: string): {
+  cleanContent: string;
+  commands: NoodlePostCommand[];
+} {
+  const commands: NoodlePostCommand[] = [];
+
+  for (const match of content.matchAll(NOODLE_POST_RE)) {
+    const params = match[1]!;
+    const rawTarget = parseQuotedParam(params, "target")?.toLowerCase();
+    const target: NoodlePostCommand["target"] = rawTarget === "noodler" ? "noodler" : "noodle";
+    const rawContent = parseQuotedParam(params, "content") ?? parseCommandTextParam(params, ["content", "text"]);
+    const postContent = stripConversationPromptTimestamps(rawContent.trim()).slice(0, 4000);
+    if (postContent) commands.push({ type: "noodle_post", target, content: postContent });
+  }
+
+  const cleanContent = content
+    .replace(NOODLE_POST_RE, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 

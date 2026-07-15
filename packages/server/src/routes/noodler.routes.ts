@@ -23,10 +23,10 @@ import { isNoodleRefreshLocked, withNoodleRefreshLock } from "../services/noodle
 import {
   ensurePrivateAccountIdentity,
   isNoodleAccountHiddenFromViewer,
-  resolvePersonaAccount,
   simulateNoodlerFanActivity,
   tryGenerateNoodlerReaction,
 } from "./noodle.routes.js";
+import { resolvePersonaAccount } from "../services/noodle/noodle-manual-post.js";
 
 export async function noodlerRoutes(app: FastifyInstance) {
   const noodle = createNoodleStorage(app.db);

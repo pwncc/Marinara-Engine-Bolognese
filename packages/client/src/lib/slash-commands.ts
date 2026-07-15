@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Slash Commands — SillyTavern-style / commands
 // ──────────────────────────────────────────────
-import { api } from "./api-client";
+import { api, ApiError } from "./api-client";
 import { useChatStore } from "../stores/chat.store";
 import { useUIStore } from "../stores/ui.store";
 import { useConversationGamesStore } from "../stores/conversation-games.store";
@@ -546,6 +546,81 @@ function isMessageHidden(msg: { extra?: unknown }): boolean {
   } catch {
     return false;
   }
+}
+
+// ── Noodle / NoodleR post commands ────────────────
+
+function resolveNoodlePostSpeaker(
+  args: string,
+  characters: Array<{ id: string; name: string }>,
+): { character: { id: string; name: string } | null; content: string; requestedName: string } {
+  if (characters.length <= 1) {
+    return { character: characters[0] ?? null, content: args.trim(), requestedName: "" };
+  }
+  const quoted = parseLeadingQuotedSegment(args);
+  if (quoted) {
+    return {
+      character: findSceneCharacter(characters, quoted.value),
+      content: quoted.rest.trim(),
+      requestedName: quoted.value,
+    };
+  }
+  const sorted = [...characters].sort((a, b) => b.name.length - a.name.length);
+  for (const character of sorted) {
+    const pattern = new RegExp(`^${escapeRegExp(character.name)}(?:\\s+|$)`, "iu");
+    const match = args.trim().match(pattern);
+    if (match) {
+      return { character, content: args.trim().slice(match[0].length).trim(), requestedName: character.name };
+    }
+  }
+  return { character: null, content: "", requestedName: "" };
+}
+
+function buildNoodlePostCommand(target: "noodle" | "noodler"): SlashCommand {
+  const label = target === "noodle" ? "Noodle" : "NoodleR";
+  return {
+    name: target,
+    description: `Post as this chat's character on ${label}`,
+    usage: `/${target} [character name] <post text>`,
+    modes: ["conversation"],
+    local: true,
+    async execute(args, ctx) {
+      const characters = ctx.characters ?? [];
+      if (characters.length === 0) {
+        return { handled: true, feedback: "No character metadata found for this chat." };
+      }
+      const { character, content, requestedName } = resolveNoodlePostSpeaker(args, characters);
+      if (!character) {
+        return {
+          handled: true,
+          feedback:
+            requestedName || characters.length > 1
+              ? `Character "${requestedName || "(missing)"}" not found. Available: ${formatAvailableCharacterList(characters)}`
+              : "Character metadata for this chat is still loading. Try again in a moment.",
+        };
+      }
+      if (!content) {
+        return { handled: true, feedback: `Usage: /${target} [character name] <post text>` };
+      }
+
+      try {
+        await api.post("/posts", {
+          authorKind: "character",
+          authorEntityId: character.id,
+          target,
+          content,
+        });
+        ctx.invalidate();
+        return { handled: true, feedback: `Posted as ${character.name} on ${label}.` };
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          return { handled: true, feedback: `${character.name} doesn't have a ${label} profile yet.` };
+        }
+        const message = error instanceof Error ? error.message : "Unknown error";
+        return { handled: true, feedback: `Failed to post to ${label}: ${message}` };
+      }
+    },
+  };
 }
 
 // ── Command definitions ────────────────
@@ -1298,6 +1373,8 @@ const COMMANDS: SlashCommand[] = [
       return { handled: true, feedback: MACRO_HELP_TEXT };
     },
   },
+  buildNoodlePostCommand("noodle"),
+  buildNoodlePostCommand("noodler"),
 ];
 
 /** Find a matching command for the given input. */

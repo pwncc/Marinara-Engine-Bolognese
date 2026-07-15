@@ -1297,7 +1297,7 @@ export function NoodleView() {
       publicAccountId: account.id,
       identityDisclosure: "hinted",
       stageName: "",
-      stageBio: "",
+      stageBio: account.bio ?? "",
       stagePersonality: "",
       stageDynamic: "",
     });
