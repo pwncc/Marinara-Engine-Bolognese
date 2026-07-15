@@ -5840,6 +5840,7 @@ export function NoodleView() {
     onEnableNoodlerFromVerification: enableNoodlerFromVerification,
     hasSettings: Boolean(settings),
     updateSettingsPending: updateSettings.isPending,
+    onOpenMobileDrawer: () => setMobileDrawerOpen(true),
     noodlerHubLoading: noodlerHubQuery.isLoading,
     noodlerHubTab,
     onNoodlerHubTabChange: setNoodlerHubTab,
@@ -5852,6 +5853,34 @@ export function NoodleView() {
     renderNoodlerDiscoverCard,
     suggestedNoodlerCreators,
     renderNoodlerSuggestionRow,
+    composeOpen,
+    inlineComposerRef,
+    composer,
+    onComposerChange: handleComposerChange,
+    onComposerBlur: () => setComposer(composerValueRef.current),
+    onComposerKeyDown: handleComposerKeyDown,
+    activeMention,
+    mentionSuggestionsCount: mentionSuggestions.length,
+    activeMentionIndex,
+    composePlaceholder,
+    composeActionLabel,
+    renderComposerMentionSuggestions,
+    renderDraftPoll,
+    attachedImageUrl,
+    onAttachedImageUrlChange: setAttachedImageUrl,
+    imageToolRef,
+    pollToolRef,
+    mediaToolRef,
+    activeComposerTool,
+    onActiveComposerToolChange: setActiveComposerTool,
+    draftPollActive: Boolean(draftPoll),
+    onTogglePollComposer: togglePollComposer,
+    onSubmitPost: submitPost,
+    canSubmitPost,
+    createPostPending: createPost.isPending,
+    renderComposerToolPopovers,
+    onTriggerRefresh: triggerRefresh,
+    refreshNoodlePending: refreshNoodle.isPending,
     profileViewProps,
   };
 
@@ -6078,8 +6107,12 @@ export function NoodleView() {
                       : activeNoodleView === "home") && "bg-[var(--noodle-blue)]/10",
                   )}
                 >
-                  <Home size={22} className="!text-[var(--noodle-blue)]" />
-                  Home
+                  {activeNoodleMode === "noodler" ? (
+                    <NoodlerMark size={22} className="!text-[var(--noodle-blue)]" />
+                  ) : (
+                    <Home size={22} className="!text-[var(--noodle-blue)]" />
+                  )}
+                  {activeNoodleMode === "noodler" ? "Hub" : "Home"}
                 </button>
                 <button
                   type="button"

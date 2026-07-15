@@ -5,32 +5,20 @@
 // presentational. All state, data fetching, and mutation handlers
 // still live in the NoodleView shell and are passed down as props.
 // ──────────────────────────────────────────────
-import {
-  AtSign,
-  Bell,
-  Heart,
-  ImageIcon,
-  ListChecks,
-  Loader2,
-  Menu,
-  MessageCircle,
-  RefreshCw,
-  Search,
-  Smile,
-  X,
-} from "lucide-react";
+import { AtSign, Bell, Heart, Menu, MessageCircle, Search, X } from "lucide-react";
 import type { ChangeEvent, ReactNode, RefObject } from "react";
 import type { NoodleAccount, NoodlePost, NoodleSettings } from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
 import type { AvatarCropValue } from "../../lib/utils";
 import {
   Avatar,
+  InlineComposer,
   MobileTimelineBackButton,
   NoodleLogo,
   NoodlerBadge,
-  NoodleToolButton,
   ProfileHeaderChrome,
   ProfileTabsAndGrid,
+  RefreshTimelineButton,
   type ActiveComposerMention,
   type ComposerTool,
   type NotificationTab,
@@ -441,111 +429,46 @@ export function NoodleHome(props: NoodleHomeProps) {
         </div>
       )}
 
-      {!isAccountSearch && !composeOpen && (
-        <div className="border-b border-[var(--noodle-divider)] px-4 py-3" data-component="NoodleHome.InlineComposer">
-          <div className="grid grid-cols-[2.75rem_minmax(0,1fr)] gap-3">
-            {personaAccount ? <Avatar account={personaAccount} /> : <AtSign size={28} className="text-[var(--noodle-blue)]" />}
-            <div className="min-w-0">
-              <textarea
-                ref={inlineComposerRef}
-                defaultValue={composer}
-                onChange={onComposerChange}
-                onBlur={onComposerBlur}
-                onKeyDown={onComposerKeyDown}
-                disabled={!personaAccount}
-                placeholder={composePlaceholder}
-                aria-autocomplete="list"
-                aria-controls={activeMention && !composeOpen ? "noodle-inline-mention-list" : undefined}
-                aria-expanded={Boolean(activeMention && !composeOpen)}
-                aria-activedescendant={
-                  activeMention && !composeOpen && mentionSuggestionsCount > 0
-                    ? `noodle-inline-mention-list-option-${Math.min(activeMentionIndex, mentionSuggestionsCount - 1)}`
-                    : undefined
-                }
-                className="min-h-20 w-full resize-none border-0 bg-transparent py-2 text-[1rem] leading-6 text-[var(--foreground)] outline-none placeholder:text-[var(--muted-foreground)] disabled:opacity-60"
-              />
-              {!composeOpen && renderComposerMentionSuggestions("noodle-inline-mention-list")}
-              {renderDraftPoll()}
-              {attachedImageUrl && (
-                <div className="mb-3 overflow-hidden rounded-xl border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/10">
-                  <img src={attachedImageUrl} alt="" className="max-h-52 w-full object-cover" />
-                  <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-[var(--noodle-blue)]">
-                    <span className="min-w-0 truncate">Attached image</span>
-                    <button
-                      type="button"
-                      onClick={() => onAttachedImageUrlChange("")}
-                      className="flex h-7 w-7 items-center justify-center rounded-full hover:bg-[var(--noodle-blue)]/15"
-                      title="Remove image"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="mt-1 h-px w-full bg-[var(--noodle-divider)]" />
-          <div className="relative mt-3 flex items-center justify-between gap-2 pl-14">
-            <div className="flex min-w-0 flex-wrap items-center gap-1">
-              <div ref={imageToolRef} className="relative">
-                <NoodleToolButton
-                  title="Attach image"
-                  active={activeComposerTool === "image"}
-                  onClick={() => onActiveComposerToolChange(activeComposerTool === "image" ? null : "image")}
-                >
-                  <ImageIcon size={18} />
-                </NoodleToolButton>
-              </div>
-              <div ref={pollToolRef} className="relative">
-                <NoodleToolButton
-                  title={draftPollActive ? "Edit poll" : "Create poll"}
-                  active={activeComposerTool === "poll" || draftPollActive}
-                  onClick={onTogglePollComposer}
-                >
-                  <ListChecks size={18} />
-                </NoodleToolButton>
-              </div>
-              <div ref={mediaToolRef} className="relative">
-                <NoodleToolButton
-                  title="Emoji, GIFs and stickers"
-                  active={activeComposerTool === "media"}
-                  onClick={() => onActiveComposerToolChange(activeComposerTool === "media" ? null : "media")}
-                >
-                  <Smile size={18} />
-                </NoodleToolButton>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={onSubmitPost}
-              disabled={!canSubmitPost || createPostPending}
-              className="h-8 rounded-full bg-[var(--noodle-blue)] px-5 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {composeActionLabel}
-            </button>
-            {!composeOpen && renderComposerToolPopovers({ imageRef: imageToolRef, pollRef: pollToolRef, mediaRef: mediaToolRef })}
-          </div>
-        </div>
+      {!isAccountSearch && (
+        <InlineComposer
+          personaAccount={personaAccount}
+          composeOpen={composeOpen}
+          inlineComposerRef={inlineComposerRef}
+          composer={composer}
+          onComposerChange={onComposerChange}
+          onComposerBlur={onComposerBlur}
+          onComposerKeyDown={onComposerKeyDown}
+          activeMention={activeMention}
+          mentionSuggestionsCount={mentionSuggestionsCount}
+          activeMentionIndex={activeMentionIndex}
+          composePlaceholder={composePlaceholder}
+          composeActionLabel={composeActionLabel}
+          renderComposerMentionSuggestions={renderComposerMentionSuggestions}
+          renderDraftPoll={renderDraftPoll}
+          attachedImageUrl={attachedImageUrl}
+          onAttachedImageUrlChange={onAttachedImageUrlChange}
+          imageToolRef={imageToolRef}
+          pollToolRef={pollToolRef}
+          mediaToolRef={mediaToolRef}
+          activeComposerTool={activeComposerTool}
+          onActiveComposerToolChange={onActiveComposerToolChange}
+          draftPollActive={draftPollActive}
+          onTogglePollComposer={onTogglePollComposer}
+          onSubmitPost={onSubmitPost}
+          canSubmitPost={canSubmitPost}
+          createPostPending={createPostPending}
+          renderComposerToolPopovers={renderComposerToolPopovers}
+          mentionListboxId="noodle-inline-mention-list"
+          dataComponent="NoodleHome.InlineComposer"
+        />
       )}
 
       {!isAccountSearch && (
-        <div className="border-b border-[var(--noodle-divider)] px-4 py-2">
-          <button
-            type="button"
-            onClick={onTriggerRefresh}
-            disabled={refreshNoodlePending || !settings || imagePromptReviewItemsCount > 0}
-            className="flex h-9 w-full items-center justify-center gap-2 rounded-full text-sm font-bold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-            title="Refresh timeline"
-            aria-label="Refresh timeline"
-          >
-            {refreshNoodlePending ? (
-              <Loader2 size={17} className="!text-[var(--noodle-blue)] animate-spin" />
-            ) : (
-              <RefreshCw size={17} className="!text-[var(--noodle-blue)]" />
-            )}
-            {refreshNoodlePending ? "Refreshing" : "Refresh timeline"}
-          </button>
-        </div>
+        <RefreshTimelineButton
+          onTriggerRefresh={onTriggerRefresh}
+          refreshNoodlePending={refreshNoodlePending}
+          disabled={!settings || imagePromptReviewItemsCount > 0}
+        />
       )}
 
       {isLoading ? (

@@ -3,7 +3,21 @@
 // primitives shared between NoodleView (shell),
 // NoodleHome (public feed), and NoodlerHome (private hub).
 // ──────────────────────────────────────────────
-import { ChevronLeft, ChevronRight, Lock, MapPin, RefreshCw, Search, X, Home } from "lucide-react";
+import {
+  AtSign,
+  ChevronLeft,
+  ChevronRight,
+  ImageIcon,
+  ListChecks,
+  Loader2,
+  Lock,
+  MapPin,
+  RefreshCw,
+  Search,
+  Smile,
+  X,
+  Home,
+} from "lucide-react";
 import { createPortal } from "react-dom";
 import {
   Fragment,
@@ -497,6 +511,195 @@ export function NoodleToolButton({
     >
       {children}
     </button>
+  );
+}
+
+export interface InlineComposerProps {
+  personaAccount: NoodleAccount | null;
+  composeOpen: boolean;
+  inlineComposerRef: RefObject<HTMLTextAreaElement | null>;
+  composer: string;
+  onComposerChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
+  onComposerBlur: () => void;
+  onComposerKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  activeMention: ActiveComposerMention | null;
+  mentionSuggestionsCount: number;
+  activeMentionIndex: number;
+  composePlaceholder: string;
+  composeActionLabel: string;
+  renderComposerMentionSuggestions: (listboxId: string) => ReactNode;
+  renderDraftPoll: () => ReactNode;
+  attachedImageUrl: string;
+  onAttachedImageUrlChange: (url: string) => void;
+  imageToolRef: RefObject<HTMLDivElement | null>;
+  pollToolRef: RefObject<HTMLDivElement | null>;
+  mediaToolRef: RefObject<HTMLDivElement | null>;
+  activeComposerTool: ComposerTool | null;
+  onActiveComposerToolChange: (tool: ComposerTool | null) => void;
+  draftPollActive: boolean;
+  onTogglePollComposer: () => void;
+  onSubmitPost: () => void;
+  canSubmitPost: boolean;
+  createPostPending: boolean;
+  renderComposerToolPopovers: (refs: {
+    imageRef: RefObject<HTMLDivElement | null>;
+    pollRef: RefObject<HTMLDivElement | null>;
+    mediaRef: RefObject<HTMLDivElement | null>;
+  }) => ReactNode;
+  mentionListboxId: string;
+  dataComponent?: string;
+}
+
+export function InlineComposer(props: InlineComposerProps) {
+  const {
+    personaAccount,
+    composeOpen,
+    inlineComposerRef,
+    composer,
+    onComposerChange,
+    onComposerBlur,
+    onComposerKeyDown,
+    activeMention,
+    mentionSuggestionsCount,
+    activeMentionIndex,
+    composePlaceholder,
+    composeActionLabel,
+    renderComposerMentionSuggestions,
+    renderDraftPoll,
+    attachedImageUrl,
+    onAttachedImageUrlChange,
+    imageToolRef,
+    pollToolRef,
+    mediaToolRef,
+    activeComposerTool,
+    onActiveComposerToolChange,
+    draftPollActive,
+    onTogglePollComposer,
+    onSubmitPost,
+    canSubmitPost,
+    createPostPending,
+    renderComposerToolPopovers,
+    mentionListboxId,
+    dataComponent = "InlineComposer",
+  } = props;
+
+  if (composeOpen) return null;
+
+  return (
+    <div className="border-b border-[var(--noodle-divider)] px-4 py-3" data-component={dataComponent}>
+      <div className="grid grid-cols-[2.75rem_minmax(0,1fr)] gap-3">
+        {personaAccount ? <Avatar account={personaAccount} /> : <AtSign size={28} className="text-[var(--noodle-blue)]" />}
+        <div className="min-w-0">
+          <textarea
+            ref={inlineComposerRef}
+            defaultValue={composer}
+            onChange={onComposerChange}
+            onBlur={onComposerBlur}
+            onKeyDown={onComposerKeyDown}
+            disabled={!personaAccount}
+            placeholder={composePlaceholder}
+            aria-autocomplete="list"
+            aria-controls={activeMention ? mentionListboxId : undefined}
+            aria-expanded={Boolean(activeMention)}
+            aria-activedescendant={
+              activeMention && mentionSuggestionsCount > 0
+                ? `${mentionListboxId}-option-${Math.min(activeMentionIndex, mentionSuggestionsCount - 1)}`
+                : undefined
+            }
+            className="min-h-20 w-full resize-none border-0 bg-transparent py-2 text-[1rem] leading-6 text-[var(--foreground)] outline-none placeholder:text-[var(--muted-foreground)] disabled:opacity-60"
+          />
+          {renderComposerMentionSuggestions(mentionListboxId)}
+          {renderDraftPoll()}
+          {attachedImageUrl && (
+            <div className="mb-3 overflow-hidden rounded-xl border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/10">
+              <img src={attachedImageUrl} alt="" className="max-h-52 w-full object-cover" />
+              <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-[var(--noodle-blue)]">
+                <span className="min-w-0 truncate">Attached image</span>
+                <button
+                  type="button"
+                  onClick={() => onAttachedImageUrlChange("")}
+                  className="flex h-7 w-7 items-center justify-center rounded-full hover:bg-[var(--noodle-blue)]/15"
+                  title="Remove image"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="mt-1 h-px w-full bg-[var(--noodle-divider)]" />
+      <div className="relative mt-3 flex items-center justify-between gap-2 pl-14">
+        <div className="flex min-w-0 flex-wrap items-center gap-1">
+          <div ref={imageToolRef} className="relative">
+            <NoodleToolButton
+              title="Attach image"
+              active={activeComposerTool === "image"}
+              onClick={() => onActiveComposerToolChange(activeComposerTool === "image" ? null : "image")}
+            >
+              <ImageIcon size={18} />
+            </NoodleToolButton>
+          </div>
+          <div ref={pollToolRef} className="relative">
+            <NoodleToolButton
+              title={draftPollActive ? "Edit poll" : "Create poll"}
+              active={activeComposerTool === "poll" || draftPollActive}
+              onClick={onTogglePollComposer}
+            >
+              <ListChecks size={18} />
+            </NoodleToolButton>
+          </div>
+          <div ref={mediaToolRef} className="relative">
+            <NoodleToolButton
+              title="Emoji, GIFs and stickers"
+              active={activeComposerTool === "media"}
+              onClick={() => onActiveComposerToolChange(activeComposerTool === "media" ? null : "media")}
+            >
+              <Smile size={18} />
+            </NoodleToolButton>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onSubmitPost}
+          disabled={!canSubmitPost || createPostPending}
+          className="h-8 rounded-full bg-[var(--noodle-blue)] px-5 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {composeActionLabel}
+        </button>
+        {renderComposerToolPopovers({ imageRef: imageToolRef, pollRef: pollToolRef, mediaRef: mediaToolRef })}
+      </div>
+    </div>
+  );
+}
+
+export function RefreshTimelineButton({
+  onTriggerRefresh,
+  refreshNoodlePending,
+  disabled = false,
+}: {
+  onTriggerRefresh: () => void;
+  refreshNoodlePending: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="border-b border-[var(--noodle-divider)] px-4 py-2">
+      <button
+        type="button"
+        onClick={onTriggerRefresh}
+        disabled={refreshNoodlePending || disabled}
+        className="flex h-9 w-full items-center justify-center gap-2 rounded-full text-sm font-bold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+        title="Refresh timeline"
+        aria-label="Refresh timeline"
+      >
+        {refreshNoodlePending ? (
+          <Loader2 size={17} className="!text-[var(--noodle-blue)] animate-spin" />
+        ) : (
+          <RefreshCw size={17} className="!text-[var(--noodle-blue)]" />
+        )}
+        {refreshNoodlePending ? "Refreshing" : "Refresh timeline"}
+      </button>
+    </div>
   );
 }
 

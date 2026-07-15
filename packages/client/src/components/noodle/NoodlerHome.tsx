@@ -6,7 +6,7 @@
 // fetching, and mutation handlers still live in the NoodleView
 // shell and are passed down as props.
 // ──────────────────────────────────────────────
-import { AtSign, Check, ImageIcon, Loader2, Trash2, User } from "lucide-react";
+import { AtSign, Check, ImageIcon, Loader2, Menu, Trash2, User } from "lucide-react";
 import { toast } from "sonner";
 import type { ChangeEvent, CSSProperties, ReactNode, RefObject } from "react";
 import type { NoodleAccount, NoodlePost, NoodlePostAccess } from "@marinara-engine/shared";
@@ -18,11 +18,15 @@ import {
   subscribeLabel,
   readPrivateIdentityDisclosure,
   readPrivateStageSetting,
+  InlineComposer,
   MobileTimelineBackButton,
   NoodlerMark,
   NoodlerPrivateBadge,
   ProfileHeaderChrome,
   ProfileTabsAndGrid,
+  RefreshTimelineButton,
+  type ActiveComposerMention,
+  type ComposerTool,
   type NoodlerHubTab,
   type NoodlerTimelineItem,
   type ProfileTab,
@@ -51,6 +55,7 @@ export interface NoodlerHomeProps {
   updateSettingsPending: boolean;
 
   // Hub
+  onOpenMobileDrawer: () => void;
   noodlerHubLoading: boolean;
   noodlerHubTab: NoodlerHubTab;
   onNoodlerHubTabChange: (tab: NoodlerHubTab) => void;
@@ -66,6 +71,41 @@ export interface NoodlerHomeProps {
   suggestedNoodlerCreators: NoodleAccount[];
   renderNoodlerSuggestionRow: (account: NoodleAccount) => React.ReactNode;
 
+  // Hub inline composer + refresh (same composer/refresh state as NoodleHome's
+  // "home" timeline — NoodleHome and NoodlerHome are never mounted at once)
+  composeOpen: boolean;
+  inlineComposerRef: RefObject<HTMLTextAreaElement | null>;
+  composer: string;
+  onComposerChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
+  onComposerBlur: () => void;
+  onComposerKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  activeMention: ActiveComposerMention | null;
+  mentionSuggestionsCount: number;
+  activeMentionIndex: number;
+  composePlaceholder: string;
+  composeActionLabel: string;
+  renderComposerMentionSuggestions: (listboxId: string) => React.ReactNode;
+  renderDraftPoll: () => React.ReactNode;
+  attachedImageUrl: string;
+  onAttachedImageUrlChange: (url: string) => void;
+  imageToolRef: RefObject<HTMLDivElement | null>;
+  pollToolRef: RefObject<HTMLDivElement | null>;
+  mediaToolRef: RefObject<HTMLDivElement | null>;
+  activeComposerTool: ComposerTool | null;
+  onActiveComposerToolChange: (tool: ComposerTool | null) => void;
+  draftPollActive: boolean;
+  onTogglePollComposer: () => void;
+  onSubmitPost: () => void;
+  canSubmitPost: boolean;
+  createPostPending: boolean;
+  renderComposerToolPopovers: (refs: {
+    imageRef: RefObject<HTMLDivElement | null>;
+    pollRef: RefObject<HTMLDivElement | null>;
+    mediaRef: RefObject<HTMLDivElement | null>;
+  }) => React.ReactNode;
+  onTriggerRefresh: () => void;
+  refreshNoodlePending: boolean;
+
   // Private profile (activeNoodleView === "profile" && activeNoodleMode === "noodler")
   profileViewProps?: PrivateProfileViewProps;
 }
@@ -78,6 +118,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
     onEnableNoodlerFromVerification,
     hasSettings,
     updateSettingsPending,
+    onOpenMobileDrawer,
     noodlerHubLoading,
     noodlerHubTab,
     onNoodlerHubTabChange,
@@ -90,6 +131,34 @@ export function NoodlerHome(props: NoodlerHomeProps) {
     renderNoodlerDiscoverCard,
     suggestedNoodlerCreators,
     renderNoodlerSuggestionRow,
+    composeOpen,
+    inlineComposerRef,
+    composer,
+    onComposerChange,
+    onComposerBlur,
+    onComposerKeyDown,
+    activeMention,
+    mentionSuggestionsCount,
+    activeMentionIndex,
+    composePlaceholder,
+    composeActionLabel,
+    renderComposerMentionSuggestions,
+    renderDraftPoll,
+    attachedImageUrl,
+    onAttachedImageUrlChange,
+    imageToolRef,
+    pollToolRef,
+    mediaToolRef,
+    activeComposerTool,
+    onActiveComposerToolChange,
+    draftPollActive,
+    onTogglePollComposer,
+    onSubmitPost,
+    canSubmitPost,
+    createPostPending,
+    renderComposerToolPopovers,
+    onTriggerRefresh,
+    refreshNoodlePending,
     profileViewProps,
   } = props;
 
@@ -221,17 +290,21 @@ export function NoodlerHome(props: NoodlerHomeProps) {
   // "noodler" hub
   return (
     <div className="min-h-full" data-component="NoodlerHome.Hub">
-      <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
-        <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
-          <MobileTimelineBackButton label="Back to Noodle" onClick={onBackToHome} />
-          <NoodlerMark size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
-          <div className="min-w-0 flex-1">
-            <h2 className="truncate text-lg font-bold">NoodleR</h2>
-            <p className="truncate text-xs text-[var(--muted-foreground)]">
-              {personaAccount ? `Private creator network · @${personaAccount.handle}` : "Choose a persona account"}
-            </p>
-          </div>
-        </div>
+      <div
+        className="sticky top-0 z-30 grid h-14 grid-cols-[3rem_minmax(0,1fr)_3rem] items-center border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 px-3 backdrop-blur lg:hidden"
+        data-component="NoodlerHome.MobileHeader"
+      >
+        <button
+          type="button"
+          onClick={onOpenMobileDrawer}
+          className="flex h-10 w-10 items-center justify-center rounded-full transition-colors hover:bg-[var(--accent)]"
+          title="Open menu"
+          aria-label="Open NoodleR menu"
+        >
+          <Menu size={22} />
+        </button>
+        <NoodlerMark size={26} className="mx-auto text-[var(--noodle-blue)]" />
+        <div aria-hidden="true" />
       </div>
       {!personaAccount ? (
         <p className="px-4 py-6 text-sm text-[var(--muted-foreground)]">Choose a persona account first.</p>
@@ -241,7 +314,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-4 border-b border-[var(--noodle-divider)]">
+          <div className="sticky top-14 z-20 grid grid-cols-4 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur lg:top-0">
             {NOODLER_HUB_TABS.map((tab) => (
               <button
                 key={tab.id}
@@ -261,6 +334,38 @@ export function NoodlerHome(props: NoodlerHomeProps) {
           </div>
           {noodlerHubTab === "timeline" ? (
             <>
+              <InlineComposer
+                personaAccount={personaAccount}
+                composeOpen={composeOpen}
+                inlineComposerRef={inlineComposerRef}
+                composer={composer}
+                onComposerChange={onComposerChange}
+                onComposerBlur={onComposerBlur}
+                onComposerKeyDown={onComposerKeyDown}
+                activeMention={activeMention}
+                mentionSuggestionsCount={mentionSuggestionsCount}
+                activeMentionIndex={activeMentionIndex}
+                composePlaceholder={composePlaceholder}
+                composeActionLabel={composeActionLabel}
+                renderComposerMentionSuggestions={renderComposerMentionSuggestions}
+                renderDraftPoll={renderDraftPoll}
+                attachedImageUrl={attachedImageUrl}
+                onAttachedImageUrlChange={onAttachedImageUrlChange}
+                imageToolRef={imageToolRef}
+                pollToolRef={pollToolRef}
+                mediaToolRef={mediaToolRef}
+                activeComposerTool={activeComposerTool}
+                onActiveComposerToolChange={onActiveComposerToolChange}
+                draftPollActive={draftPollActive}
+                onTogglePollComposer={onTogglePollComposer}
+                onSubmitPost={onSubmitPost}
+                canSubmitPost={canSubmitPost}
+                createPostPending={createPostPending}
+                renderComposerToolPopovers={renderComposerToolPopovers}
+                mentionListboxId="noodler-inline-mention-list"
+                dataComponent="NoodlerHome.InlineComposer"
+              />
+              <RefreshTimelineButton onTriggerRefresh={onTriggerRefresh} refreshNoodlePending={refreshNoodlePending} />
               {suggestedNoodlerCreators.length > 0 && (
                 <section
                   aria-labelledby="noodler-suggested-creators"
