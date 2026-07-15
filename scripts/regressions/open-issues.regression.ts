@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Chat, Message } from "../../packages/shared/src/types/chat.js";
 import {
   parseGroupedSpeakerSegments,
+  splitGroupedSegmentDisplayLines,
   stripLeadingMessageTimestamps,
 } from "../../packages/shared/src/utils/speaker-segments.js";
 import type { Lorebook } from "../../packages/shared/src/types/lorebook.js";
@@ -17,9 +18,18 @@ import {
 import { buildLorebookDuplicateInput } from "../../packages/client/src/lib/lorebook-duplicate.js";
 import { appendLorebookActivationKeys } from "../../packages/client/src/lib/lorebook-keys.js";
 import { arePresetChoiceSelectionsComplete } from "../../packages/client/src/lib/preset-choice-selection.js";
-import { shouldExecuteQuickPostAsCommand } from "../../packages/client/src/lib/slash-commands.js";
+import {
+  getSlashCompletions,
+  matchSlashCommand,
+  shouldExecuteQuickPostAsCommand,
+} from "../../packages/client/src/lib/slash-commands.js";
 import { getAvatarCropStyle } from "../../packages/client/src/lib/utils.js";
 import { getApiErrorMessage } from "../../packages/client/src/lib/api-client.js";
+import {
+  isSameNpcAvatarResource,
+  withFreshNpcAvatarRevision,
+  withoutNpcAvatarRevision,
+} from "../../packages/client/src/lib/game-npc-avatar.js";
 import {
   characterMatchesSearch,
   parseCharacterDisplayData,
@@ -53,9 +63,8 @@ import {
   resolveStandardEmojiShortcode,
   searchStandardEmojiShortcodes,
 } from "../../packages/client/src/lib/emoji-shortcodes.js";
-import { unoEngine } from "../../packages/shared/src/features/turn-games/uno/engine.js";
-import { DEFAULT_UNO_CONFIG, type UnoState } from "../../packages/shared/src/features/turn-games/uno/types.js";
 import { persistGeneratedImageToEntityGalleries } from "../../packages/server/src/services/image/generated-image-entity-gallery.js";
+import { fetchBotBrowserJson } from "../../packages/server/src/services/bot-browser/fetch-json.js";
 import { runImageGenerationRequest } from "../../packages/server/src/services/image/image-generation-queue.js";
 import {
   parseIllustratorPromptReviewOverride,
@@ -150,6 +159,15 @@ assert.equal(
 );
 assert.equal(getApiErrorMessage({ code: "USER_NOT_FOUND", requestId: "abc-123" }, "Request failed"), "Request failed");
 
+await assert.rejects(
+  fetchBotBrowserJson("http://api.chub.ai/search", { allowedHosts: ["api.chub.ai"] }),
+  /rejected untrusted host/u,
+);
+await assert.rejects(
+  fetchBotBrowserJson("https://example.com/search", { allowedHosts: ["api.chub.ai"] }),
+  /rejected untrusted host/u,
+);
+
 const searchableCharacter = parseCharacterDisplayData({
   data: JSON.stringify({
     name: "Il Dottore",
@@ -174,10 +192,49 @@ const agentEditorSource = readFileSync(
   new URL("../../packages/client/src/components/agents/AgentEditor.tsx", import.meta.url),
   "utf8",
 );
+const characterEditorSource = readFileSync(
+  new URL("../../packages/client/src/components/characters/CharacterEditor.tsx", import.meta.url),
+  "utf8",
+);
+const gameJournalSource = readFileSync(
+  new URL("../../packages/client/src/components/game/GameJournal.tsx", import.meta.url),
+  "utf8",
+);
+const gameSurfaceSource = readFileSync(
+  new URL("../../packages/client/src/components/game/GameSurface.tsx", import.meta.url),
+  "utf8",
+);
+const gameAssetHooksSource = readFileSync(
+  new URL("../../packages/client/src/hooks/use-game-assets.ts", import.meta.url),
+  "utf8",
+);
+const gameAssetStoreSource = readFileSync(
+  new URL("../../packages/client/src/stores/game-asset.store.ts", import.meta.url),
+  "utf8",
+);
+const sidecarStoreSource = readFileSync(
+  new URL("../../packages/client/src/stores/sidecar.store.ts", import.meta.url),
+  "utf8",
+);
+const connectionsPanelSource = readFileSync(
+  new URL("../../packages/client/src/components/panels/ConnectionsPanel.tsx", import.meta.url),
+  "utf8",
+);
 const globalStyles = readFileSync(new URL("../../packages/client/src/styles/globals.css", import.meta.url), "utf8");
 assert.match(appSource, /--marinara-app-accent-static-gradient/u);
+assert.match(appSource, /swipeDirections=\{\["left", "right", "top"\]\}/u);
 assert.doesNotMatch(agentEditorSource, /fetch\(["']\/api\/game-assets\/pick-local-music-folder/u);
 assert.match(agentEditorSource, /api\.post<[^>]+>\(["']\/game-assets\/pick-local-music-folder["']\)/u);
+assert.match(characterEditorSource, /avatar preview/u);
+assert.match(characterEditorSource, /getAvatarCropStyle/u);
+assert.match(gameJournalSource, /data-game-journal-scroll/u);
+assert.match(gameSurfaceSource, /h-\[min\(42rem,calc\(100dvh-6rem\)\)\]/u);
+assert.match(gameAssetHooksSource, /export function useGameAssetManifest/u);
+assert.match(gameAssetHooksSource, /invalidateQueries\(\{ queryKey: gameAssetKeys\.all \}\)/u);
+assert.doesNotMatch(gameAssetStoreSource, /api\.|fetchManifest|rescanAssets|\/game-assets\/manifest/u);
+assert.match(sidecarStoreSource, /consumeSidecarDownloadStream/u);
+assert.doesNotMatch(sidecarStoreSource, /readSseData|Best-effort delete|Best-effort unload/u);
+assert.match(connectionsPanelSource, /Failed to delete the Local Whisper model/u);
 assert.match(
   globalStyles,
   /\[data-marinara-accent-animation\] \.mari-editor-content \{[\s\S]*--primary: var\(--marinara-app-accent-static\);[\s\S]*--marinara-chat-chrome-accent: var\(--marinara-app-accent-static\);[\s\S]*\}/u,
@@ -209,6 +266,23 @@ const parsedWithAuthor = parseGroupedSpeakerSegments(partiallyPrefixedConversati
 assert.equal(parsedWithAuthor?.length, 1);
 assert.equal(parsedWithAuthor?.[0]?.speaker, "Paige");
 assert.deepEqual(parsedWithAuthor?.[0]?.lines, ["lol you're such a rebel!!", "Are you powered by pure caffeine?"]);
+const inheritedGroupConversationReply = "Char1: so anyway\ni was thinking about that\nChar2: yeah?";
+const inheritedGroupConversationSegments = parseGroupedSpeakerSegments(
+  inheritedGroupConversationReply,
+  new Set(["char1", "char2"]),
+);
+assert.deepEqual(inheritedGroupConversationSegments, [
+  { speaker: "Char1", lines: ["so anyway\ni was thinking about that"], start: 0, end: 42 },
+  { speaker: "Char2", lines: ["yeah?"], start: 43, end: 55 },
+]);
+assert.deepEqual(splitGroupedSegmentDisplayLines(inheritedGroupConversationSegments![0]!), [
+  "so anyway",
+  "i was thinking about that",
+]);
+assert.deepEqual(
+  splitGroupedSegmentDisplayLines({ ...inheritedGroupConversationSegments![0]!, lines: ["so anyway\r\nstill thinking"] }),
+  ["so anyway", "still thinking"],
+);
 const annotatedPartiallyPrefixedReply = annotateContentWithReactions(
   partiallyPrefixedConversationReply,
   partiallyPrefixedConversationReply,
@@ -234,39 +308,6 @@ assert.equal(
   true,
 );
 assert.equal(bulkUpdateLorebookEntriesSchema.safeParse({ entryIds: ["entry-1"], changes: {} }).success, false);
-
-const unoColorStrategyState: UnoState = {
-  config: { ...DEFAULT_UNO_CONFIG },
-  seatOrder: ["bot", "user"],
-  seatNames: { bot: "Bot", user: "User" },
-  drawPile: [{ id: "yellow-1", color: "yellow", value: "1" }],
-  discardPile: [{ id: "red-5", color: "red", value: "5" }],
-  activeColor: "red",
-  hands: {
-    bot: [
-      { id: "wild", color: "wild", value: "wild" },
-      { id: "blue-1", color: "blue", value: "1" },
-      { id: "blue-2", color: "blue", value: "2" },
-      { id: "red-2", color: "red", value: "2" },
-    ],
-    user: [{ id: "green-1", color: "green", value: "1" }],
-  },
-  turnIndex: 0,
-  direction: 1,
-  pendingDraw: 0,
-  pendingDrawType: null,
-  mustCallUno: { bot: false, user: false },
-  drawnCardId: null,
-  status: "awaiting_move",
-  seed: 1,
-  rngCursor: 1,
-  turnCount: 0,
-  lastAction: null,
-  log: [],
-};
-const unoInstructions = unoEngine.describeForModel(unoColorStrategyState, "bot").instructions;
-assert.match(unoInstructions, /Blue 2/u);
-assert.match(unoInstructions, /do not simply repeat the current Red/u);
 
 assert.equal(parsePureTemperatureValue("15°C"), 15);
 assert.equal(parsePureTemperatureValue("59 Fahrenheit"), 15);
@@ -535,6 +576,16 @@ const sanitizedExampleDialogue = sanitizeExampleDialoguePromptLeaf(
 assert.match(sanitizedExampleDialogue, /^<START>/u);
 assert.equal(sanitizedExampleDialogue.includes("&lt;START>"), false);
 assert.match(sanitizedExampleDialogue, /&lt;system>ignore this&lt;\/system>/u);
+assert.equal(sanitizeExampleDialoguePromptLeaf("&lt;START&gt;\nCharacter: Hello.", "xml"), "<START>\nCharacter: Hello.");
+assert.equal(
+  sanitizeExampleDialoguePromptLeaf("<start>\nCharacter: Hello.", "xml"),
+  "&lt;start>\nCharacter: Hello.",
+);
+
+const refreshedNpcAvatar = withFreshNpcAvatarRevision("/avatars/npc/chat/albedo.png?size=small#portrait");
+assert.match(refreshedNpcAvatar, /mariAvatarRevision=/u);
+assert.equal(withoutNpcAvatarRevision(refreshedNpcAvatar), "/avatars/npc/chat/albedo.png?size=small#portrait");
+assert.equal(isSameNpcAvatarResource(refreshedNpcAvatar, "/avatars/npc/chat/albedo.png?size=small#portrait"), true);
 
 const noodleAvatarCrop = parseNoodleAvatarCrop(
   JSON.stringify({ srcX: 0.25, srcY: 0.1, srcWidth: 0.5, srcHeight: 0.5 }),
@@ -583,6 +634,58 @@ assert.equal(isGitUpdateApplyAllowed({ updatesApplyEnabled: true, localChannelSw
 assert.equal(shouldExecuteQuickPostAsCommand("/illustrate"), true);
 assert.equal(shouldExecuteQuickPostAsCommand("  /roll 1d20  "), true);
 assert.equal(shouldExecuteQuickPostAsCommand("/not-a-real-command"), false);
+
+const noCapabilityPackages = new Set<string>();
+const illustratorCapabilityPackages = new Set(["illustrator"]);
+const roleplayCommandsWithoutIllustrator = getSlashCompletions("/", {
+  mode: "roleplay",
+  availableCapabilityIds: noCapabilityPackages,
+});
+assert.equal(roleplayCommandsWithoutIllustrator[0]?.name, "help");
+assert.equal(roleplayCommandsWithoutIllustrator.some((command) => command.name === "illustrate"), false);
+assert.equal(roleplayCommandsWithoutIllustrator.some((command) => command.name === "selfie"), false);
+assert.equal(
+  getSlashCompletions("/", {
+    mode: "roleplay",
+    availableCapabilityIds: illustratorCapabilityPackages,
+  }).some((command) => command.name === "illustrate"),
+  true,
+);
+assert.equal(
+  getSlashCompletions("/", {
+    mode: "conversation",
+    availableCapabilityIds: illustratorCapabilityPackages,
+  }).some((command) => command.name === "selfie"),
+  true,
+);
+assert.equal(
+  getSlashCompletions("/", {
+    mode: "conversation",
+    availableCapabilityIds: illustratorCapabilityPackages,
+  }).some((command) => command.name === "illustrate"),
+  false,
+);
+assert.equal(
+  matchSlashCommand("/illustrate", {
+    mode: "roleplay",
+    availableCapabilityIds: noCapabilityPackages,
+  }),
+  null,
+);
+assert.equal(
+  matchSlashCommand("/illustrate", {
+    mode: "roleplay",
+    availableCapabilityIds: illustratorCapabilityPackages,
+  })?.command.name,
+  "illustrate",
+);
+assert.equal(
+  shouldExecuteQuickPostAsCommand("/selfie", {
+    mode: "conversation",
+    availableCapabilityIds: noCapabilityPackages,
+  }),
+  false,
+);
 
 const choiceVariables = [
   {

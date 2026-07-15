@@ -86,6 +86,7 @@ import {
 } from "../ui/ImagePromptReviewModal";
 import {
   useConfirmNoodleImagePrompts,
+  useClearNoodleInvites,
   useCreateNoodleInteraction,
   useCreateNoodlePost,
   useDeleteNoodleInteraction,
@@ -211,6 +212,12 @@ type NoodleConfirmAction =
     }
   | {
       kind: "reset-timeline";
+      title: string;
+      message: string;
+      confirmLabel: string;
+    }
+  | {
+      kind: "uninvite-everybody";
       title: string;
       message: string;
       confirmLabel: string;
@@ -653,6 +660,7 @@ export function NoodleView() {
   const updateAccount = useUpdateNoodleAccount();
   const inviteCharacter = useInviteNoodleCharacter();
   const inviteCharacters = useInviteNoodleCharacters();
+  const clearInvites = useClearNoodleInvites();
   const removeCharacter = useRemoveNoodleCharacter();
   const createPost = useCreateNoodlePost();
   const updatePost = useUpdateNoodlePost();
@@ -899,6 +907,13 @@ export function NoodleView() {
     () =>
       new Map(accounts.filter((account) => account.kind === "character").map((account) => [account.entityId, account])),
     [accounts],
+  );
+  const directlyInvitedCharacterIds = useMemo(
+    () =>
+      (data?.accounts ?? [])
+        .filter((account) => account.kind === "character" && account.invited)
+        .map((account) => account.entityId),
+    [data?.accounts],
   );
   const personaAccount = useMemo(
     () => personaAccounts.find((account) => account.entityId === selectedPersonaId) ?? sortedPersonaAccounts[0] ?? null,
@@ -1611,7 +1626,9 @@ export function NoodleView() {
           ? resetNoodleTimeline.isPending
           : confirmAction?.kind === "delete-noodler-profile"
             ? deletePrivateAccount.isPending
-            : false;
+            : confirmAction?.kind === "uninvite-everybody"
+              ? clearInvites.isPending
+              : false;
   const normalizedProfileHandle = profileHandle.trim().replace(/^@+/, "");
   const isEditingProfile = canEditViewedProfile && profileEditing;
   const profileDisplayName = canEditViewedProfile
@@ -1689,6 +1706,9 @@ export function NoodleView() {
         : `Invite ${uninvitedSelectedFolderCharacterIds.length} ${
             uninvitedSelectedFolderCharacterIds.length === 1 ? "character" : "characters"
           }`;
+  const hasActiveInvites = Boolean(
+    directlyInvitedCharacterIds.length > 0 || selectedCharacterGroupIds.size > 0 || settings?.allowRandomUsers,
+  );
   const followedAccountIds = useMemo(
     () => new Set(readStringArray(personaAccount?.settings?.followingAccountIds)),
     [personaAccount?.settings],
@@ -2668,6 +2688,16 @@ export function NoodleView() {
       });
       return;
     }
+    if (confirmAction.kind === "uninvite-everybody") {
+      clearInvites.mutate(undefined, {
+        onSuccess: () => {
+          setConfirmAction(null);
+          toast.success("Noodle invites cleared.");
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not clear Noodle invites."),
+      });
+      return;
+    }
     resetNoodleTimeline.mutate(undefined, {
       onSuccess: () => {
         clearReplyComposer();
@@ -2998,6 +3028,15 @@ export function NoodleView() {
     });
   };
 
+  const uninviteEverybody = () => {
+    setConfirmAction({
+      kind: "uninvite-everybody",
+      title: "Uninvite Everybody",
+      message: "This removes all direct Noodle character invites, clears selected invite folders, and turns off random users.",
+      confirmLabel: "Uninvite everybody",
+    });
+  };
+
   const toggleCarryoverTarget = (target: NoodleCarryoverTarget, checked: boolean) => {
     if (!settings) return;
     const current = new Set(settings.carryoverModes ?? carryoverTargetsFromLegacy(settings.carryoverMode));
@@ -3146,9 +3185,28 @@ export function NoodleView() {
           )}
 
           <div className="space-y-2">
-            <FieldLabel help="Directly invited characters are eligible regardless of folder selection and get priority in Noodle suggestions and generated activity.">
-              Characters
-            </FieldLabel>
+            <div className="flex items-center justify-between gap-3">
+              <FieldLabel help="Directly invited characters are eligible regardless of folder selection and get priority in Noodle suggestions and generated activity.">
+                Characters
+              </FieldLabel>
+              <button
+                type="button"
+                onClick={uninviteEverybody}
+                disabled={
+                  !settings ||
+                  updateSettings.isPending ||
+                  inviteCharacter.isPending ||
+                  inviteCharacters.isPending ||
+                  removeCharacter.isPending ||
+                  clearInvites.isPending ||
+                  !hasActiveInvites
+                }
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--destructive)]/35 px-3 text-[0.68rem] font-semibold text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {clearInvites.isPending ? <Loader2 size={13} className="animate-spin" /> : <UserMinus size={13} />}
+                Uninvite everybody
+              </button>
+            </div>
             <div className="max-h-96 overflow-y-auto rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] [scrollbar-gutter:stable]">
               <button
                 type="button"

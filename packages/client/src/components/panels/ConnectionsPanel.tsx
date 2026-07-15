@@ -33,6 +33,7 @@ import {
 import { handleFolderRenameKeyDown, useFolderRenameGesture } from "../../hooks/use-folder-rename-gesture";
 import { useTouchFolderDrag } from "../../hooks/use-touch-folder-drag";
 import { useAgentConfigs, useCreateAgent, useUpdateAgent } from "../../hooks/use-agents";
+import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
 import { useChatStore } from "../../stores/chat.store";
 import { useUIStore, type ConnectionPanelSort } from "../../stores/ui.store";
 import { useSidecarStore } from "../../stores/sidecar.store";
@@ -70,6 +71,7 @@ import {
   ImageIcon,
   Film,
   Mic,
+  Loader2,
   HardDriveDownload,
   MessageSquareText,
 } from "lucide-react";
@@ -188,6 +190,7 @@ function getDroppedConnectionIds(event: DragEvent<HTMLElement>, fallbackId: stri
 
 function SidecarCard() {
   const { data: agentConfigs } = useAgentConfigs();
+  const { data: installedCapabilityPackages } = useInstalledCapabilityPackages();
   const createAgent = useCreateAgent();
   const updateAgentConnection = useUpdateAgent();
   const {
@@ -221,7 +224,15 @@ function SidecarCard() {
   const [assigningTrackers, setAssigningTrackers] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [speechModelChoice, setSpeechModelChoice] = useState<SidecarSpeechModelId>("whisper_tiny");
+  const [deletingSpeechModel, setDeletingSpeechModel] = useState(false);
   const activeModelName = isDownloaded ? modelDisplayName : null;
+  const callsPackageInstalled = useMemo(
+    () =>
+      (installedCapabilityPackages ?? []).some(
+        (item) => item.status !== "error" && item.manifest.kind.includes("conversation-calls"),
+      ),
+    [installedCapabilityPackages],
+  );
   const backendLabel = config.backend === "mlx" ? "MLX" : "GGUF";
   const nativeToolLabel =
     config.backend === "llama_cpp" ? ` • Native tools ${config.enableNativeToolCalls ? "on" : "off"}` : "";
@@ -238,8 +249,8 @@ function SidecarCard() {
   // Fetch status on mount (handles HMR store resets and initial load)
   useEffect(() => {
     fetchStatus();
-    fetchSpeechStatus();
-  }, [fetchSpeechStatus, fetchStatus]);
+    if (callsPackageInstalled) fetchSpeechStatus();
+  }, [callsPackageInstalled, fetchSpeechStatus, fetchStatus]);
 
   useEffect(() => {
     const firstModel = speechModels[0]?.id;
@@ -247,6 +258,19 @@ function SidecarCard() {
       setSpeechModelChoice(firstModel);
     }
   }, [speechModelChoice, speechModels]);
+
+  const handleDeleteSpeechModel = async () => {
+    if (deletingSpeechModel) return;
+    setDeletingSpeechModel(true);
+    try {
+      await deleteSpeechModel();
+      toast.success("Local Whisper model deleted.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete the Local Whisper model.");
+    } finally {
+      setDeletingSpeechModel(false);
+    }
+  };
 
   const handleAssignTrackersToLocal = async () => {
     if (!isDownloaded || assigningTrackers) return;
@@ -323,9 +347,9 @@ function SidecarCard() {
               ? " • Ready"
               : ""
       }`
-    : speechModelDownloaded
+    : callsPackageInstalled && speechModelDownloaded
       ? speechStatusLabel
-      : speechDownloading
+      : callsPackageInstalled && speechDownloading
         ? "Downloading Whisper..."
         : "Not downloaded";
   const speechUnavailableMessage = describeSpeechRuntimeUnavailable(speechRuntime);
@@ -393,6 +417,7 @@ function SidecarCard() {
               background tasks only.
             </p>
           </div>
+          {callsPackageInstalled && (
           <div className="mt-2.5 rounded-lg border border-sky-400/15 bg-sky-400/5 p-2.5">
             <div className="flex items-start gap-2">
               <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-sky-400 to-blue-500 text-white shadow-sm">
@@ -404,11 +429,16 @@ function SidecarCard() {
                   {speechModelDownloaded && (
                     <button
                       type="button"
-                      onClick={() => void deleteSpeechModel()}
+                      onClick={() => void handleDeleteSpeechModel()}
+                      disabled={deletingSpeechModel}
                       className="mari-chrome-control mari-chrome-control--small p-1"
                       title="Delete Local Whisper"
                     >
-                      <Trash2 size="0.75rem" />
+                      {deletingSpeechModel ? (
+                        <Loader2 size="0.75rem" className="animate-spin" />
+                      ) : (
+                        <Trash2 size="0.75rem" />
+                      )}
                     </button>
                   )}
                 </div>
@@ -495,6 +525,7 @@ function SidecarCard() {
               </div>
             </div>
           </div>
+          )}
           {isDownloaded && (
             <div className="mt-2.5 flex flex-col gap-1.5 border-t border-sky-400/10 pt-2.5">
               <button
@@ -823,7 +854,7 @@ function ConnectionDefaultsSection({ connectionsList }: { connectionsList: Conne
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-[var(--foreground)]">Defaults</div>
           <div className="text-[0.6875rem] text-[var(--muted-foreground)]">
-            Main, Agents, Illustrator, and Videos defaults and fallbacks
+            Main, Agents, Images, and Videos defaults and fallbacks
           </div>
         </div>
         <button
@@ -859,12 +890,12 @@ function ConnectionDefaultsSection({ connectionsList }: { connectionsList: Conne
             fallbackModelLabel="No model set"
           />
           <ConnectionDefaultPair
-            title="Illustrator"
+            title="Images"
             icon={<ImageIcon size="0.875rem" />}
             connections={imageConnections}
             primaryField="defaultForAgents"
             fallbackField="fallbackForAgents"
-            primaryEmptyLabel="No default Illustrator connection"
+            primaryEmptyLabel="No default image connection"
             fallbackModelLabel="Image generation"
           />
           <ConnectionDefaultPair
