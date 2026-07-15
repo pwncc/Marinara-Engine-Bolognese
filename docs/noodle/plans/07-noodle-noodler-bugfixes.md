@@ -1,9 +1,63 @@
-# Plan: Noodle / NoodleR bug-fix & UX pass
+# Plan 7 — Noodle / NoodleR bug-fix & UX pass
 
-> **For:** the agent picking up the reported bugs on the `noooooods` branch.
-> **Scope:** Mostly UI/UX and behavior fixes in the Noodle + NoodleR client surface, plus **two server-touching items**: B2 (private-profile access scoping — security) and B1 (new per-profile automatic-posting setting). Both likely need `pnpm db:push`.
-> **Baseline validation:** `pnpm install`, then `pnpm check` (TypeScript + ESLint). Run `pnpm db:push` for B1/B2. There is no automated test suite, so each item below lists a **manual verify** step. Read `packages/client/.instructions.md` before editing client code (per `CLAUDE.md`).
-> **All maintainer questions are answered** — see *Resolved decisions* near the end. Nothing here is blocked on further input.
+## Status
+
+**Mostly not started — three quick items already done, the rest is for another agent.**
+This doc comes from a round of maintainer bug reports against the current `noooooods`
+branch, after Plans 1–6 landed. All open questions have been **answered by the maintainer**
+(see *Resolved decisions* near the end) — nothing is blocked on further input.
+
+**✅ Already implemented in the working tree (uncommitted; `pnpm check` passing):**
+- **A1** — mode switcher gated on `isNoodlerEnabled` (both render sites).
+- **B3** — enable toast rewritten to "Verification complete. Welcome to NoodleR — start by creating a NoodlerID."
+- **C3** — mode switcher shrunk.
+
+**Remaining for the next agent:** B1, B2, B4, B5, B6, B7, B8, C1, C2, C4. These are the
+substantive items (settings refactor, security fix, new setting, hub/profile UI, RP
+create). Start from *Suggested sequencing* below.
+
+## Context
+
+Plans 1–6 built Noodle and NoodleR up to "technically complete": the Noodlegram layout
+(`01`), access/subscribe/unlock (`02`), private accounts (`03`), fan activity + the
+global kill switch (`04`), NoodleR hub completeness (`05`), and the Global pseudo-persona
+(`06`). This plan is the **first pass driven by real usage** rather than feature work — it
+fixes what's broken or awkward now that the surface is being used end to end.
+
+Read `docs/noodle/overview.md` and `docs/noodle/settings.md` first for the surrounding
+design conventions (single shared `NoodleView.tsx` component tree, `visibility` flag
+pattern, settings panel patterns). `05-noodler-completeness.md` and
+`06-noodler-global-feed-persona.md` are the most relevant priors — this plan partly
+**revises** their settings and hub decisions (see C1/C2, B5).
+
+**`docs/noodle/settings.md` must be updated alongside C1/C2** — it documents the settings
+surface this plan restructures. Don't let the doc and the UI drift apart (per `CLAUDE.md`:
+keep code, docs, and metadata aligned in the same change).
+
+### Scope
+
+Mostly UI/UX and behavior fixes in the Noodle + NoodleR client surface, plus **two
+server-touching items**: B2 (private-profile access scoping — security) and B1 (new
+per-profile automatic-posting setting). Both likely need `pnpm db:push`.
+
+### Validation
+
+`pnpm install`, then `pnpm check` (TypeScript + ESLint). Run `pnpm db:push` for B1/B2.
+There is no automated test suite, so each item below lists a **manual verify** step. Read
+`packages/client/.instructions.md` before editing client code (per `CLAUDE.md`).
+
+### ⚠️ Line numbers drift — trust the anchors, not the digits
+
+Two rounds of change have landed on top of what the line numbers below were read from:
+1. Commit `a845be3e` "Replace NoodlerMark icon with NoodlerLogo image component"
+   (`NoodlerMark`→`NoodlerLogo`, mode-switched sidebar logo, new
+   `packages/client/public/noodler-klusek.png`).
+2. The **uncommitted A1/B3/C3 fixes** described in *Status* above.
+
+Every `file.tsx:NNN` reference below was read at commit `f2c9102f` and is now off by a
+few lines. **Grep for the quoted symbol/string, don't trust the number.** Do not revert
+or "clean up" the committed `NoodlerLogo` work or the uncommitted A1/B3/C3 changes
+(`CLAUDE.md`: keep edits non-destructive).
 
 ## Ground truth — where things live
 
@@ -24,10 +78,10 @@ Key state facts:
 
 ## Group A — Noodle (public side)
 
-### A1. Mode switcher shows even when NoodleR is disabled
+### A1. Mode switcher shows even when NoodleR is disabled — ✅ DONE
 **Symptom:** With NoodleR not enabled in Settings, the Noodle↔NoodleR switcher is still displayed.
-**Cause:** Both `NoodleModeSwitcher` render sites (`NoodleView.tsx:6049`, `:6217`) render regardless of `isNoodlerEnabled`.
-**Fix:** Gate both on `isNoodlerEnabled`. When disabled, render nothing (there is nothing to switch to). Keep the enable path reachable from Settings (A/B below) — do **not** rely on the switcher as the only entry point.
+**Cause:** Both `NoodleModeSwitcher` render sites (mobile drawer, desktop sidebar) rendered regardless of `isNoodlerEnabled`.
+**Done:** Wrapped both render sites in `{isNoodlerEnabled && (…)}` in `NoodleView.tsx`. Enable path stays reachable from Settings (the NoodleR nav icon / verification flow), so the switcher isn't the only entry point.
 **Manual verify:** Fresh install / NoodleR off → no switcher in desktop sidebar or mobile drawer. Enable in Settings → switcher appears in both.
 
 ---
@@ -61,15 +115,12 @@ Key state facts:
 **Manual verify:** With persona A (no NoodleR page) try to open persona B's private page by navigating/deep-linking → denied. Confirm the check is server-side (e.g. hit the API directly, not just the UI). Confirm the public Noodle side and legitimate subscriber access are unaffected.
 **Owner note:** security-relevant — flag it explicitly in the PR description, and don't let it get buried among the UI polish commits. Keep it as its own commit within the branch so it's reviewable in isolation.
 
-### B3. "Just kidding. NoodleR enabled." toast is stale copy
-**Decision (maintainer):** Drop the "Just kidding" gag. Replace with copy that confirms verification and points the user at the next step — creating a NoodlerID. Something along the lines of:
-
-> **"Verification complete — welcome to NoodleR. Start by creating a NoodlerID."**
-
-**Symptom:** Enabling NoodleR shows `toast.success("Just kidding. NoodleR enabled.")` (`NoodleView.tsx:1243`).
-**Fix:** Update the toast to the new copy. Align both enable paths — the verification screen (`onEnableNoodlerFromVerification`, `NoodlerHome.tsx:329`) and the Settings toggle (`setNoodlerEnabled`, `NoodleView.tsx:2979`). Note the Settings-toggle path never showed a verification screen, so "Verification complete" doesn't fit there — use a suitable variant for that path (e.g. "NoodleR enabled. Start by creating a NoodlerID.").
-**Nice-to-have:** if it's cheap, make the "create a NoodlerID" hint actionable (link/CTA into the create flow) rather than just a toast string — ties into B8.
-**Manual verify:** Enable from the verification screen and from the Settings toggle → each shows correct, non-joke copy that names the NoodlerID next step.
+### B3. "Just kidding. NoodleR enabled." toast is stale copy — ✅ DONE
+**Decision (maintainer):** Drop the "Just kidding" gag. Confirm verification and point the user at the next step — creating a NoodlerID.
+**Done:** Toast in `enableNoodlerFromVerification` (`NoodleView.tsx`) now reads *"Verification complete. Welcome to NoodleR — start by creating a NoodlerID."*
+**Note (verified while implementing):** there is only **one** enable path. The Settings toggle's `setNoodlerEnabled(true)` routes through `enterNoodlerVerification()` (`NoodleView.tsx:2980`) rather than enabling directly, so both "toggle" and "verification screen" funnel through `enableNoodlerFromVerification` and hit this same toast. "Verification complete" fits everywhere. (The plan previously warned it wouldn't fit the toggle path — that was wrong.)
+**Optional follow-up (B8-adjacent):** make the "create a NoodlerID" hint an actionable CTA into the create flow, not just toast text.
+**Manual verify:** Enable NoodleR from the Settings toggle and from the NoodleR nav icon → both show the new copy after the verification screen.
 
 ### B4. "Your pages" needs an info box + main-account attribution
 **Symptom:** The NoodleR "your pages" list shows all persona NoodleR profiles with no explanation, and doesn't show which main account each profile belongs to.
@@ -134,10 +185,9 @@ Key state facts:
 - Settings nav button (`activeNoodleView === "settings"` highlight at `NoodleView.tsx:6281`): render a half-blue/half-pink treatment when `isNoodlerEnabled`, plain blue when not. Use `NOODLE_BLUE` / `NOODLER_BLUE` tokens for the split (e.g. a gradient/two-tone icon or background).
 **Manual verify:** NoodleR off → settings is blue, no NoodleR sections, settings button plain blue. Turn NoodleR on → NoodleR sections appear, settings button goes half-blue/half-pink, and the accent doesn't fully flip to pink when you enter from NoodleR mode.
 
-### C3. Make the Noodle↔NoodleR toggle smaller
+### C3. Make the Noodle↔NoodleR toggle smaller — ✅ DONE
 **Symptom:** "Make the noodle/noodler toggle smaller."
-**Cause:** `NoodleModeSwitcher` (`noodle-shared.tsx:329–369`) uses `min-h-9`, `gap-1.5`, `px-2`, `text-xs`, `size={14}` icons.
-**Fix:** Reduce to a more compact control (smaller min-height, tighter padding, smaller/optional label or icon-only). Keep it accessible (`aria-pressed`, hit target ≥ the a11y minimum — don't shrink the tap target below ~32px even if visuals are denser). This affects both render sites via the shared component.
+**Done:** In `NoodleModeSwitcher` (`noodle-shared.tsx`): `min-h-9`→`min-h-8`, `gap-1.5`→`gap-1`, `px-2`→`px-1.5`, `text-xs`→`text-[0.7rem]`, icon `size={14}`→`12`, and the container `gap-1`/`p-1`/`rounded-lg`→`gap-0.5`/`p-0.5`/`rounded-md`. Kept `aria-pressed`; min tap height stays at 32px (`min-h-8`) so it's still accessible. Both render sites update via the shared component.
 **Manual verify:** Switcher is visibly smaller in desktop sidebar and mobile drawer; still keyboard/pointer usable.
 
 ---

@@ -1240,7 +1240,7 @@ export function NoodleView() {
       { enableNoodler: true },
       {
         onSuccess: () => {
-          toast.success("Just kidding. NoodleR enabled.");
+          toast.success("Verification complete. Welcome to NoodleR — start by creating a NoodlerID.");
           trackAchievement.mutate("noodler_discovered");
           transitionNoodleMode("noodler");
         },
@@ -6045,13 +6045,15 @@ export function NoodleView() {
                 </button>
               </div>
 
-              <div className="mt-7">
-                <NoodleModeSwitcher
-                  activeMode={activeNoodleMode}
-                  onOpenNoodle={switchToNoodleModeMobile}
-                  onOpenNoodler={openNoodlerHub}
-                />
-              </div>
+              {isNoodlerEnabled && (
+                <div className="mt-7">
+                  <NoodleModeSwitcher
+                    activeMode={activeNoodleMode}
+                    onOpenNoodle={switchToNoodleModeMobile}
+                    onOpenNoodler={openNoodlerHub}
+                  />
+                </div>
+              )}
 
               <nav className="mt-4 space-y-1" aria-label="Noodle account navigation">
                 <button
@@ -6217,13 +6219,15 @@ export function NoodleView() {
                   <NoodleLogo className="h-10 w-16" />
                 )}
               </div>
-              <div className="mb-4">
-                <NoodleModeSwitcher
-                  activeMode={activeNoodleMode}
-                  onOpenNoodle={switchToNoodleMode}
-                  onOpenNoodler={openNoodlerHub}
-                />
-              </div>
+              {isNoodlerEnabled && (
+                <div className="mb-4">
+                  <NoodleModeSwitcher
+                    activeMode={activeNoodleMode}
+                    onOpenNoodle={switchToNoodleMode}
+                    onOpenNoodler={openNoodlerHub}
+                  />
+                </div>
+              )}
               <nav className="space-y-1 border-t border-[var(--noodle-divider)] pt-3">
                 <button
                   type="button"

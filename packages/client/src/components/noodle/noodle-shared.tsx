@@ -356,7 +356,7 @@ export function NoodleModeSwitcher({
     { id: "noodler", icon: NoodlerLogo, onClick: onOpenNoodler },
   ];
   return (
-    <div className="grid grid-cols-2 gap-1 rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] p-1">
+    <div className="grid grid-cols-2 gap-0.5 rounded-md border border-[var(--noodle-divider)] bg-[var(--card)] p-0.5">
       {modes.map((mode) => {
         const Icon = mode.icon;
         const active = activeMode === mode.id;
@@ -367,11 +367,11 @@ export function NoodleModeSwitcher({
             onClick={mode.onClick}
             aria-pressed={active}
             className={cn(
-              "flex min-h-9 min-w-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-bold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+              "flex min-h-8 min-w-0 items-center justify-center gap-1 rounded px-1.5 text-[0.7rem] font-bold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
               active && "bg-[var(--noodle-blue)]/15 text-[var(--foreground)] ring-1 ring-[var(--noodle-blue)]/30",
             )}
           >
-            <Icon size={14} className={cn(active && "!text-[var(--noodle-blue)]")} />
+            <Icon size={12} className={cn(active && "!text-[var(--noodle-blue)]")} />
             <span className="truncate">{NOODLE_MODE_META[mode.id].label}</span>
           </button>
         );
