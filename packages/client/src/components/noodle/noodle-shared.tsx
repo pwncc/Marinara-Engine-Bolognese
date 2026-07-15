@@ -907,19 +907,21 @@ export function ProfileHeaderChrome(props: ProfileHeaderChromeProps) {
             className="hidden"
             onChange={(event) => onProfileImageFile("avatar", event)}
           />
-          {canEditViewedProfile ? (
-            <button
-              type="button"
-              onClick={onEditToggle}
-              disabled={isEditingProfile ? !canSaveProfile || updateAccountPending : !hasViewedProfileAccount}
-              className="mb-1 h-9 rounded-full bg-[var(--noodle-blue)] px-5 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isEditingProfile ? (updateAccountPending ? "Saving" : "Save") : "Edit Profile"}
-            </button>
-          ) : (
-            nonEditAction
-          )}
-          {extraActionButtons}
+          <div className="mb-1 flex items-center gap-2">
+            {canEditViewedProfile ? (
+              <button
+                type="button"
+                onClick={onEditToggle}
+                disabled={isEditingProfile ? !canSaveProfile || updateAccountPending : !hasViewedProfileAccount}
+                className="h-9 rounded-full bg-[var(--noodle-blue)] px-5 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isEditingProfile ? (updateAccountPending ? "Saving" : "Save") : "Edit Profile"}
+              </button>
+            ) : (
+              nonEditAction
+            )}
+            {extraActionButtons}
+          </div>
         </div>
 
         {isEditingProfile ? (

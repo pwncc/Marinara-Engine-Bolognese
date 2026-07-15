@@ -4978,10 +4978,13 @@ export function NoodleView() {
     );
   };
 
-  const renderNoodlerAccountRow = (account: NoodleAccount) => {
+  const renderNoodlerAccountRow = (account: NoodleAccount, isOwn: boolean) => {
     const subscribed = subscribedCreatorIds.has(account.id);
-    const isOwn = account.kind === "persona";
     const unseenCount = noodlerUnseenCountByAccountId.get(account.id) ?? 0;
+    // Private accounts never carry their own linkedAccountId back to the public
+    // side (only the public account points at its private counterpart), so the
+    // owning persona/character has to be looked up by scanning for the match.
+    const linkedPublicAccount = isOwn ? accounts.find((candidate) => candidate.linkedAccountId === account.id) : null;
     return (
       <div
         key={account.id}
@@ -4999,6 +5002,11 @@ export function NoodleView() {
               <NoodlerPrivateBadge />
             </span>
             <span className="block truncate text-sm text-[var(--muted-foreground)]">@{account.handle}</span>
+            {linkedPublicAccount && (
+              <span className="mt-0.5 block truncate text-xs text-[var(--muted-foreground)]">
+                Main account: {linkedPublicAccount.displayName} (@{linkedPublicAccount.handle})
+              </span>
+            )}
             {unseenCount > 0 && (
               <span className="mt-1 inline-flex h-5 items-center rounded-full bg-[var(--noodle-blue)] px-2 text-[0.65rem] font-black text-zinc-950">
                 {unseenCount > 9 ? "9+" : unseenCount} new
@@ -5653,42 +5661,58 @@ export function NoodleView() {
           )}
         </label>
 
-        <section className="overflow-hidden rounded-2xl border border-[var(--noodle-divider)] bg-[var(--background)]">
-          <div className="border-b border-[var(--noodle-divider)] px-4 py-3">
-            <h3 className="text-lg font-bold">Who to follow</h3>
-          </div>
-          {suggestedCharacters.length > 0 ? (
-            <div className="divide-y divide-[var(--noodle-divider)]">
-              {suggestedCharacters.map((character) => (
-                <div key={character.accountId} className="flex items-center gap-3 px-4 py-3">
-                  <button
-                    type="button"
-                    onClick={() => openProfile(character.account)}
-                    className="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left transition-colors hover:text-[var(--noodle-blue)]"
-                  >
-                    <Avatar account={character.account} size="sm" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold">{character.name}</span>
-                      <span className="block truncate text-xs text-[var(--muted-foreground)]">@{character.handle}</span>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => updateFollowedAccount(character.account, true)}
-                    disabled={updateAccount.isPending}
-                    className="h-8 rounded-full bg-[var(--foreground)] px-4 text-xs font-bold text-[var(--background)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Follow
-                  </button>
-                </div>
-              ))}
+        {activeNoodleMode === "noodler" ? (
+          <section className="overflow-hidden rounded-2xl border border-[var(--noodle-divider)] bg-[var(--background)]">
+            <div className="border-b border-[var(--noodle-divider)] px-4 py-3">
+              <h3 className="text-lg font-bold">Creators to check out</h3>
+              <p className="text-xs text-[var(--muted-foreground)]">Paid pages, not follows — subscribe to unlock.</p>
             </div>
-          ) : (
-            <p className="px-4 py-5 text-sm text-[var(--muted-foreground)]">
-              {followableCharacterAccounts.length > 0 ? "You're following everyone!" : "No one's cooking yet…"}
-            </p>
-          )}
-        </section>
+            {suggestedNoodlerCreators.length > 0 ? (
+              <div className="divide-y divide-[var(--noodle-divider)]">
+                {suggestedNoodlerCreators.map(renderNoodlerSuggestionRow)}
+              </div>
+            ) : (
+              <p className="px-4 py-5 text-sm text-[var(--muted-foreground)]">No NoodleR creators to suggest yet.</p>
+            )}
+          </section>
+        ) : (
+          <section className="overflow-hidden rounded-2xl border border-[var(--noodle-divider)] bg-[var(--background)]">
+            <div className="border-b border-[var(--noodle-divider)] px-4 py-3">
+              <h3 className="text-lg font-bold">Who to follow</h3>
+            </div>
+            {suggestedCharacters.length > 0 ? (
+              <div className="divide-y divide-[var(--noodle-divider)]">
+                {suggestedCharacters.map((character) => (
+                  <div key={character.accountId} className="flex items-center gap-3 px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={() => openProfile(character.account)}
+                      className="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left transition-colors hover:text-[var(--noodle-blue)]"
+                    >
+                      <Avatar account={character.account} size="sm" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold">{character.name}</span>
+                        <span className="block truncate text-xs text-[var(--muted-foreground)]">@{character.handle}</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateFollowedAccount(character.account, true)}
+                      disabled={updateAccount.isPending}
+                      className="h-8 rounded-full bg-[var(--foreground)] px-4 text-xs font-bold text-[var(--background)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Follow
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="px-4 py-5 text-sm text-[var(--muted-foreground)]">
+                {followableCharacterAccounts.length > 0 ? "You're following everyone!" : "No one's cooking yet…"}
+              </p>
+            )}
+          </section>
+        )}
       </div>
     </aside>
   );
@@ -5912,8 +5936,6 @@ export function NoodleView() {
     renderNoodlerAccountRow,
     sortedNoodlerDiscoverAccounts,
     renderNoodlerDiscoverCard,
-    suggestedNoodlerCreators,
-    renderNoodlerSuggestionRow,
     composeOpen,
     inlineComposerRef,
     composer,

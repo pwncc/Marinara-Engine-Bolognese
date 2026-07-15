@@ -2,19 +2,96 @@
 
 ## Status
 
-**Mostly not started — three quick items already done, the rest is for another agent.**
+**Six items done and committed, the rest is for another agent.**
 This doc comes from a round of maintainer bug reports against the current `noooooods`
 branch, after Plans 1–6 landed. All open questions have been **answered by the maintainer**
 (see *Resolved decisions* near the end) — nothing is blocked on further input.
 
-**✅ Already implemented in the working tree (uncommitted; `pnpm check` passing):**
+**✅ Already implemented (`pnpm check` passing on every change):**
 - **A1** — mode switcher gated on `isNoodlerEnabled` (both render sites).
 - **B3** — enable toast rewritten to "Verification complete. Welcome to NoodleR — start by creating a NoodlerID."
 - **C3** — mode switcher shrunk.
+- **B5** — "Creators to check out" moved from inline-in-timeline to the right rail; the
+  rail now branches on `activeNoodleMode` (`noodler` → Creators to check out via
+  `suggestedNoodlerCreators`/`renderNoodlerSuggestionRow`, else → Who to follow).
+- **B6** — profile header action-button misalignment fixed. Root cause:
+  `ProfileHeaderChrome` (`noodle-shared.tsx`) rendered avatar / edit-or-subscribe /
+  extraActionButtons as **three siblings under `justify-between`**, which spread all
+  three evenly (avatar left, Subscribe center, Delete right — exactly the reported bug).
+  Fix: the edit-or-subscribe button and `extraActionButtons` are now wrapped in one
+  `flex items-center gap-2` group, so `justify-between` only separates two things:
+  avatar vs. the action cluster.
+- **B4 (partial — see caveat)** — info box added above "Your Pages"
+  (`NoodlerHome.tsx`, explains these are all your own persona/character NoodleR
+  profiles) and main-account attribution added to each owned row
+  (`renderNoodlerAccountRow` in `NoodleView.tsx`, via `accounts.find(a =>
+  a.linkedAccountId === privateAccount.id)` — private accounts don't carry a
+  back-reference, so the owner has to be found by scanning, same pattern already used
+  elsewhere at the "Relationships & privacy" section).
+  **Also fixed in passing:** `renderNoodlerAccountRow`'s `isOwn` used to be computed as
+  `account.kind === "persona"` — a coincidental proxy that broke as soon as you
+  subscribed to *someone else's* persona-kind private page (their page would show a
+  "Delete NoodleR profile" button instead of Subscribe/Unsubscribe in your
+  Subscriptions tab). It's now passed explicitly by the caller
+  (`renderNoodlerAccountRow(account, isOwn: boolean)`) — `true` from the "owned" tab,
+  `false` from "subscriptions".
+  **Caveat — not yet correct for character-owned pages:** see the B8 finding below.
+  The attribution/info-box UI is done, but a character's own private page will still
+  render fine in the "Your Pages" list (that list comes from the server's
+  owned/subscribed split, not from the client's persona-only ownership check) — this
+  caveat is really about B8, not B4; flagging here because it was found while touching
+  the same row renderer.
 
-**Remaining for the next agent:** B1, B2, B4, B5, B6, B7, B8, C1, C2, C4. These are the
-substantive items (settings refactor, security fix, new setting, hub/profile UI, RP
-create). Start from *Suggested sequencing* below.
+**Remaining for the next agent:** B1, B2, B7, B8, C1, C2, C4. Read the **"B8 investigation
+findings"** subsection below before starting B7/B8 — it identifies the actual root cause
+and saves re-deriving it. Start from *Suggested sequencing* below.
+
+### 🔍 B8 investigation findings (read before starting B7/B8)
+
+Traced while implementing B4/B6. **The header "Create NoodleR" CTA already works for
+characters** — `onCreateNoodler: openPrivateStageSetup` (`NoodleView.tsx`) is fully
+generic over `NoodleAccount`, and the server's `createPrivateAccount` (`noodle.storage.ts`)
+already supports `kind === "character"`, copying `kind: publicAccount.kind` onto the new
+private row. So a character can get a private page created today.
+
+**What's actually broken:** once created, the creator tools never appear on it. The gate
+is `viewingOwnPrivateAccount`:
+
+```ts
+const viewingOwnPrivateAccount = Boolean(
+  personaAccount &&
+    viewedProfileAccount?.visibility === "private" &&
+    personaAccount.linkedAccountId === viewedProfileAccount.id,
+);
+```
+
+This only recognizes a private account linked to the **currently-acting persona**.
+Characters are never "acted as" the way personas are, so a character's private account
+can never satisfy this check — the `Section title="Your page"` creator-tools block
+(stage profile, pricing, fan activity, posting mode) is gated on
+`viewedProfileAccount && viewingOwnPrivateAccount` and simply never renders for it.
+
+**Two more things to account for before fixing this:**
+1. `invited` is hardcoded `"false"` on every newly-created private account server-side
+   (`noodle.storage.ts` `createPrivateAccount`), regardless of whether the linked public
+   account is a persona or character. `canEditViewedProfile` requires
+   `viewedProfileAccount.invited` for character-kind accounts — so a fresh character
+   private page may also fail the "can edit the public-style fields" check. Confirm
+   whether `invited` should default `true` for accounts created via this private-page
+   flow, or whether `canEditViewedProfile`'s character branch needs its own carve-out
+   for private accounts.
+2. `personaLinkedNoodlerAccount` (the "your one NoodleR account" concept used for
+   composer routing, auto-attaching `authorAccountId` when posting in NoodleR mode,
+   notification badges, etc.) is **persona-scoped by design** — it represents "the
+   account currently posting". Don't widen that one; it's a different concept from "can
+   view/edit this private page's creator tools". Conflating the two is the likely way to
+   introduce a regression here.
+
+**Suggested fix shape:** extend `viewingOwnPrivateAccount` (or add a parallel check) to
+also cover `viewedProfileAccount.kind === "character"` private accounts unconditionally
+(this is a single-user local app — every character belongs to "you", there's no
+per-character ownership ACL to check, unlike the multi-persona case). Leave
+`personaLinkedNoodlerAccount`/posting-as untouched.
 
 ## Context
 
@@ -122,7 +199,7 @@ Key state facts:
 **Optional follow-up (B8-adjacent):** make the "create a NoodlerID" hint an actionable CTA into the create flow, not just toast text.
 **Manual verify:** Enable NoodleR from the Settings toggle and from the NoodleR nav icon → both show the new copy after the verification screen.
 
-### B4. "Your pages" needs an info box + main-account attribution
+### B4. "Your pages" needs an info box + main-account attribution — ✅ DONE (see caveat above)
 **Symptom:** The NoodleR "your pages" list shows all persona NoodleR profiles with no explanation, and doesn't show which main account each profile belongs to.
 **Cause:** The list renders profile rows (`renderNoodlerProfileRow`, `NoodleView.tsx:~4982–5041`) with no header/context and no linked-account label.
 **Fix:**
@@ -130,7 +207,7 @@ Key state facts:
 - For each row, show the main/linked account (each private account has `linkedAccountId`; resolve via `accountById` and render the owner's display name/handle under the stage name).
 **Manual verify:** With 2+ personas that each have a NoodleR page, the list shows the info box and each row names its parent account.
 
-### B5. Move "Creators to check out" into the right rail
+### B5. Move "Creators to check out" into the right rail — ✅ DONE
 **Symptom:** NoodleR's "Creators to check out" is a cool section but currently sits inline in the timeline (`NoodlerHome.tsx:473–488`). It should live in the right-side rail — the NoodleR analog of Noodle's "Who to follow".
 **Cause:** The right rail (`rightRailContent`, `NoodleView.tsx:5633–5694`) is shared across both modes but only ever renders "Who to follow" from `suggestedCharacters`. NoodleR's `suggestedNoodlerCreators` (`NoodleView.tsx:1079`) is only consumed by the inline section.
 **Fix:**
@@ -139,7 +216,7 @@ Key state facts:
 - Net: Noodle rail = "Who to follow", NoodleR rail = "Creators to check out".
 **Manual verify:** In Noodle mode the rail shows "Who to follow"; switch to NoodleR mode → same rail slot shows "Creators to check out", and the timeline no longer has the inline block.
 
-### B6. Profile header: action-button placement is wrong
+### B6. Profile header: action-button placement is wrong — ✅ DONE
 **Symptom:** On a profile (e.g. a persona profile) the **Delete** button sits on the right and **Subscribe** sits in the middle — the layout reads as misaligned.
 **Cause:** In the profile row/header, the two states render as siblings with `mt-1 shrink-0` and no shared alignment: Subscribe (`NoodleView.tsx:5013–5027`) vs Delete (`:5028–5039`). Depending on which branch is active they land in different horizontal slots.
 **Fix:** Normalize the action slot so the primary action (Subscribe/Unsubscribe for others, Delete/manage for own) occupies the same right-aligned position with consistent sizing. Verify against the full profile header too (not just the compact row) — the same `isOwn`/`!isOwn` split appears where the profile is shown.

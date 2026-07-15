@@ -65,13 +65,9 @@ export interface NoodlerHomeProps {
   renderNoodlerTimelineItem: (item: NoodlerTimelineItem) => React.ReactNode;
   privateAccountsCount: number;
   noodlerHub: NoodlerHub | undefined;
-  renderNoodlerAccountRow: (account: NoodleAccount) => React.ReactNode;
+  renderNoodlerAccountRow: (account: NoodleAccount, isOwn: boolean) => React.ReactNode;
   sortedNoodlerDiscoverAccounts: NoodleAccount[];
   renderNoodlerDiscoverCard: (account: NoodleAccount) => React.ReactNode;
-  // Distinct from Noodle's "Who to follow": leads with subscriber count /
-  // price since these are paid creator pages, not follow-only accounts.
-  suggestedNoodlerCreators: NoodleAccount[];
-  renderNoodlerSuggestionRow: (account: NoodleAccount) => React.ReactNode;
 
   // Hub inline composer + refresh (same composer/refresh state as NoodleHome's
   // "home" timeline — NoodleHome and NoodlerHome are never mounted at once)
@@ -148,8 +144,6 @@ export function NoodlerHome(props: NoodlerHomeProps) {
     renderNoodlerAccountRow,
     sortedNoodlerDiscoverAccounts,
     renderNoodlerDiscoverCard,
-    suggestedNoodlerCreators,
-    renderNoodlerSuggestionRow,
     composeOpen,
     inlineComposerRef,
     composer,
@@ -470,22 +464,6 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                   <RefreshTimelineButton onTriggerRefresh={onTriggerRefresh} refreshNoodlePending={refreshNoodlePending} />
                 </>
               )}
-              {suggestedNoodlerCreators.length > 0 && (
-                <section
-                  aria-labelledby="noodler-suggested-creators"
-                  className="border-b border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/8"
-                >
-                  <div className="px-4 py-3">
-                    <h2 id="noodler-suggested-creators" className="text-sm font-bold">
-                      Creators to check out
-                    </h2>
-                    <p className="text-xs text-[var(--muted-foreground)]">Paid pages, not follows — subscribe to unlock.</p>
-                  </div>
-                  <div className="divide-y divide-[var(--noodle-divider)]">
-                    {suggestedNoodlerCreators.map(renderNoodlerSuggestionRow)}
-                  </div>
-                </section>
-              )}
               {noodlerTimelineItems.length > 0 ? (
                 <div>{noodlerTimelineItems.map(renderNoodlerTimelineItem)}</div>
               ) : privateAccountsCount > 0 ? (
@@ -508,7 +486,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
             </>
           ) : activeNoodlerHubTab === "subscriptions" ? (
             noodlerHub && noodlerHub.subscribed.length > 0 ? (
-              <div>{noodlerHub.subscribed.map((account) => renderNoodlerAccountRow(account))}</div>
+              <div>{noodlerHub.subscribed.map((account) => renderNoodlerAccountRow(account, false))}</div>
             ) : (
               <p className="px-4 py-4 text-sm text-[var(--muted-foreground)]">
                 Not subscribed to any NoodleR creators yet.
@@ -523,7 +501,13 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               </p>
             )
           ) : noodlerHub && noodlerHub.owned.length > 0 ? (
-            <div>{noodlerHub.owned.map((account) => renderNoodlerAccountRow(account))}</div>
+            <>
+              <p className="border-b border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/8 px-4 py-3 text-xs leading-5 text-[var(--muted-foreground)]">
+                These are all of your own NoodleR profiles — one per persona or character you've given a private page
+                to. Each row shows which main account it belongs to.
+              </p>
+              <div>{noodlerHub.owned.map((account) => renderNoodlerAccountRow(account, true))}</div>
+            </>
           ) : (
             <p className="px-4 py-4 text-sm text-[var(--muted-foreground)]">
               No NoodleR pages of your own yet. Create one from a persona's profile.
