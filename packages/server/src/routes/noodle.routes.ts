@@ -1731,9 +1731,11 @@ export async function ensurePrivateAccountIdentity(input: {
   try {
     const settings = await noodle.getSettings();
     const connectionId = settings.generationConnectionId;
-    const conn = connectionId ? await connections.getWithKey(connectionId) : null;
+    const conn = connectionId ? await connections.getWithKey(connectionId) : await connections.getDefaultForAgents();
     let stageIdentityFailed = false;
+    let stageIdentityError: string | undefined;
     let avatarFailed = false;
+    let avatarError: string | undefined;
     // Previous attempt's text identity already succeeded and only the
     // avatar failed — reuse the persisted name/bio/appearance instead of
     // paying for another LLM call to regenerate text that already worked.
@@ -1759,15 +1761,24 @@ export async function ensurePrivateAccountIdentity(input: {
           debugMode: false,
         }).catch((error) => {
           logger.warn(error, "[noodle] Failed to regenerate NoodleR avatar for %s", privateAccount.displayName);
+          avatarError = getErrorMessage(error).slice(0, 500);
           return null;
         });
         await noodle.updateAccount(privateAccount.id, {
           ...(avatarUrl ? { avatarUrl } : {}),
-          settings: { ...privateAccount.settings, avatarGenerationFailed: !avatarUrl },
+          settings: {
+            ...privateAccount.settings,
+            avatarGenerationFailed: !avatarUrl,
+            ...(avatarError ? { avatarGenerationError: avatarError } : {}),
+          },
         });
       } else {
         await noodle.updateAccount(privateAccount.id, {
-          settings: { ...privateAccount.settings, avatarGenerationFailed: true },
+          settings: {
+            ...privateAccount.settings,
+            avatarGenerationFailed: true,
+            avatarGenerationError: "No image generation connection is configured.",
+          },
         });
       }
     } else if (conn) {
@@ -1792,6 +1803,7 @@ export async function ensurePrivateAccountIdentity(input: {
       }).catch((error) => {
         logger.warn(error, "[noodle] Failed to generate NoodleR stage identity for account %s", privateAccount.id);
         stageIdentityFailed = true;
+        stageIdentityError = getErrorMessage(error).slice(0, 500);
         return null;
       });
       if (identity) {
@@ -1825,10 +1837,12 @@ export async function ensurePrivateAccountIdentity(input: {
           }).catch((error) => {
             logger.warn(error, "[noodle] Failed to generate NoodleR avatar for %s", sanitizedName);
             avatarFailed = true;
+            avatarError = getErrorMessage(error).slice(0, 500);
             return null;
           });
         } else {
           avatarFailed = true;
+          avatarError = "No image generation connection is configured.";
         }
         await noodle.updateAccount(privateAccount.id, {
           handle: identity.handle,
@@ -1838,7 +1852,9 @@ export async function ensurePrivateAccountIdentity(input: {
           settings: {
             ...writePrivateStageProfileSettings(privateAccount.settings, identity.stageProfile),
             stageIdentityGenerationFailed: false,
+            stageIdentityGenerationError: null,
             avatarGenerationFailed: avatarFailed,
+            ...(avatarError ? { avatarGenerationError: avatarError } : {}),
             // Persisted so a later avatar-only retry (avatarOnlyRetry above)
             // can regenerate just the image without another LLM call.
             stageAppearanceGenerated: sanitizedAppearance,
@@ -1872,13 +1888,17 @@ export async function ensurePrivateAccountIdentity(input: {
       // A manually-submitted stage profile is a deliberate choice, not a
       // failure. Only the no-connection retry path (no requestedStageProfile
       // at all) should surface as a generation failure to the UI.
-      if (!input.requestedStageProfile) stageIdentityFailed = true;
+      if (!input.requestedStageProfile) {
+        stageIdentityFailed = true;
+        stageIdentityError = "No Noodle generation connection is configured.";
+      }
     }
     if (stageIdentityFailed) {
       await noodle.updateAccount(privateAccount.id, {
         settings: {
           ...privateAccount.settings,
           stageIdentityGenerationFailed: true,
+          ...(stageIdentityError ? { stageIdentityGenerationError: stageIdentityError } : {}),
         },
       });
     }
@@ -1888,6 +1908,7 @@ export async function ensurePrivateAccountIdentity(input: {
       settings: {
         ...privateAccount.settings,
         stageIdentityGenerationFailed: true,
+        stageIdentityGenerationError: getErrorMessage(error).slice(0, 500),
       },
     });
   }
@@ -1964,7 +1985,9 @@ export async function tryGenerateNoodlerReaction(input: {
   try {
     const settings = await input.noodle.getSettings();
     const connectionId = settings.generationConnectionId;
-    const conn = connectionId ? await input.connections.getWithKey(connectionId) : null;
+    const conn = connectionId
+      ? await input.connections.getWithKey(connectionId)
+      : await input.connections.getDefaultForAgents();
     if (!conn) return null;
     const baseUrl = resolveBaseUrl(conn);
     const provider = createLLMProvider(
@@ -2070,7 +2093,9 @@ export async function simulateNoodlerFanActivity(input: {
 
   const settings = await input.noodle.getSettings();
   const connectionId = settings.generationConnectionId;
-  const conn = connectionId ? await input.connections.getWithKey(connectionId) : null;
+  const conn = connectionId
+    ? await input.connections.getWithKey(connectionId)
+    : await input.connections.getDefaultForAgents();
   if (!conn) return { ok: false, error: "Choose a generation connection for Noodle first." };
 
   await ensureRandomUserAccounts(input.noodle);
@@ -2955,9 +2980,12 @@ export async function noodleRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     const settings = await noodle.getSettings();
     const connectionId = parsed.data.connectionId ?? settings.generationConnectionId;
-    if (!connectionId) return reply.code(400).send({ error: "Select a Noodle generation connection first." });
-    const conn = await connections.getWithKey(connectionId);
-    if (!conn) return reply.code(404).send({ error: "Noodle generation connection not found" });
+    const conn = connectionId ? await connections.getWithKey(connectionId) : await connections.getDefaultForAgents();
+    if (!conn) {
+      return reply
+        .code(connectionId ? 404 : 400)
+        .send({ error: connectionId ? "Noodle generation connection not found" : "Select a Noodle generation connection first." });
+    }
     const targetPrivateAccount = parsed.data.targetAccountId
       ? await noodle.getAccountById(parsed.data.targetAccountId)
       : null;

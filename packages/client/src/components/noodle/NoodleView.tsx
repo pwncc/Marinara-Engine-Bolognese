@@ -3432,7 +3432,7 @@ export function NoodleView() {
           >
             <div className="space-y-3">
               <label className="block space-y-1.5">
-                <FieldLabel help="The text-generation connection used to write new Noodle posts, replies, reposts, likes, and activity digests.">
+                <FieldLabel help="The text-generation connection used to write new Noodle posts, replies, reposts, likes, and activity digests. Leave blank to use the workspace's default-for-agents connection, if one is set.">
                   Generation connection
                 </FieldLabel>
                 <select
@@ -3440,7 +3440,7 @@ export function NoodleView() {
                   onChange={(event) => saveSettings({ generationConnectionId: event.target.value || null })}
                   className={fieldClass}
                 >
-                  <option value="">Choose connection</option>
+                  <option value="">Use default-for-agents connection</option>
                   {connections.map((connection) => (
                     <option key={String(connection.id)} value={String(connection.id)}>
                       {String(connection.name ?? connection.model ?? "Connection")}

@@ -1007,8 +1007,10 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--destructive)]/40 bg-[var(--destructive)]/10 px-3 py-2 text-xs text-[var(--destructive)]">
               <span>
                 {viewedProfileAccount?.settings?.stageIdentityGenerationFailed === true
-                  ? "Stage identity generation failed — this profile is using placeholder defaults."
-                  : "Avatar generation failed for this profile."}
+                  ? (viewedProfileAccount.settings.stageIdentityGenerationError as string | undefined) ||
+                    "Stage identity generation failed — this profile is using placeholder defaults."
+                  : (viewedProfileAccount?.settings?.avatarGenerationError as string | undefined) ||
+                    "Avatar generation failed for this profile."}
               </span>
               <button
                 type="button"
