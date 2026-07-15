@@ -68,7 +68,9 @@ Guidelines:
 - `docs/` — Docs and repo media assets
 - `start.bat`, `start.sh`, `start-termux.sh` — platform launchers
 
-Official downloadable package sources, manifests, artifacts, and catalog validation live in the separate [Pasta-Devs/Marinara-Agents](https://github.com/Pasta-Devs/Marinara-Agents) repository. Package-only changes should use that repository's issues and target its `staging` branch; Engine integration and capability API changes remain in Marinara Engine.
+Official downloadable agent and capability-package sources live in the separate [Pasta-Devs/Marinara-Agents](https://github.com/Pasta-Devs/Marinara-Agents) repository. Fixes to agents such as Illustrator, Music DJ, and Lorebook Keeper—including their definitions, default prompts, package-owned runtime code, metadata, artwork/assets, manifests, artifacts, and catalog validation—must use that repository's issues and target its `staging` branch.
+
+Marinara Engine owns the host integration: package loading, capability APIs and shared contracts, Engine UI/settings, storage, provider/model routing, orchestration, and compatibility handling. A fix can therefore mention or affect a downloadable agent while still belonging in Engine when it changes only how the host loads, configures, or executes the package. Determine the owning repository before opening an issue, branch, or PR, and split cross-repository changes when both package content and host integration need updates.
 
 ## Validation
 
