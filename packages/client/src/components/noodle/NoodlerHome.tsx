@@ -47,6 +47,7 @@ export interface NoodlerHub {
 export interface NoodlerHomeProps {
   activeNoodleView: "noodler-verification" | "noodler" | "profile";
   personaAccount: NoodleAccount | null;
+  isGlobalPersonaSelected: boolean;
 
   // Verification screen
   onBackToHome: () => void;
@@ -123,6 +124,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
   const {
     activeNoodleView,
     personaAccount,
+    isGlobalPersonaSelected,
     onBackToHome,
     onEnableNoodlerFromVerification,
     hasSettings,
@@ -175,6 +177,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
     onOpenOwnProfile,
     profileViewProps,
   } = props;
+  const activeNoodlerHubTab = isGlobalPersonaSelected ? "timeline" : noodlerHubTab;
 
   if (activeNoodleView === "profile") {
     if (showNoodlerSignup) {
@@ -373,17 +376,17 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                 onClick={() => onNoodlerHubTabChange(tab.id)}
                 className={cn(
                   "relative flex h-12 min-w-0 items-center justify-center px-1 text-center text-xs font-bold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] sm:text-sm",
-                  noodlerHubTab === tab.id && "text-[var(--foreground)]",
+                  activeNoodlerHubTab === tab.id && "text-[var(--foreground)]",
                 )}
               >
                 <span className="truncate">{tab.label}</span>
-                {noodlerHubTab === tab.id && (
+                {activeNoodlerHubTab === tab.id && (
                   <span className="absolute bottom-0 left-1/2 h-1 w-12 -translate-x-1/2 rounded-full bg-[var(--noodle-blue)]" />
                 )}
               </button>
             ))}
           </div>
-          {noodlerHubTab === "timeline" ? (
+          {activeNoodlerHubTab === "timeline" ? (
             <>
               {hasNoodlerAccount ? (
                 <>
@@ -471,7 +474,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                 </div>
               )}
             </>
-          ) : noodlerHubTab === "subscriptions" ? (
+          ) : activeNoodlerHubTab === "subscriptions" ? (
             noodlerHub && noodlerHub.subscribed.length > 0 ? (
               <div>{noodlerHub.subscribed.map((account) => renderNoodlerAccountRow(account))}</div>
             ) : (
@@ -479,7 +482,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                 Not subscribed to any NoodleR creators yet.
               </p>
             )
-          ) : noodlerHubTab === "discover" ? (
+          ) : activeNoodlerHubTab === "discover" ? (
             sortedNoodlerDiscoverAccounts.length > 0 ? (
               <div>{sortedNoodlerDiscoverAccounts.map(renderNoodlerDiscoverCard)}</div>
             ) : (

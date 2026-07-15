@@ -79,6 +79,7 @@ export const iconButtonClass =
   "inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-md px-2 text-xs font-medium !text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:!text-[var(--noodle-blue)]";
 export const NOODLE_BLUE = "#7EA7FF";
 export const NOODLER_BLUE = "#FF6FAE";
+export const NOODLE_GLOBAL_PERSONA_ID = "__global__";
 export const NOODLE_ICON_SCOPE_CLASS = "[&_svg]:!text-[var(--noodle-blue)]";
 export const NOODLE_LOGO_SRC = "/noodle-klusek.png";
 

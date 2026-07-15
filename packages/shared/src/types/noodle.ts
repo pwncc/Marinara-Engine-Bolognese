@@ -88,6 +88,7 @@ export interface NoodleSettings {
   generationConnectionId: string | null;
   layout: NoodleLayout;
   enableNoodler: boolean;
+  allowGlobalPersona: boolean;
   noodler: NoodlerSettings;
 }
 

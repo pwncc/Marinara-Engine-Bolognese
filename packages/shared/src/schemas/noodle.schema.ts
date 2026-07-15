@@ -44,6 +44,7 @@ export const DEFAULT_NOODLE_SETTINGS = {
   generationConnectionId: null,
   layout: "timeline",
   enableNoodler: false,
+  allowGlobalPersona: false,
   noodler: {
     enableFanActivityScheduler: false,
   },
@@ -101,6 +102,7 @@ export const noodleSettingsSchema = z.object({
   generationConnectionId: z.string().min(1).nullable().default(DEFAULT_NOODLE_SETTINGS.generationConnectionId),
   layout: noodleLayoutSchema.default(DEFAULT_NOODLE_SETTINGS.layout),
   enableNoodler: z.boolean().default(DEFAULT_NOODLE_SETTINGS.enableNoodler),
+  allowGlobalPersona: z.boolean().default(DEFAULT_NOODLE_SETTINGS.allowGlobalPersona),
   noodler: noodlerSettingsSchema.default(() => ({ ...DEFAULT_NOODLE_SETTINGS.noodler })),
 });
 

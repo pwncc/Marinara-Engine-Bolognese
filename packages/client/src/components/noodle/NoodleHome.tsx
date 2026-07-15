@@ -49,6 +49,7 @@ export interface NoodleHomeProps {
   activeNoodleView: "home" | "search" | "notifications";
   isLoading: boolean;
   personaAccount: NoodleAccount | null;
+  isGlobalPersonaSelected: boolean;
   settings: NoodleSettings | undefined;
 
   // Mobile chrome
@@ -143,6 +144,7 @@ export function NoodleHome(props: NoodleHomeProps) {
     activeNoodleView,
     isLoading,
     personaAccount,
+    isGlobalPersonaSelected,
     settings,
     onOpenMobileDrawer,
     onBackToHome,
@@ -408,8 +410,13 @@ export function NoodleHome(props: NoodleHomeProps) {
           </div>
         </div>
       ) : (
-        <div className="sticky top-14 z-20 grid grid-cols-2 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur lg:top-0">
-          {TIMELINE_TABS.map((tab) => (
+        <div
+          className={cn(
+            "sticky top-14 z-20 grid border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur lg:top-0",
+            isGlobalPersonaSelected ? "grid-cols-1" : "grid-cols-2",
+          )}
+        >
+          {TIMELINE_TABS.filter((tab) => !isGlobalPersonaSelected || tab.id === "main").map((tab) => (
             <button
               key={tab.id}
               type="button"

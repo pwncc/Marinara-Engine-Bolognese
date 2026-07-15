@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Dices,
   FolderOpen,
+  Globe2,
   Heart,
   Home,
   Image as ImageIcon,
@@ -140,6 +141,7 @@ import {
   labelClass,
   textareaClass,
   NOODLE_BLUE,
+  NOODLE_GLOBAL_PERSONA_ID,
   NOODLER_BLUE,
   NOODLE_ICON_SCOPE_CLASS,
   NOODLE_MODE_META,
@@ -915,10 +917,12 @@ export function NoodleView() {
         .map((account) => account.entityId),
     [data?.accounts],
   );
-  const personaAccount = useMemo(
-    () => personaAccounts.find((account) => account.entityId === selectedPersonaId) ?? sortedPersonaAccounts[0] ?? null,
-    [personaAccounts, selectedPersonaId, sortedPersonaAccounts],
-  );
+  const allowGlobalPersona = settings?.allowGlobalPersona === true;
+  const isGlobalPersonaSelected = selectedPersonaId === NOODLE_GLOBAL_PERSONA_ID && allowGlobalPersona;
+  const personaAccount = useMemo(() => {
+    if (isGlobalPersonaSelected) return null;
+    return personaAccounts.find((account) => account.entityId === selectedPersonaId) ?? sortedPersonaAccounts[0] ?? null;
+  }, [isGlobalPersonaSelected, personaAccounts, selectedPersonaId, sortedPersonaAccounts]);
   const viewedProfileAccount = useMemo(
     () => (viewedProfileAccountId ? (accountById.get(viewedProfileAccountId) ?? personaAccount) : personaAccount),
     [accountById, personaAccount, viewedProfileAccountId],
@@ -1166,12 +1170,13 @@ export function NoodleView() {
     // Do not erase the persisted choice while the account/persona queries are
     // still empty during initial hydration.
     if (!data || personas === null) return;
+    if (isGlobalPersonaSelected) return;
     if (selectedPersonaId && personaAccounts.some((account) => account.entityId === selectedPersonaId)) return;
     const activeId = readString((activePersona as RawPersona | null)?.id);
     const activeAccount = personaAccounts.find((account) => account.entityId === activeId);
     const nextPersonaId = activeAccount?.entityId ?? sortedPersonaAccounts[0]?.entityId ?? "";
     if (selectedPersonaId !== nextPersonaId) setSelectedPersonaId(nextPersonaId);
-  }, [activePersona, data, personaAccounts, personas, selectedPersonaId, setSelectedPersonaId, sortedPersonaAccounts]);
+  }, [activePersona, data, isGlobalPersonaSelected, personaAccounts, personas, selectedPersonaId, setSelectedPersonaId, sortedPersonaAccounts]);
 
   useEffect(() => {
     if (accountSwitcherOpen) setPersonaAccountLimit(NOODLE_PERSONA_SWITCHER_PAGE_SIZE);
@@ -1765,7 +1770,7 @@ export function NoodleView() {
   }, [interactionById, interactions, personaAccount]);
   const baseTimelinePosts = useMemo(() => {
     const visiblePosts =
-      timelineTab === "following"
+      timelineTab === "following" && !isGlobalPersonaSelected
         ? feedVisiblePosts.filter((post) => followedCharacterAccountIds.has(post.authorAccountId))
         : feedVisiblePosts;
     return visiblePosts.slice().sort((left, right) => {
@@ -1779,7 +1784,7 @@ export function NoodleView() {
       );
       return rightActivityAt - leftActivityAt;
     });
-  }, [feedVisiblePosts, followedCharacterAccountIds, latestExternalReplyToPersonaCommentAtByPostId, timelineTab]);
+  }, [feedVisiblePosts, followedCharacterAccountIds, isGlobalPersonaSelected, latestExternalReplyToPersonaCommentAtByPostId, timelineTab]);
   const timelinePosts = useMemo(() => {
     if (!normalizedPostSearch || isAccountSearch) return baseTimelinePosts;
     return baseTimelinePosts.filter((post) => {
@@ -2151,20 +2156,19 @@ export function NoodleView() {
         .sort((a, b) => a.displayName.localeCompare(b.displayName)),
     [accounts, folderInvitedCharacterIds],
   );
-  const suggestedCharacters = useMemo(
-    () =>
-      followableCharacterAccounts
-        .filter((account) => !followedAccountIds.has(account.id))
-        .map((account) => ({
-          account,
-          accountId: account.id,
-          name: account.displayName,
-          handle: account.handle,
-          avatarUrl: account.avatarUrl,
-        }))
-        .slice(0, 5),
-    [followableCharacterAccounts, followedAccountIds],
-  );
+  const suggestedCharacters = useMemo(() => {
+    if (isGlobalPersonaSelected) return [];
+    return followableCharacterAccounts
+      .filter((account) => !followedAccountIds.has(account.id))
+      .map((account) => ({
+        account,
+        accountId: account.id,
+        name: account.displayName,
+        handle: account.handle,
+        avatarUrl: account.avatarUrl,
+      }))
+      .slice(0, 5);
+  }, [followableCharacterAccounts, followedAccountIds, isGlobalPersonaSelected]);
 
   const markNoodlerAccountViewed = (account: NoodleAccount) => {
     if (account.visibility !== "private") return;
@@ -5641,6 +5645,7 @@ export function NoodleView() {
     activeNoodleView: activeNoodleView === "search" || activeNoodleView === "notifications" ? activeNoodleView : "home",
     isLoading,
     personaAccount,
+    isGlobalPersonaSelected,
     settings,
     onOpenMobileDrawer: () => setMobileDrawerOpen(true),
     onBackToHome: openMobileHomeTimeline,
@@ -5839,6 +5844,7 @@ export function NoodleView() {
           ? "profile"
           : "noodler-verification",
     personaAccount,
+    isGlobalPersonaSelected,
     onBackToHome: openMobileHomeTimeline,
     onEnableNoodlerFromVerification: enableNoodlerFromVerification,
     hasSettings: Boolean(settings),
@@ -5947,16 +5953,26 @@ export function NoodleView() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  {personaAccount ? (
+                  {isGlobalPersonaSelected ? (
+                    <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 ring-1 ring-[var(--noodle-blue)]/25">
+                      <Globe2 size={24} className="text-[var(--noodle-blue)]" />
+                    </span>
+                  ) : personaAccount ? (
                     <Avatar account={personaAccount} />
                   ) : (
                     <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 ring-1 ring-[var(--noodle-blue)]/25">
                       <AtSign size={24} className="text-[var(--noodle-blue)]" />
                     </span>
                   )}
-                  <p className="mt-3 truncate text-lg font-bold">{personaAccount?.displayName ?? "Noodle Account"}</p>
+                  <p className="mt-3 truncate text-lg font-bold">
+                    {isGlobalPersonaSelected ? "Global" : (personaAccount?.displayName ?? "Noodle Account")}
+                  </p>
                   <p className="truncate text-sm text-[var(--muted-foreground)]">
-                    {personaAccount ? `${activeNoodleModeMeta.tagline} · @${personaAccount.handle}` : "Pick a persona below"}
+                    {isGlobalPersonaSelected
+                      ? `${activeNoodleModeMeta.tagline} · every persona`
+                      : personaAccount
+                        ? `${activeNoodleModeMeta.tagline} · @${personaAccount.handle}`
+                        : "Pick a persona below"}
                   </p>
                 </div>
                 <button
@@ -5990,7 +6006,8 @@ export function NoodleView() {
                 <button
                   type="button"
                   onClick={openOwnProfile}
-                  className="flex min-h-12 w-full items-center gap-4 rounded-xl px-2 text-left text-base font-bold transition-colors hover:bg-[var(--accent)]"
+                  disabled={isGlobalPersonaSelected}
+                  className="flex min-h-12 w-full items-center gap-4 rounded-xl px-2 text-left text-base font-bold transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <User size={23} />
                   Profile
@@ -6006,12 +6023,14 @@ export function NoodleView() {
                 <button
                   type="button"
                   onClick={() => {
+                    if (isGlobalPersonaSelected) return;
                     setComposer(composerValueRef.current);
                     setComposeOpen(true);
                     setActiveComposerTool(null);
                     setMobileDrawerOpen(false);
                   }}
-                  className="flex min-h-12 w-full items-center gap-4 rounded-xl px-2 text-left text-base font-bold transition-colors hover:bg-[var(--accent)]"
+                  disabled={isGlobalPersonaSelected}
+                  className="flex min-h-12 w-full items-center gap-4 rounded-xl px-2 text-left text-base font-bold transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Pencil size={23} />
                   {composeActionLabel}
@@ -6022,8 +6041,40 @@ export function NoodleView() {
                 {mobileAccountSwitcherOpen && (
                   <div className="absolute bottom-[calc(100%+0.5rem)] left-0 right-0 max-h-64 overflow-y-auto rounded-2xl border border-[var(--noodle-divider)] bg-[var(--background)] p-2 shadow-2xl shadow-black/35">
                     <p className={cn(labelClass, "px-2 pb-2")}>Switch account</p>
-                    {sortedPersonaAccounts.length > 0 ? (
+                    {allowGlobalPersona || sortedPersonaAccounts.length > 0 ? (
                       <div className="space-y-1">
+                        {allowGlobalPersona && (
+                          <button
+                            data-noodle-persona-id={NOODLE_GLOBAL_PERSONA_ID}
+                            type="button"
+                            onClick={() => {
+                              setSelectedPersonaId(NOODLE_GLOBAL_PERSONA_ID);
+                              setViewedProfileAccountId(null);
+                              setProfileEditing(false);
+                              setProfileTab("posts");
+                              setProfileConnectionTab(null);
+                              setTimelineTab("main");
+                              setActiveNoodleView(activeNoodleMode === "noodler" ? "noodler" : "home");
+                              setMobileAccountSwitcherOpen(false);
+                              setMobileDrawerOpen(false);
+                            }}
+                            className={cn(
+                              "flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition-colors hover:bg-[var(--accent)]",
+                              isGlobalPersonaSelected && "bg-[var(--noodle-blue)]/10",
+                            )}
+                          >
+                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 text-[var(--noodle-blue)] ring-1 ring-[var(--noodle-blue)]/25">
+                              <Globe2 size={17} />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-semibold">Global</span>
+                              <span className="block truncate text-xs text-[var(--muted-foreground)]">
+                                See every persona's posts
+                              </span>
+                            </span>
+                            {isGlobalPersonaSelected && <span className="h-2 w-2 rounded-full bg-[var(--noodle-blue)]" />}
+                          </button>
+                        )}
                         {sortedPersonaAccounts.map((account) => {
                           const selected = account.id === personaAccount?.id;
                           return (
@@ -6072,7 +6123,11 @@ export function NoodleView() {
                   aria-expanded={mobileAccountSwitcherOpen}
                   className="flex min-h-14 w-full items-center gap-3 rounded-xl px-2 text-left transition-colors hover:bg-[var(--accent)]"
                 >
-                  {personaAccount ? (
+                  {isGlobalPersonaSelected ? (
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15">
+                      <Globe2 size={18} />
+                    </span>
+                  ) : personaAccount ? (
                     <Avatar account={personaAccount} size="sm" />
                   ) : (
                     <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15">
@@ -6082,7 +6137,7 @@ export function NoodleView() {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-semibold">Switch account</span>
                     <span className="block truncate text-xs text-[var(--muted-foreground)]">
-                      {personaAccount ? `@${personaAccount.handle}` : "Choose a persona"}
+                      {isGlobalPersonaSelected ? "Global" : personaAccount ? `@${personaAccount.handle}` : "Choose a persona"}
                     </span>
                   </span>
                   <MoreHorizontal size={19} />
@@ -6127,14 +6182,16 @@ export function NoodleView() {
                 <button
                   type="button"
                   onClick={openNotifications}
+                  disabled={isGlobalPersonaSelected}
                   className={cn(
-                    "flex min-h-11 w-full items-center gap-4 rounded-full px-3 text-left text-[0.95rem] font-semibold hover:bg-[var(--accent)]",
+                    "flex min-h-11 w-full items-center gap-4 rounded-full px-3 text-left text-[0.95rem] font-semibold hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50",
                     activeNoodleView === "notifications" && "bg-[var(--noodle-blue)]/10",
                   )}
                 >
                   <span className="relative flex h-6 w-6 shrink-0 items-center justify-center">
                     <Bell size={22} className="!text-[var(--noodle-blue)]" />
-                    {(activeNoodleMode === "noodler" ? noodlerNotificationCount : notificationCount) > 0 && (
+                    {!isGlobalPersonaSelected &&
+                      (activeNoodleMode === "noodler" ? noodlerNotificationCount : notificationCount) > 0 && (
                       <span
                         data-component="NoodleView.NotificationBadge"
                         className="absolute -right-2 -top-2 min-w-4 rounded-full bg-[var(--noodle-blue)] px-1 text-center text-[0.58rem] font-black leading-4 text-zinc-950 ring-2 ring-[var(--background)]"
@@ -6148,8 +6205,9 @@ export function NoodleView() {
                 <button
                   type="button"
                   onClick={openOwnProfile}
+                  disabled={isGlobalPersonaSelected}
                   className={cn(
-                    "flex min-h-11 w-full items-center gap-4 rounded-full px-3 text-left text-[0.95rem] font-semibold hover:bg-[var(--accent)]",
+                    "flex min-h-11 w-full items-center gap-4 rounded-full px-3 text-left text-[0.95rem] font-semibold hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50",
                     activeNoodleView === "profile" && "bg-[var(--noodle-blue)]/10",
                   )}
                 >
@@ -6171,11 +6229,13 @@ export function NoodleView() {
               <button
                 type="button"
                 onClick={() => {
+                  if (isGlobalPersonaSelected) return;
                   setComposer(composerValueRef.current);
                   setComposeOpen(true);
                   setActiveComposerTool(null);
                 }}
-                className="mt-5 h-12 rounded-full bg-[var(--noodle-blue)] px-6 text-sm font-bold text-zinc-950 transition-opacity hover:opacity-90"
+                disabled={isGlobalPersonaSelected}
+                className="mt-5 h-12 rounded-full bg-[var(--noodle-blue)] px-6 text-sm font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {composeActionLabel}
               </button>
@@ -6183,8 +6243,39 @@ export function NoodleView() {
                 {accountSwitcherOpen && (
                   <div className="absolute bottom-[calc(100%+0.5rem)] left-0 right-0 z-30 overflow-hidden rounded-xl border border-[var(--noodle-divider)] bg-[var(--background)] p-2 shadow-2xl shadow-black/30">
                     <p className={cn(labelClass, "px-2 pb-2")}>Switch account</p>
-                    {sortedPersonaAccounts.length > 0 ? (
+                    {allowGlobalPersona || sortedPersonaAccounts.length > 0 ? (
                       <div className="max-h-72 space-y-1 overflow-y-auto">
+                        {allowGlobalPersona && (
+                          <button
+                            data-noodle-persona-id={NOODLE_GLOBAL_PERSONA_ID}
+                            type="button"
+                            onClick={() => {
+                              setSelectedPersonaId(NOODLE_GLOBAL_PERSONA_ID);
+                              setViewedProfileAccountId(null);
+                              setProfileEditing(false);
+                              setProfileTab("posts");
+                              setProfileConnectionTab(null);
+                              setTimelineTab("main");
+                              setActiveNoodleView(activeNoodleMode === "noodler" ? "noodler" : "home");
+                              setAccountSwitcherOpen(false);
+                            }}
+                            className={cn(
+                              "flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--accent)]",
+                              isGlobalPersonaSelected && "bg-[var(--noodle-blue)]/10",
+                            )}
+                          >
+                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 text-[var(--noodle-blue)] ring-1 ring-[var(--noodle-blue)]/25">
+                              <Globe2 size={17} />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-xs font-semibold">Global</span>
+                              <span className="block truncate text-[0.68rem] text-[var(--muted-foreground)]">
+                                See every persona's posts
+                              </span>
+                            </span>
+                            {isGlobalPersonaSelected && <span className="h-2 w-2 rounded-full bg-[var(--noodle-blue)]" />}
+                          </button>
+                        )}
                         {visiblePersonaAccounts.map((account) => {
                           const selected = account.id === personaAccount?.id;
                           return (
@@ -6243,18 +6334,22 @@ export function NoodleView() {
                   className="flex min-h-16 w-full items-center gap-3 rounded-full px-3 text-left transition-colors hover:bg-[var(--accent)]"
                   title="Switch account"
                 >
-                  {personaAccount ? (
+                  {isGlobalPersonaSelected ? (
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 text-[var(--noodle-blue)] ring-1 ring-[var(--noodle-blue)]/25">
+                      <Globe2 size={22} />
+                    </span>
+                  ) : personaAccount ? (
                     <Avatar account={personaAccount} />
                   ) : (
                     <AtSign size={28} className="!text-[var(--noodle-blue)]" />
                   )}
                   <div className="min-w-0 flex-1">
                     <p className="flex items-center gap-1.5 truncate text-sm font-semibold">
-                      {personaAccount?.displayName ?? "Noodle Account"}
+                      {isGlobalPersonaSelected ? "Global" : (personaAccount?.displayName ?? "Noodle Account")}
                       {isNoodlerEnabled && Boolean(personaAccount?.linkedAccountId) && <NoodlerBadge />}
                     </p>
                     <p className="truncate text-xs text-[var(--muted-foreground)]">
-                      {personaAccount ? `@${personaAccount.handle}` : "Pick a persona"}
+                      {isGlobalPersonaSelected ? "Every persona" : personaAccount ? `@${personaAccount.handle}` : "Pick a persona"}
                     </p>
                   </div>
                   <MoreHorizontal size={18} className="!text-[var(--noodle-blue)] opacity-70" />
@@ -6405,13 +6500,15 @@ export function NoodleView() {
           <button
             type="button"
             onClick={openNotifications}
+            disabled={isGlobalPersonaSelected}
             aria-label="Noodle notifications"
             aria-current={activeNoodleView === "notifications" ? "page" : undefined}
-            className="relative flex items-center justify-center transition-colors hover:bg-[var(--accent)]"
+            className="relative flex items-center justify-center transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <span className="relative flex h-6 w-6 items-center justify-center">
               <Bell size={22} strokeWidth={activeNoodleView === "notifications" ? 2.8 : 2} />
-              {(activeNoodleMode === "noodler" ? noodlerNotificationCount : notificationCount) > 0 && (
+              {!isGlobalPersonaSelected &&
+                (activeNoodleMode === "noodler" ? noodlerNotificationCount : notificationCount) > 0 && (
                 <span
                   data-component="NoodleView.NotificationBadge"
                   className="absolute -right-2 -top-2 min-w-4 rounded-full bg-[var(--noodle-blue)] px-1 text-center text-[0.58rem] font-black leading-4 text-zinc-950 ring-2 ring-[var(--background)]"
