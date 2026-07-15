@@ -81,6 +81,8 @@ export const capabilityCatalogSchema = z.object({
   packages: z.array(capabilityCatalogPackageSchema),
 }).strict();
 
+export const capabilityPackageReadinessSchema = z.enum(["pending", "registered", "ready", "error"]);
+
 export const installedCapabilityPackageSchema = z.object({
   id: z.string(),
   version: z.string(),
@@ -88,6 +90,8 @@ export const installedCapabilityPackageSchema = z.object({
   installedAt: z.string().datetime(),
   status: z.enum(["active", "restart-required", "error"]),
   error: z.string().nullable(),
+  readiness: capabilityPackageReadinessSchema.default("pending"),
+  readinessError: z.string().nullable().default(null),
   legacy: z.boolean().default(false),
   previousVersion: z.string().optional(),
 });
@@ -132,3 +136,8 @@ export type CapabilityCatalogPackage = z.infer<typeof capabilityCatalogPackageSc
 export type CapabilityCatalog = z.infer<typeof capabilityCatalogSchema>;
 export type InstalledCapabilityPackage = z.infer<typeof installedCapabilityPackageSchema>;
 export type PackagedAgentDefinition = z.infer<typeof packagedAgentDefinitionSchema>;
+
+export function isInstalledCapabilityReady(installed: InstalledCapabilityPackage): boolean {
+  if (installed.status !== "active") return false;
+  return !installed.manifest.entrypoints.server || installed.readiness === "ready";
+}

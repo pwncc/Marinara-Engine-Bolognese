@@ -113,7 +113,6 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
       app.log.warn(error, "Optional package availability migration did not complete; it will retry next startup");
     }
   }
-  await initializeCapabilityAgentRegistry();
   resetTurnGameRegistry(false);
   if (migratedLegacyCapabilities) await migrateLegacyChatCapabilitySelections(db);
 
@@ -180,6 +179,10 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
 
   // Trusted downloaded server capabilities register while Fastify is still mutable.
   await capabilityModuleRuntime.start(app);
+  // Server-backed agent definitions are visible only after their runtime reaches
+  // functional readiness. Packages without a server entrypoint remain available
+  // as soon as their verified files are installed.
+  await initializeCapabilityAgentRegistry();
 
   // ── Server extensions ──
   await serverExtensionRuntime.start(app, db);
@@ -249,12 +252,26 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   // ── Health Check ──
   app.get("/api/health", async () => {
     const commit = getBuildCommit();
+    let capabilityPackages: Awaited<ReturnType<typeof capabilityPackageManager.diagnostics>> | null = null;
+    try {
+      capabilityPackages = await capabilityPackageManager.diagnostics();
+    } catch (error) {
+      app.log.warn(error, "Capability package diagnostics are unavailable");
+    }
     return {
       status: "ok",
       version: APP_VERSION,
       commit,
       build: getBuildLabel(),
       timestamp: new Date().toISOString(),
+      capabilityPackages: {
+        status: capabilityPackages
+          ? capabilityPackages.every((item) => item.ready || item.status === "restart-required")
+            ? "ok"
+            : "degraded"
+          : "error",
+        packages: capabilityPackages ?? [],
+      },
     };
   });
 

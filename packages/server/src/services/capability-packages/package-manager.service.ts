@@ -7,6 +7,7 @@ import {
   APP_VERSION,
   capabilityCatalogSchema,
   capabilityPackageManifestSchema,
+  isInstalledCapabilityReady,
   installedCapabilityRegistrySchema,
   packagedAgentDefinitionsSchema,
   type CapabilityCatalog,
@@ -26,6 +27,12 @@ const CATALOG_URL = process.env.MARINARA_AGENT_CATALOG_URL?.trim() ||
 const MAX_ARTIFACT_BYTES = 100 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 250 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
+const KNOWN_INCOMPATIBLE_RUNTIMES = new Map([
+  [
+    "hierarchical-maps@1.0.0",
+    "Hierarchical Maps 1.0.0 is incompatible with file-native storage. Update the package before using maps.",
+  ],
+]);
 
 function normalizeArchivePath(value: string): string {
   if (!value || value.includes("\\") || value.startsWith("/") || value.includes("\0")) {
@@ -61,6 +68,10 @@ function compareVersions(left: string, right: string): number {
     if (delta) return delta;
   }
   return 0;
+}
+
+function runtimeBlockReason(installed: InstalledCapabilityPackage): string | null {
+  return KNOWN_INCOMPATIBLE_RUNTIMES.get(`${installed.id}@${installed.version}`) ?? null;
 }
 
 async function readRegistry() {
@@ -125,12 +136,27 @@ export const capabilityPackageManager = {
     return (await readRegistry()).packages;
   },
 
+  async diagnostics() {
+    return (await readRegistry()).packages.map((installed) => ({
+      id: installed.id,
+      version: installed.version,
+      status: installed.status,
+      readiness: installed.readiness,
+      ready: isInstalledCapabilityReady(installed),
+      hasServer: Boolean(installed.manifest.entrypoints.server),
+      hasClient: Boolean(installed.manifest.entrypoints.client),
+      issue: installed.status === "error" || installed.readiness === "error" ? "runtime_error" : null,
+    }));
+  },
+
+  runtimeBlockReason,
+
   async agentDefinitions() {
     const registry = await readRegistry();
     const definitions = [];
     const ids = new Set<string>();
     for (const installed of registry.packages) {
-      if (installed.status === "error") continue;
+      if (!isInstalledCapabilityReady(installed)) continue;
       const entrypoint = installed.manifest.entrypoints.agents;
       if (!entrypoint) continue;
       const file = inside(VERSIONS, join(VERSIONS, installed.id, installed.version, normalizeArchivePath(entrypoint)));
@@ -164,7 +190,7 @@ export const capabilityPackageManager = {
 
   async clientEntrypoint(packageId: string) {
     const installed = (await readRegistry()).packages.find((item) => item.id === packageId);
-    if (!installed || installed.status !== "active") return null;
+    if (!installed || !isInstalledCapabilityReady(installed)) return null;
     const entrypoint = installed.manifest.entrypoints.client;
     if (!entrypoint) return null;
     return {
@@ -181,6 +207,18 @@ export const capabilityPackageManager = {
     const index = registry.packages.findIndex((installed) => installed.id === packageId);
     if (index < 0) return;
     registry.packages[index] = { ...registry.packages[index]!, status, error };
+    await writeRegistry(registry.packages);
+  },
+
+  async markRuntimeReadiness(
+    packageId: string,
+    readiness: InstalledCapabilityPackage["readiness"],
+    readinessError: string | null = null,
+  ) {
+    const registry = await readRegistry();
+    const index = registry.packages.findIndex((installed) => installed.id === packageId);
+    if (index < 0) return;
+    registry.packages[index] = { ...registry.packages[index]!, readiness, readinessError };
     await writeRegistry(registry.packages);
   },
 
@@ -201,8 +239,11 @@ export const capabilityPackageManager = {
       manifest,
       status: "active",
       error: null,
+      readiness: "pending",
+      readinessError: null,
       previousVersion: undefined,
     };
+    if (runtimeBlockReason(restored)) return null;
     registry.packages[index] = restored;
     await writeRegistry(registry.packages);
     const server = manifest.entrypoints.server;
@@ -306,6 +347,8 @@ export const capabilityPackageManager = {
         installedAt: new Date().toISOString(),
         status: manifest.restartRequired ? "restart-required" : "active",
         error: null,
+        readiness: manifest.entrypoints.server ? "pending" : "ready",
+        readinessError: null,
         legacy: false,
         ...(previous && previous.version !== manifest.version ? { previousVersion: previous.version } : {}),
       };
