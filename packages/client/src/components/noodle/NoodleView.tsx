@@ -151,6 +151,10 @@ import {
   readString,
   readPrivateStageSetting,
   readPrivateIdentityDisclosure,
+  readFanActivityEnabled,
+  readFanActivityIntensity,
+  readFanActivityAutoSchedule,
+  fanActivitySettingsFromAccount,
   type ActiveComposerMention,
   type ComposerTool,
   type NoodleMode,
@@ -183,6 +187,7 @@ type PrivateStageDraft = {
 };
 
 const NOODLE_NOTIFICATIONS_READ_AT_KEY = "notificationsReadAt";
+const NOODLER_NOTIFICATIONS_READ_AT_KEY = "noodlerNotificationsReadAt";
 const NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY = "followingAccountTimestamps";
 const NOODLER_LAST_VIEWED_AT_KEY = "noodlerLastViewedAt";
 const NOODLE_INVITE_PAGE_SIZE = 50;
@@ -741,6 +746,9 @@ export function NoodleView() {
   const [profileTab, setProfileTab] = useState<ProfileTab>("posts");
   const [profileConnectionTab, setProfileConnectionTab] = useState<ProfileConnectionTab | null>(null);
   const [notificationTab, setNotificationTab] = useState<NotificationTab>("likes");
+  const [noodlerNotificationTab, setNoodlerNotificationTab] = useState<"subscribers" | "unlocks" | "activity">(
+    "subscribers",
+  );
   const [activeNoodleView, setActiveNoodleView] = useState<NoodleViewId>("home");
   // Explicit source of truth for chrome selection — set only by
   // transitionNoodleMode/openProfile/openOwnProfile, never derived from
@@ -794,7 +802,6 @@ export function NoodleView() {
   const [privateGuidePrompt, setPrivateGuidePrompt] = useState("");
   const [privateGuideAccountId, setPrivateGuideAccountId] = useState<string | null>(null);
   const [privateStageDraft, setPrivateStageDraft] = useState<PrivateStageDraft | null>(null);
-  const [stageProfileEditing, setStageProfileEditing] = useState(false);
   const [stageProfileDisclosure, setStageProfileDisclosure] = useState<NoodlePrivateIdentityDisclosure>("hinted");
   const [stageProfileName, setStageProfileName] = useState("");
   const [stageProfileBio, setStageProfileBio] = useState("");
@@ -1161,7 +1168,6 @@ export function NoodleView() {
     setProfileBannerUrl(readAccountSetting(viewedProfileAccount, "bannerUrl"));
     setProfileLocation(readAccountSetting(viewedProfileAccount, "location"));
     setProfileEditing(false);
-    setStageProfileEditing(false);
     setStageProfileDisclosure(readPrivateIdentityDisclosure(viewedProfileAccount));
     setStageProfileName(readPrivateStageSetting(viewedProfileAccount, "stageName") || viewedProfileAccount.displayName);
     setStageProfileBio(readPrivateStageSetting(viewedProfileAccount, "stageBio") || viewedProfileAccount.bio);
@@ -1311,7 +1317,6 @@ export function NoodleView() {
       },
       {
         onSuccess: () => {
-          setStageProfileEditing(false);
           toast.success("NoodleR stage profile updated.");
         },
         onError: (error) => toast.error(error instanceof Error ? error.message : "Could not update stage profile."),
@@ -1921,6 +1926,118 @@ export function NoodleView() {
     return items.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
   }, [accountById, interactionById, interactions, personaAccount, postById, posts]);
 
+  const noodlerNotificationLikes = useMemo(() => {
+    if (!personaLinkedNoodlerAccount) return [];
+    const ownedAccountId = personaLinkedNoodlerAccount.id;
+    const ownedPostIds = new Set(
+      posts.filter((post) => post.authorAccountId === ownedAccountId).map((post) => post.id),
+    );
+    return interactions
+      .filter((interaction) => interaction.type === "like" && interaction.actorAccountId !== ownedAccountId)
+      .map((interaction) => {
+        const targetReply = interaction.parentInteractionId
+          ? (interactionById.get(interaction.parentInteractionId) ?? null)
+          : null;
+        const targetsOwnedAccount = targetReply
+          ? targetReply.actorAccountId === ownedAccountId
+          : ownedPostIds.has(interaction.postId);
+        return {
+          interaction,
+          targetReply,
+          targetsOwnedAccount,
+          post: postById.get(interaction.postId) ?? null,
+          actorAccount: accountById.get(interaction.actorAccountId) ?? null,
+          actorSnapshot: interaction.actorSnapshot,
+        };
+      })
+      .filter((item) => item.targetsOwnedAccount)
+      .filter((item): item is typeof item & { post: NoodlePost } => Boolean(item.post))
+      .sort(
+        (left, right) =>
+          new Date(right.interaction.createdAt).getTime() - new Date(left.interaction.createdAt).getTime(),
+      );
+  }, [accountById, interactionById, interactions, personaLinkedNoodlerAccount, postById, posts]);
+
+  const noodlerNotificationReplies = useMemo(() => {
+    if (!personaLinkedNoodlerAccount) return [];
+    const ownedAccountId = personaLinkedNoodlerAccount.id;
+    const items: Array<{
+      id: string;
+      createdAt: string;
+      actorAccount: NoodleAccount | null;
+      actorSnapshot: NoodlePost["authorSnapshot"];
+      post: NoodlePost;
+      content: string;
+      replyTarget: "post" | "comment" | null;
+      interactionId: string;
+    }> = [];
+    for (const interaction of interactions) {
+      if (interaction.type !== "reply" || interaction.actorAccountId === ownedAccountId) continue;
+      const post = postById.get(interaction.postId);
+      if (!post || post.authorAccountId !== ownedAccountId) continue;
+      const parentReply = interaction.parentInteractionId
+        ? (interactionById.get(interaction.parentInteractionId) ?? null)
+        : null;
+      const repliesToOwnedComment = parentReply?.actorAccountId === ownedAccountId;
+      items.push({
+        id: `reply:${interaction.id}`,
+        createdAt: interaction.createdAt,
+        actorAccount: accountById.get(interaction.actorAccountId) ?? null,
+        actorSnapshot: interaction.actorSnapshot,
+        post,
+        content: interaction.content ?? "",
+        replyTarget: repliesToOwnedComment ? "comment" : "post",
+        interactionId: interaction.id,
+      });
+    }
+    return items.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  }, [accountById, interactionById, interactions, personaLinkedNoodlerAccount, postById]);
+
+  const noodlerNotificationSubscriptions = useMemo(() => {
+    if (!personaLinkedNoodlerAccount) return [];
+    return subscriptions
+      .filter((subscription) => subscription.creatorAccountId === personaLinkedNoodlerAccount.id)
+      .map((subscription) => ({
+        subscription,
+        subscriberAccount: accountById.get(subscription.subscriberAccountId) ?? null,
+      }))
+      .sort(
+        (left, right) =>
+          new Date(right.subscription.createdAt).getTime() - new Date(left.subscription.createdAt).getTime(),
+      );
+  }, [accountById, personaLinkedNoodlerAccount, subscriptions]);
+
+  const noodlerNotificationUnlocks = useMemo(() => {
+    if (!personaLinkedNoodlerAccount) return [];
+    const ownedPostIds = new Set(
+      posts.filter((post) => post.authorAccountId === personaLinkedNoodlerAccount.id).map((post) => post.id),
+    );
+    return postUnlocks
+      .filter((unlock) => ownedPostIds.has(unlock.postId))
+      .map((unlock) => ({
+        unlock,
+        unlockerAccount: accountById.get(unlock.accountId) ?? null,
+        post: postById.get(unlock.postId) ?? null,
+      }))
+      .sort((left, right) => new Date(right.unlock.createdAt).getTime() - new Date(left.unlock.createdAt).getTime());
+  }, [accountById, personaLinkedNoodlerAccount, postById, postUnlocks, posts]);
+
+  const noodlerNotificationActivity = useMemo(() => {
+    const likeEntries = noodlerNotificationLikes.map((item) => ({
+      kind: "like" as const,
+      createdAt: item.interaction.createdAt,
+      item,
+    }));
+    const replyEntries = noodlerNotificationReplies.map((item) => ({
+      kind: "reply" as const,
+      createdAt: item.createdAt,
+      item,
+    }));
+    return [...likeEntries, ...replyEntries].sort(
+      (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+    );
+  }, [noodlerNotificationLikes, noodlerNotificationReplies]);
+
   useEffect(() => {
     if (activeNoodleView !== "home" || !notificationFocusTarget) return;
     const frame = window.requestAnimationFrame(() => {
@@ -1966,6 +2083,23 @@ export function NoodleView() {
     notificationFollowAccounts.filter((item) => (Date.parse(item.followedAt) || 0) > notificationReadTime).length +
     notificationReplyItems.filter((item) => new Date(item.createdAt).getTime() > notificationReadTime).length;
   const notificationBadgeLabel = notificationCount > 99 ? "99+" : String(notificationCount);
+  const noodlerNotificationReadAt = personaAccount
+    ? (notificationReadOverrides[`noodler:${personaAccount.id}`] ??
+      readAccountSetting(personaAccount, NOODLER_NOTIFICATIONS_READ_AT_KEY))
+    : "";
+  const noodlerNotificationReadTime = Date.parse(noodlerNotificationReadAt) || 0;
+  const noodlerNotificationCount =
+    noodlerNotificationSubscriptions.filter(
+      (item) => new Date(item.subscription.createdAt).getTime() > noodlerNotificationReadTime,
+    ).length +
+    noodlerNotificationUnlocks.filter((item) => new Date(item.unlock.createdAt).getTime() > noodlerNotificationReadTime)
+      .length +
+    noodlerNotificationLikes.filter(
+      (item) => new Date(item.interaction.createdAt).getTime() > noodlerNotificationReadTime,
+    ).length +
+    noodlerNotificationReplies.filter((item) => new Date(item.createdAt).getTime() > noodlerNotificationReadTime)
+      .length;
+  const noodlerNotificationBadgeLabel = noodlerNotificationCount > 99 ? "99+" : String(noodlerNotificationCount);
   const followableCharacterAccounts = useMemo(
     () =>
       accounts
@@ -2023,12 +2157,17 @@ export function NoodleView() {
   };
 
   const openOwnProfile = () => {
-    setViewedProfileAccountId(null);
     setProfileEditing(false);
     setProfileTab("posts");
     setProfileConnectionTab(null);
-    setActiveNoodleMode("noodle");
-    setActiveNoodleView("profile");
+    if (activeNoodleMode === "noodler" && personaLinkedNoodlerAccount) {
+      setViewedProfileAccountId(personaLinkedNoodlerAccount.id);
+      setActiveNoodleView("profile");
+    } else {
+      setViewedProfileAccountId(null);
+      setActiveNoodleMode("noodle");
+      setActiveNoodleView("profile");
+    }
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
   };
@@ -2659,6 +2798,15 @@ export function NoodleView() {
   }, [resetNoodleModeTransientState]);
 
   const openHomeTimeline = useCallback(() => {
+    transitionNoodleMode(activeNoodleMode === "noodler" ? "noodler" : "noodle");
+    scrollTimelineToTop();
+  }, [transitionNoodleMode, activeNoodleMode, scrollTimelineToTop]);
+
+  // Explicit mode-switch affordances (the Noodle/NoodleR toggle, and the
+  // mobile bottom nav's "Home" tab which doubles as that toggle) always
+  // land in Noodle mode regardless of what's currently active — unlike
+  // openHomeTimeline, which stays in the current mode.
+  const switchToNoodleMode = useCallback(() => {
     transitionNoodleMode("noodle");
     scrollTimelineToTop();
   }, [transitionNoodleMode, scrollTimelineToTop]);
@@ -2677,6 +2825,11 @@ export function NoodleView() {
   const openMobileHomeTimeline = () => {
     setPostSearch("");
     openHomeTimeline();
+  };
+
+  const switchToNoodleModeMobile = () => {
+    setPostSearch("");
+    switchToNoodleMode();
   };
 
   const openNotificationTarget = (postId: string, interactionId: string | null) => {
@@ -2703,36 +2856,39 @@ export function NoodleView() {
 
   const openNotifications = () => {
     if (personaAccount) {
+      const readAtKey =
+        activeNoodleMode === "noodler" ? NOODLER_NOTIFICATIONS_READ_AT_KEY : NOODLE_NOTIFICATIONS_READ_AT_KEY;
+      const overrideKey = activeNoodleMode === "noodler" ? `noodler:${personaAccount.id}` : personaAccount.id;
       const accountId = personaAccount.id;
-      const previousOverride = notificationReadOverrides[accountId];
+      const previousOverride = notificationReadOverrides[overrideKey];
       const readAt = new Date().toISOString();
-      setNotificationReadOverrides((current) => ({ ...current, [accountId]: readAt }));
+      setNotificationReadOverrides((current) => ({ ...current, [overrideKey]: readAt }));
       updateAccount.mutate(
         {
           id: accountId,
           settings: {
             ...personaAccount.settings,
-            [NOODLE_NOTIFICATIONS_READ_AT_KEY]: readAt,
+            [readAtKey]: readAt,
           },
         },
         {
           onSuccess: () => {
             setNotificationReadOverrides((current) => {
-              if (current[accountId] !== readAt) return current;
+              if (current[overrideKey] !== readAt) return current;
               const next = { ...current };
-              delete next[accountId];
+              delete next[overrideKey];
               return next;
             });
           },
           onError: (error) => {
             setNotificationReadOverrides((current) => {
-              if (current[accountId] !== readAt) return current;
+              if (current[overrideKey] !== readAt) return current;
               const next = { ...current };
-              if (previousOverride) next[accountId] = previousOverride;
-              else delete next[accountId];
+              if (previousOverride) next[overrideKey] = previousOverride;
+              else delete next[overrideKey];
               return next;
             });
-            toast.error(error instanceof Error ? error.message : "Could not mark Noodle notifications as read.");
+            toast.error(error instanceof Error ? error.message : "Could not mark notifications as read.");
           },
         },
       );
@@ -2745,6 +2901,9 @@ export function NoodleView() {
   };
 
   const openSettings = () => {
+    if (activeNoodleMode === "noodler" && personaLinkedNoodlerAccount) {
+      setViewedProfileAccountId(personaLinkedNoodlerAccount.id);
+    }
     setActiveNoodleView("settings");
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
@@ -3294,21 +3453,12 @@ export function NoodleView() {
                 <Lock size={14} />
                 Test verification screen
               </button>
-            </div>
-          </Section>
-
-          <Section
-            title="NoodleR Fan Activity"
-            help="Global kill switch for unattended fan activity across every NoodleR (private) page. Off by default. Even a page with its own auto-schedule toggle on stays dormant until this is also on; turning this off freezes every page's scheduled activity at once."
-          >
-            <div className="space-y-3">
-              <ToggleSetting
-                label="Enable NoodleR fan activity"
-                help="Lets the fan-activity scheduler run unattended for any NoodleR page that has both fan activity and its own auto-schedule toggle turned on. Manual 'Simulate fan activity now' is unaffected by this switch either way."
-                checked={settings.noodler.enableFanActivityScheduler}
-                disabled={updateSettings.isPending || !isNoodlerEnabled}
-                onChange={(checked) => saveSettings({ noodler: { enableFanActivityScheduler: checked } })}
-              />
+              {isNoodlerEnabled && (
+                <p className="rounded-md border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/5 px-3 py-2 text-xs leading-5 text-[var(--muted-foreground)]">
+                  Your page's stage identity, subscription pricing, and fan activity now live under NoodleR settings
+                  — switch to NoodleR mode and open Settings there.
+                </p>
+              )}
             </div>
           </Section>
 
@@ -3636,6 +3786,258 @@ export function NoodleView() {
             </button>
           </Section>
         </>
+      )}
+    </>
+  );
+
+  const noodlerSettingsContent = (
+    <>
+      <Section
+        title="NoodleR Access"
+        help="Controls whether the private NoodleR side of Noodle is available from the mode switcher and mobile navigation."
+      >
+        <div className="space-y-3">
+          <ToggleSetting
+            label="Enable NoodleR"
+            help="Unlocks the private creator network mode. Turning this off exits NoodleR mode immediately."
+            checked={isNoodlerEnabled}
+            disabled={updateSettings.isPending}
+            onChange={setNoodlerEnabled}
+          />
+        </div>
+      </Section>
+
+      <Section
+        title="NoodleR Fan Activity"
+        help="Global kill switch for unattended fan activity across every NoodleR (private) page. Off by default. Even a page with its own auto-schedule toggle on stays dormant until this is also on; turning this off freezes every page's scheduled activity at once."
+      >
+        <div className="space-y-3">
+          <ToggleSetting
+            label="Enable NoodleR fan activity"
+            help="Lets the fan-activity scheduler run unattended for any NoodleR page that has both fan activity and its own auto-schedule toggle turned on. Manual 'Simulate fan activity now' is unaffected by this switch either way."
+            checked={settings?.noodler.enableFanActivityScheduler ?? false}
+            disabled={!settings || updateSettings.isPending || !isNoodlerEnabled}
+            onChange={(checked) => saveSettings({ noodler: { enableFanActivityScheduler: checked } })}
+          />
+        </div>
+      </Section>
+
+      {viewedProfileAccount && viewingOwnPrivateAccount ? (
+        <>
+          <Section title="Stage profile" help="Controls the private creator identity shown on your NoodleR page.">
+            <div className="space-y-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block space-y-1.5">
+                  <FieldLabel help="&quot;Secret&quot; filters the linked name out of generated posts/images — it's AI-generated content moderation, not a hard guarantee it can never slip through.">
+                    Identity
+                  </FieldLabel>
+                  <select
+                    value={stageProfileDisclosure}
+                    onChange={(event) =>
+                      setStageProfileDisclosure(event.target.value as NoodlePrivateIdentityDisclosure)
+                    }
+                    className={fieldClass}
+                  >
+                    <option value="open">Open</option>
+                    <option value="hinted">Hinted</option>
+                    <option value="secret">Secret</option>
+                  </select>
+                </label>
+                <label className="block space-y-1.5">
+                  <FieldLabel>Stage name</FieldLabel>
+                  <input
+                    value={stageProfileName}
+                    onChange={(event) => setStageProfileName(event.target.value)}
+                    className={fieldClass}
+                  />
+                </label>
+              </div>
+              <label className="block space-y-1.5">
+                <FieldLabel>Private persona</FieldLabel>
+                <textarea
+                  value={stageProfilePersonality}
+                  onChange={(event) => setStageProfilePersonality(event.target.value)}
+                  className={cn(textareaClass, "min-h-20 resize-none")}
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <FieldLabel>Dynamic</FieldLabel>
+                <input
+                  value={stageProfileDynamic}
+                  onChange={(event) => setStageProfileDynamic(event.target.value)}
+                  className={fieldClass}
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <FieldLabel>Appearance/style override</FieldLabel>
+                <textarea
+                  value={stageProfileAppearanceOverride}
+                  onChange={(event) => setStageProfileAppearanceOverride(event.target.value)}
+                  placeholder="Optional styling, outfit, or presentation notes. Your linked account's body/face is still preserved."
+                  className={cn(textareaClass, "min-h-20 resize-none")}
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <FieldLabel>Bio</FieldLabel>
+                <textarea
+                  value={stageProfileBio}
+                  onChange={(event) => setStageProfileBio(event.target.value)}
+                  className={cn(textareaClass, "min-h-20 resize-none")}
+                />
+              </label>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={saveStageProfile}
+                  disabled={updateAccount.isPending}
+                  className="flex h-9 items-center justify-center gap-2 rounded-md bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {updateAccount.isPending && <Loader2 size={14} className="animate-spin" />}
+                  {updateAccount.isPending ? "Saving" : "Save stage profile"}
+                </button>
+              </div>
+            </div>
+          </Section>
+
+          <Section title="Monetization" help="Subscription pricing and pay-per-view bundling for your NoodleR page.">
+            <div className="space-y-3">
+              <label className="flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={viewedProfileAccount.settings?.subscriptionIncludesPpv === true}
+                  onChange={(event) =>
+                    updateAccount.mutate({
+                      id: viewedProfileAccount.id,
+                      settings: { subscriptionIncludesPpv: event.target.checked },
+                    })
+                  }
+                  disabled={updateAccount.isPending}
+                />
+                <span>
+                  Subscribers automatically unlock pay-per-post content too. Off by default — subscribers still have
+                  to unlock each pay-per-post individually.
+                </span>
+              </label>
+              <label className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                <span className="shrink-0 font-semibold text-[var(--foreground)]">Subscription price</span>
+                <span>$</span>
+                <input
+                  key={viewedProfileAccount.id}
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  inputMode="decimal"
+                  defaultValue={
+                    typeof viewedProfileAccount.settings?.subscriptionPrice === "number"
+                      ? (viewedProfileAccount.settings.subscriptionPrice as number)
+                      : ""
+                  }
+                  placeholder="9.99"
+                  onBlur={(event) => {
+                    const value = Number.parseFloat(event.target.value);
+                    updateAccount.mutate({
+                      id: viewedProfileAccount.id,
+                      settings: { subscriptionPrice: Number.isFinite(value) && value >= 0 ? value : null },
+                    });
+                  }}
+                  className={cn(fieldClass, "h-8 w-24")}
+                />
+                <span>/mo · shown to fans, no real payment is processed</span>
+              </label>
+            </div>
+          </Section>
+
+          <Section
+            title="Fan activity"
+            help="Lets existing filler accounts like, comment on, subscribe to, and unlock this page's posts on their own. Fans never write new posts — only you do that."
+          >
+            <div className="space-y-3">
+              <label className="flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={readFanActivityEnabled(viewedProfileAccount)}
+                  onChange={(event) =>
+                    updateAccount.mutate({
+                      id: viewedProfileAccount.id,
+                      settings: {
+                        fanActivity: {
+                          ...fanActivitySettingsFromAccount(viewedProfileAccount),
+                          enabled: event.target.checked,
+                        },
+                      },
+                    })
+                  }
+                  disabled={updateAccount.isPending}
+                />
+                <span>Turn on fan activity for this page. Off by default.</span>
+              </label>
+              {readFanActivityEnabled(viewedProfileAccount) && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={readFanActivityIntensity(viewedProfileAccount)}
+                    onChange={(event) =>
+                      updateAccount.mutate({
+                        id: viewedProfileAccount.id,
+                        settings: {
+                          fanActivity: {
+                            ...fanActivitySettingsFromAccount(viewedProfileAccount),
+                            intensity: event.target.value,
+                          },
+                        },
+                      })
+                    }
+                    disabled={updateAccount.isPending}
+                    className="h-8 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs"
+                  >
+                    <option value="low">Low (up to 3 actions/run)</option>
+                    <option value="medium">Medium (up to 6 actions/run)</option>
+                    <option value="high">High (up to 10 actions/run)</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => simulateFanActivity.mutate(viewedProfileAccount.id)}
+                    disabled={simulateFanActivity.isPending}
+                    className="ml-auto h-8 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {simulateFanActivity.isPending ? "Simulating…" : "Simulate fan activity now"}
+                  </button>
+                  <label className="mt-1 flex w-full items-start gap-2 text-xs text-[var(--muted-foreground)]">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={readFanActivityAutoSchedule(viewedProfileAccount)}
+                      onChange={(event) =>
+                        updateAccount.mutate({
+                          id: viewedProfileAccount.id,
+                          settings: {
+                            fanActivity: {
+                              ...fanActivitySettingsFromAccount(viewedProfileAccount),
+                              autoSchedule: event.target.checked,
+                            },
+                          },
+                        })
+                      }
+                      disabled={updateAccount.isPending}
+                    />
+                    <span>
+                      Run fan activity on a schedule, unattended. Also needs "Enable NoodleR fan activity" above —
+                      this only opts this page in, it doesn't turn scheduling on by itself.
+                    </span>
+                  </label>
+                </div>
+              )}
+            </div>
+          </Section>
+        </>
+      ) : (
+        <Section title="Your page" help="Create a NoodleR page to manage stage identity, pricing, and fan activity here.">
+          <p className="text-xs leading-5 text-[var(--muted-foreground)]">
+            You don't have a NoodleR page linked to this persona yet. Create one from your public profile to unlock
+            these settings.
+          </p>
+        </Section>
       )}
     </>
   );
@@ -4644,6 +5046,190 @@ export function NoodleView() {
     );
   };
 
+  const renderNoodlerSubscriptionNotification = (item: (typeof noodlerNotificationSubscriptions)[number]) => (
+    <div
+      key={item.subscription.id}
+      className="flex items-start gap-3 border-b border-[var(--noodle-divider)] px-4 py-4"
+    >
+      {item.subscriberAccount ? (
+        <button
+          type="button"
+          onClick={() => openProfile(item.subscriberAccount)}
+          className="rounded-full transition-opacity hover:opacity-80"
+          title={`View @${item.subscriberAccount.handle}`}
+        >
+          <Avatar account={item.subscriberAccount} />
+        </button>
+      ) : (
+        <UserPlus size={28} className="text-[var(--noodle-blue)]" />
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="truncate font-bold">{item.subscriberAccount?.displayName ?? "A fan"}</span>
+          <span className="text-xs text-[var(--muted-foreground)]">
+            @{item.subscriberAccount?.handle ?? "noodle"}
+          </span>
+          <span className="text-xs text-[var(--muted-foreground)]">{formatTime(item.subscription.createdAt)}</span>
+        </div>
+        <p className="mt-1 text-sm">subscribed to your page</p>
+      </div>
+    </div>
+  );
+
+  const renderNoodlerUnlockNotification = (item: (typeof noodlerNotificationUnlocks)[number]) => (
+    <div key={item.unlock.id} className="flex items-start gap-3 border-b border-[var(--noodle-divider)] px-4 py-4">
+      {item.unlockerAccount ? (
+        <button
+          type="button"
+          onClick={() => openProfile(item.unlockerAccount)}
+          className="rounded-full transition-opacity hover:opacity-80"
+          title={`View @${item.unlockerAccount.handle}`}
+        >
+          <Avatar account={item.unlockerAccount} />
+        </button>
+      ) : (
+        <Lock size={28} className="text-[var(--noodle-blue)]" />
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="truncate font-bold">{item.unlockerAccount?.displayName ?? "A fan"}</span>
+          <span className="text-xs text-[var(--muted-foreground)]">@{item.unlockerAccount?.handle ?? "noodle"}</span>
+          <span className="text-xs text-[var(--muted-foreground)]">{formatTime(item.unlock.createdAt)}</span>
+        </div>
+        <p className="mt-1 text-sm">unlocked a pay-per-view post</p>
+        {item.post && (
+          <p className="mt-2 line-clamp-2 text-sm leading-5 text-[var(--muted-foreground)]">
+            {item.post.content || (item.post.imageUrl ? "Shared an image." : "Private post")}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderNoodlerActivityNotification = (entry: (typeof noodlerNotificationActivity)[number]) => {
+    if (entry.kind === "like") {
+      const item = entry.item;
+      const actor = item.actorAccount ?? item.actorSnapshot;
+      return (
+        <div
+          key={`like:${item.interaction.id}`}
+          className="flex items-start gap-3 border-b border-[var(--noodle-divider)] px-4 py-4"
+        >
+          {actor ? (
+            <Avatar account={actor} />
+          ) : (
+            <Heart size={28} className="text-[var(--noodle-blue)]" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="truncate font-bold">{actor?.displayName ?? "Noodle User"}</span>
+              <span className="text-xs text-[var(--muted-foreground)]">@{actor?.handle ?? "noodle"}</span>
+              <span className="text-xs text-[var(--muted-foreground)]">{formatTime(item.interaction.createdAt)}</span>
+            </div>
+            <p className="mt-1 text-sm">liked your {item.targetReply ? "comment" : "post"}</p>
+          </div>
+        </div>
+      );
+    }
+    const item = entry.item;
+    const actor = item.actorAccount ?? item.actorSnapshot;
+    return (
+      <div key={item.id} className="flex items-start gap-3 border-b border-[var(--noodle-divider)] px-4 py-4">
+        {actor ? (
+          <Avatar account={actor} />
+        ) : (
+          <MessageCircle size={28} className="text-[var(--noodle-blue)]" />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="truncate font-bold">{actor?.displayName ?? "Noodle User"}</span>
+            <span className="text-xs text-[var(--muted-foreground)]">@{actor?.handle ?? "noodle"}</span>
+            <span className="text-xs text-[var(--muted-foreground)]">{formatTime(item.createdAt)}</span>
+          </div>
+          <p className="mt-1 text-sm">replied to your {item.replyTarget ?? "post"}</p>
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-5">{item.content}</p>
+        </div>
+      </div>
+    );
+  };
+
+  const NOODLER_NOTIFICATION_TABS: Array<{ id: typeof noodlerNotificationTab; label: string }> = [
+    { id: "subscribers", label: "Subscribers" },
+    { id: "unlocks", label: "Unlocks" },
+    { id: "activity", label: "Activity" },
+  ];
+
+  const noodlerNotificationsContent = (
+    <div className="min-h-full">
+      <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
+        <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
+          <MobileTimelineBackButton label="Back to NoodleR" onClick={openMobileHomeTimeline} />
+          <Bell size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
+          <div className="min-w-0">
+            <h2 className="truncate text-lg font-bold">NoodleR notifications</h2>
+            <p className="truncate text-xs text-[var(--muted-foreground)]">
+              {personaLinkedNoodlerAccount ? `@${personaLinkedNoodlerAccount.handle}` : "No NoodleR page yet"}
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-3">
+          {NOODLER_NOTIFICATION_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setNoodlerNotificationTab(tab.id)}
+              className={cn(
+                "relative flex h-12 items-center justify-center text-sm font-bold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+                noodlerNotificationTab === tab.id && "text-[var(--foreground)]",
+              )}
+            >
+              {tab.label}
+              {noodlerNotificationTab === tab.id && (
+                <span className="absolute bottom-0 left-1/2 h-1 w-14 -translate-x-1/2 rounded-full bg-[var(--noodle-blue)]" />
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {noodlerNotificationTab === "subscribers" ? (
+        noodlerNotificationSubscriptions.length > 0 ? (
+          <div>{noodlerNotificationSubscriptions.map(renderNoodlerSubscriptionNotification)}</div>
+        ) : (
+          <div className="px-8 py-14 text-center">
+            <UserPlus size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
+            <p className="text-base font-bold">No subscribers yet.</p>
+            <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
+              New subscribers to your NoodleR page will show here.
+            </p>
+          </div>
+        )
+      ) : noodlerNotificationTab === "unlocks" ? (
+        noodlerNotificationUnlocks.length > 0 ? (
+          <div>{noodlerNotificationUnlocks.map(renderNoodlerUnlockNotification)}</div>
+        ) : (
+          <div className="px-8 py-14 text-center">
+            <Lock size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
+            <p className="text-base font-bold">No unlocks yet.</p>
+            <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
+              Pay-per-view unlocks on your posts will show here.
+            </p>
+          </div>
+        )
+      ) : noodlerNotificationActivity.length > 0 ? (
+        <div>{noodlerNotificationActivity.map(renderNoodlerActivityNotification)}</div>
+      ) : (
+        <div className="px-8 py-14 text-center">
+          <Heart size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
+          <p className="text-base font-bold">No activity yet.</p>
+          <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
+            Likes and replies on your NoodleR posts will show here.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+
   const renderComposerToolPopovers = ({
     imageRef,
     pollRef,
@@ -4997,27 +5583,10 @@ export function NoodleView() {
     viewingOwnPrivateAccount,
     onDeleteNoodlerProfile: deleteNoodlerProfile,
     deletePrivateAccountPending: deletePrivateAccount.isPending,
-    stageProfileEditing,
-    onStageProfileEditingChange: setStageProfileEditing,
-    stageProfileDisclosure,
-    onStageProfileDisclosureChange: setStageProfileDisclosure,
-    stageProfileName,
-    onStageProfileNameChange: setStageProfileName,
-    stageProfilePersonality,
-    onStageProfilePersonalityChange: setStageProfilePersonality,
-    stageProfileDynamic,
-    onStageProfileDynamicChange: setStageProfileDynamic,
-    stageProfileAppearanceOverride,
-    onStageProfileAppearanceOverrideChange: setStageProfileAppearanceOverride,
-    stageProfileBio,
-    onStageProfileBioChange: setStageProfileBio,
-    onSaveStageProfile: saveStageProfile,
     onOpenGuidedPrivatePost: openGuidedPrivatePost,
     refreshNoodlePending: refreshNoodle.isPending,
-    onRetryPrivateIdentity: (accountId) => retryPrivateIdentity.mutate(accountId),
+    onRetryPrivateIdentity: (accountId: string) => retryPrivateIdentity.mutate(accountId),
     retryPrivateIdentityPending: retryPrivateIdentity.isPending,
-    onUpdateAccountSettings: (accountId, settingsPatch) =>
-      updateAccount.mutate({ id: accountId, settings: settingsPatch }),
     privateComposerText,
     onPrivateComposerTextChange: setPrivateComposerText,
     privateComposerAccess,
@@ -5028,8 +5597,6 @@ export function NoodleView() {
     onPrivateComposerImageUrlChange: setPrivateComposerImageUrl,
     onSubmitPrivatePost: submitPrivatePost,
     createPostPending: createPost.isPending,
-    onSimulateFanActivity: (accountId) => simulateFanActivity.mutate(accountId),
-    simulateFanActivityPending: simulateFanActivity.isPending,
     profileTab,
     onProfileTabChange: setProfileTab,
     profileVisiblePosts,
@@ -5142,7 +5709,7 @@ export function NoodleView() {
               <div className="mt-7">
                 <NoodleModeSwitcher
                   activeMode={activeNoodleMode}
-                  onOpenNoodle={openMobileHomeTimeline}
+                  onOpenNoodle={switchToNoodleModeMobile}
                   onOpenNoodler={openNoodlerHub}
                 />
               </div>
@@ -5271,7 +5838,7 @@ export function NoodleView() {
               <div className="mb-4">
                 <NoodleModeSwitcher
                   activeMode={activeNoodleMode}
-                  onOpenNoodle={openHomeTimeline}
+                  onOpenNoodle={switchToNoodleMode}
                   onOpenNoodler={openNoodlerHub}
                 />
               </div>
@@ -5281,7 +5848,9 @@ export function NoodleView() {
                   onClick={openHomeTimeline}
                   className={cn(
                     "flex min-h-11 w-full items-center gap-4 rounded-full px-3 text-left text-[0.95rem] font-semibold hover:bg-[var(--accent)]",
-                    activeNoodleView === "home" && "bg-[var(--noodle-blue)]/10",
+                    (activeNoodleMode === "noodler"
+                      ? activeNoodleView === "noodler"
+                      : activeNoodleView === "home") && "bg-[var(--noodle-blue)]/10",
                   )}
                 >
                   <Home size={22} className="!text-[var(--noodle-blue)]" />
@@ -5297,12 +5866,12 @@ export function NoodleView() {
                 >
                   <span className="relative flex h-6 w-6 shrink-0 items-center justify-center">
                     <Bell size={22} className="!text-[var(--noodle-blue)]" />
-                    {notificationCount > 0 && (
+                    {(activeNoodleMode === "noodler" ? noodlerNotificationCount : notificationCount) > 0 && (
                       <span
                         data-component="NoodleView.NotificationBadge"
                         className="absolute -right-2 -top-2 min-w-4 rounded-full bg-[var(--noodle-blue)] px-1 text-center text-[0.58rem] font-black leading-4 text-zinc-950 ring-2 ring-[var(--background)]"
                       >
-                        {notificationBadgeLabel}
+                        {activeNoodleMode === "noodler" ? noodlerNotificationBadgeLabel : notificationBadgeLabel}
                       </span>
                     )}
                   </span>
@@ -5444,18 +6013,25 @@ export function NoodleView() {
                 <div className="min-h-full">
                   <div className="border-b border-[var(--noodle-divider)] px-2 py-3 lg:px-4 lg:py-5">
                     <div className="flex items-center gap-3">
-                      <MobileTimelineBackButton label="Back to Noodle" onClick={openMobileHomeTimeline} />
+                      <MobileTimelineBackButton
+                        label={activeNoodleMode === "noodler" ? "Back to NoodleR" : "Back to Noodle"}
+                        onClick={openMobileHomeTimeline}
+                      />
                       <Settings2 size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
                       <div className="min-w-0">
-                        <h2 className="text-lg font-bold">Noodle settings</h2>
+                        <h2 className="text-lg font-bold">
+                          {activeNoodleMode === "noodler" ? "NoodleR settings" : "Noodle settings"}
+                        </h2>
                         <p className="truncate text-xs text-[var(--muted-foreground)]">
                           {personaAccount ? `@${personaAccount.handle}` : "Choose a persona account"}
                         </p>
                       </div>
                     </div>
                   </div>
-                  {settingsContent}
+                  {activeNoodleMode === "noodler" ? noodlerSettingsContent : settingsContent}
                 </div>
+              ) : activeNoodleView === "notifications" && activeNoodleMode === "noodler" ? (
+                noodlerNotificationsContent
               ) : activeNoodleView === "profile" && profileConnectionTab ? (
                 <div className="min-h-full">
                   <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
@@ -5536,7 +6112,7 @@ export function NoodleView() {
         <div className="grid h-[52px] grid-cols-4">
           <button
             type="button"
-            onClick={openMobileHomeTimeline}
+            onClick={switchToNoodleModeMobile}
             aria-label="Noodle home"
             aria-current={activeNoodleView === "home" ? "page" : undefined}
             className="relative flex items-center justify-center transition-colors hover:bg-[var(--accent)]"
@@ -5567,12 +6143,12 @@ export function NoodleView() {
           >
             <span className="relative flex h-6 w-6 items-center justify-center">
               <Bell size={22} strokeWidth={activeNoodleView === "notifications" ? 2.8 : 2} />
-              {notificationCount > 0 && (
+              {(activeNoodleMode === "noodler" ? noodlerNotificationCount : notificationCount) > 0 && (
                 <span
                   data-component="NoodleView.NotificationBadge"
                   className="absolute -right-2 -top-2 min-w-4 rounded-full bg-[var(--noodle-blue)] px-1 text-center text-[0.58rem] font-black leading-4 text-zinc-950 ring-2 ring-[var(--background)]"
                 >
-                  {notificationBadgeLabel}
+                  {activeNoodleMode === "noodler" ? noodlerNotificationBadgeLabel : notificationBadgeLabel}
                 </span>
               )}
             </span>

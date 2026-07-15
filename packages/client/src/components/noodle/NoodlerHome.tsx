@@ -9,25 +9,15 @@
 import { AtSign, Check, ImageIcon, Loader2, Trash2, User } from "lucide-react";
 import { toast } from "sonner";
 import type { ChangeEvent, CSSProperties, ReactNode, RefObject } from "react";
-import type {
-  NoodleAccount,
-  NoodlePost,
-  NoodlePostAccess,
-  NoodlePrivateIdentityDisclosure,
-} from "@marinara-engine/shared";
+import type { NoodleAccount, NoodlePost, NoodlePostAccess } from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
 import type { AvatarCropValue } from "../../lib/utils";
 import {
   fieldClass,
-  labelClass,
   textareaClass,
   subscribeLabel,
   readPrivateIdentityDisclosure,
   readPrivateStageSetting,
-  readFanActivityEnabled,
-  readFanActivityIntensity,
-  readFanActivityAutoSchedule,
-  fanActivitySettingsFromAccount,
   MobileTimelineBackButton,
   NoodlerMark,
   NoodlerPrivateBadge,
@@ -356,29 +346,13 @@ export interface PrivateProfileViewProps {
   onDeleteNoodlerProfile: (account: NoodleAccount) => void;
   deletePrivateAccountPending: boolean;
 
-  // Stage profile panel (linked character pages only)
-  stageProfileEditing: boolean;
-  onStageProfileEditingChange: (editing: boolean) => void;
-  stageProfileDisclosure: NoodlePrivateIdentityDisclosure;
-  onStageProfileDisclosureChange: (value: NoodlePrivateIdentityDisclosure) => void;
-  stageProfileName: string;
-  onStageProfileNameChange: (value: string) => void;
-  stageProfilePersonality: string;
-  onStageProfilePersonalityChange: (value: string) => void;
-  stageProfileDynamic: string;
-  onStageProfileDynamicChange: (value: string) => void;
-  stageProfileAppearanceOverride: string;
-  onStageProfileAppearanceOverrideChange: (value: string) => void;
-  stageProfileBio: string;
-  onStageProfileBioChange: (value: string) => void;
-  onSaveStageProfile: () => void;
+  // AI-guided post generation (own page only)
   onOpenGuidedPrivatePost: (account: NoodleAccount) => void;
   refreshNoodlePending: boolean;
 
   // Creator-tools composer (own page only)
   onRetryPrivateIdentity: (accountId: string) => void;
   retryPrivateIdentityPending: boolean;
-  onUpdateAccountSettings: (accountId: string, settings: Record<string, unknown>) => void;
   privateComposerText: string;
   onPrivateComposerTextChange: (value: string) => void;
   privateComposerAccess: NoodlePostAccess;
@@ -389,10 +363,6 @@ export interface PrivateProfileViewProps {
   onPrivateComposerImageUrlChange: (value: string) => void;
   onSubmitPrivatePost: () => void;
   createPostPending: boolean;
-
-  // Fan activity panel
-  onSimulateFanActivity: (accountId: string) => void;
-  simulateFanActivityPending: boolean;
 
   // Tabs and grid
   profileTab: ProfileTab;
@@ -441,26 +411,10 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
     viewingOwnPrivateAccount,
     onDeleteNoodlerProfile,
     deletePrivateAccountPending,
-    stageProfileEditing,
-    onStageProfileEditingChange,
-    stageProfileDisclosure,
-    onStageProfileDisclosureChange,
-    stageProfileName,
-    onStageProfileNameChange,
-    stageProfilePersonality,
-    onStageProfilePersonalityChange,
-    stageProfileDynamic,
-    onStageProfileDynamicChange,
-    stageProfileAppearanceOverride,
-    onStageProfileAppearanceOverrideChange,
-    stageProfileBio,
-    onStageProfileBioChange,
-    onSaveStageProfile,
     onOpenGuidedPrivatePost,
     refreshNoodlePending,
     onRetryPrivateIdentity,
     retryPrivateIdentityPending,
-    onUpdateAccountSettings,
     privateComposerText,
     onPrivateComposerTextChange,
     privateComposerAccess,
@@ -471,8 +425,6 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
     onPrivateComposerImageUrlChange,
     onSubmitPrivatePost,
     createPostPending,
-    onSimulateFanActivity,
-    simulateFanActivityPending,
     profileTab,
     onProfileTabChange,
     profileVisiblePosts,
@@ -480,8 +432,6 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
     renderPostGrid,
     renderPostArticle,
   } = props;
-
-  const linkedAccountKindLabel = viewedProfileAccount?.kind === "character" ? "character" : "persona";
 
   return (
     <div className="border-b border-[var(--noodle-divider)]">
@@ -575,130 +525,9 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
           <div className="mb-4">
             <h4 className="text-sm font-bold text-[var(--foreground)]">NoodleR creator tools</h4>
             <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-              Manage your stage identity, generate a post with AI, or post manually. Timeline refreshes will not
-              post here automatically.
+              Generate a post with AI, or post manually. Timeline refreshes will not post here automatically. Stage
+              identity, subscription pricing, and fan activity live in NoodleR settings now.
             </p>
-          </div>
-          <div className="mb-4 rounded-lg border border-[var(--noodle-divider)] p-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <h5 className="text-sm font-bold text-[var(--foreground)]">Stage profile</h5>
-                <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">
-                  Controls the private creator identity while the linked {linkedAccountKindLabel} keeps the visual
-                  anchor.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => onStageProfileEditingChange(!stageProfileEditing)}
-                className="h-8 shrink-0 rounded-full border border-[var(--noodle-divider)] px-3 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)]"
-              >
-                {stageProfileEditing ? "Close" : "Edit"}
-              </button>
-            </div>
-            {stageProfileEditing ? (
-              <div className="mt-3 space-y-3">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="block space-y-1.5">
-                    <span className={labelClass}>Identity</span>
-                    <select
-                      value={stageProfileDisclosure}
-                      onChange={(event) =>
-                        onStageProfileDisclosureChange(event.target.value as NoodlePrivateIdentityDisclosure)
-                      }
-                      className={fieldClass}
-                    >
-                      <option value="open">Open</option>
-                      <option value="hinted">Hinted</option>
-                      <option value="secret">Secret</option>
-                    </select>
-                    <p className="text-[11px] leading-4 text-[var(--muted-foreground)]">
-                      "Secret" filters the linked name out of generated posts/images — it's AI-generated content
-                      moderation, not a hard guarantee it can never slip through.
-                    </p>
-                  </label>
-                  <label className="block space-y-1.5">
-                    <span className={labelClass}>Stage name</span>
-                    <input
-                      value={stageProfileName}
-                      onChange={(event) => onStageProfileNameChange(event.target.value)}
-                      className={fieldClass}
-                    />
-                  </label>
-                </div>
-                <label className="block space-y-1.5">
-                  <span className={labelClass}>Private persona</span>
-                  <textarea
-                    value={stageProfilePersonality}
-                    onChange={(event) => onStageProfilePersonalityChange(event.target.value)}
-                    className={cn(textareaClass, "min-h-20 resize-none")}
-                  />
-                </label>
-                <label className="block space-y-1.5">
-                  <span className={labelClass}>Dynamic</span>
-                  <input
-                    value={stageProfileDynamic}
-                    onChange={(event) => onStageProfileDynamicChange(event.target.value)}
-                    className={fieldClass}
-                  />
-                </label>
-                <label className="block space-y-1.5">
-                  <span className={labelClass}>Appearance/style override</span>
-                  <textarea
-                    value={stageProfileAppearanceOverride}
-                    onChange={(event) => onStageProfileAppearanceOverrideChange(event.target.value)}
-                    placeholder={`Optional styling, outfit, or presentation notes. The linked ${linkedAccountKindLabel}'s body/face is still preserved.`}
-                    className={cn(textareaClass, "min-h-20 resize-none")}
-                  />
-                </label>
-                <label className="block space-y-1.5">
-                  <span className={labelClass}>Bio</span>
-                  <textarea
-                    value={stageProfileBio}
-                    onChange={(event) => onStageProfileBioChange(event.target.value)}
-                    className={cn(textareaClass, "min-h-20 resize-none")}
-                  />
-                </label>
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onStageProfileEditingChange(false)}
-                    disabled={updateAccountPending}
-                    className="h-8 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] px-3 text-xs font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onSaveStageProfile}
-                    disabled={updateAccountPending}
-                    className="flex h-8 items-center justify-center gap-2 rounded-md bg-[var(--noodle-blue)] px-3 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {updateAccountPending && <Loader2 size={14} className="animate-spin" />}
-                    {updateAccountPending ? "Saving" : "Save"}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="mt-3 grid gap-2 text-xs text-[var(--muted-foreground)]">
-                <p>
-                  <span className="font-semibold text-[var(--foreground)]">Identity:</span>{" "}
-                  {readPrivateIdentityDisclosure(viewedProfileAccount)}
-                </p>
-                {readPrivateStageSetting(viewedProfileAccount, "stagePersonality") && (
-                  <p className="line-clamp-2">
-                    <span className="font-semibold text-[var(--foreground)]">Persona:</span>{" "}
-                    {readPrivateStageSetting(viewedProfileAccount, "stagePersonality")}
-                  </p>
-                )}
-                {readPrivateStageSetting(viewedProfileAccount, "stageAppearanceOverride") && (
-                  <p className="line-clamp-2">
-                    <span className="font-semibold text-[var(--foreground)]">Style:</span>{" "}
-                    {readPrivateStageSetting(viewedProfileAccount, "stageAppearanceOverride")}
-                  </p>
-                )}
-              </div>
-            )}
           </div>
 
           <div className="mb-4 flex flex-col gap-3 rounded-lg border border-[var(--noodle-divider)] p-3 sm:flex-row sm:items-center sm:justify-between">
@@ -736,48 +565,6 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
               </button>
             </div>
           )}
-          <label className="mb-3 flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={viewedProfileAccount?.settings?.subscriptionIncludesPpv === true}
-              onChange={(event) =>
-                viewedProfileAccount &&
-                onUpdateAccountSettings(viewedProfileAccount.id, { subscriptionIncludesPpv: event.target.checked })
-              }
-              disabled={updateAccountPending}
-            />
-            <span>
-              Subscribers automatically unlock pay-per-post content too. Off by default — subscribers still have to
-              unlock each pay-per-post individually.
-            </span>
-          </label>
-          <label className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
-            <span className="shrink-0 font-semibold text-[var(--foreground)]">Subscription price</span>
-            <span>$</span>
-            <input
-              key={viewedProfileAccount?.id}
-              type="number"
-              min={0}
-              step="0.01"
-              inputMode="decimal"
-              defaultValue={
-                typeof viewedProfileAccount?.settings?.subscriptionPrice === "number"
-                  ? (viewedProfileAccount.settings.subscriptionPrice as number)
-                  : ""
-              }
-              placeholder="9.99"
-              onBlur={(event) => {
-                if (!viewedProfileAccount) return;
-                const value = Number.parseFloat(event.target.value);
-                onUpdateAccountSettings(viewedProfileAccount.id, {
-                  subscriptionPrice: Number.isFinite(value) && value >= 0 ? value : null,
-                });
-              }}
-              className={cn(fieldClass, "h-7 w-24")}
-            />
-            <span>/mo · shown to fans, no real payment is processed</span>
-          </label>
           <textarea
             value={privateComposerText}
             onChange={(event) => onPrivateComposerTextChange(event.target.value)}
@@ -837,87 +624,6 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
               Post
             </button>
           </div>
-        </div>
-      )}
-
-      {viewingOwnPrivateAccount && viewedProfileAccount && (
-        <div className="border-t border-[var(--noodle-divider)] p-4">
-          <div className="mb-3">
-            <h4 className="text-sm font-bold text-[var(--foreground)]">Fan activity</h4>
-            <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-              Lets existing filler accounts like, comment on, subscribe to, and unlock this page's posts on their
-              own. Fans never write new posts — only you do that.
-            </p>
-          </div>
-          <label className="mb-3 flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={readFanActivityEnabled(viewedProfileAccount)}
-              onChange={(event) =>
-                viewedProfileAccount &&
-                onUpdateAccountSettings(viewedProfileAccount.id, {
-                  fanActivity: {
-                    ...fanActivitySettingsFromAccount(viewedProfileAccount),
-                    enabled: event.target.checked,
-                  },
-                })
-              }
-              disabled={updateAccountPending}
-            />
-            <span>Turn on fan activity for this page. Off by default.</span>
-          </label>
-          {readFanActivityEnabled(viewedProfileAccount) && (
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                value={readFanActivityIntensity(viewedProfileAccount)}
-                onChange={(event) =>
-                  viewedProfileAccount &&
-                  onUpdateAccountSettings(viewedProfileAccount.id, {
-                    fanActivity: {
-                      ...fanActivitySettingsFromAccount(viewedProfileAccount),
-                      intensity: event.target.value,
-                    },
-                  })
-                }
-                disabled={updateAccountPending}
-                className="h-8 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs"
-              >
-                <option value="low">Low (up to 3 actions/run)</option>
-                <option value="medium">Medium (up to 6 actions/run)</option>
-                <option value="high">High (up to 10 actions/run)</option>
-              </select>
-              <button
-                type="button"
-                onClick={() => viewedProfileAccount && onSimulateFanActivity(viewedProfileAccount.id)}
-                disabled={simulateFanActivityPending}
-                className="ml-auto h-8 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {simulateFanActivityPending ? "Simulating…" : "Simulate fan activity now"}
-              </button>
-              <label className="mt-1 flex w-full items-start gap-2 text-xs text-[var(--muted-foreground)]">
-                <input
-                  type="checkbox"
-                  className="mt-0.5"
-                  checked={readFanActivityAutoSchedule(viewedProfileAccount)}
-                  onChange={(event) =>
-                    viewedProfileAccount &&
-                    onUpdateAccountSettings(viewedProfileAccount.id, {
-                      fanActivity: {
-                        ...fanActivitySettingsFromAccount(viewedProfileAccount),
-                        autoSchedule: event.target.checked,
-                      },
-                    })
-                  }
-                  disabled={updateAccountPending}
-                />
-                <span>
-                  Run fan activity on a schedule, unattended. Also needs "Enable NoodleR fan activity" on in Noodle
-                  settings — this only opts this page in, it doesn't turn scheduling on by itself.
-                </span>
-              </label>
-            </div>
-          )}
         </div>
       )}
 
