@@ -11,20 +11,23 @@ const registryPath = join(packagesRoot, "installed.json");
 const modelsRoot = join(dataDir, "models");
 const speechConfigPath = join(modelsRoot, "sidecar-speech-config.json");
 
-function installedPackage(id: string, kind: string[]) {
+function installedPackage(id: string, kind: string[], version = "1.0.0") {
   return {
     id,
-    version: "1.0.0",
+    version,
     manifest: {
       schemaVersion: 1,
       id,
       name: id,
-      version: "1.0.0",
+      version,
       description: "Capability lifecycle regression fixture.",
       engine: { min: "2.3.0", maxExclusive: "3.0.0" },
       kind,
-      entrypoints: { server: "server.mjs" },
-      files: [{ path: "server.mjs", sha256: "0".repeat(64), bytes: 1 }],
+      entrypoints: { server: "server.mjs", client: "client.js" },
+      files: [
+        { path: "server.mjs", sha256: "0".repeat(64), bytes: 1 },
+        { path: "client.js", sha256: "0".repeat(64), bytes: 1 },
+      ],
       permissions: ["ui"],
       restartRequired: true,
     },
@@ -42,6 +45,7 @@ function writeRegistry(packages: ReturnType<typeof installedPackage>[]) {
     const versionRoot = join(packagesRoot, "versions", item.id, item.version);
     mkdirSync(versionRoot, { recursive: true });
     writeFileSync(join(versionRoot, "server.mjs"), "x");
+    writeFileSync(join(versionRoot, "client.js"), "x");
   }
 }
 
@@ -79,7 +83,73 @@ try {
     "Uninstalling a package other than Conversation Calls must preserve Whisper",
   );
 
-  console.info("Capability-owned Local Whisper lifecycle regression passed.");
+  const blocked = installedPackage("hierarchical-maps", ["agent", "maps"]);
+  const failing = installedPackage("readiness-failure", ["agent"]);
+  const ready = installedPackage("readiness-success", ["agent"]);
+  writeRegistry([blocked, failing, ready]);
+  writeFileSync(
+    join(packagesRoot, "versions", failing.id, failing.version, "server.mjs"),
+    `export async function activate({ api }) {
+      api.registerService("readiness:failure", { active: true });
+    }
+    export async function selfCheck() {
+      throw new Error("fixture snapshot read failed");
+    }`,
+  );
+  writeFileSync(
+    join(packagesRoot, "versions", ready.id, ready.version, "server.mjs"),
+    `export async function activate({ api }) {
+      api.registerService("readiness:success", { active: true });
+    }
+    export async function selfCheck() {}`,
+  );
+
+  const { capabilityModuleRuntime } = await import(
+    "../../packages/server/src/services/capability-packages/capability-module-runtime.service.js"
+  );
+  const { getCapabilityService } = await import(
+    "../../packages/server/src/services/capability-packages/capability-service-registry.service.js"
+  );
+  await capabilityModuleRuntime.start({} as Parameters<typeof capabilityModuleRuntime.start>[0]);
+
+  const readinessById = new Map((await capabilityPackageManager.installed()).map((item) => [item.id, item]));
+  assert.equal(readinessById.get("hierarchical-maps")?.status, "error");
+  assert.equal(readinessById.get("hierarchical-maps")?.readiness, "error");
+  assert.match(readinessById.get("hierarchical-maps")?.readinessError ?? "", /incompatible with file-native storage/);
+  assert.equal(readinessById.get("readiness-failure")?.readiness, "error");
+  assert.match(readinessById.get("readiness-failure")?.readinessError ?? "", /fixture snapshot read failed/);
+  assert.equal(readinessById.get("readiness-success")?.status, "active");
+  assert.equal(readinessById.get("readiness-success")?.readiness, "ready");
+
+  assert.equal(getCapabilityService("readiness:failure"), null, "Failed self-check contributions must be removed");
+  assert.deepEqual(getCapabilityService("readiness:success"), { active: true });
+  assert.equal(await capabilityPackageManager.clientEntrypoint("hierarchical-maps"), null);
+  assert.equal(await capabilityPackageManager.clientEntrypoint("readiness-failure"), null);
+  assert.ok(await capabilityPackageManager.clientEntrypoint("readiness-success"));
+
+  const diagnostics = await capabilityPackageManager.diagnostics();
+  assert.deepEqual(
+    diagnostics.map((item) => ({ id: item.id, readiness: item.readiness, ready: item.ready, issue: item.issue })),
+    [
+      { id: "hierarchical-maps", readiness: "error", ready: false, issue: "runtime_error" },
+      { id: "readiness-failure", readiness: "error", ready: false, issue: "runtime_error" },
+      { id: "readiness-success", readiness: "ready", ready: true, issue: null },
+    ],
+  );
+  assert.equal(JSON.stringify(diagnostics).includes("snapshot read failed"), false, "Health diagnostics must omit errors");
+
+  const { getFileTableConfig, isFileTable } = await import("../../packages/server/src/db/file-schema.js");
+  const packageTable = {};
+  Object.defineProperty(packageTable, Symbol.for("marinara:file-table"), {
+    value: { name: "package_fixture", columns: {}, uniqueConstraints: [] },
+  });
+  assert.equal(isFileTable(packageTable), true, "Package-bundled file tables must share the host table identity");
+  assert.equal(getFileTableConfig(packageTable as never).name, "package_fixture");
+
+  await capabilityModuleRuntime.stop();
+  assert.equal(getCapabilityService("readiness:success"), null, "Runtime stop must remove ready contributions");
+
+  console.info("Capability package lifecycle and readiness regressions passed.");
 } finally {
   rmSync(dataDir, { recursive: true, force: true });
 }

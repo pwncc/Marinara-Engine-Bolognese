@@ -22,7 +22,10 @@ export type FileColumn<TData = unknown, TNotNull extends boolean = boolean, THas
 
 export type AnyFileColumn = FileColumn<any, any, any>;
 type FileColumns = Record<string, AnyFileColumn>;
-const FILE_TABLE_META = Symbol("marinara:file-table");
+// Capability packages bundle their own table declarations. A global symbol keeps
+// those verified declarations recognizable without exposing the Engine database
+// schema or requiring packages to import a private module instance.
+const FILE_TABLE_META = Symbol.for("marinara:file-table");
 
 type ColumnValue<TColumn> =
   TColumn extends FileColumn<infer TData, infer TNotNull, boolean>

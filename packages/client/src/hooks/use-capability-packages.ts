@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  isInstalledCapabilityReady,
   replaceBuiltInAgentDefinitions,
   type CapabilityCatalog,
   type BuiltInAgentManifest,
@@ -54,7 +55,7 @@ export function useCapabilityClientModules() {
   const installed = useInstalledCapabilityPackages();
   useEffect(() => {
     for (const item of installed.data ?? []) {
-      if (item.status !== "active" || !item.manifest.entrypoints.client) continue;
+      if (!isInstalledCapabilityReady(item) || !item.manifest.entrypoints.client) continue;
       if (loadedClientModules.get(item.id) === item.version) continue;
       const source = `/api/capability-packages/${encodeURIComponent(item.id)}/client?v=${encodeURIComponent(item.version)}`;
       void import(/* @vite-ignore */ source)

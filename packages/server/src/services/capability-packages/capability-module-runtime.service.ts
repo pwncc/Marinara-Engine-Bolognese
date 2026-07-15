@@ -15,18 +15,32 @@ import {
 import { registerCapabilityService } from "./capability-service-registry.service.js";
 
 type Cleanup = () => void | Promise<void>;
-type CapabilityModule = {
-  activate?: (context: {
-    app: FastifyInstance;
-    dataDir: string;
-    package: InstalledCapabilityPackage;
-    api: {
-      registerTurnGameEngine(engine: AnyTurnGameEngine): Cleanup;
-      registerConversationCommand(registration: CapabilityConversationCommandRegistration): Cleanup;
-      registerService<T>(key: string, service: T): Cleanup;
-    };
-  }) => void | Cleanup | Promise<void | Cleanup>;
+type CapabilityActivationContext = {
+  app: FastifyInstance;
+  dataDir: string;
+  package: InstalledCapabilityPackage;
+  api: {
+    registerTurnGameEngine(engine: AnyTurnGameEngine): Cleanup;
+    registerConversationCommand(registration: CapabilityConversationCommandRegistration): Cleanup;
+    registerService<T>(key: string, service: T): Cleanup;
+  };
 };
+type CapabilityModule = {
+  activate?: (context: CapabilityActivationContext) => void | Cleanup | Promise<void | Cleanup>;
+  selfCheck?: (context: CapabilityActivationContext) => void | Promise<void>;
+};
+
+async function runCleanups(cleanups: Cleanup[]): Promise<void> {
+  let firstError: unknown;
+  for (const cleanup of cleanups.splice(0).reverse()) {
+    try {
+      await cleanup();
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError) throw firstError;
+}
 
 class CapabilityModuleRuntime {
   private cleanup: Cleanup[] = [];
@@ -58,24 +72,55 @@ class CapabilityModuleRuntime {
     allowRollback: boolean,
   ): Promise<void> {
     const { installed, serverEntrypoint } = runtimePackage;
+    const registeredCleanups: Cleanup[] = [];
+    let moduleCleanup: Cleanup | undefined;
     try {
+      await capabilityPackageManager.markRuntimeReadiness(installed.id, "pending");
+      const blockReason = capabilityPackageManager.runtimeBlockReason(installed);
+      if (blockReason) throw new Error(blockReason);
+
       const module = (await import(pathToFileURL(serverEntrypoint).href)) as CapabilityModule;
       if (typeof module.activate !== "function") throw new Error("Server entrypoint must export activate(context)");
-      const cleanup = await module.activate({
+      const trackCleanup = (cleanup: Cleanup) => {
+        let called = false;
+        const guardedCleanup = () => {
+          if (called) return;
+          called = true;
+          return cleanup();
+        };
+        registeredCleanups.push(guardedCleanup);
+        return guardedCleanup;
+      };
+      const context: CapabilityActivationContext = {
         app,
         dataDir: DATA_DIR,
         package: installed,
         api: {
-          registerTurnGameEngine,
-          registerConversationCommand: registerCapabilityConversationCommand,
-          registerService: registerCapabilityService,
+          registerTurnGameEngine: (engine) => trackCleanup(registerTurnGameEngine(engine)),
+          registerConversationCommand: (registration) =>
+            trackCleanup(registerCapabilityConversationCommand(registration)),
+          registerService: (key, service) => trackCleanup(registerCapabilityService(key, service)),
         },
-      });
-      if (typeof cleanup === "function") this.cleanup.push(cleanup);
+      };
+      const cleanup = await module.activate(context);
+      if (typeof cleanup === "function") moduleCleanup = cleanup;
+      await capabilityPackageManager.markRuntimeReadiness(installed.id, "registered");
+      await module.selfCheck?.(context);
       await capabilityPackageManager.markRuntimeStatus(installed.id, "active");
-      logger.info("Activated capability package %s@%s", installed.id, installed.version);
+      await capabilityPackageManager.markRuntimeReadiness(installed.id, "ready");
+      this.cleanup.push(async () => {
+        if (moduleCleanup) await moduleCleanup();
+        await runCleanups(registeredCleanups);
+      });
+      logger.info("Activated and verified capability package %s@%s", installed.id, installed.version);
     } catch (error) {
       logger.error(error, "Failed to activate capability package %s@%s", installed.id, installed.version);
+      try {
+        if (moduleCleanup) await moduleCleanup();
+        await runCleanups(registeredCleanups);
+      } catch (cleanupError) {
+        logger.warn(cleanupError, "Capability package %s cleanup failed after activation error", installed.id);
+      }
       const previous = allowRollback ? await capabilityPackageManager.rollbackRuntime(installed.id) : null;
       if (previous) {
         logger.warn("Rolling capability package %s back to %s", installed.id, previous.installed.version);
@@ -83,6 +128,11 @@ class CapabilityModuleRuntime {
         return;
       }
       await capabilityPackageManager.markRuntimeStatus(
+        installed.id,
+        "error",
+        error instanceof Error ? error.message : String(error),
+      );
+      await capabilityPackageManager.markRuntimeReadiness(
         installed.id,
         "error",
         error instanceof Error ? error.message : String(error),
