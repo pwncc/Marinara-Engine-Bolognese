@@ -3,11 +3,13 @@
 // ──────────────────────────────────────────────
 import {
   AtSign,
+  AlertTriangle,
   Bell,
   Check,
   ChevronLeft,
   ChevronRight,
   Dices,
+  FileText,
   FolderOpen,
   Heart,
   Home,
@@ -21,6 +23,8 @@ import {
   Pencil,
   RefreshCw,
   Repeat2,
+  RotateCcw,
+  Save,
   Search,
   Settings2,
   Smile,
@@ -49,6 +53,7 @@ import {
   canManageNoodleReply,
   findNoodleTextMentions,
   noodleTextMentionsHandle as textMentionsHandle,
+  PROFESSOR_MARI_ID,
   readNoodlePollFromMetadata,
   type NoodleTextMention,
   type APIConnection,
@@ -67,6 +72,12 @@ import { renderInlineWithCustomEmojis } from "../../lib/custom-emoji-render";
 import { useActivePersona, useCharacterGroups, useCharacters, usePersonas } from "../../hooks/use-characters";
 import { useConnections } from "../../hooks/use-connections";
 import { useNoodleCustomEmojiMap } from "../../hooks/use-noodle-custom-emojis";
+import {
+  usePromptOverride,
+  usePromptOverrideDefault,
+  useResetPromptOverride,
+  useSavePromptOverride,
+} from "../../hooks/use-prompt-overrides";
 import { useUploadGlobalGalleryImages } from "../../hooks/use-global-gallery";
 import type { ChatImage } from "../../hooks/use-gallery";
 import { HelpTooltip } from "../ui/HelpTooltip";
@@ -76,6 +87,7 @@ import {
   type ConversationMediaPickerTabId,
 } from "../chat/ConversationMediaPickerPanel";
 import { ChatImageLightbox } from "../chat/ChatImageLightbox";
+import { ExpandedTextarea } from "../ui/ExpandedTextarea";
 import { Modal } from "../ui/Modal";
 import {
   ImagePromptReviewModal,
@@ -84,6 +96,7 @@ import {
 } from "../ui/ImagePromptReviewModal";
 import {
   useConfirmNoodleImagePrompts,
+  useClearNoodleInvites,
   useCreateNoodleInteraction,
   useCreateNoodlePost,
   useDeleteNoodleInteraction,
@@ -124,6 +137,7 @@ const NOODLE_INVITE_PAGE_SIZE = 50;
 const NOODLE_PERSONA_SWITCHER_PAGE_SIZE = 5;
 const NOODLE_MENTION_SUGGESTION_LIMIT = 8;
 const NOODLE_CARRYOVER_TARGETS: NoodleCarryoverTarget[] = ["conversation", "roleplay", "game"];
+const NOODLE_TIMELINE_BASE_PROMPT_KEY = "noodle.timelineBase";
 const NOODLE_MEDIA_PICKER_TABS: ConversationMediaPickerTab[] = [
   { id: "emoji", label: "Emoji" },
   { id: "gifs", label: "GIFs" },
@@ -152,6 +166,12 @@ type NoodleConfirmAction =
     }
   | {
       kind: "reset-timeline";
+      title: string;
+      message: string;
+      confirmLabel: string;
+    }
+  | {
+      kind: "uninvite-everybody";
       title: string;
       message: string;
       confirmLabel: string;
@@ -894,6 +914,7 @@ export function NoodleView() {
   const updateAccount = useUpdateNoodleAccount();
   const inviteCharacter = useInviteNoodleCharacter();
   const inviteCharacters = useInviteNoodleCharacters();
+  const clearInvites = useClearNoodleInvites();
   const removeCharacter = useRemoveNoodleCharacter();
   const createPost = useCreateNoodlePost();
   const updatePost = useUpdateNoodlePost();
@@ -906,6 +927,10 @@ export function NoodleView() {
   const refreshNoodle = useRefreshNoodle();
   const confirmNoodleImagePrompts = useConfirmNoodleImagePrompts();
   const resetNoodleTimeline = useResetNoodleTimeline();
+  const noodlePromptDetail = usePromptOverride(NOODLE_TIMELINE_BASE_PROMPT_KEY);
+  const noodlePromptDefault = usePromptOverrideDefault(NOODLE_TIMELINE_BASE_PROMPT_KEY);
+  const saveNoodlePrompt = useSavePromptOverride();
+  const resetNoodlePrompt = useResetPromptOverride();
   const uploadGlobalImages = useUploadGlobalGalleryImages();
   const prefersReducedMotion = useReducedMotion();
   const imageFileRef = useRef<HTMLInputElement | null>(null);
@@ -999,6 +1024,8 @@ export function NoodleView() {
   const [editingReplyId, setEditingReplyId] = useState<string | null>(null);
   const [editingReplyContent, setEditingReplyContent] = useState("");
   const [confirmAction, setConfirmAction] = useState<NoodleConfirmAction | null>(null);
+  const [noodlePromptEditorOpen, setNoodlePromptEditorOpen] = useState(false);
+  const [noodlePromptDraft, setNoodlePromptDraft] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
@@ -1013,7 +1040,24 @@ export function NoodleView() {
   const [pollOptions, setPollOptions] = useState(["", ""]);
   const [draftPoll, setDraftPoll] = useState<NoodlePollInput | null>(null);
 
-  const accounts = useMemo(() => data?.accounts ?? [], [data?.accounts]);
+  const noodlePromptOverride = noodlePromptDetail.data?.override ?? null;
+  const noodleDefaultPromptText = noodlePromptDefault.data?.template ?? "";
+  const noodlePromptText =
+    noodlePromptOverride?.enabled === true ? noodlePromptOverride.template : noodleDefaultPromptText;
+  const noodlePromptHasOverride = noodlePromptOverride?.enabled === true;
+  const noodlePromptLoading = noodlePromptDetail.isLoading || noodlePromptDefault.isLoading;
+  const noodlePromptDirty = noodlePromptDraft !== noodlePromptText;
+  const settings = data?.settings;
+  const accounts = useMemo(
+    () =>
+      (data?.accounts ?? []).filter(
+        (account) =>
+          (settings?.allowProfessorMari ?? true) ||
+          account.kind !== "character" ||
+          account.entityId !== PROFESSOR_MARI_ID,
+      ),
+    [data?.accounts, settings?.allowProfessorMari],
+  );
   const livePersonaIds = useMemo(() => {
     const ids = new Set<string>();
     for (const persona of personas ?? []) {
@@ -1054,7 +1098,6 @@ export function NoodleView() {
   const hasMorePersonaAccounts = visiblePersonaAccounts.length < sortedPersonaAccounts.length;
   const posts = useMemo(() => data?.posts ?? [], [data?.posts]);
   const interactions = useMemo(() => data?.interactions ?? [], [data?.interactions]);
-  const settings = data?.settings;
   const scheduler = data?.scheduler;
   const accountById = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const accountByHandle = useMemo(
@@ -1070,6 +1113,13 @@ export function NoodleView() {
     () =>
       new Map(accounts.filter((account) => account.kind === "character").map((account) => [account.entityId, account])),
     [accounts],
+  );
+  const directlyInvitedCharacterIds = useMemo(
+    () =>
+      (data?.accounts ?? [])
+        .filter((account) => account.kind === "character" && account.invited)
+        .map((account) => account.entityId),
+    [data?.accounts],
   );
   const personaAccount = useMemo(
     () => personaAccounts.find((account) => account.entityId === selectedPersonaId) ?? sortedPersonaAccounts[0] ?? null,
@@ -1117,6 +1167,10 @@ export function NoodleView() {
   }, [settings?.imageGenerationPrompt]);
 
   useEffect(() => {
+    if (!noodlePromptEditorOpen) setNoodlePromptDraft(noodlePromptText);
+  }, [noodlePromptEditorOpen, noodlePromptText]);
+
+  useEffect(() => {
     if (!viewedProfileAccount) return;
     setProfileHandle(viewedProfileAccount.handle);
     setProfileName(viewedProfileAccount.displayName);
@@ -1141,6 +1195,52 @@ export function NoodleView() {
     updateSettings.mutate(patch, {
       onError: (error) => toast.error(error instanceof Error ? error.message : "Could not update Noodle settings."),
     });
+  };
+
+  const openNoodlePromptEditor = () => {
+    if (!noodlePromptText) {
+      toast.error("The default Noodle prompt is still loading.");
+      return;
+    }
+    setNoodlePromptDraft(noodlePromptText);
+    setNoodlePromptEditorOpen(true);
+  };
+
+  const closeNoodlePromptEditor = () => {
+    setNoodlePromptDraft(noodlePromptText);
+    setNoodlePromptEditorOpen(false);
+  };
+
+  const saveNoodlePromptDraft = async () => {
+    if (!noodlePromptDraft.trim()) {
+      toast.error("The Noodle prompt cannot be empty.");
+      return;
+    }
+    try {
+      await saveNoodlePrompt.mutateAsync({
+        key: NOODLE_TIMELINE_BASE_PROMPT_KEY,
+        template: noodlePromptDraft,
+        enabled: true,
+      });
+      setNoodlePromptEditorOpen(false);
+      toast.success("Noodle prompt saved.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not save the Noodle prompt.");
+    }
+  };
+
+  const restoreDefaultNoodlePrompt = async () => {
+    if (!noodlePromptHasOverride) {
+      setNoodlePromptDraft(noodleDefaultPromptText);
+      return;
+    }
+    try {
+      await resetNoodlePrompt.mutateAsync(NOODLE_TIMELINE_BASE_PROMPT_KEY);
+      setNoodlePromptDraft(noodleDefaultPromptText);
+      toast.success("Default Noodle prompt restored.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not restore the default Noodle prompt.");
+    }
   };
 
   const beginRefreshTimeEdit = (scheduledTime: string) => {
@@ -1170,6 +1270,7 @@ export function NoodleView() {
   const saveProfile = () => {
     if (!viewedProfileAccount || !canEditViewedProfile) return;
     const normalizedHandle = profileHandle.trim().replace(/^@+/, "");
+    const nextAvatarUrl = profileAvatarUrl.trim() || null;
     const nextSettings = {
       ...viewedProfileAccount.settings,
       bannerUrl: profileBannerUrl.trim(),
@@ -1181,7 +1282,7 @@ export function NoodleView() {
         handle: normalizedHandle,
         displayName: profileName.trim(),
         bio: profileBio,
-        avatarUrl: profileAvatarUrl.trim() || null,
+        ...(nextAvatarUrl !== viewedProfileAccount.avatarUrl ? { avatarUrl: nextAvatarUrl } : {}),
         settings: nextSettings,
       },
       {
@@ -1456,6 +1557,8 @@ export function NoodleView() {
         ? deleteInteraction.isPending
         : confirmAction?.kind === "reset-timeline"
           ? resetNoodleTimeline.isPending
+          : confirmAction?.kind === "uninvite-everybody"
+            ? clearInvites.isPending
           : false;
   const normalizedProfileHandle = profileHandle.trim().replace(/^@+/, "");
   const isEditingProfile = canEditViewedProfile && profileEditing;
@@ -1532,6 +1635,9 @@ export function NoodleView() {
         : `Invite ${uninvitedSelectedFolderCharacterIds.length} ${
             uninvitedSelectedFolderCharacterIds.length === 1 ? "character" : "characters"
           }`;
+  const hasActiveInvites = Boolean(
+    directlyInvitedCharacterIds.length > 0 || selectedCharacterGroupIds.size > 0 || settings?.allowRandomUsers,
+  );
   const followedAccountIds = useMemo(
     () => new Set(readStringArray(personaAccount?.settings?.followingAccountIds)),
     [personaAccount?.settings],
@@ -2304,6 +2410,16 @@ export function NoodleView() {
       );
       return;
     }
+    if (confirmAction.kind === "uninvite-everybody") {
+      clearInvites.mutate(undefined, {
+        onSuccess: () => {
+          setConfirmAction(null);
+          toast.success("Noodle invites cleared.");
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not clear Noodle invites."),
+      });
+      return;
+    }
     resetNoodleTimeline.mutate(undefined, {
       onSuccess: () => {
         clearReplyComposer();
@@ -2459,9 +2575,10 @@ export function NoodleView() {
     () =>
       characters
         .filter((character) => readString(character.id))
+        .filter((character) => (settings?.allowProfessorMari ?? true) || readString(character.id) !== PROFESSOR_MARI_ID)
         .filter((character) => characterName(character).toLowerCase().includes(normalizedInviteSearch))
         .sort((left, right) => characterName(left).localeCompare(characterName(right))),
-    [characters, normalizedInviteSearch],
+    [characters, normalizedInviteSearch, settings?.allowProfessorMari],
   );
   const visibleInviteCharacters = filteredCharacters.slice(0, inviteCharacterLimit);
   const hasMoreInviteCharacters = filteredCharacters.length > visibleInviteCharacters.length;
@@ -2498,6 +2615,15 @@ export function NoodleView() {
         );
       },
       onError: (error) => toast.error(error instanceof Error ? error.message : "Could not invite folder characters."),
+    });
+  };
+
+  const uninviteEverybody = () => {
+    setConfirmAction({
+      kind: "uninvite-everybody",
+      title: "Uninvite Everybody",
+      message: "This removes all direct Noodle character invites, clears selected invite folders, and turns off random users.",
+      confirmLabel: "Uninvite everybody",
     });
   };
 
@@ -2543,10 +2669,66 @@ export function NoodleView() {
   const settingsContent = (
     <>
       <Section
+        title="Noodle Prompt"
+        help="Controls the editable base instructions used to write Noodle timeline refreshes. Timeline voice and tone instructions are appended after this prompt."
+      >
+        <div data-component="NoodleView.PromptSetting" className="space-y-3">
+          <div className="flex items-start gap-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
+              {noodlePromptLoading ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-xs font-semibold text-[var(--foreground)]">Timeline base prompt</p>
+                <span className="rounded-full border border-[var(--noodle-blue)]/30 bg-[var(--noodle-blue)]/10 px-2 py-0.5 text-[0.625rem] font-semibold text-[var(--noodle-blue)]">
+                  {noodlePromptOverride?.enabled === true ? "Custom" : "Default"}
+                </span>
+              </div>
+              <p className="mt-1 line-clamp-3 whitespace-pre-line text-[0.68rem] leading-5 text-[var(--muted-foreground)]">
+                {noodlePromptDetail.isError || noodlePromptDefault.isError
+                  ? "The Noodle prompt could not be loaded."
+                  : noodlePromptText || "Loading the default Noodle prompt…"}
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => void restoreDefaultNoodlePrompt()}
+              disabled={!noodlePromptHasOverride || resetNoodlePrompt.isPending}
+              className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-md border border-[var(--noodle-blue)]/35 px-3 text-xs font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {resetNoodlePrompt.isPending ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+              Restore default
+            </button>
+            <button
+              type="button"
+              onClick={openNoodlePromptEditor}
+              disabled={
+                noodlePromptLoading || noodlePromptDetail.isError || noodlePromptDefault.isError || !noodlePromptText
+              }
+              className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:bg-[var(--noodle-blue)]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--noodle-blue)]/70 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <Pencil size={14} aria-hidden="true" className="shrink-0 text-[var(--noodle-blue)]" />
+              <span>Edit prompt</span>
+            </button>
+          </div>
+        </div>
+      </Section>
+
+      <Section
         title="Invites"
         help="Choose who can participate in Noodle refreshes. Direct character invites, selected character folders, and optional random users form the pool the generator can draw from."
       >
         <div className="space-y-4">
+          <ToggleSetting
+            label="Professor Mari participates"
+            help="When off, Professor Mari is hidden from Noodle account discovery and excluded from future generated posts, replies, reactions, mentions, profiles, and chat carryover. Existing timeline history is preserved."
+            checked={settings?.allowProfessorMari ?? true}
+            disabled={!settings || updateSettings.isPending}
+            onChange={(checked) => saveSettings({ allowProfessorMari: checked })}
+          />
+
           <label className="block space-y-1.5">
             <FieldLabel help="Filters both character folders and individual characters in this invite section.">
               Characters to Invite
@@ -2641,9 +2823,28 @@ export function NoodleView() {
           )}
 
           <div className="space-y-2">
-            <FieldLabel help="Directly invited characters are eligible regardless of folder selection and get priority in Noodle suggestions and generated activity.">
-              Characters
-            </FieldLabel>
+            <div className="flex items-center justify-between gap-3">
+              <FieldLabel help="Directly invited characters are eligible regardless of folder selection and get priority in Noodle suggestions and generated activity.">
+                Characters
+              </FieldLabel>
+              <button
+                type="button"
+                onClick={uninviteEverybody}
+                disabled={
+                  !settings ||
+                  updateSettings.isPending ||
+                  inviteCharacter.isPending ||
+                  inviteCharacters.isPending ||
+                  removeCharacter.isPending ||
+                  clearInvites.isPending ||
+                  !hasActiveInvites
+                }
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--noodle-blue)]/35 px-3 text-[0.68rem] font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {clearInvites.isPending ? <Loader2 size={13} className="animate-spin" /> : <UserMinus size={13} />}
+                Uninvite everybody
+              </button>
+            </div>
             <div className="max-h-96 overflow-y-auto rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] [scrollbar-gutter:stable]">
               <button
                 type="button"
@@ -2777,6 +2978,19 @@ export function NoodleView() {
                     )}
                   </div>
                   <p className="mt-1.5 leading-5 text-[var(--muted-foreground)]">{noodleSchedulerSummary(scheduler)}</p>
+                  {(scheduler.timezone === "Etc/Unknown" || scheduler.timezone === "local") && (
+                    <div
+                      className="mt-2 flex gap-2 rounded-md bg-[var(--destructive)]/10 px-2.5 py-2 leading-5 text-[var(--foreground)]"
+                      role="alert"
+                    >
+                      <AlertTriangle className="mt-0.5 shrink-0 text-[var(--destructive)]" size={14} />
+                      <p>
+                        The server timezone could not be detected. Remove a blank <code>TZ=</code> from your{" "}
+                        <code>.env</code>, or set an IANA timezone such as <code>TZ=Europe/Warsaw</code>, then restart
+                        Marinara.
+                      </p>
+                    </div>
+                  )}
                   {scheduler.scheduledTimes.length > 0 && (
                     <div className="mt-2">
                       <p className="text-[0.68rem] font-semibold text-[var(--muted-foreground)]">
@@ -5296,6 +5510,56 @@ export function NoodleView() {
           </section>
         </div>
       )}
+      <ExpandedTextarea
+        open={noodlePromptEditorOpen}
+        onClose={closeNoodlePromptEditor}
+        title="Edit Noodle Prompt"
+        value={noodlePromptDraft}
+        onChange={setNoodlePromptDraft}
+        placeholder="Write the base instructions for Noodle timeline generation…"
+        closeLabel="Cancel"
+        overlayStyle={{ "--noodle-blue": NOODLE_BLUE } as CSSProperties}
+        footer={
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <button
+              type="button"
+              onClick={() => void restoreDefaultNoodlePrompt()}
+              disabled={
+                resetNoodlePrompt.isPending ||
+                (!noodlePromptHasOverride && noodlePromptDraft === noodleDefaultPromptText)
+              }
+              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-md border border-[var(--noodle-blue)]/35 px-3 text-xs font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {resetNoodlePrompt.isPending ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+              Restore default
+            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={closeNoodlePromptEditor}
+                disabled={saveNoodlePrompt.isPending || resetNoodlePrompt.isPending}
+                className="min-h-10 flex-1 rounded-md border border-[var(--border)] px-4 text-xs font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-45 sm:flex-none"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveNoodlePromptDraft()}
+                disabled={
+                  !noodlePromptDraft.trim() ||
+                  !noodlePromptDirty ||
+                  saveNoodlePrompt.isPending ||
+                  resetNoodlePrompt.isPending
+                }
+                className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-md bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45 sm:flex-none"
+              >
+                {saveNoodlePrompt.isPending ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+                Save prompt
+              </button>
+            </div>
+          </div>
+        }
+      />
       {confirmAction && (
         <Modal
           open={Boolean(confirmAction)}
@@ -5324,9 +5588,11 @@ export function NoodleView() {
                 disabled={confirmActionPending}
                 className={cn(
                   "flex h-9 items-center justify-center gap-2 rounded-md px-4 text-xs font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+                  confirmAction.kind === "delete-post" ||
+                  confirmAction.kind === "delete-reply" ||
                   confirmAction.kind === "reset-timeline"
-                    ? "border border-[var(--noodle-blue)]/45 bg-[var(--noodle-blue)] text-[var(--background)] hover:bg-[var(--noodle-blue)]/85"
-                    : "bg-[var(--destructive)] text-[var(--destructive-foreground)] hover:opacity-90",
+                    ? "bg-[var(--destructive)] text-[var(--destructive-foreground)] hover:opacity-90"
+                    : "border border-[var(--noodle-blue)]/45 bg-[var(--noodle-blue)] text-[var(--background)] hover:bg-[var(--noodle-blue)]/85",
                 )}
               >
                 {confirmActionPending && <Loader2 size={14} className="animate-spin" />}

@@ -158,6 +158,8 @@ export interface AssemblerInput {
   activeAgentIds?: string[];
   /** Per-chat list of manually activated lorebook IDs from chat settings */
   activeLorebookIds?: string[];
+  /** Entries attached to the exact current hierarchical location. */
+  forcedLorebookEntryIds?: string[];
   /** Lorebook IDs that should be excluded even if otherwise scoped to the chat. */
   excludedLorebookIds?: string[];
   /** Source agent IDs whose generated lorebooks should be excluded from scanning. */
@@ -168,6 +170,8 @@ export interface AssemblerInput {
   chatEmbedding?: number[] | null;
   /** Per-lorebook pre-computed embeddings for semantic lorebook matching. */
   semanticEmbeddingsByLorebookId?: ReadonlyMap<string, number[] | null>;
+  /** Unrelated-text cosine floor used to calibrate clustered embedding models. */
+  semanticSimilarityBaseline?: number;
   /** Per-chat ephemeral state overrides for lorebook entries (from chat metadata). */
   entryStateOverrides?: Record<string, { ephemeral?: number | null; enabled?: boolean }>;
   /** Per-chat sticky/cooldown/delay timing state for lorebook entries. */
@@ -337,11 +341,13 @@ export async function assemblePrompt(input: AssemblerInput): Promise<AssemblerOu
     enableAgents: input.enableAgents ?? true,
     activeAgentIds: input.activeAgentIds ?? [],
     activeLorebookIds: input.activeLorebookIds ?? [],
+    forcedLorebookEntryIds: input.forcedLorebookEntryIds ?? [],
     excludedLorebookIds: input.excludedLorebookIds ?? [],
     excludedLorebookSourceAgentIds: input.excludedLorebookSourceAgentIds ?? [],
     disableLorebooks: input.disableLorebooks === true,
     chatEmbedding: input.chatEmbedding ?? null,
     semanticEmbeddingsByLorebookId: input.semanticEmbeddingsByLorebookId,
+    semanticSimilarityBaseline: input.semanticSimilarityBaseline,
     entryStateOverrides: input.entryStateOverrides,
     entryTimingStates: input.entryTimingStates,
     lorebookTokenBudget: input.lorebookTokenBudget,

@@ -172,6 +172,7 @@ export function buildGameSetupSummarySections(source: GameSetupShareSource): Gam
         { label: "Setting", value: config.setting },
         { label: "Tone", value: config.tone },
         { label: "Difficulty", value: titleCaseToken(config.difficulty) },
+        { label: "Combat style", value: titleCaseToken(config.combatStyle ?? "classic") },
         { label: "Content rating", value: config.rating.toUpperCase() },
         { label: "Language", value: config.language?.trim() || "Default" },
         { label: "Player goals", value: config.playerGoals.trim() || "None" },
@@ -250,7 +251,6 @@ export function buildGameSetupSummarySections(source: GameSetupShareSource): Gam
             ? titleCaseToken(config.gameStoryboardVideoPromptTemplateId)
             : "Built-in default",
         },
-        { label: "Direct scene prompts", value: config.gameStoryboardUseDirectScenePrompt ? "On" : "Off" },
       ],
     },
     {

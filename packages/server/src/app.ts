@@ -13,7 +13,6 @@ import { basicAuthHook } from "./middleware/basic-auth.js";
 import { csrfProtectionHook } from "./middleware/csrf-protection.js";
 import { rateLimitHook } from "./middleware/rate-limit.js";
 import { securityHeadersHook } from "./middleware/security-headers.js";
-import { runMigrations } from "./db/migrate.js";
 import { seedDefaultPreset } from "./db/seed.js";
 import { seedProfessorMari } from "./db/seed-mari.js";
 import { seedDefaultConnection } from "./db/seed-connection.js";
@@ -24,7 +23,7 @@ import { buildAssetManifest, ensureAssetDirs } from "./services/game/asset-manif
 import { recoverGalleryImages } from "./services/storage/gallery-recovery.js";
 import { migrateCharacterExtendedDescriptionsToLorebooks } from "./services/lorebook/extended-descriptions-migration.js";
 import { migrateLegacyDefaultAgentPrompts } from "./services/agents/default-prompt-migration.js";
-import { APP_VERSION } from "@marinara-engine/shared";
+import { APP_VERSION, resetTurnGameRegistry } from "@marinara-engine/shared";
 import { existsSync } from "fs";
 import { basename, join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -33,8 +32,8 @@ import {
   getLogLevel,
   getNodeEnv,
   isRequestLoggingDisabled,
-  isFileStorageBackend,
   isAutoCreateDefaultConnectionDisabled,
+  getFileStorageDir,
 } from "./config/runtime-config.js";
 import { corsDelegate } from "./config/cors-config.js";
 import { sidecarProcessService } from "./services/sidecar/sidecar-process.service.js";
@@ -43,6 +42,10 @@ import { startNoodleRefreshScheduler } from "./services/noodle/noodle-refresh-sc
 import { serverExtensionRuntime } from "./services/extensions/server-extension-runtime.js";
 import { runWithGenerationFallbackNotifier } from "./services/generation/fallback-notification.js";
 import { createReplyFallbackNotifier } from "./routes/generate/fallback-notification.js";
+import { initializeCapabilityAgentRegistry } from "./services/capability-packages/capability-agent-registry.service.js";
+import { capabilityPackageManager } from "./services/capability-packages/package-manager.service.js";
+import { capabilityModuleRuntime } from "./services/capability-packages/capability-module-runtime.service.js";
+import { migrateLegacyChatCapabilitySelections } from "./services/capability-packages/legacy-capability-chat-migration.js";
 
 const isLite = process.env.MARINARA_LITE === "true" || process.env.MARINARA_LITE === "1";
 const REVALIDATE_FILES = new Set(["index.html"]);
@@ -50,6 +53,7 @@ const NO_STORE_FILES = new Set(["manifest.json", "sw.js", "registerSW.js"]);
 const MAX_UPLOAD_BYTES = 256 * 1024 * 1024;
 
 export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
+  const hadUserStateBeforeStartup = existsSync(join(getFileStorageDir(), "manifest.json"));
   const app = Fastify({
     logger: {
       level: getLogLevel(),
@@ -75,12 +79,16 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
     },
   });
 
-  // ── Database ──
+  // ── Storage ──
   const db = await getDB();
   app.decorate("db", db);
   app.addHook("onClose", async () => {
     try {
-      const stopResults = await Promise.allSettled([serverExtensionRuntime.stop(), sidecarProcessService.stop()]);
+      const stopResults = await Promise.allSettled([
+        capabilityModuleRuntime.stop(),
+        serverExtensionRuntime.stop(),
+        sidecarProcessService.stop(),
+      ]);
       for (const result of stopResults) {
         if (result.status === "rejected") {
           app.log.error(result.reason, "Failed to stop a server runtime service during shutdown");
@@ -91,10 +99,22 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
     }
   });
 
-  // ── Legacy SQLite migrations (file-native storage imports old DBs without runtime migrations) ──
-  if (!isFileStorageBackend()) {
-    await runMigrations(db);
+  // Existing installations retain the capabilities the previous release shipped. Fresh installs stay empty.
+  let migratedLegacyCapabilities = false;
+  if (getNodeEnv() !== "test") {
+    try {
+      const removedCorePackages = await capabilityPackageManager.pruneNonDownloadableCorePackages();
+      if (removedCorePackages.length > 0) {
+        app.log.info("Removed obsolete downloadable copies of core features: %s", removedCorePackages.join(", "));
+      }
+      const migration = await capabilityPackageManager.migrateLegacyAvailability(hadUserStateBeforeStartup);
+      migratedLegacyCapabilities = migration.migrated;
+    } catch (error) {
+      app.log.warn(error, "Optional package availability migration did not complete; it will retry next startup");
+    }
   }
+  resetTurnGameRegistry(false);
+  if (migratedLegacyCapabilities) await migrateLegacyChatCapabilitySelections(db);
 
   // ── Seed defaults ──
   await seedDefaultPreset(db);
@@ -156,6 +176,13 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
 
   // ── Routes ──
   await registerRoutes(app);
+
+  // Trusted downloaded server capabilities register while Fastify is still mutable.
+  await capabilityModuleRuntime.start(app);
+  // Server-backed agent definitions are visible only after their runtime reaches
+  // functional readiness. Packages without a server entrypoint remain available
+  // as soon as their verified files are installed.
+  await initializeCapabilityAgentRegistry();
 
   // ── Server extensions ──
   await serverExtensionRuntime.start(app, db);
@@ -225,12 +252,26 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   // ── Health Check ──
   app.get("/api/health", async () => {
     const commit = getBuildCommit();
+    let capabilityPackages: Awaited<ReturnType<typeof capabilityPackageManager.diagnostics>> | null = null;
+    try {
+      capabilityPackages = await capabilityPackageManager.diagnostics();
+    } catch (error) {
+      app.log.warn(error, "Capability package diagnostics are unavailable");
+    }
     return {
       status: "ok",
       version: APP_VERSION,
       commit,
       build: getBuildLabel(),
       timestamp: new Date().toISOString(),
+      capabilityPackages: {
+        status: capabilityPackages
+          ? capabilityPackages.every((item) => item.ready || item.status === "restart-required")
+            ? "ok"
+            : "degraded"
+          : "error",
+        packages: capabilityPackages ?? [],
+      },
     };
   });
 

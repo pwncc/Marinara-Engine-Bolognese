@@ -15,6 +15,7 @@ import {
 } from "../../packages/server/src/services/llm/providers/openai.provider.js";
 import {
   isOpenRouterApiUrl,
+  OPENROUTER_APP_CATEGORIES,
   OPENROUTER_APP_REFERER,
   OPENROUTER_APP_TITLE,
   requestHeadersWithOpenRouterAttribution,
@@ -208,11 +209,13 @@ const attributedHeaders = requestHeadersWithOpenRouterAttribution("https://openr
 assert.equal(attributedHeaders?.get("authorization"), "Bearer test");
 assert.equal(attributedHeaders?.get("HTTP-Referer"), OPENROUTER_APP_REFERER);
 assert.equal(attributedHeaders?.get("X-OpenRouter-Title"), OPENROUTER_APP_TITLE);
+assert.equal(attributedHeaders?.get("X-OpenRouter-Categories"), OPENROUTER_APP_CATEGORIES);
 const unrelatedHeaders = requestHeadersWithOpenRouterAttribution("https://api.openai.com/v1/models", {
   Authorization: "Bearer test",
 });
 assert.equal(unrelatedHeaders?.get("HTTP-Referer"), null);
 assert.equal(unrelatedHeaders?.get("X-OpenRouter-Title"), null);
+assert.equal(unrelatedHeaders?.get("X-OpenRouter-Categories"), null);
 assert.equal(isOpenRouterApiUrl("https://openrouter.ai/api/v1"), true);
 assert.equal(isOpenRouterApiUrl("https://api.openrouter.ai/v1"), true);
 assert.equal(isOpenRouterApiUrl("https://openrouter.ai.example.com/v1"), false);

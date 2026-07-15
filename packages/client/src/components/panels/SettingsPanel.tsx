@@ -118,9 +118,13 @@ import {
 } from "lucide-react";
 import { useClearAllData, useExpungeData, useUpdateChatMetadata, type ExpungeScope } from "../../hooks/use-chats";
 import { useChatStore } from "../../stores/chat.store";
-import { useGameAssetStore } from "../../stores/game-asset.store";
-import { useOpenGameAssetsFolder } from "../../hooks/use-game-assets";
+import {
+  useGameAssetManifest,
+  useOpenGameAssetsFolder,
+  useRescanGameAssets,
+} from "../../hooks/use-game-assets";
 import { chatKeys } from "../../hooks/use-chats";
+import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
 import { HelpTooltip } from "../ui/HelpTooltip";
 import { ColorPicker } from "../ui/ColorPicker";
 import { TrackerPanelIcon } from "../ui/TrackerPanelIcon";
@@ -1953,7 +1957,7 @@ function TrackerPanelAppearanceDrawer({
       <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-3 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--secondary)]/70 text-[var(--primary)] ring-1 ring-[var(--border)]">
-            <TrackerPanelIcon size="0.9rem" strokeWidth={1.95} />
+            <TrackerPanelIcon size="0.9rem" />
           </span>
           <span className="min-w-0">
             <span className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--foreground)]">
@@ -2660,7 +2664,7 @@ function GeneralSettings() {
             label="Music Player"
             checked={musicPlayerEnabled}
             onChange={setMusicPlayerEnabled}
-            help="Shows the compact Music Player. Switch between Spotify and YouTube from the player itself or the Music DJ agent settings."
+            help="Shows the compact Music Player. Switch between Spotify, YouTube, and Custom from the player itself or the Music DJ agent settings."
           />
           <ToggleSetting
             anchorId={getSettingsControlAnchorId("mini-mari")}
@@ -3286,7 +3290,7 @@ function VideoGenerationSettings() {
 }
 
 function GameAssetsSettings() {
-  const rescanGameAssets = useGameAssetStore((s) => s.rescanAssets);
+  const rescanGameAssets = useRescanGameAssets();
   const openGameAssetsFolder = useOpenGameAssetsFolder();
   const openGameAssetsBrowser = useUIStore((s) => s.openGameAssetsBrowser);
   const assetFileRef = useRef<HTMLInputElement>(null);
@@ -3345,7 +3349,7 @@ function GameAssetsSettings() {
       );
       const succeeded = uploads.filter((result) => result.status === "fulfilled").length;
       const failed = uploads.length - succeeded;
-      await rescanGameAssets();
+      await rescanGameAssets.mutateAsync();
       if (succeeded > 0) {
         toast.success(`Uploaded ${succeeded} game asset${succeeded === 1 ? "" : "s"}.`);
       }
@@ -3383,7 +3387,8 @@ function GameAssetsSettings() {
           </button>
           <button
             onClick={() => {
-              rescanGameAssets()
+              rescanGameAssets
+                .mutateAsync()
                 .then(() => toast.success("Game assets rescanned."))
                 .catch(() => toast.error("Failed to rescan game assets."));
             }}
@@ -4749,7 +4754,7 @@ function BackgroundPicker({
   const [renamingFile, setRenamingFile] = useState<string | null>(null);
   const [renameInput, setRenameInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const refreshGameAssetManifest = useGameAssetStore((s) => s.fetchManifest);
+  const { refetch: refreshGameAssetManifest } = useGameAssetManifest();
   const qc = useQueryClient();
 
   const { data: backgrounds } = useQuery({
@@ -5159,38 +5164,68 @@ function BackgroundPicker({
 }
 
 function GenerationsSettings() {
+  const { data: installedCapabilities = [], isLoading } = useInstalledCapabilityPackages();
+  const openRightPanel = useUIStore((state) => state.openRightPanel);
+  const openAgentCatalog = useUIStore((state) => state.openAgentCatalog);
+  const illustratorInstalled = installedCapabilities.some(
+    (capability) => capability.id === "illustrator" && capability.status === "active",
+  );
+  const openDownloadAgents = useCallback(() => {
+    openRightPanel("agents");
+    openAgentCatalog();
+  }, [openAgentCatalog, openRightPanel]);
+
   return (
     <div className="flex flex-col gap-3">
       <SettingsIntro>
-        Global defaults for generated images, generated videos, and reusable prompt templates.
+        Global defaults for generated images, videos, and reusable prompt templates.
       </SettingsIntro>
 
-      <OverallGenerationSettings />
-      <ImageGenerationSettings />
-      <VideoGenerationSettings />
-      <div id={getSettingsSectionAnchorId("prompt-overrides")} className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border)]/70 bg-[var(--background)]/35 px-3 py-2">
-          <div className="min-w-0">
-            <div className="text-xs font-semibold text-[var(--foreground)]">Prompt Overrides</div>
-            <div className="mt-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
-              Reusable image and video prompt templates.
-            </div>
-          </div>
+      {isLoading ? (
+        <div className="flex items-center justify-center gap-2 rounded-xl border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--marinara-chat-chrome-highlight-bg)] px-4 py-8 text-xs text-[var(--marinara-chat-chrome-panel-muted)]">
+          <Loader2 size="1rem" className="animate-spin" />
+          Checking installed agents…
         </div>
-        <PromptOverridesEditor
-          title="Video Generation Prompt Overrides"
-          description="Edit reusable templates for Game/Gallery scene videos, Conversation Call character clips, and animated Expression portraits."
-          help="Game scene videos use this before sending a reference-image video request. Conversation Call clips use the selected character avatar as the identity reference and return to idle at the end of each clip. Animated Expression portraits become looping GIF sprites."
-          keys={VIDEO_PROMPT_TEMPLATE_KEYS}
-          preferredKey="game.video"
-        />
-        <PromptOverridesEditor
-          title="Image Generation Prompt Overrides"
-          description="Edit the templates used by image, sprite, Game, and prompt-builder systems."
-          help="Global templates for registered prompt builders, including Conversation selfies, Game NPC portraits, scene media, storyboard prompts, and other registered builders."
-          preferredKey="game.npcPortrait"
-        />
-      </div>
+      ) : !illustratorInstalled ? (
+        <div className="flex flex-col items-center gap-3 rounded-xl border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--marinara-chat-chrome-highlight-bg)] px-5 py-8 text-center">
+          <WandSparkles size="1.5rem" className="text-[var(--marinara-chat-chrome-highlight-text)]" />
+          <p className="max-w-md text-xs leading-relaxed text-[var(--marinara-chat-chrome-panel-text)]">
+            Download Illustrator Agent first from Agents tab to enable image and video generation.
+          </p>
+          <button type="button" onClick={openDownloadAgents} className={SETTINGS_PRIMARY_BUTTON_CLASS}>
+            Download Illustrator Agent
+          </button>
+        </div>
+      ) : (
+        <>
+          <OverallGenerationSettings />
+          <ImageGenerationSettings />
+          <VideoGenerationSettings />
+          <div id={getSettingsSectionAnchorId("prompt-overrides")} className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border)]/70 bg-[var(--background)]/35 px-3 py-2">
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-[var(--foreground)]">Prompt Overrides</div>
+                <div className="mt-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
+                  Reusable image and video prompt templates.
+                </div>
+              </div>
+            </div>
+            <PromptOverridesEditor
+              title="Video Generation Prompt Overrides"
+              description="Edit reusable templates for Game/Gallery scene videos, Conversation Call character clips, and animated Expression portraits."
+              help="Game scene videos use this before sending a reference-image video request. Conversation Call clips use the selected character avatar as the identity reference and return to idle at the end of each clip. Animated Expression portraits become looping GIF sprites."
+              keys={VIDEO_PROMPT_TEMPLATE_KEYS}
+              preferredKey="game.video"
+            />
+            <PromptOverridesEditor
+              title="Image Generation Prompt Overrides"
+              description="Edit the templates used by image, sprite, Game, and prompt-builder systems."
+              help="Global templates for registered prompt builders, including Conversation selfies, Game NPC portraits, scene media, storyboard prompts, and other registered builders."
+              preferredKey="game.npcPortrait"
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }

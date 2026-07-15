@@ -125,10 +125,9 @@ import {
 
 export type { CharacterMap };
 
-const BUILT_IN_AGENT_ID_SET = new Set(BUILT_IN_AGENTS.map((agent) => agent.id));
-const BUILT_IN_TRACKER_AGENT_ID_SET = new Set(
-  BUILT_IN_AGENTS.filter((agent) => agent.category === "tracker" && !agent.libraryHidden).map((agent) => agent.id),
-);
+const isBuiltInAgentType = (agentType: string) => BUILT_IN_AGENTS.some((agent) => agent.id === agentType);
+const isBuiltInTrackerAgentType = (agentType: string) =>
+  BUILT_IN_AGENTS.some((agent) => agent.id === agentType && agent.category === "tracker" && !agent.libraryHidden);
 
 function compareMessagesByCursor(left: MessageWithSwipes, right: MessageWithSwipes): number {
   const createdAtCompare = left.createdAt.localeCompare(right.createdAt);
@@ -791,6 +790,7 @@ export function ChatArea() {
   const updateMessageExtra = useUpdateMessageExtra(activeChatId);
   const peekPrompt = usePeekPrompt();
   const branchChat = useBranchChat();
+  const branchPendingRef = useRef(false);
   const { generate, retryAgents } = useGenerate();
   const generateGallerySelfie = useGenerateGallerySelfie(activeChatId ?? "");
   const setActiveSwipe = useSetActiveSwipe(activeChatId);
@@ -1762,7 +1762,7 @@ export function ChatArea() {
   const manualTrackerTypes = useMemo(() => {
     const set = new Set<string>();
     for (const type of enabledAgentTypes) {
-      if (!BUILT_IN_TRACKER_AGENT_ID_SET.has(type)) continue;
+      if (!isBuiltInTrackerAgentType(type)) continue;
       if (chatMeta.manualTrackers === true || manualTrackerAgentTypes[type] === true) set.add(type);
     }
     return set;
@@ -2074,7 +2074,7 @@ export function ChatArea() {
       manualTypes.length > 0
         ? manualTypes
         : Array.from(enabledAgentTypes).filter(
-            (type) => BUILT_IN_TRACKER_AGENT_ID_SET.has(type) || !BUILT_IN_AGENT_ID_SET.has(type),
+            (type) => isBuiltInTrackerAgentType(type) || !isBuiltInAgentType(type),
           );
     if (types.length === 0) return;
     await retryAgents(activeChatId, types);
@@ -2083,7 +2083,7 @@ export function ChatArea() {
   const handleRerunSingleTracker = useCallback(
     async (agentType: string) => {
       if (!activeChatId || isStreaming || agentProcessing) return;
-      if (!BUILT_IN_TRACKER_AGENT_ID_SET.has(agentType) || !enabledAgentTypes.has(agentType)) return;
+      if (!isBuiltInTrackerAgentType(agentType) || !enabledAgentTypes.has(agentType)) return;
       await retryAgents(activeChatId, [agentType]);
     },
     [activeChatId, isStreaming, agentProcessing, enabledAgentTypes, retryAgents],
@@ -2168,11 +2168,22 @@ export function ChatArea() {
   );
 
   const handleBranch = useCallback(
-    (messageId: string) => {
-      if (!activeChatId || branchChat.isPending) return;
+    async (messageId: string) => {
+      const chatId = activeChatId;
+      if (!chatId || branchChat.isPending || branchPendingRef.current) return;
+      branchPendingRef.current = true;
+      const confirmed = await showConfirmDialog({
+        title: "Create a new branch?",
+        message: "This will copy the chat through this message and open the new branch.",
+        confirmLabel: "Create branch",
+      });
+      if (!confirmed || useChatStore.getState().activeChatId !== chatId) {
+        branchPendingRef.current = false;
+        return;
+      }
       const branchToastId = toast.loading("Creating branch...");
       branchChat.mutate(
-        { chatId: activeChatId, upToMessageId: messageId },
+        { chatId, upToMessageId: messageId },
         {
           onSuccess: (newChat) => {
             if (newChat) useChatStore.getState().setActiveChatId(newChat.id);
@@ -2182,6 +2193,7 @@ export function ChatArea() {
             toast.error(error instanceof Error ? `Branch failed: ${error.message}` : "Branch failed.");
           },
           onSettled: () => {
+            branchPendingRef.current = false;
             toast.dismiss(branchToastId);
           },
         },

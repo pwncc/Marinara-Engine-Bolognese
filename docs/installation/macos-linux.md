@@ -192,7 +192,7 @@ Then run this command:
 
 ## Optional background remover
 
-Marinara can remove the background from character sprite images. A sprite is a character picture used in Roleplay and Game modes. The built-in cleanup works on its own, so this step is optional. Installing the extra background remover gives stronger results but downloads large files.
+Marinara can remove the background from character sprite images. A sprite is a character picture used in Roleplay and Game modes. Native transparency and built-in adaptive matte cleanup work without this download. Install the extra AI remover only if you also need a fallback for sprites made against detailed scenery, shadows, or other non-flat backgrounds; it downloads large files.
 
 The extra tool is a Python program. Installing it creates a Python venv (a virtual environment, a private folder that holds Python packages). It also downloads PyTorch, a machine learning library. Finally it downloads the U2Net models, the files that find the subject in an image.
 

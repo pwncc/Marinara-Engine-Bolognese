@@ -46,6 +46,7 @@ import { ConvoProfileFields } from "./ConvoProfileFields";
 import { useUIStore } from "../../stores/ui.store";
 import { lorebookKeys, useLorebook } from "../../hooks/use-lorebooks";
 import { useConnections } from "../../hooks/use-connections";
+import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { SpriteGenerationModal } from "../ui/SpriteGenerationModal";
 import { AvatarGenerationModal } from "../ui/AvatarGenerationModal";
@@ -1943,7 +1944,7 @@ function DialogueTab({
           rows={10}
           title="Example Dialogue"
           className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-4 font-mono text-xs leading-relaxed outline-none placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
-          placeholder={"<START>\n{{user}}: Hello!\n{{char}}: *waves excitedly* Hey there!"}
+          placeholder={"<START>\n{{user}}: Hello!\n{{char}}: *Waves excitedly.* Hey there!"}
         />
       </div>
     </div>
@@ -2281,7 +2282,7 @@ function CharacterGalleryTab({ characterId, characterName }: { characterId: stri
                       <button
                         type="button"
                         onClick={() => void handleDelete(image)}
-	                        className="rounded-lg bg-white/15 p-1.5 text-white transition-colors hover:bg-white/25"
+                        className="rounded-lg bg-white/15 p-1.5 text-white transition-colors hover:bg-white/25"
                         title="Delete"
                       >
                         <Trash2 size="0.75rem" />
@@ -3119,6 +3120,10 @@ function SpritesTab({
 
   const { data: sprites, isLoading } = useCharacterSprites(characterId);
   const { data: spriteCapabilities } = useSpriteCapabilities();
+  const { data: installedCapabilities = [] } = useInstalledCapabilityPackages(true);
+  const conversationCallsInstalled = installedCapabilities.some(
+    (item) => item.status === "active" && item.manifest.kind.includes("conversation-calls"),
+  );
   const uploadSprite = useUploadSprite();
   const deleteSprite = useDeleteSprite();
   const exportSprites = useExportSprites();
@@ -3165,16 +3170,13 @@ function SpritesTab({
   const spriteGenerationReason = spriteCapabilities?.reason ?? "Sprite generation is unavailable on this platform.";
   const backgroundCleanupUnavailable = spriteCapabilities?.backgroundRemovalAvailable === false;
   const backgroundCleanupReason = spriteCapabilities?.reason ?? "Background cleanup is unavailable on this platform.";
-  const backgroundRemoverUnavailable = spriteCapabilities?.backgroundRemover?.installed === false;
-  const backgroundRemoverReason =
-    spriteCapabilities?.backgroundRemover?.reason ?? "Local backgroundremover is not installed.";
 
   const categoryTabs = (
     <div className="inline-flex rounded-xl bg-[var(--secondary)] p-1 ring-1 ring-[var(--border)]">
       {[
         { id: "expressions" as const, label: "Facial Expressions" },
         { id: "full-body" as const, label: "Full-body" },
-        { id: "clips" as const, label: "Clips" },
+        ...(conversationCallsInstalled ? [{ id: "clips" as const, label: "Clips" }] : []),
       ].map((tab) => (
         <button
           key={tab.id}
@@ -3367,10 +3369,10 @@ function SpritesTab({
         setLastCleanupBackupId(result.backupId ?? null);
         const engineDetails =
           result.backgroundRemoverProcessed && result.builtinProcessed
-            ? ` with backgroundremover and built-in fallback`
+            ? ` with automatic matte cleanup and AI fallback`
             : result.backgroundRemoverProcessed
-              ? ` with backgroundremover`
-              : ` with built-in cleanup`;
+              ? ` with AI fallback`
+              : ` with automatic matte cleanup`;
         toast.success(`Cleaned ${result.processed} saved sprite${result.processed === 1 ? "" : "s"}${engineDetails}.`);
       }
       if (result.failed.length > 0) {
@@ -3600,7 +3602,7 @@ function SpritesTab({
         {cleaningSprites && (
           <div className="flex items-center gap-2 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs text-[var(--muted-foreground)]">
             <Loader2 size="0.75rem" className="animate-spin text-[var(--primary)]" />
-            Running local backgroundremover on saved sprites…
+            Applying automatic matte cleanup to saved sprites…
           </div>
         )}
         {lastCleanupBackupId && (
@@ -3625,11 +3627,6 @@ function SpritesTab({
         {backgroundCleanupUnavailable && !spriteGenerationUnavailable && (
           <div className="rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs text-[var(--muted-foreground)]">
             {backgroundCleanupReason}
-          </div>
-        )}
-        {backgroundRemoverUnavailable && !backgroundCleanupUnavailable && (
-          <div className="rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs text-[var(--muted-foreground)]">
-            {backgroundRemoverReason}
           </div>
         )}
         <div className="flex gap-2">
@@ -4108,8 +4105,17 @@ function ColorsTab({
       <div className="rounded-xl border border-[var(--border)] bg-black/30 p-4 space-y-3">
         <p className="text-[0.625rem] font-medium uppercase tracking-widest text-[var(--muted-foreground)]">Preview</p>
         <div className="flex gap-3">
-          <div className="mari-chrome-accent-tile mari-accent-animated flex h-10 w-10 shrink-0 items-center justify-center rounded-full ring-2 ring-[var(--marinara-chat-chrome-button-border-active)]">
-            <User size="1rem" className="text-white" />
+          <div className="mari-chrome-accent-tile mari-accent-animated flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full ring-2 ring-[var(--marinara-chat-chrome-button-border-active)]">
+            {avatarUrl ? (
+              <img
+                src={avatarUrl}
+                alt={`${formData.name || "Character"} avatar preview`}
+                className="h-full w-full object-cover"
+                style={getAvatarCropStyle(formData.extensions.avatarCrop as AvatarCrop | LegacyAvatarCrop | undefined)}
+              />
+            ) : (
+              <User size="1rem" className="text-white" />
+            )}
           </div>
           <div className="flex-1 space-y-1">
             <span
@@ -4137,9 +4143,9 @@ function ColorsTab({
               className="rounded-2xl rounded-tl-sm px-4 py-3 text-[0.8125rem] leading-[1.8] backdrop-blur-md ring-1 ring-white/8"
               style={boxColor ? { backgroundColor: boxColor } : { backgroundColor: "rgba(255,255,255,0.08)" }}
             >
-              <span className="text-white/90">*She looks at you with a warm smile.* </span>
+              <span className="text-white/90">They jump down, landing behind you, and straighten up. </span>
               <strong style={dialogueColor ? { color: dialogueColor } : { color: "rgb(255, 255, 255)" }}>
-                &ldquo;Hello there! How are you?&rdquo;
+                &ldquo;Hello there.&rdquo;
               </strong>
             </div>
           </div>

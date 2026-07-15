@@ -17,6 +17,8 @@ You might edit configuration when you want to:
 
 Almost everything else, like your AI provider keys, characters, and chat options, is set inside the app, not here. To add an AI provider, see [Connecting to an AI Provider](connections/connecting-to-a-provider.md).
 
+Optional first-party agents are also managed inside the app. Open **Agents → Download Agents** to install, update, or uninstall them. Package sources, manifests, artifacts, and the complete catalog live in [Pasta-Devs/Marinara-Agents](https://github.com/Pasta-Devs/Marinara-Agents). Installed packages live under `DATA_DIR/capability-packages`, so Docker volumes, custom data directories, backups, and normal upgrades preserve them. Installed packages work offline; catalog browsing and installation require outbound HTTPS access to that official repository. Server-runtime package changes require a full Marinara restart.
+
 ## Where the .env file is
 
 Configuration lives in a file named `.env`. This is a plain text file with one setting per line, in the form `KEY=value`. Lines that start with `#` are comments and the server ignores them.
@@ -46,7 +48,7 @@ A small group of low-level settings are locked in when the server starts. Changi
 
 - `PORT`, `HOST`
 - `SSL_CERT`, `SSL_KEY`
-- `DATA_DIR`, `STORAGE_BACKEND`, `FILE_STORAGE_DIR`, `DATABASE_URL`
+- `DATA_DIR`, `FILE_STORAGE_DIR`
 - `ENCRYPTION_KEY`
 - `MARINARA_ENV_FILE`
 - `TZ`
@@ -98,12 +100,10 @@ Storage settings control where your local data lives. Your data includes chats, 
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `DATA_DIR` | `packages/server/data` | Root folder for all user data. Docker images set `/app/data`. |
-| `STORAGE_BACKEND` | `files` | Storage engine. `files` stores data as files under `DATA_DIR/storage`. Use `sqlite` for the legacy database. |
 | `FILE_STORAGE_DIR` | the `storage` folder inside `DATA_DIR` | Overrides the file-storage folder. |
-| `DATABASE_URL` | `file:./data/marinara-engine.db` | Legacy SQLite source path. Used only to import old data on first run. |
 | `ENCRYPTION_KEY` | empty | Key used to encrypt saved API keys. Generate one with the command below. |
 
-The default `files` backend keeps your data as plain files. This makes backups easy to copy and inspect. You do not need to change `STORAGE_BACKEND` unless you are migrating an older SQLite install.
+Marinara keeps your data as plain JSON files. This makes backups easy to copy and inspect.
 
 To generate an encryption key, run this command and paste the result into `ENCRYPTION_KEY`:
 
@@ -216,7 +216,7 @@ This section lists the remaining settings, grouped by purpose. The tables above 
 | `HOST` | `127.0.0.1` (`0.0.0.0` in the shell launchers) | The network interface to bind. Use `0.0.0.0` for LAN access. |
 | `AUTO_OPEN_BROWSER` | `true` | Whether the shell launchers open the app URL for you. Set `false` to stop this. |
 | `MARINARA_ENV_FILE` | project-root `.env` | Optional path override for the `.env` file. Set it before startup. |
-| `TZ` | system default | IANA timezone used by time-based features like character schedules. |
+| `TZ` | system default | Optional IANA timezone used by server-side schedules. Leave it unset to inherit the host timezone; an empty `TZ=` is also treated as unset. |
 | `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Browser origins allowed to make cross-origin requests. |
 | `AUTO_CREATE_DEFAULT_CONNECTION` | `true` | Legacy flag. Current builds bundle no starter key, so this creates nothing. Add your own connection in the app. |
 
@@ -228,7 +228,7 @@ This section lists the remaining settings, grouped by purpose. The tables above 
 | --- | --- | --- |
 | `FFMPEG_PATH` | empty | Path to an `ffmpeg` program. Used for animated expression GIFs. Falls back to `ffmpeg` on your PATH. |
 | `SPRITE_ANIMATED_FFMPEG_TIMEOUT_MS` | `180000` (3 minutes) | Time allowed to convert one animated expression clip. |
-| `SPRITE_BACKGROUND_REMOVAL_ENGINE` | `auto` | Sprite cleanup engine. `auto`, `builtin`, or `backgroundremover`. |
+| `SPRITE_BACKGROUND_REMOVAL_ENGINE` | `auto` | Sprite cleanup engine. `auto` tries adaptive matte cleanup before the optional AI fallback; `builtin` keeps only the matte path; `backgroundremover` forces the AI tool. |
 | `BACKGROUNDREMOVER_AUTO_INSTALL` | `false` | When `true`, installs the optional AI background remover on launch. |
 | `BACKGROUNDREMOVER_COMMAND` | empty | Path to a system `backgroundremover` program. |
 | `BACKGROUNDREMOVER_PYTHON` | empty | Path to a Python program where `backgroundremover` is installed. |

@@ -17,7 +17,7 @@ import { requestChatScrollToBottom } from "../lib/chat-scroll-events";
 import { startSceneWithPromptPreferences } from "../lib/scene-generation";
 import { agentKeys } from "./use-agents";
 import { discardPendingGameStatePatch } from "./use-game-state-patcher";
-import { turnGameKeys } from "./turn-game-keys";
+import { spatialContextKeys } from "./use-spatial-context";
 import type { PendingAgentWriteApproval, PendingCardUpdate } from "../stores/agent.store";
 import type { DelayedCharacterInfo } from "../stores/chat.store";
 import {
@@ -33,6 +33,8 @@ import {
   type EditableCharacterCardField,
   type MariGuidedPlanStep,
   type MariSuggestionChip,
+  type PendingSpatialTransition,
+  type SpatialContextResponse,
   type ThinkingTagPair,
 } from "@marinara-engine/shared";
 
@@ -72,10 +74,9 @@ function showAgentFailuresError(failures: AgentFailure[], onRetry?: () => void) 
 }
 
 const shownAgentWarnings = new Set<string>();
-const BUILT_IN_AGENT_TYPE_SET = new Set(BUILT_IN_AGENTS.map((agent) => agent.id));
-const BUILT_IN_TRACKER_AGENT_TYPE_SET = new Set(
-  BUILT_IN_AGENTS.filter((agent) => agent.category === "tracker" && !agent.libraryHidden).map((agent) => agent.id),
-);
+const isBuiltInAgentType = (agentType: string) => BUILT_IN_AGENTS.some((agent) => agent.id === agentType);
+const isBuiltInTrackerAgentType = (agentType: string) =>
+  BUILT_IN_AGENTS.some((agent) => agent.id === agentType && agent.category === "tracker" && !agent.libraryHidden);
 
 type AgentWarningToastData = {
   code?: unknown;
@@ -261,6 +262,68 @@ function latestAssistantMessage(messages: Iterable<Message>): Message | null {
   return latest;
 }
 
+function resolveNotifiedCharacterId(
+  message: Message | null,
+  forCharacterId: string | undefined,
+  fallbackCharacterId: string | null,
+): string | null {
+  return message?.characterId ?? forCharacterId ?? fallbackCharacterId;
+}
+
+function getCachedMessages(qc: QueryClient, chatId: string): Message[] {
+  return qc.getQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId))?.pages.flat() ?? [];
+}
+
+function assistantMessageFingerprint(message: Message): string {
+  return JSON.stringify([
+    message.content,
+    message.activeSwipeIndex,
+    message.swipeCount ?? null,
+    message.extra?.displayText ?? null,
+    message.extra?.proseGuardianRewrittenAt ?? null,
+  ]);
+}
+
+type AssistantMessageSnapshot = {
+  cacheWasLoaded: boolean;
+  fingerprints: ReadonlyMap<string, string>;
+};
+
+function snapshotAssistantMessages(qc: QueryClient, chatId: string): AssistantMessageSnapshot {
+  const cached = qc.getQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId));
+  return {
+    cacheWasLoaded: cached !== undefined,
+    fingerprints: new Map(
+      (cached?.pages.flat() ?? [])
+        .filter((message) => message.role === "assistant")
+        .map((message) => [message.id, assistantMessageFingerprint(message)]),
+    ),
+  };
+}
+
+function latestChangedAssistantMessage(
+  qc: QueryClient,
+  chatId: string,
+  snapshot: AssistantMessageSnapshot,
+): Message | null {
+  if (!snapshot.cacheWasLoaded) return null;
+  return latestAssistantMessage(
+    getCachedMessages(qc, chatId).filter(
+      (message) =>
+        message.role === "assistant" && snapshot.fingerprints.get(message.id) !== assistantMessageFingerprint(message),
+    ),
+  );
+}
+
+function replyNotificationTitle(mode: Chat["mode"] | undefined, characterName: string | null): string | undefined {
+  if (mode === "game") return "Game turn is ready";
+  if (characterName) return undefined;
+  if (mode === "roleplay") return "Roleplay reply is ready";
+  if (mode === "visual_novel") return "Visual Novel reply is ready";
+  if (mode === "conversation") return "New message is ready";
+  return "Reply is ready";
+}
+
 /**
  * Build one or more PendingCardUpdate batches from a character_card_update
  * agent result. Each batch is scoped to a single characterId so the approval
@@ -419,12 +482,6 @@ import { useChatStore } from "../stores/chat.store";
 import { useAgentStore } from "../stores/agent.store";
 import { useGameModeStore } from "../stores/game-mode.store";
 import { useGameStateStore } from "../stores/game-state.store";
-import { useUnoGameStore } from "../stores/uno-game.store";
-import { useChessGameStore } from "../stores/chess-game.store";
-import { usePokerGameStore } from "../stores/poker-game.store";
-import { useEightBallGameStore } from "../stores/eightball-game.store";
-import { useTicTacToeGameStore } from "../stores/tic-tac-toe-game.store";
-import { useRockPaperScissorsGameStore } from "../stores/rock-paper-scissors-game.store";
 import { useTranslationStore } from "../stores/translation.store";
 import { useUIStore } from "../stores/ui.store";
 import {
@@ -438,9 +495,9 @@ import { characterKeys } from "./use-characters";
 import { connectionKeys } from "./use-connections";
 import { lorebookKeys } from "./use-lorebooks";
 import { presetKeys } from "./use-presets";
-import { conversationCallKeys } from "./use-conversation-calls";
 import { playConfiguredNotificationPing } from "../lib/notification-sound";
-import { playConversationCallRingingSoundOnce } from "../lib/conversation-call-sounds";
+import { showLocalMessageNotification, showNativeMessageNotification } from "../lib/local-notifications";
+import { dispatchCapabilityClientEvent } from "../lib/capability-client-events";
 import { messageHasPendingPostProcessing } from "../lib/chat-message-extra";
 import { stripGmTagsKeepReadables } from "../lib/game-tag-parser";
 import type { APIConnection, Chat, GameMap, Message } from "@marinara-engine/shared";
@@ -1030,6 +1087,8 @@ export function useGenerate() {
       impersonatePromptTemplate?: string;
       /** When true, this generation drives the active turn-game's bot seats instead of a chat reply. */
       turnGameBots?: boolean;
+      /** Structured Roleplay/Game movement committed atomically with this owner turn. */
+      pendingSpatialTransition?: PendingSpatialTransition;
     }) => {
       // Prevent concurrent generations for the same chat. Different chats may
       // keep generating in the background while the user navigates elsewhere.
@@ -1079,6 +1138,7 @@ export function useGenerate() {
       // message after it is upserted into the cache. Cancel early so the
       // post-save refresh owns the query lifecycle for this generation.
       await qc.cancelQueries({ queryKey: chatKeys.messages(params.chatId), exact: true });
+      const assistantMessagesBeforeGeneration = snapshotAssistantMessages(qc, params.chatId);
       if (params.regenerateMessageId) {
         forgetRecentMessageContentEdit(params.chatId, params.regenerateMessageId);
       }
@@ -1086,7 +1146,7 @@ export function useGenerate() {
       const pendingAttachments = params.attachments ?? [];
 
       // Optimistically show the user message in the chat immediately
-      if ((params.userMessage || pendingAttachments.length > 0) && !params.impersonate) {
+      if ((params.userMessage || pendingAttachments.length > 0 || params.pendingSpatialTransition) && !params.impersonate) {
         // Build persona snapshot for per-message persona tracking
         const cachedPersonas = qc.getQueryData<
           Array<{
@@ -1188,6 +1248,8 @@ export function useGenerate() {
       let gameTurnLoadedSoundPlayed = false;
       let sawDoneEvent = false;
       let passiveStreamRecovered = false;
+      let spatialTransitionCommitted = false;
+      let passiveStreamSettled = false;
       let typingActive = false;
       let typewriterDone: (() => void) | null = null;
       let rafId = 0;
@@ -1433,6 +1495,21 @@ export function useGenerate() {
           abortController.signal,
         )) {
           switch (event.type) {
+            case "spatial_transition_committed": {
+              const transitionData = event.data as
+                | { chatId?: string; commandId?: string; currentLocationId?: string; definitionRevision?: number }
+                | undefined;
+              if (transitionData?.chatId === params.chatId && transitionData.commandId) {
+                spatialTransitionCommitted = true;
+                useChatStore
+                  .getState()
+                  .clearPendingSpatialTransition(params.chatId, transitionData.commandId);
+                void qc.invalidateQueries({ queryKey: spatialContextKeys.detail(params.chatId) });
+                void qc.invalidateQueries({ queryKey: chatKeys.detail(params.chatId) });
+              }
+              break;
+            }
+
             case "token": {
               const isFirstToken = !receivedContent;
               receivedContent = true;
@@ -1839,37 +1916,14 @@ export function useGenerate() {
             }
 
             case "turn_game_state_patch": {
-              // The payload carries a gameType discriminator — route it to the matching
-              // board store only; a view from one game rendered by another board crashes.
               const turnGameType = (event.data as { gameType?: string } | null)?.gameType;
-              if (!isActiveChat()) {
-                // A background chat's board can't be painted, but a silently
-                // dropped patch leaves a stale snapshot that blocks re-hydration
-                // on switch-back (the state query is disabled while a snapshot
-                // exists). Drop the snapshot and mark the query stale so
-                // returning to the chat refetches the board.
-                if (turnGameType === "chess") useChessGameStore.getState().clearChess(params.chatId);
-                else if (turnGameType === "uno") useUnoGameStore.getState().clearUno(params.chatId);
-                else if (turnGameType === "poker") usePokerGameStore.getState().clearPoker(params.chatId);
-                else if (turnGameType === "eightball") useEightBallGameStore.getState().clearEightBall(params.chatId);
-                else if (turnGameType === "tic-tac-toe") useTicTacToeGameStore.getState().clearTicTacToe(params.chatId);
-                else if (turnGameType === "rock-paper-scissors")
-                  useRockPaperScissorsGameStore.getState().clearRockPaperScissors(params.chatId);
-                void qc.invalidateQueries({ queryKey: turnGameKeys.state(params.chatId) });
-                break;
-              }
-              if (turnGameType === "chess") {
-                useChessGameStore.getState().setChess(event.data as never, params.chatId);
-              } else if (turnGameType === "uno") {
-                useUnoGameStore.getState().setUno(event.data as never, params.chatId);
-              } else if (turnGameType === "poker") {
-                usePokerGameStore.getState().setPoker(event.data as never, params.chatId);
-              } else if (turnGameType === "eightball") {
-                useEightBallGameStore.getState().setEightBall(event.data as never, params.chatId);
-              } else if (turnGameType === "tic-tac-toe") {
-                useTicTacToeGameStore.getState().setTicTacToe(event.data as never, params.chatId);
-              } else if (turnGameType === "rock-paper-scissors") {
-                useRockPaperScissorsGameStore.getState().setRockPaperScissors(event.data as never, params.chatId);
+              if (turnGameType) {
+                dispatchCapabilityClientEvent({
+                  packageId: turnGameType,
+                  type: event.type,
+                  chatId: params.chatId,
+                  data: event.data,
+                });
               }
               break;
             }
@@ -2142,15 +2196,18 @@ export function useGenerate() {
                     ? session.metadata.reason
                     : null;
 
-              qc.invalidateQueries({ queryKey: conversationCallKeys.status(callChatId) });
+              dispatchCapabilityClientEvent({
+                packageId: "conversation-calls",
+                type: event.type,
+                chatId: callChatId,
+                data: event.data,
+              });
               if (callChatId === params.chatId) {
                 invalidateCurrentMessagesIfSafe();
               } else {
                 qc.invalidateQueries({ queryKey: chatKeys.messages(callChatId) });
               }
               qc.invalidateQueries({ queryKey: chatKeys.list() });
-
-              playConversationCallRingingSoundOnce(callId);
 
               if (callId && !isChatSurfaceVisible(callChatId)) {
                 const identity = resolveCachedCharacterIdentity(qc, characterId);
@@ -2488,11 +2545,12 @@ export function useGenerate() {
         flushLeadingSpeakerPrefix();
         flushTypewriterBuffer();
         // Abort is intentional — don't log or toast
-        if (isAbortError(error)) return receivedContent;
+        if (isAbortError(error)) return receivedContent || spatialTransitionCommitted;
         if (isPassiveStreamDisconnect(error, pageWasHiddenDuringStream, abortController.signal)) {
           passiveStreamRecovered = true;
           if (isActiveChat()) useChatStore.getState().setGenerationPhase("Finishing in background...");
           const settled = await waitForServerGenerationToSettle(params.chatId, abortController.signal);
+          passiveStreamSettled = settled;
           if (!abortController.signal.aborted) {
             await refreshMessagesAuthoritatively(qc, params.chatId, persistedMessages.values());
             if (!settled) {
@@ -2501,11 +2559,38 @@ export function useGenerate() {
               );
             }
           }
-          return abortController.signal.aborted ? receivedContent : true;
+          return abortController.signal.aborted ? receivedContent || spatialTransitionCommitted : true;
+        }
+        if (params.pendingSpatialTransition) {
+          const payload = error instanceof ApiError && error.payload && typeof error.payload === "object"
+            ? (error.payload as Record<string, unknown>)
+            : null;
+          const spatialErrorCode = typeof payload?.code === "string" ? payload.code : null;
+          if (spatialErrorCode === "spatial_transition_already_applied") {
+            spatialTransitionCommitted = true;
+          } else if (!spatialErrorCode?.startsWith("spatial_")) {
+            try {
+              const current = await api.get<SpatialContextResponse>(`/chats/${params.chatId}/spatial-context`);
+              qc.setQueryData(spatialContextKeys.detail(params.chatId), current);
+              spatialTransitionCommitted =
+                current.currentLocationId === params.pendingSpatialTransition.destinationId;
+            } catch {
+              /* Preserve the pending command when current state cannot be confirmed. */
+            }
+          }
+          if (spatialTransitionCommitted) {
+            useChatStore
+              .getState()
+              .clearPendingSpatialTransition(params.chatId, params.pendingSpatialTransition.commandId);
+            void qc.invalidateQueries({ queryKey: chatKeys.detail(params.chatId) });
+            return true;
+          }
+          useChatStore.getState().setPendingSpatialTransitionStatus(params.chatId, "needs_review");
         }
         const msg = error instanceof Error ? error.message : "Generation failed";
         showError(msg);
         window.dispatchEvent(new CustomEvent("marinara:generation-error", { detail: { chatId: params.chatId } }));
+        return false;
       } finally {
         // Stream has terminated (done, error, abort, or unexpected throw) —
         // guarantee the Mari indicator clears even if the end SSE never arrived.
@@ -2569,7 +2654,11 @@ export function useGenerate() {
                 ? rawIds
                 : [];
           const notifiedMessage = latestAssistantMessage(persistedMessages.values());
-          const notifiedCharacterId = notifiedMessage?.characterId ?? parsedIds[0] ?? null;
+          const notifiedCharacterId = resolveNotifiedCharacterId(
+            notifiedMessage,
+            params.forCharacterId,
+            parsedIds[0] ?? null,
+          );
           if (notifiedCharacterId) {
             const identity = resolveCachedCharacterIdentity(qc, notifiedCharacterId);
             useChatStore
@@ -2701,6 +2790,45 @@ export function useGenerate() {
           }
         }
 
+        const completedReply =
+          !abortController.signal.aborted &&
+          !params.impersonate &&
+          !params.turnGameBots &&
+          ((sawDoneEvent && receivedContent) || passiveStreamSettled);
+        if (completedReply) {
+          const notifiedMessage =
+            latestAssistantMessage(persistedForRefresh) ??
+            latestChangedAssistantMessage(qc, params.chatId, assistantMessagesBeforeGeneration);
+          if (notifiedMessage) {
+            const chat = getCachedChatForGeneration(qc, params.chatId);
+            const fallbackCharacterId = parseChatCharacterIds(chat?.characterIds)[0] ?? null;
+            const notifiedCharacterId = resolveNotifiedCharacterId(
+              notifiedMessage,
+              params.forCharacterId,
+              fallbackCharacterId,
+            );
+            const characterName = notifiedCharacterId ? getCachedCharacterName(qc, notifiedCharacterId) : null;
+            const uiState = useUIStore.getState();
+            const notification = {
+              characterName,
+              title: replyNotificationTitle(chat?.mode ?? chatModeForGeneration, characterName),
+              tag: `marinara-chat-${params.chatId}`,
+            };
+            void showLocalMessageNotification({
+              ...notification,
+              enabled: params.autonomous
+                ? uiState.conversationBrowserNotifications
+                : uiState.generationBrowserNotifications,
+            });
+            showNativeMessageNotification({
+              ...notification,
+              enabled: params.autonomous
+                ? uiState.conversationMobileNotifications
+                : uiState.generationMobileNotifications,
+            });
+          }
+        }
+
         // Always notify game surface that generation completed for this chat.
         // Dispatched unconditionally — GameSurface uses lastProcessedMsgRef
         // to prevent duplicate processing.
@@ -2762,7 +2890,7 @@ export function useGenerate() {
           }
         }
       }
-      return receivedContent || passiveStreamRecovered;
+      return receivedContent || passiveStreamRecovered || spatialTransitionCommitted;
     },
     [
       qc,
@@ -2814,7 +2942,7 @@ export function useGenerate() {
       }
       useChatStore.getState().setAbortController(chatId, abortController);
       const isTrackerRetry = agentTypes.some(
-        (agentType) => BUILT_IN_TRACKER_AGENT_TYPE_SET.has(agentType) || !BUILT_IN_AGENT_TYPE_SET.has(agentType),
+        (agentType) => isBuiltInTrackerAgentType(agentType) || !isBuiltInAgentType(agentType),
       );
       setProcessing(true, chatId);
       if (isTrackerRetry) useGameStateStore.getState().setRefreshingChat(chatId);
@@ -3061,37 +3189,9 @@ export function useGenerate() {
               break;
             }
             case "turn_game_state_patch": {
-              // The payload carries a gameType discriminator — route it to the matching
-              // board store only; a view from one game rendered by another board crashes.
               const turnGameType = (event.data as { gameType?: string } | null)?.gameType;
-              if (!isActiveChat()) {
-                // A background chat's board can't be painted, but a silently
-                // dropped patch leaves a stale snapshot that blocks re-hydration
-                // on switch-back (the state query is disabled while a snapshot
-                // exists). Drop the snapshot and mark the query stale so
-                // returning to the chat refetches the board.
-                if (turnGameType === "chess") useChessGameStore.getState().clearChess(chatId);
-                else if (turnGameType === "uno") useUnoGameStore.getState().clearUno(chatId);
-                else if (turnGameType === "poker") usePokerGameStore.getState().clearPoker(chatId);
-                else if (turnGameType === "eightball") useEightBallGameStore.getState().clearEightBall(chatId);
-                else if (turnGameType === "tic-tac-toe") useTicTacToeGameStore.getState().clearTicTacToe(chatId);
-                else if (turnGameType === "rock-paper-scissors")
-                  useRockPaperScissorsGameStore.getState().clearRockPaperScissors(chatId);
-                void qc.invalidateQueries({ queryKey: turnGameKeys.state(chatId) });
-                break;
-              }
-              if (turnGameType === "chess") {
-                useChessGameStore.getState().setChess(event.data as never, chatId);
-              } else if (turnGameType === "uno") {
-                useUnoGameStore.getState().setUno(event.data as never, chatId);
-              } else if (turnGameType === "poker") {
-                usePokerGameStore.getState().setPoker(event.data as never, chatId);
-              } else if (turnGameType === "eightball") {
-                useEightBallGameStore.getState().setEightBall(event.data as never, chatId);
-              } else if (turnGameType === "tic-tac-toe") {
-                useTicTacToeGameStore.getState().setTicTacToe(event.data as never, chatId);
-              } else if (turnGameType === "rock-paper-scissors") {
-                useRockPaperScissorsGameStore.getState().setRockPaperScissors(event.data as never, chatId);
+              if (turnGameType) {
+                dispatchCapabilityClientEvent({ packageId: turnGameType, type: event.type, chatId, data: event.data });
               }
               break;
             }
