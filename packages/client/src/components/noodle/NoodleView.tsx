@@ -30,7 +30,6 @@ import {
   User,
   UserMinus,
   UserPlus,
-  Globe2,
 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
