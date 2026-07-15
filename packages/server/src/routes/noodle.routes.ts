@@ -766,6 +766,7 @@ function filterExcludedNoodleAccounts(bootstrap: NoodleBootstrap, settings: Nood
 async function bootstrapVisibleNoodle(
   noodle: ReturnType<typeof createNoodleStorage>,
   characters: ReturnType<typeof createCharactersStorage>,
+  viewerPersonaId?: string | null,
 ) {
   const settings = await noodle.getSettings();
   const livePersonaIds = await ensurePersonaAccounts(noodle, characters);
@@ -786,7 +787,52 @@ async function bootstrapVisibleNoodle(
       syncIdentity: true,
     });
   }
-  return filterExcludedNoodleAccounts(filterStalePersonaAccounts(await noodle.bootstrap(), livePersonaIds), settings);
+  const viewerAccount = viewerPersonaId ? await resolvePersonaAccount(noodle, characters, viewerPersonaId) : null;
+  return filterPrivateNoodleBootstrapForViewer(
+    filterExcludedNoodleAccounts(filterStalePersonaAccounts(await noodle.bootstrap(), livePersonaIds), settings),
+    viewerAccount,
+  );
+}
+
+function filterPrivateNoodleBootstrapForViewer(
+  bootstrap: NoodleBootstrap,
+  viewerAccount: NoodleAccount | null,
+): NoodleBootstrap {
+  if (!bootstrap.settings.enableNoodler) return bootstrap;
+  const publicAccountIds = new Set(
+    bootstrap.accounts.filter((account) => account.visibility !== "private").map((account) => account.id),
+  );
+  const accessiblePrivateAccountIds = new Set<string>();
+  if (viewerAccount) {
+    for (const account of bootstrap.accounts) {
+      if (account.visibility !== "private") continue;
+      if (account.kind === "persona" && account.entityId === viewerAccount.entityId) {
+        accessiblePrivateAccountIds.add(account.id);
+        continue;
+      }
+      if (account.kind === "character" && !isNoodleAccountHiddenFromViewer(account, viewerAccount.id)) {
+        accessiblePrivateAccountIds.add(account.id);
+      }
+    }
+    for (const subscription of bootstrap.subscriptions) {
+      if (subscription.subscriberAccountId === viewerAccount.id) accessiblePrivateAccountIds.add(subscription.creatorAccountId);
+    }
+  }
+  const visibleAccountIds = new Set([...publicAccountIds, ...accessiblePrivateAccountIds]);
+  const visiblePosts = bootstrap.posts.filter((post) => visibleAccountIds.has(post.authorAccountId));
+  const visiblePostIds = new Set(visiblePosts.map((post) => post.id));
+  return {
+    ...bootstrap,
+    accounts: bootstrap.accounts.filter((account) => visibleAccountIds.has(account.id)),
+    posts: visiblePosts,
+    interactions: bootstrap.interactions.filter((interaction) => visiblePostIds.has(interaction.postId)),
+    subscriptions: bootstrap.subscriptions.filter(
+      (subscription) =>
+        visibleAccountIds.has(subscription.creatorAccountId) && visibleAccountIds.has(subscription.subscriberAccountId),
+    ),
+    postUnlocks: bootstrap.postUnlocks.filter((unlock) => visibleAccountIds.has(unlock.accountId)),
+    digests: bootstrap.digests.filter((digest) => digest.accountIds.every((accountId) => visibleAccountIds.has(accountId))),
+  };
 }
 
 const NOODLE_CHAT_CONTEXT_MESSAGE_LIMIT = 8;
@@ -2458,8 +2504,9 @@ export async function noodleRoutes(app: FastifyInstance) {
   const characterGallery = createCharacterGalleryStorage(app.db);
   const promptOverrides = createPromptOverridesStorage(app.db);
 
-  app.get("/", async () => {
-    return bootstrapVisibleNoodle(noodle, characters);
+  app.get("/", async (req) => {
+    const viewerPersonaId = (req.query as Record<string, unknown>).viewerPersonaId;
+    return bootstrapVisibleNoodle(noodle, characters, typeof viewerPersonaId === "string" ? viewerPersonaId : null);
   });
 
   // Cursor pagination for history older than the bootstrap's fixed-size

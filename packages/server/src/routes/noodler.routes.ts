@@ -108,11 +108,9 @@ export async function noodlerRoutes(app: FastifyInstance) {
     if (!subscriber) return reply.code(404).send({ error: "Noodle subscriber not found" });
 
     const privateAccounts = await noodle.listPrivateAccounts();
-    // A private account always shares kind+entityId with the public account it's
-    // linked from, so we can split owned-vs-browsable without a reverse lookup:
-    // "persona" private accounts are the caller's own NoodleR pages, "character"
-    // ones are creators to subscribe to.
-    const owned = privateAccounts.filter((account) => account.kind === "persona");
+    const owned = privateAccounts.filter(
+      (account) => account.kind === "persona" && account.entityId === subscriber.entityId,
+    );
     // A page never leaks its own existence to itself, so hidden-from only
     // applies to accounts other than the requesting subscriber.
     const creatorAccounts = privateAccounts

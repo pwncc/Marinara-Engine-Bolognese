@@ -1,6 +1,7 @@
 // ──────────────────────────────────────────────
 // React Query: Noodle hooks
 // ──────────────────────────────────────────────
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api-client";
 import { useUIStore } from "../stores/ui.store";
@@ -52,10 +53,13 @@ function preservePollVotes(current: NoodleBootstrap | undefined, next: NoodleBoo
   return interactions === next.interactions ? next : { ...next, interactions };
 }
 
-export function useNoodle(enabled = true) {
-  return useQuery({
+export function useNoodle(viewerPersonaId?: string, enabled = true) {
+  const query = useQuery({
     queryKey: noodleKeys.bootstrap(),
-    queryFn: () => api.get<NoodleBootstrap>("/noodle"),
+    queryFn: () => {
+      const params = viewerPersonaId ? `?viewerPersonaId=${encodeURIComponent(viewerPersonaId)}` : "";
+      return api.get<NoodleBootstrap>(`/noodle${params}`);
+    },
     enabled,
     staleTime: 10_000,
     refetchInterval: enabled ? 30_000 : false,
@@ -63,6 +67,13 @@ export function useNoodle(enabled = true) {
     structuralSharing: (current, next) =>
       preservePollVotes(current as NoodleBootstrap | undefined, next as NoodleBootstrap),
   });
+  const { refetch } = query;
+
+  useEffect(() => {
+    if (enabled) void refetch();
+  }, [enabled, refetch, viewerPersonaId]);
+
+  return query;
 }
 
 export function useLoadOlderNoodlePosts() {

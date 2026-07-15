@@ -646,8 +646,10 @@ function ToggleSetting({
 export function NoodleView() {
   const selectedPersonaId = useUIStore((state) => state.noodleSelectedPersonaId) ?? "";
   const setSelectedPersonaId = useUIStore((state) => state.setNoodleSelectedPersonaId);
-  const { data, isLoading } = useNoodle();
   const { data: activePersona } = useActivePersona();
+  const noodleViewerPersonaId =
+    selectedPersonaId && selectedPersonaId !== NOODLE_GLOBAL_PERSONA_ID ? selectedPersonaId : activePersona?.id;
+  const { data, isLoading } = useNoodle(noodleViewerPersonaId);
   const { data: personasRaw } = usePersonas();
   const { data: charactersRaw } = useCharacters();
   const { data: characterGroupsRaw } = useCharacterGroups();
