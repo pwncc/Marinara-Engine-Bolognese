@@ -59,7 +59,13 @@ function seedWhisperModels() {
 }
 
 try {
-  const { compareCapabilityPackageVersions } = await import(
+  const {
+    capabilityPackageManifestSchema,
+    compareCapabilityPackageVersions,
+    getCapabilityApiCompatibilityIssue,
+    installedCapabilityPackageSchema,
+    supportedCapabilityApi,
+  } = await import(
     "../../packages/shared/src/schemas/capability-package.schema.js"
   );
   assert.equal(compareCapabilityPackageVersions("1.0.1", "1.0.0"), 1);
@@ -68,11 +74,63 @@ try {
   assert.equal(compareCapabilityPackageVersions("1.0.1", "1.0.1-beta.2"), 1);
   assert.equal(compareCapabilityPackageVersions("1.0.1-beta.10", "1.0.1-beta.2"), 1);
 
+  const legacyManifest = capabilityPackageManifestSchema.parse(installedPackage("legacy", ["agent"]).manifest);
+  assert.equal(legacyManifest.schemaVersion, 1, "Existing manifest v1 packages must remain readable");
+  assert.equal(getCapabilityApiCompatibilityIssue(legacyManifest), null);
+  assert.deepEqual(supportedCapabilityApi, { major: 1, minor: 0 });
+
+  const manifestV2 = capabilityPackageManifestSchema.parse({
+    ...legacyManifest,
+    schemaVersion: 2,
+    capabilityApi: { major: 1, minor: 0 },
+    builtAgainst: {
+      engineVersion: "2.3.0",
+      engineCommit: "a".repeat(40),
+    },
+  });
+  assert.equal(getCapabilityApiCompatibilityIssue(manifestV2), null);
+  assert.throws(
+    () =>
+      capabilityPackageManifestSchema.parse({
+        ...legacyManifest,
+        schemaVersion: 2,
+        capabilityApi: { major: 1, minor: 0 },
+      }),
+    /builtAgainst/,
+    "Manifest v2 must record exact Engine build provenance",
+  );
+
+  const unsupportedMajorManifest = capabilityPackageManifestSchema.parse({
+    ...manifestV2,
+    capabilityApi: { major: 2, minor: 0 },
+  });
+  assert.match(
+    getCapabilityApiCompatibilityIssue(unsupportedMajorManifest) ?? "",
+    /requires capability API 2\.0; this Engine supports 1\.0/,
+  );
+  const unsupportedMinorManifest = capabilityPackageManifestSchema.parse({
+    ...manifestV2,
+    capabilityApi: { major: 1, minor: 1 },
+  });
+  assert.match(
+    getCapabilityApiCompatibilityIssue(unsupportedMinorManifest) ?? "",
+    /requires capability API 1\.1; this Engine supports 1\.0/,
+  );
+
   writeRegistry([installedPackage("conversation-calls", ["agent", "conversation-calls"])]);
   seedWhisperModels();
 
   const { capabilityPackageManager } = await import(
     "../../packages/server/src/services/capability-packages/package-manager.service.js"
+  );
+  const unsupportedInstalled = installedCapabilityPackageSchema.parse({
+    ...installedPackage("future-contract", ["agent"]),
+    manifest: unsupportedMajorManifest,
+  });
+  assert.match(
+    capabilityPackageManager.runtimeBlockReason(unsupportedInstalled) ?? "",
+    /requires capability API 2\.0/,
+    "Unsupported capability APIs must be blocked before runtime import",
   );
   const removedCalls = await capabilityPackageManager.uninstall("conversation-calls");
   assert.ok(removedCalls, "Conversation Calls should be removed");

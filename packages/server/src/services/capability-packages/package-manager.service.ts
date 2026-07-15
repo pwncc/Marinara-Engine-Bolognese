@@ -8,6 +8,7 @@ import {
   capabilityCatalogSchema,
   capabilityPackageManifestSchema,
   compareCapabilityPackageVersions,
+  getCapabilityApiCompatibilityIssue,
   isInstalledCapabilityReady,
   installedCapabilityRegistrySchema,
   packagedAgentDefinitionsSchema,
@@ -58,7 +59,9 @@ function inside(root: string, candidate: string): string {
 }
 
 function runtimeBlockReason(installed: InstalledCapabilityPackage): string | null {
-  return KNOWN_INCOMPATIBLE_RUNTIMES.get(`${installed.id}@${installed.version}`) ?? null;
+  return getCapabilityApiCompatibilityIssue(installed.manifest) ??
+    KNOWN_INCOMPATIBLE_RUNTIMES.get(`${installed.id}@${installed.version}`) ??
+    null;
 }
 
 function assertNotDowngrade(current: InstalledCapabilityPackage | undefined, nextVersion: string) {
@@ -140,6 +143,8 @@ export const capabilityPackageManager = {
       ready: isInstalledCapabilityReady(installed),
       hasServer: Boolean(installed.manifest.entrypoints.server),
       hasClient: Boolean(installed.manifest.entrypoints.client),
+      capabilityApi: installed.manifest.schemaVersion === 2 ? installed.manifest.capabilityApi : null,
+      builtAgainst: installed.manifest.schemaVersion === 2 ? installed.manifest.builtAgainst : null,
       issue: installed.status === "error" || installed.readiness === "error" ? "runtime_error" : null,
     }));
   },
@@ -274,6 +279,8 @@ export const capabilityPackageManager = {
     const { manifest, artifact } = entry;
     const initiallyInstalled = (await readRegistry()).packages.find((item) => item.id === manifest.id);
     assertNotDowngrade(initiallyInstalled, manifest.version);
+    const capabilityApiIssue = getCapabilityApiCompatibilityIssue(manifest);
+    if (capabilityApiIssue) throw new Error(capabilityApiIssue);
     if (
       compareCapabilityPackageVersions(APP_VERSION, manifest.engine.min) < 0 ||
       compareCapabilityPackageVersions(APP_VERSION, manifest.engine.maxExclusive) >= 0

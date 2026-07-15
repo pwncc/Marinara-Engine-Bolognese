@@ -13,8 +13,7 @@ export const capabilityPermissionSchema = z.enum([
   "ui",
 ]);
 
-export const capabilityPackageManifestSchema = z.object({
-  schemaVersion: z.literal(1),
+const capabilityPackageManifestBaseSchema = z.object({
   id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(80),
   name: z.string().min(1).max(120),
   version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
@@ -62,6 +61,33 @@ export const capabilityPackageManifestSchema = z.object({
   permissions: z.array(capabilityPermissionSchema),
   restartRequired: z.boolean().default(false),
 }).strict();
+
+export const supportedCapabilityApi = Object.freeze({ major: 1, minor: 0 } as const);
+
+const capabilityApiVersionSchema = z.object({
+  major: z.number().int().positive(),
+  minor: z.number().int().nonnegative(),
+}).strict();
+
+const capabilityPackageBuiltAgainstSchema = z.object({
+  engineVersion: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
+  engineCommit: z.string().regex(/^[a-f0-9]{40}$/),
+}).strict();
+
+export const capabilityPackageManifestV1Schema = capabilityPackageManifestBaseSchema.extend({
+  schemaVersion: z.literal(1),
+}).strict();
+
+export const capabilityPackageManifestV2Schema = capabilityPackageManifestBaseSchema.extend({
+  schemaVersion: z.literal(2),
+  capabilityApi: capabilityApiVersionSchema,
+  builtAgainst: capabilityPackageBuiltAgainstSchema,
+}).strict();
+
+export const capabilityPackageManifestSchema = z.discriminatedUnion("schemaVersion", [
+  capabilityPackageManifestV1Schema,
+  capabilityPackageManifestV2Schema,
+]);
 
 export const capabilityCatalogPackageSchema = z.object({
   manifest: capabilityPackageManifestSchema,
@@ -136,6 +162,16 @@ export type CapabilityCatalogPackage = z.infer<typeof capabilityCatalogPackageSc
 export type CapabilityCatalog = z.infer<typeof capabilityCatalogSchema>;
 export type InstalledCapabilityPackage = z.infer<typeof installedCapabilityPackageSchema>;
 export type PackagedAgentDefinition = z.infer<typeof packagedAgentDefinitionSchema>;
+
+export function getCapabilityApiCompatibilityIssue(manifest: CapabilityPackageManifest): string | null {
+  if (manifest.schemaVersion === 1) return null;
+  const required = manifest.capabilityApi;
+  const supported = supportedCapabilityApi;
+  if (required.major !== supported.major || required.minor > supported.minor) {
+    return `Package requires capability API ${required.major}.${required.minor}; this Engine supports ${supported.major}.${supported.minor}`;
+  }
+  return null;
+}
 
 function parseCapabilityPackageVersion(value: string) {
   const prereleaseSeparator = value.indexOf("-");
