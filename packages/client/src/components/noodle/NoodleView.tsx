@@ -930,13 +930,22 @@ export function NoodleView() {
   const privateGuideAccount = privateGuideAccountId ? (accountById.get(privateGuideAccountId) ?? null) : null;
   const noodleCustomEmojiMap = useNoodleCustomEmojiMap(viewedProfileAccount);
   const viewingOwnProfile = Boolean(personaAccount && viewedProfileAccount?.id === personaAccount.id);
-  const viewingOwnPrivateAccount = Boolean(
+  const viewingOwnPersonaPrivateAccount = Boolean(
     personaAccount &&
       viewedProfileAccount?.visibility === "private" &&
+      viewedProfileAccount.kind === "persona" &&
       personaAccount.linkedAccountId === viewedProfileAccount.id,
   );
+  const viewingOwnCharacterPrivateAccount = Boolean(
+    viewedProfileAccount?.visibility === "private" && viewedProfileAccount.kind === "character",
+  );
+  const viewingOwnPrivateAccount = Boolean(
+    viewingOwnPersonaPrivateAccount || viewingOwnCharacterPrivateAccount,
+  );
   const canEditViewedProfile = Boolean(
-    viewingOwnProfile || (viewedProfileAccount?.kind === "character" && viewedProfileAccount.invited),
+    viewingOwnProfile ||
+      viewingOwnPrivateAccount ||
+      (viewedProfileAccount?.kind === "character" && viewedProfileAccount.invited),
   );
   const personaLinkedNoodlerAccount = personaAccount?.linkedAccountId
     ? (accountById.get(personaAccount.linkedAccountId) ?? null)
@@ -2425,14 +2434,14 @@ export function NoodleView() {
   };
 
   const submitPrivatePost = () => {
-    if (!personaAccount || !viewedProfileAccount || !viewingOwnPrivateAccount) return;
+    if (!viewedProfileAccount || !viewingOwnPrivateAccount) return;
     const content = privateComposerText.trim() || "Shared an image.";
     if (!content && !privateComposerImageUrl.trim()) return;
     const ppvPrice = privateComposerAccess === "ppv" ? Number.parseFloat(privateComposerPpvPrice) : NaN;
     createPost.mutate(
       {
-        authorKind: "persona",
-        authorEntityId: personaAccount.entityId,
+        authorKind: viewedProfileAccount.kind,
+        authorEntityId: viewedProfileAccount.entityId,
         authorAccountId: viewedProfileAccount.id,
         content,
         imageUrl: privateComposerImageUrl.trim() || null,

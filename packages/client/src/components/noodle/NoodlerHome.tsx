@@ -904,7 +904,7 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
         canSaveProfile={canSaveProfile}
         updateAccountPending={updateAccountPending}
         nonEditAction={
-          viewedProfileAccount ? (
+          viewedProfileAccount && !viewingOwnPrivateAccount ? (
             <button
               type="button"
               onClick={() => onToggleSubscription(viewedProfileAccount.id)}
@@ -968,19 +968,27 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
       />
 
       {viewingOwnPrivateAccount && viewedProfileAccount && (
-        <div className="border-t border-[var(--noodle-divider)] p-4">
-          <div className="mb-4">
-            <h4 className="text-sm font-bold text-[var(--foreground)]">NoodleR creator tools</h4>
-            <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-              Generate a post with AI, or post manually. Timeline refreshes will not post here automatically. Stage
-              identity, subscription pricing, and fan activity live in NoodleR settings now.
-            </p>
-          </div>
+        <div className="border-t border-[var(--noodle-divider)] px-4 py-3">
+          <details className="group rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)]/60" open>
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-bold text-[var(--foreground)] marker:hidden [&::-webkit-details-marker]:hidden">
+              <span>NoodleR creator tools</span>
+              <span className="text-[0.65rem] font-semibold uppercase tracking-wide text-[var(--muted-foreground)] group-open:hidden">
+                Open
+              </span>
+              <span className="hidden text-[0.65rem] font-semibold uppercase tracking-wide text-[var(--muted-foreground)] group-open:inline">
+                Hide
+              </span>
+            </summary>
+            <div className="space-y-3 border-t border-[var(--noodle-divider)] p-3 pt-2">
+              <p className="text-xs leading-5 text-[var(--muted-foreground)]">
+                Generate a guided post or post manually. Stage identity, pricing, fan activity, and automatic posting
+                live in Settings.
+              </p>
 
-          <div className="mb-4 flex flex-col gap-3 rounded-lg border border-[var(--noodle-divider)] p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-2 rounded-md border border-[var(--noodle-divider)] p-2.5 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
-              <h5 className="text-sm font-bold text-[var(--foreground)]">Generate with AI</h5>
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+              <h5 className="text-xs font-bold text-[var(--foreground)]">Generate with AI</h5>
+              <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
                 One guided post — choose access, theme, and whether to include text and/or an image.
               </p>
             </div>
@@ -1016,7 +1024,7 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
             value={privateComposerText}
             onChange={(event) => onPrivateComposerTextChange(event.target.value)}
             placeholder="Post to your NoodleR…"
-            className={cn(textareaClass, "min-h-16 w-full resize-none bg-transparent")}
+            className={cn(textareaClass, "min-h-14 w-full resize-none bg-transparent")}
           />
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             {(
@@ -1071,6 +1079,8 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
               Post
             </button>
           </div>
+            </div>
+          </details>
         </div>
       )}
 
