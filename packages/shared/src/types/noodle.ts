@@ -25,6 +25,22 @@ export interface NoodleFanActivitySettings {
   nextRunAt: string | null;
 }
 
+export interface NoodleAutoPostSettings {
+  enabled: boolean;
+  intensity: NoodleFanActivityIntensity;
+  // ISO timestamp for the scheduler's next unattended post generation.
+  // Only meaningful while enabled is true.
+  nextRunAt: string | null;
+}
+
+export interface NoodleSocialSettings {
+  knownAccountIds: string[];
+}
+
+export interface NoodleHiddenFromSettings {
+  hiddenFromAccountIds: string[];
+}
+
 export interface NoodlerSettings {
   // Global kill switch for the NoodleR fan-activity scheduler. Off by default;
   // even accounts with fanActivity.autoSchedule on stay dormant until this is on.

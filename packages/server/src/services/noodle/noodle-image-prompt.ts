@@ -1,3 +1,28 @@
+// Joins text blocks (each already internally formatted, single- or
+// multi-line) with a blank line between them, while dropping any line from a
+// later block that's a near-duplicate (normalized on whitespace/case) of one
+// already emitted by an earlier block. Guards against the same
+// appearance/personality sentence surviving from two different source
+// blocks into one image prompt, without disturbing each block's own
+// internal line breaks.
+export function joinDedupedBlocks(blocks: Array<string | null | undefined>): string {
+  const seen = new Set<string>();
+  const keptBlocks: string[] = [];
+  for (const block of blocks) {
+    if (!block?.trim()) continue;
+    const keptLines = block.split("\n").filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return false;
+      const normalized = trimmed.toLowerCase().replace(/\s+/g, " ");
+      if (seen.has(normalized)) return false;
+      seen.add(normalized);
+      return true;
+    });
+    if (keptLines.length > 0) keptBlocks.push(keptLines.join("\n"));
+  }
+  return keptBlocks.join("\n\n");
+}
+
 function stripCodeFence(value: string): string {
   const trimmed = value.trim();
   const match = trimmed.match(/^```(?:json|text)?\s*([\s\S]*?)\s*```$/iu);

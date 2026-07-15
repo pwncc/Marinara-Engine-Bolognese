@@ -17,7 +17,7 @@ import { logger } from "../../lib/logger.js";
 import { createNoodleStorage } from "../storage/noodle.storage.js";
 import { createConnectionsStorage } from "../storage/connections.storage.js";
 import { createCharactersStorage } from "../storage/characters.storage.js";
-import { parseFanActivitySettings, simulateNoodlerFanActivity } from "../../routes/noodle.routes.js";
+import { parseAutoPostSettings, parseFanActivitySettings, simulateNoodlerFanActivity } from "../../routes/noodle.routes.js";
 import { isNoodleRefreshLocked, withNoodleRefreshLock } from "./noodle-refresh-lock.js";
 import type { NoodleAccount, NoodleAccountSubscription, NoodleFanActivityIntensity } from "@marinara-engine/shared";
 
@@ -68,6 +68,49 @@ export function startNoodleFanActivityScheduler(app: FastifyInstance) {
     });
   };
 
+  const persistAutoPostSettings = async (account: NoodleAccount, nextRunAt: string | null) => {
+    const current = parseAutoPostSettings(account);
+    await noodle.updateAccount(account.id, {
+      settings: {
+        ...account.settings,
+        autoPost: { ...current, nextRunAt },
+      },
+    });
+  };
+
+  // Reuses the manual "generate a post" UI's own route (targetAccountId),
+  // rather than duplicating post-generation logic here — the route already
+  // owns the per-account refresh lock, so we only need to skip cheaply when
+  // it's already held (e.g. a manual generation is in flight).
+  const runDueAutoPostAccount = async (account: NoodleAccount, autoPostSettings: ReturnType<typeof parseAutoPostSettings>) => {
+    const nextRunAt = new Date(Date.now() + jitteredIntervalMs(autoPostSettings.intensity)).toISOString();
+    if (isNoodleRefreshLocked(account.id)) {
+      // Manual trigger or guided post in flight; don't burn this slot, try again next tick.
+      return;
+    }
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/noodle/refresh",
+        payload: { targetAccountId: account.id },
+      });
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        logger.info("[noodle-fan-activity-scheduler] Auto-posted a new NoodleR post for %s", account.displayName);
+      } else {
+        logger.debug(
+          "[noodle-fan-activity-scheduler] Auto-post skipped for %s: HTTP %d %s",
+          account.displayName,
+          response.statusCode,
+          response.body,
+        );
+      }
+    } catch (error) {
+      logger.error(error, "[noodle-fan-activity-scheduler] Auto-post failed for %s", account.displayName);
+    } finally {
+      await persistAutoPostSettings(account, nextRunAt);
+    }
+  };
+
   const runDueAccount = async (
     account: NoodleAccount,
     fanSettings: ReturnType<typeof parseFanActivitySettings>,
@@ -112,24 +155,40 @@ export function startNoodleFanActivityScheduler(app: FastifyInstance) {
       const privateAccounts = await noodle.listPrivateAccounts();
       const now = Date.now();
       const dueAccounts: { account: NoodleAccount; fanSettings: ReturnType<typeof parseFanActivitySettings> }[] = [];
+      const dueAutoPostAccounts: { account: NoodleAccount; autoPostSettings: ReturnType<typeof parseAutoPostSettings> }[] = [];
       for (const account of privateAccounts) {
         const fanSettings = parseFanActivitySettings(account);
-        if (!fanSettings.enabled || !fanSettings.autoSchedule) continue;
-
-        if (!fanSettings.nextRunAt) {
-          // First time this account is eligible for scheduling — pick a
-          // future time instead of running immediately, so flipping the
-          // toggle on doesn't itself trigger a burst of fan activity.
-          await persistFanActivitySettings(
-            account,
-            new Date(now + jitteredIntervalMs(fanSettings.intensity)).toISOString(),
-          );
-          continue;
+        if (fanSettings.enabled && fanSettings.autoSchedule) {
+          if (!fanSettings.nextRunAt) {
+            // First time this account is eligible for scheduling — pick a
+            // future time instead of running immediately, so flipping the
+            // toggle on doesn't itself trigger a burst of fan activity.
+            await persistFanActivitySettings(
+              account,
+              new Date(now + jitteredIntervalMs(fanSettings.intensity)).toISOString(),
+            );
+          } else if (Date.parse(fanSettings.nextRunAt) <= now) {
+            dueAccounts.push({ account, fanSettings });
+          }
         }
 
-        if (Date.parse(fanSettings.nextRunAt) <= now) {
-          dueAccounts.push({ account, fanSettings });
+        const autoPostSettings = parseAutoPostSettings(account);
+        if (autoPostSettings.enabled) {
+          if (!autoPostSettings.nextRunAt) {
+            // Same burst-avoidance as fan activity: don't run immediately
+            // the moment auto-post is switched on.
+            await persistAutoPostSettings(
+              account,
+              new Date(now + jitteredIntervalMs(autoPostSettings.intensity)).toISOString(),
+            );
+          } else if (Date.parse(autoPostSettings.nextRunAt) <= now) {
+            dueAutoPostAccounts.push({ account, autoPostSettings });
+          }
         }
+      }
+
+      for (const { account, autoPostSettings } of dueAutoPostAccounts) {
+        await runDueAutoPostAccount(account, autoPostSettings);
       }
 
       if (dueAccounts.length > 0) {

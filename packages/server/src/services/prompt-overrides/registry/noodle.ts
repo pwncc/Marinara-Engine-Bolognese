@@ -3,6 +3,7 @@
 // ──────────────────────────────────────────────
 import type { PromptOverrideKeyDef } from "../types.js";
 import { noodleTimelineVoiceDefaultText } from "../../noodle/noodle-prompt.js";
+import { joinDedupedBlocks } from "../../noodle/noodle-image-prompt.js";
 
 export interface NoodleImagePostCtx extends Record<string, string | number | undefined> {
   authorName: string;
@@ -42,10 +43,11 @@ export const NOODLE_IMAGE_POST: PromptOverrideKeyDef<NoodleImagePostCtx> = {
     },
   ],
   defaultBuilder: (ctx) =>
-    [ctx.characterDescription, ctx.draftPrompt.trim() || `A social-media-ready image posted by ${ctx.authorName}.`, ctx.userInstructions]
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .join("\n\n"),
+    joinDedupedBlocks([
+      ctx.characterDescription,
+      ctx.draftPrompt.trim() || `A social-media-ready image posted by ${ctx.authorName}.`,
+      ctx.userInstructions,
+    ]),
   exampleContext: {
     authorName: "Dottore",
     postContent: "I left one meeting unattended for six minutes and returned to theatrical accusations.",

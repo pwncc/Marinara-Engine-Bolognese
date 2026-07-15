@@ -22,6 +22,7 @@ import { createNoodleStorage } from "../services/storage/noodle.storage.js";
 import { isNoodleRefreshLocked, withNoodleRefreshLock } from "../services/noodle/noodle-refresh-lock.js";
 import {
   ensurePrivateAccountIdentity,
+  isNoodleAccountHiddenFromViewer,
   resolvePersonaAccount,
   simulateNoodlerFanActivity,
   tryGenerateNoodlerReaction,
@@ -112,7 +113,11 @@ export async function noodlerRoutes(app: FastifyInstance) {
     // "persona" private accounts are the caller's own NoodleR pages, "character"
     // ones are creators to subscribe to.
     const owned = privateAccounts.filter((account) => account.kind === "persona");
-    const creatorAccounts = privateAccounts.filter((account) => account.kind === "character");
+    // A page never leaks its own existence to itself, so hidden-from only
+    // applies to accounts other than the requesting subscriber.
+    const creatorAccounts = privateAccounts
+      .filter((account) => account.kind === "character")
+      .filter((account) => !isNoodleAccountHiddenFromViewer(account, subscriber.id));
     const subscriptions = await noodle.listSubscriptionsForSubscriber(subscriber.id);
     const subscribedCreatorIds = new Set(subscriptions.map((subscription) => subscription.creatorAccountId));
     return {
@@ -133,6 +138,10 @@ export async function noodlerRoutes(app: FastifyInstance) {
       subscriber = await resolvePersonaAccount(noodle, characters, parsed.data.subscriberEntityId);
     }
     if (!subscriber) return reply.code(404).send({ error: "Noodle subscriber not found" });
+    // Don't reveal a hidden-from page's existence via a different status code.
+    if (isNoodleAccountHiddenFromViewer(creator, subscriber.id)) {
+      return reply.code(404).send({ error: "Noodle account not found" });
+    }
     const subscription = await noodle.subscribe(subscriber.id, creator.id);
     if (!subscription) return reply.code(400).send({ error: "Could not subscribe to that account." });
     const triggerPost = await noodle.getMostRecentPostByAuthor(creator.id);
@@ -171,6 +180,10 @@ export async function noodlerRoutes(app: FastifyInstance) {
       actor = await resolvePersonaAccount(noodle, characters, parsed.data.actorEntityId);
     }
     if (!actor) return reply.code(404).send({ error: "Noodle actor not found" });
+    const postAuthor = await noodle.getAccountById(post.authorAccountId);
+    if (postAuthor && isNoodleAccountHiddenFromViewer(postAuthor, actor.id)) {
+      return reply.code(404).send({ error: "Noodle post not found" });
+    }
     const unlock = await noodle.unlockPost(actor.id, postId);
     const creator = await noodle.getAccountById(post.authorAccountId);
     const reaction = creator

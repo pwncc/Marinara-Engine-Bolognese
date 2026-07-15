@@ -292,6 +292,30 @@ export const noodleFanActivitySettingsSchema = z.object({
   nextRunAt: z.string().nullable().default(null),
 });
 
+// Unattended generation of new NoodleR posts, distinct from fan activity
+// (which only reacts to posts that already exist). Off by default; reuses
+// the same intensity dial semantics (runs/day), but tracks its own
+// nextRunAt so toggling one scheduler never perturbs the other's cadence.
+export const noodleAutoPostSettingsSchema = z.object({
+  enabled: z.boolean().default(false),
+  intensity: noodleFanActivityIntensitySchema.default("low"),
+  nextRunAt: z.string().nullable().default(null),
+});
+
+// "People this character knows" — other Noodle account ids. Used to bias
+// (never restrict) which accounts a character's posts/replies interact
+// with, on both public and private accounts.
+export const noodleSocialSettingsSchema = z.object({
+  knownAccountIds: z.array(z.string()).default([]),
+});
+
+// Private (NoodleR) accounts only. Independent of the linked public
+// account's social list, so one persona's NoodleR page can hide from an
+// account while another linked page doesn't.
+export const noodleHiddenFromSettingsSchema = z.object({
+  hiddenFromAccountIds: z.array(z.string()).default([]),
+});
+
 export const noodleInteractionUpdateSchema = noodleInteractionOwnerSchema
   .extend({
     content: z.string().max(2000).nullable().optional(),

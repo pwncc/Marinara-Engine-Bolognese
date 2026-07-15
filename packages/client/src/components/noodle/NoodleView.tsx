@@ -1056,6 +1056,25 @@ export function NoodleView() {
       return rightPost.localeCompare(leftPost) || sortAccountsByDisplayName(left, right);
     });
   }, [latestPrivatePostByCreatorId, noodlerHub, noodlerUnseenCountByAccountId]);
+  // Distinct from "Who to follow" on the Noodle side: these are paid creator
+  // pages, not follow-only accounts, so the suggestion surface leads with
+  // subscriber count / price instead of a plain follow button. Capped at 4,
+  // ranked by subscriber count then recency — not the same list or ranking
+  // as the "Discover" tab's full sortedNoodlerDiscoverAccounts (which also
+  // includes already-subscribed creators and ranks by unseen activity).
+  const suggestedNoodlerCreators = useMemo(() => {
+    const discoverOnly = noodlerHub?.discover ?? [];
+    return uniqueAccountsById(discoverOnly)
+      .sort((left, right) => {
+        const leftSubs = subscriberCountByCreatorId.get(left.id) ?? 0;
+        const rightSubs = subscriberCountByCreatorId.get(right.id) ?? 0;
+        if (leftSubs !== rightSubs) return rightSubs - leftSubs;
+        const leftPost = latestPrivatePostByCreatorId.get(left.id)?.createdAt ?? "";
+        const rightPost = latestPrivatePostByCreatorId.get(right.id)?.createdAt ?? "";
+        return rightPost.localeCompare(leftPost) || sortAccountsByDisplayName(left, right);
+      })
+      .slice(0, 4);
+  }, [latestPrivatePostByCreatorId, noodlerHub, subscriberCountByCreatorId]);
   const activeNoodleModeMeta = NOODLE_MODE_META[activeNoodleMode];
   const composeActionLabel = activeNoodleMode === "noodler" ? "NoodleR Post" : "Post";
   const composePlaceholder = activeNoodleMode === "noodler" ? "Post to NoodleR..." : "What's simmering?";
@@ -3949,6 +3968,117 @@ export function NoodleView() {
           </Section>
 
           <Section
+            title="Relationships & privacy"
+            help="Who this character knows, and who this private page should stay invisible to — separate from the public account's own visibility."
+          >
+            <div className="space-y-4">
+              {(() => {
+                const linkedPublicAccount = accounts.find(
+                  (account) => account.linkedAccountId === viewedProfileAccount.id,
+                );
+                const linkedKnownAccountIds = linkedPublicAccount?.settings?.social as
+                  | { knownAccountIds?: unknown }
+                  | undefined;
+                const knownAccountIds = new Set(
+                  Array.isArray(linkedKnownAccountIds?.knownAccountIds)
+                    ? (linkedKnownAccountIds!.knownAccountIds as string[])
+                    : [],
+                );
+                const hiddenFromSetting = viewedProfileAccount.settings?.hiddenFrom as
+                  | { hiddenFromAccountIds?: unknown }
+                  | undefined;
+                const hiddenFromIds = new Set(
+                  Array.isArray(hiddenFromSetting?.hiddenFromAccountIds)
+                    ? (hiddenFromSetting!.hiddenFromAccountIds as string[])
+                    : [],
+                );
+                const otherPublicAccounts = accounts.filter(
+                  (account) => account.visibility === "public" && account.id !== linkedPublicAccount?.id,
+                );
+                const toggleKnown = (accountId: string) => {
+                  if (!linkedPublicAccount) return;
+                  const next = new Set(knownAccountIds);
+                  if (next.has(accountId)) next.delete(accountId);
+                  else next.add(accountId);
+                  updateAccount.mutate({
+                    id: linkedPublicAccount.id,
+                    settings: { social: { knownAccountIds: Array.from(next) } },
+                  });
+                };
+                const toggleHidden = (accountId: string) => {
+                  const next = new Set(hiddenFromIds);
+                  if (next.has(accountId)) next.delete(accountId);
+                  else next.add(accountId);
+                  updateAccount.mutate({
+                    id: viewedProfileAccount.id,
+                    settings: { hiddenFrom: { hiddenFromAccountIds: Array.from(next) } },
+                  });
+                };
+                return (
+                  <>
+                    <div>
+                      <p className="text-xs font-semibold text-[var(--foreground)]">People this character knows</p>
+                      <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
+                        Biases who this character's public account tries to interact with. Doesn't restrict anyone
+                        else — just a preference.
+                      </p>
+                      {!linkedPublicAccount ? (
+                        <p className="mt-2 text-xs text-[var(--muted-foreground)]">
+                          No linked public account found for this page.
+                        </p>
+                      ) : (
+                        <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-md border border-[var(--noodle-divider)] p-2">
+                          {otherPublicAccounts.map((account) => (
+                            <label
+                              key={account.id}
+                              className="flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-[var(--accent)]"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={knownAccountIds.has(account.id)}
+                                onChange={() => toggleKnown(account.id)}
+                                disabled={updateAccount.isPending}
+                              />
+                              <span className="truncate">
+                                {account.displayName} <span className="text-[var(--muted-foreground)]">@{account.handle}</span>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-[var(--foreground)]">Hide this page from</p>
+                      <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
+                        These accounts will never see or be shown this page, even in Discover — separate from any
+                        other private page linked to a different account.
+                      </p>
+                      <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-md border border-[var(--noodle-divider)] p-2">
+                        {otherPublicAccounts.map((account) => (
+                          <label
+                            key={account.id}
+                            className="flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-[var(--accent)]"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={hiddenFromIds.has(account.id)}
+                              onChange={() => toggleHidden(account.id)}
+                              disabled={updateAccount.isPending}
+                            />
+                            <span className="truncate">
+                              {account.displayName} <span className="text-[var(--muted-foreground)]">@{account.handle}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </Section>
+
+          <Section
             title="Fan activity"
             help="Lets existing filler accounts like, comment on, subscribe to, and unlock this page's posts on their own. Fans never write new posts — only you do that."
           >
@@ -4859,6 +4989,41 @@ export function NoodleView() {
   const renderNoodlerTimelineItem = (item: NoodlerTimelineItem) =>
     item.kind === "post" ? renderPostArticle(item.post) : renderNoodlerActivityRow(item);
 
+  const renderNoodlerSuggestionRow = (account: NoodleAccount) => {
+    const subscriberCount = subscriberCountByCreatorId.get(account.id) ?? 0;
+    const price =
+      typeof account.settings?.subscriptionPrice === "number" ? (account.settings.subscriptionPrice as number) : null;
+    return (
+      <div key={account.id} className="flex items-center gap-3 px-4 py-3">
+        <button
+          type="button"
+          onClick={() => openProfile(account)}
+          className="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left transition-colors hover:text-[var(--noodle-blue)]"
+        >
+          <Avatar account={account} size="sm" />
+          <span className="min-w-0 flex-1">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-sm font-semibold">{account.displayName}</span>
+              <NoodlerPrivateBadge />
+            </span>
+            <span className="block truncate text-xs text-[var(--muted-foreground)]">
+              {price ? `$${price.toFixed(2)}/mo` : "Free to subscribe"} · {subscriberCount} subscriber
+              {subscriberCount === 1 ? "" : "s"}
+            </span>
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => toggleSubscription(account.id)}
+          disabled={subscribeAccount.isPending || unsubscribeAccount.isPending}
+          className="h-8 shrink-0 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {subscribeLabel(account, false)}
+        </button>
+      </div>
+    );
+  };
+
   const renderNoodlerDiscoverCard = (account: NoodleAccount) => {
     const subscribed = subscribedCreatorIds.has(account.id);
     const subscriberCount = subscriberCountByCreatorId.get(account.id) ?? 0;
@@ -5627,6 +5792,8 @@ export function NoodleView() {
     renderNoodlerAccountRow,
     sortedNoodlerDiscoverAccounts,
     renderNoodlerDiscoverCard,
+    suggestedNoodlerCreators,
+    renderNoodlerSuggestionRow,
     profileViewProps,
   };
 

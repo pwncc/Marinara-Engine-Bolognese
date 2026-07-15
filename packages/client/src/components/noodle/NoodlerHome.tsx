@@ -61,6 +61,10 @@ export interface NoodlerHomeProps {
   renderNoodlerAccountRow: (account: NoodleAccount) => React.ReactNode;
   sortedNoodlerDiscoverAccounts: NoodleAccount[];
   renderNoodlerDiscoverCard: (account: NoodleAccount) => React.ReactNode;
+  // Distinct from Noodle's "Who to follow": leads with subscriber count /
+  // price since these are paid creator pages, not follow-only accounts.
+  suggestedNoodlerCreators: NoodleAccount[];
+  renderNoodlerSuggestionRow: (account: NoodleAccount) => React.ReactNode;
 
   // Private profile (activeNoodleView === "profile" && activeNoodleMode === "noodler")
   profileViewProps?: PrivateProfileViewProps;
@@ -84,6 +88,8 @@ export function NoodlerHome(props: NoodlerHomeProps) {
     renderNoodlerAccountRow,
     sortedNoodlerDiscoverAccounts,
     renderNoodlerDiscoverCard,
+    suggestedNoodlerCreators,
+    renderNoodlerSuggestionRow,
     profileViewProps,
   } = props;
 
@@ -100,7 +106,9 @@ export function NoodlerHome(props: NoodlerHomeProps) {
             <NoodlerMark size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
             <div className="min-w-0 flex-1">
               <h2 className="truncate text-lg font-bold">NoodleR Verification</h2>
-              <p className="truncate text-xs text-[var(--muted-foreground)]">Private creator network access</p>
+              <p className="truncate text-xs text-[var(--muted-foreground)]">
+                Private, paid, adult-content creator network
+              </p>
             </div>
           </div>
         </div>
@@ -115,8 +123,9 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                 <p className="text-xs font-black uppercase tracking-normal text-[var(--noodle-blue)]">Verification Desk</p>
                 <h3 className="mt-1 text-2xl font-black leading-tight">Verify your NoodleR eligibility.</h3>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--muted-foreground)]">
-                  NoodleR uses private creator pages, subscriptions, and paid unlocks. This quick check marks the
-                  feature as intentionally enabled before those controls appear.
+                  NoodleR is Noodle's private, paid corner for adult creator content — subscriptions and per-post
+                  unlocks, kept out of the main Noodle timeline entirely. This quick check marks the feature as
+                  intentionally enabled before those controls appear.
                 </p>
               </div>
             </div>
@@ -127,7 +136,11 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               { icon: User, title: "Government ID", detail: "Passport, license, or anything that looks official enough." },
               { icon: ImageIcon, title: "Photo pass", detail: "A current profile photo for the badge desk." },
               { icon: AtSign, title: "Handle match", detail: "Confirm the Noodle account requesting access." },
-              { icon: Check, title: "Access notice", detail: "Acknowledge that NoodleR profiles are private pages." },
+              {
+                icon: Check,
+                title: "18+ acknowledgment",
+                detail: "Confirm you're here for adult creator content and you're of age.",
+              },
             ].map((item, index) => {
               const Icon = item.icon;
               return (
@@ -247,25 +260,43 @@ export function NoodlerHome(props: NoodlerHomeProps) {
             ))}
           </div>
           {noodlerHubTab === "timeline" ? (
-            noodlerTimelineItems.length > 0 ? (
-              <div>{noodlerTimelineItems.map(renderNoodlerTimelineItem)}</div>
-            ) : privateAccountsCount > 0 ? (
-              <div className="px-8 py-14 text-center">
-                <NoodlerMark size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
-                <p className="text-base font-bold">Nothing here yet.</p>
-                <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                  NoodleR posts, comments, subscribers, and unlocks will show here.
-                </p>
-              </div>
-            ) : (
-              <div className="px-8 py-14 text-center">
-                <NoodlerMark size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
-                <p className="text-base font-bold">No NoodleR accounts yet.</p>
-                <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                  Create a private page from a persona or character profile.
-                </p>
-              </div>
-            )
+            <>
+              {suggestedNoodlerCreators.length > 0 && (
+                <section
+                  aria-labelledby="noodler-suggested-creators"
+                  className="border-b border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/8"
+                >
+                  <div className="px-4 py-3">
+                    <h2 id="noodler-suggested-creators" className="text-sm font-bold">
+                      Creators to check out
+                    </h2>
+                    <p className="text-xs text-[var(--muted-foreground)]">Paid pages, not follows — subscribe to unlock.</p>
+                  </div>
+                  <div className="divide-y divide-[var(--noodle-divider)]">
+                    {suggestedNoodlerCreators.map(renderNoodlerSuggestionRow)}
+                  </div>
+                </section>
+              )}
+              {noodlerTimelineItems.length > 0 ? (
+                <div>{noodlerTimelineItems.map(renderNoodlerTimelineItem)}</div>
+              ) : privateAccountsCount > 0 ? (
+                <div className="px-8 py-14 text-center">
+                  <NoodlerMark size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
+                  <p className="text-base font-bold">Nothing here yet.</p>
+                  <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
+                    NoodleR posts, comments, subscribers, and unlocks will show here.
+                  </p>
+                </div>
+              ) : (
+                <div className="px-8 py-14 text-center">
+                  <NoodlerMark size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
+                  <p className="text-base font-bold">No NoodleR accounts yet.</p>
+                  <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
+                    Create a private page from a persona or character profile.
+                  </p>
+                </div>
+              )}
+            </>
           ) : noodlerHubTab === "subscriptions" ? (
             noodlerHub && noodlerHub.subscribed.length > 0 ? (
               <div>{noodlerHub.subscribed.map((account) => renderNoodlerAccountRow(account))}</div>

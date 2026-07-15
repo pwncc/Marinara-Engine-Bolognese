@@ -11,10 +11,13 @@ import {
   canManageNoodleReply,
   extractNoodleMentionHandles,
   noodleAccountUpdateSchema,
+  noodleAutoPostSettingsSchema,
   noodleBulkInviteSchema,
   noodleCreateInteractionSchema,
   noodleCreatePostSchema,
   noodleFanActivitySettingsSchema,
+  noodleHiddenFromSettingsSchema,
+  noodleSocialSettingsSchema,
   noodleFillerProfileCreateSchema,
   noodleFillerProfileUpdateSchema,
   noodleInviteSchema,
@@ -31,9 +34,12 @@ import {
   type APIProvider,
   type NoodleAccount,
   type NoodleAccountSubscription,
+  type NoodleAutoPostSettings,
   type NoodleBootstrap,
   type NoodleFanActivityIntensity,
   type NoodleFanActivitySettings,
+  type NoodleHiddenFromSettings,
+  type NoodleSocialSettings,
   type NoodleInteraction,
   type NoodleInteractionType,
   type NoodlePost,
@@ -105,7 +111,7 @@ import {
   parseNoodleGeneratedRefresh,
   validateNoodleGeneratedRefresh,
 } from "../services/noodle/noodle-generated-refresh.js";
-import { normalizeNoodleImagePrompt } from "../services/noodle/noodle-image-prompt.js";
+import { joinDedupedBlocks, normalizeNoodleImagePrompt } from "../services/noodle/noodle-image-prompt.js";
 import {
   NOODLE_PUBLIC_REFRESH_SCOPE,
   acquireNoodleRefreshLock,
@@ -264,6 +270,7 @@ function characterAppearanceFromRow(row: { data: unknown }) {
 function compactLines(lines: Array<string | null | undefined>) {
   return lines.map((line) => line?.trim()).filter((line): line is string => Boolean(line));
 }
+
 
 function characterPersonalityFromRow(row: { data: unknown }) {
   const data = parseRecord(row.data);
@@ -587,6 +594,21 @@ export function collectNoodlePriorityAccountIds(input: {
     }
   }
   return priority;
+}
+
+// Union of every account's own "people this character knows" list, filtered
+// to accounts actually present in the pool. Feeds the same priority tier as
+// collectNoodlePriorityAccountIds so acquainted characters are more likely
+// to be selected to appear together, without ever excluding anyone else.
+export function collectKnownAccountPriorityIds(accounts: NoodleAccount[]): Set<string> {
+  const known = new Set<string>();
+  const accountIds = new Set(accounts.map((account) => account.id));
+  for (const account of accounts) {
+    for (const knownId of parseSocialSettings(account).knownAccountIds) {
+      if (accountIds.has(knownId)) known.add(knownId);
+    }
+  }
+  return known;
 }
 
 async function pickGalleryAttachmentForAccount(input: {
@@ -982,6 +1004,13 @@ async function buildRefreshPrompt(input: {
         .filter((handle): handle is string => Boolean(handle)),
     );
     const recentAuthorIds = new Set(recentPosts.map((post) => post.authorAccountId));
+    // Accounts any currently-active participant considers "known" — biases
+    // recall toward people the active characters would actually seek out,
+    // without excluding anyone else.
+    const knownByActiveAccounts = new Set<string>();
+    for (const account of input.activeAccounts) {
+      for (const knownId of parseSocialSettings(account).knownAccountIds) knownByActiveAccounts.add(knownId);
+    }
     const recalledPostRelevanceWeight = (post: NoodlePost): number => {
       let weight = 0.25;
       if (activeAccountIds.has(post.authorAccountId)) weight += 2;
@@ -989,6 +1018,7 @@ async function buildRefreshPrompt(input: {
         if (activeAccountHandles.has(handle)) weight += 1;
       }
       if (recentAuthorIds.has(post.authorAccountId)) weight += 1;
+      if (knownByActiveAccounts.has(post.authorAccountId)) weight += 1;
       return weight;
     };
     recalledPosts = sampleNoodlePastMemoriesWeighted(olderPosts, pastMemorySampleSize, recalledPostRelevanceWeight);
@@ -1946,6 +1976,23 @@ export function parseFanActivitySettings(account: NoodleAccount): NoodleFanActiv
   return noodleFanActivitySettingsSchema.parse(parseRecord(account.settings.fanActivity));
 }
 
+export function parseAutoPostSettings(account: NoodleAccount): NoodleAutoPostSettings {
+  return noodleAutoPostSettingsSchema.parse(parseRecord(account.settings.autoPost));
+}
+
+export function parseSocialSettings(account: NoodleAccount): NoodleSocialSettings {
+  return noodleSocialSettingsSchema.parse(parseRecord(account.settings.social));
+}
+
+export function parseHiddenFromSettings(account: NoodleAccount): NoodleHiddenFromSettings {
+  return noodleHiddenFromSettingsSchema.parse(parseRecord(account.settings.hiddenFrom));
+}
+
+export function isNoodleAccountHiddenFromViewer(account: NoodleAccount, viewerAccountId: string | null): boolean {
+  if (!viewerAccountId) return false;
+  return parseHiddenFromSettings(account).hiddenFromAccountIds.includes(viewerAccountId);
+}
+
 const noodleFanActivityResponseSchema = z.object({
   actions: z
     .array(
@@ -2267,12 +2314,18 @@ async function generateNoodlePostImage(input: {
   }
 
   if (privateStageProfile && linkedAuthorContext) {
+    // The appearance text in linkedAuthorContext.visualDescription is the same
+    // underlying source (character/persona appearance) already resolved into
+    // characterDescription above via resolveIllustratorCharacterReferences, so
+    // only restate it here when that resolution produced nothing — otherwise
+    // the image prompt carries the same appearance text twice.
+    const visualDescriptionAlreadyCovered = characterDescription.trim().length > 0;
     const privateVisualContext = compactLines([
       "Private NoodleR visual identity anchor:",
       privateStageProfile.identityDisclosure === "open"
         ? `Linked public identity: ${linkedAuthorContext.publicName}`
         : `Linked public identity: hidden ${linkedAuthorContext.sourceKind}; do not write or render the public name.`,
-      linkedAuthorContext.visualDescription
+      linkedAuthorContext.visualDescription && !visualDescriptionAlreadyCovered
         ? `Underlying visual identity to preserve: ${linkedAuthorContext.visualDescription}`
         : null,
       privateStageProfile.stageAppearanceOverride
@@ -2286,7 +2339,7 @@ async function generateNoodlePostImage(input: {
         ? "The generated image must preserve the linked person's body, age range, species, face/hair/visible traits, and hard visual continuity. User scene directions can change outfit, pose, mood, and setting, not who the person is."
         : "The private stage appearance may diverge only where the stage appearance override explicitly says so.",
     ]).join("\n");
-    characterDescription = compactLines([privateVisualContext, characterDescription]).join("\n\n");
+    characterDescription = joinDedupedBlocks([privateVisualContext, characterDescription]);
   }
 
   const draftPrompt =
@@ -3034,12 +3087,15 @@ export async function noodleRoutes(app: FastifyInstance) {
           noodle.listInteractions(recentSelectionPosts.map((post) => post.id)),
           noodle.listRefreshRuns({ status: "completed", limit: 1 }),
         ]);
-        const priorityAccountIds = collectNoodlePriorityAccountIds({
-          accounts: participantAccounts,
-          posts: recentSelectionPosts,
-          interactions: recentSelectionInteractions,
-          personaAccount,
-        });
+        const priorityAccountIds = new Set([
+          ...collectNoodlePriorityAccountIds({
+            accounts: participantAccounts,
+            posts: recentSelectionPosts,
+            interactions: recentSelectionInteractions,
+            personaAccount,
+          }),
+          ...collectKnownAccountPriorityIds(participantAccounts),
+        ]);
         selectedParticipants = chooseNoodleParticipantAccounts({
           accounts: participantAccounts,
           settings,
