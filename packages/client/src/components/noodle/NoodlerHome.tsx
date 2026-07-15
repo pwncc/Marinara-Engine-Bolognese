@@ -105,8 +105,17 @@ export interface NoodlerHomeProps {
   }) => React.ReactNode;
   onTriggerRefresh: () => void;
   refreshNoodlePending: boolean;
+  // Whether the current persona already has a linked NoodleR creator
+  // account. Gates the Hub timeline composer and the Profile tab sign-up.
+  hasNoodlerAccount: boolean;
 
   // Private profile (activeNoodleView === "profile" && activeNoodleMode === "noodler")
+  // When true, the persona has no NoodleR account yet — show the sign-up
+  // screen instead of PrivateProfileView.
+  showNoodlerSignup: boolean;
+  onStartNoodlerSignup: () => void;
+  startNoodlerSignupPending: boolean;
+  onOpenOwnProfile: () => void;
   profileViewProps?: PrivateProfileViewProps;
 }
 
@@ -159,10 +168,52 @@ export function NoodlerHome(props: NoodlerHomeProps) {
     renderComposerToolPopovers,
     onTriggerRefresh,
     refreshNoodlePending,
+    hasNoodlerAccount,
+    showNoodlerSignup,
+    onStartNoodlerSignup,
+    startNoodlerSignupPending,
+    onOpenOwnProfile,
     profileViewProps,
   } = props;
 
   if (activeNoodleView === "profile") {
+    if (showNoodlerSignup) {
+      return (
+        <div className="min-h-full" data-component="NoodlerHome.ProfileSignup">
+          <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
+            <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
+              <MobileTimelineBackButton label="Back to Hub" onClick={onBackToHome} />
+              <NoodlerMark size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
+              <div className="min-w-0 flex-1">
+                <h2 className="truncate text-lg font-bold">Your NoodleR profile</h2>
+                <p className="truncate text-xs text-[var(--muted-foreground)]">
+                  {personaAccount ? `@${personaAccount.handle}` : "Choose a persona account"}
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-col items-center px-6 py-16 text-center">
+            <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[var(--noodle-blue)] text-zinc-950">
+              <NoodlerMark size={26} />
+            </span>
+            <h3 className="mt-4 text-xl font-black">Create your NoodleR creator profile</h3>
+            <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
+              This is where you post as your NoodleR creator persona — subscriptions, pay-per-view unlocks, and
+              all. Set it up once to start posting to the Hub.
+            </p>
+            <button
+              type="button"
+              onClick={onStartNoodlerSignup}
+              disabled={!personaAccount || startNoodlerSignupPending}
+              className="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--noodle-blue)] px-6 text-sm font-black text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {startNoodlerSignupPending ? <Loader2 size={17} className="animate-spin" /> : <NoodlerMark size={17} />}
+              {startNoodlerSignupPending ? "Creating" : "Create NoodleR creator profile"}
+            </button>
+          </div>
+        </div>
+      );
+    }
     return profileViewProps ? <PrivateProfileView {...profileViewProps} /> : null;
   }
 
@@ -334,38 +385,56 @@ export function NoodlerHome(props: NoodlerHomeProps) {
           </div>
           {noodlerHubTab === "timeline" ? (
             <>
-              <InlineComposer
-                personaAccount={personaAccount}
-                composeOpen={composeOpen}
-                inlineComposerRef={inlineComposerRef}
-                composer={composer}
-                onComposerChange={onComposerChange}
-                onComposerBlur={onComposerBlur}
-                onComposerKeyDown={onComposerKeyDown}
-                activeMention={activeMention}
-                mentionSuggestionsCount={mentionSuggestionsCount}
-                activeMentionIndex={activeMentionIndex}
-                composePlaceholder={composePlaceholder}
-                composeActionLabel={composeActionLabel}
-                renderComposerMentionSuggestions={renderComposerMentionSuggestions}
-                renderDraftPoll={renderDraftPoll}
-                attachedImageUrl={attachedImageUrl}
-                onAttachedImageUrlChange={onAttachedImageUrlChange}
-                imageToolRef={imageToolRef}
-                pollToolRef={pollToolRef}
-                mediaToolRef={mediaToolRef}
-                activeComposerTool={activeComposerTool}
-                onActiveComposerToolChange={onActiveComposerToolChange}
-                draftPollActive={draftPollActive}
-                onTogglePollComposer={onTogglePollComposer}
-                onSubmitPost={onSubmitPost}
-                canSubmitPost={canSubmitPost}
-                createPostPending={createPostPending}
-                renderComposerToolPopovers={renderComposerToolPopovers}
-                mentionListboxId="noodler-inline-mention-list"
-                dataComponent="NoodlerHome.InlineComposer"
-              />
-              <RefreshTimelineButton onTriggerRefresh={onTriggerRefresh} refreshNoodlePending={refreshNoodlePending} />
+              {hasNoodlerAccount ? (
+                <>
+                  <InlineComposer
+                    personaAccount={personaAccount}
+                    composeOpen={composeOpen}
+                    inlineComposerRef={inlineComposerRef}
+                    composer={composer}
+                    onComposerChange={onComposerChange}
+                    onComposerBlur={onComposerBlur}
+                    onComposerKeyDown={onComposerKeyDown}
+                    activeMention={activeMention}
+                    mentionSuggestionsCount={mentionSuggestionsCount}
+                    activeMentionIndex={activeMentionIndex}
+                    composePlaceholder={composePlaceholder}
+                    composeActionLabel={composeActionLabel}
+                    renderComposerMentionSuggestions={renderComposerMentionSuggestions}
+                    renderDraftPoll={renderDraftPoll}
+                    attachedImageUrl={attachedImageUrl}
+                    onAttachedImageUrlChange={onAttachedImageUrlChange}
+                    imageToolRef={imageToolRef}
+                    pollToolRef={pollToolRef}
+                    mediaToolRef={mediaToolRef}
+                    activeComposerTool={activeComposerTool}
+                    onActiveComposerToolChange={onActiveComposerToolChange}
+                    draftPollActive={draftPollActive}
+                    onTogglePollComposer={onTogglePollComposer}
+                    onSubmitPost={onSubmitPost}
+                    canSubmitPost={canSubmitPost}
+                    createPostPending={createPostPending}
+                    renderComposerToolPopovers={renderComposerToolPopovers}
+                    mentionListboxId="noodler-inline-mention-list"
+                    dataComponent="NoodlerHome.InlineComposer"
+                  />
+                  <RefreshTimelineButton onTriggerRefresh={onTriggerRefresh} refreshNoodlePending={refreshNoodlePending} />
+                </>
+              ) : (
+                <div
+                  className="border-b border-[var(--noodle-divider)] px-4 py-3 text-sm text-[var(--muted-foreground)]"
+                  data-component="NoodlerHome.NoAccountComposerNotice"
+                >
+                  <button
+                    type="button"
+                    onClick={onOpenOwnProfile}
+                    className="font-bold text-[var(--noodle-blue)] hover:underline"
+                  >
+                    Create a NoodleR creator profile
+                  </button>{" "}
+                  to post yourself.
+                </div>
+              )}
               {suggestedNoodlerCreators.length > 0 && (
                 <section
                   aria-labelledby="noodler-suggested-creators"

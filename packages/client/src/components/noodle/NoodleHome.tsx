@@ -584,6 +584,9 @@ export interface PublicProfileViewProps {
 
   // Extra action: Create/Open NoodleR (public accounts only)
   isNoodlerEnabled: boolean;
+  // The "Create NoodleR" CTA is hidden on the viewer's own persona — that
+  // flow now lives in NoodleR's own Profile tab sign-up screen instead.
+  viewingOwnProfile: boolean;
   linkedNoodlerAccount: NoodleAccount | null;
   onOpenLinkedNoodler: (account: NoodleAccount) => void;
   onCreateNoodler: (account: NoodleAccount) => void;
@@ -633,6 +636,7 @@ export function PublicProfileView(props: PublicProfileViewProps) {
     viewedProfileFollowed,
     onUpdateFollowedAccount,
     isNoodlerEnabled,
+    viewingOwnProfile,
     linkedNoodlerAccount,
     onOpenLinkedNoodler,
     onCreateNoodler,
@@ -701,7 +705,7 @@ export function PublicProfileView(props: PublicProfileViewProps) {
               >
                 Open NoodleR
               </button>
-            ) : (
+            ) : viewingOwnProfile && viewedProfileAccount.kind === "persona" ? null : (
               <button
                 type="button"
                 onClick={() => onCreateNoodler(viewedProfileAccount)}

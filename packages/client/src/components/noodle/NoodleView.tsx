@@ -2199,8 +2199,10 @@ export function NoodleView() {
     setProfileEditing(false);
     setProfileTab("posts");
     setProfileConnectionTab(null);
-    if (activeNoodleMode === "noodler" && personaLinkedNoodlerAccount) {
-      setViewedProfileAccountId(personaLinkedNoodlerAccount.id);
+    if (activeNoodleMode === "noodler") {
+      // No linked NoodleR account yet: stay in NoodleR mode and show the
+      // sign-up screen instead of bouncing back to the public profile.
+      setViewedProfileAccountId(personaLinkedNoodlerAccount ? personaLinkedNoodlerAccount.id : null);
       setActiveNoodleView("profile");
     } else {
       setViewedProfileAccountId(null);
@@ -5754,6 +5756,7 @@ export function NoodleView() {
     viewedProfileFollowed,
     onUpdateFollowedAccount: updateFollowedAccount,
     isNoodlerEnabled,
+    viewingOwnProfile,
     linkedNoodlerAccount,
     onOpenLinkedNoodler: openProfile,
     onCreateNoodler: openPrivateStageSetup,
@@ -5881,6 +5884,13 @@ export function NoodleView() {
     renderComposerToolPopovers,
     onTriggerRefresh: triggerRefresh,
     refreshNoodlePending: refreshNoodle.isPending,
+    hasNoodlerAccount: Boolean(personaLinkedNoodlerAccount),
+    onOpenOwnProfile: openOwnProfile,
+    showNoodlerSignup: activeNoodleMode === "noodler" && !viewedProfileAccountId && !personaLinkedNoodlerAccount,
+    onStartNoodlerSignup: () => {
+      if (personaAccount) openPrivateStageSetup(personaAccount);
+    },
+    startNoodlerSignupPending: createPrivateAccount.isPending,
     profileViewProps,
   };
 
