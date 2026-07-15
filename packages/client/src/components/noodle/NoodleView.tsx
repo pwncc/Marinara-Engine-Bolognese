@@ -135,7 +135,7 @@ import {
   NoodleToolButton,
   NoodleToolPopover,
   NoodlerBadge,
-  NoodlerMark,
+  NoodlerLogo,
   NoodlerPrivateBadge,
   fieldClass,
   iconButtonClass,
@@ -6211,7 +6211,11 @@ export function NoodleView() {
           <aside className="hidden w-[17rem] shrink-0 border-r border-[var(--noodle-divider)] bg-[var(--background)] lg:flex lg:flex-col [&_svg]:!text-[var(--noodle-blue)]">
             <div className="flex min-h-0 flex-1 flex-col px-5 py-4">
               <div className="mb-5 flex h-12 items-center">
-                <NoodleLogo className="h-10 w-16" />
+                {activeNoodleMode === "noodler" ? (
+                  <NoodlerLogo className="h-10 w-16" />
+                ) : (
+                  <NoodleLogo className="h-10 w-16" />
+                )}
               </div>
               <div className="mb-4">
                 <NoodleModeSwitcher
@@ -6232,7 +6236,7 @@ export function NoodleView() {
                   )}
                 >
                   {activeNoodleMode === "noodler" ? (
-                    <NoodlerMark size={22} className="!text-[var(--noodle-blue)]" />
+                    <NoodlerLogo size={24} />
                   ) : (
                     <Home size={22} className="!text-[var(--noodle-blue)]" />
                   )}
@@ -6587,7 +6591,7 @@ export function NoodleView() {
             aria-current={activeNoodleView === "noodler" || activeNoodleView === "noodler-verification" ? "page" : undefined}
             className="relative flex items-center justify-center transition-colors hover:bg-[var(--accent)]"
           >
-            <NoodlerMark size={22} />
+            <NoodlerLogo size={24} />
             {(activeNoodleView === "noodler" || activeNoodleView === "noodler-verification") && (
               <span className="absolute top-1 h-1 w-1 rounded-full bg-[var(--noodle-blue)]" />
             )}

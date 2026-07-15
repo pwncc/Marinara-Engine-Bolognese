@@ -94,6 +94,7 @@ export const NOODLER_BLUE = "#FF6FAE";
 export const NOODLE_GLOBAL_PERSONA_ID = "__global__";
 export const NOODLE_ICON_SCOPE_CLASS = "[&_svg]:!text-[var(--noodle-blue)]";
 export const NOODLE_LOGO_SRC = "/noodle-klusek.png";
+export const NOODLER_LOGO_SRC = "/noodler-klusek.png";
 
 export const PROFILE_TABS: Array<{ id: ProfileTab; label: string }> = [
   { id: "posts", label: "Posts" },
@@ -263,6 +264,17 @@ export function NoodleLogo({ className }: { className?: string }) {
   return <img src={NOODLE_LOGO_SRC} alt="" className={cn("object-contain", className)} />;
 }
 
+export function NoodlerLogo({ size, className }: { size?: number; className?: string }) {
+  return (
+    <img
+      src={NOODLER_LOGO_SRC}
+      alt=""
+      className={cn("object-contain", className)}
+      style={size ? { width: size, height: size } : undefined}
+    />
+  );
+}
+
 /** NoodleR's mark: a bold "R" glyph, used everywhere Noodle uses an icon for NoodleR-branded chrome. */
 export function NoodlerMark({ size = 16, className }: { size?: number; className?: string }) {
   return (
@@ -341,7 +353,7 @@ export function NoodleModeSwitcher({
     onClick: () => void;
   }> = [
     { id: "noodle", icon: Home, onClick: onOpenNoodle },
-    { id: "noodler", icon: NoodlerMark, onClick: onOpenNoodler },
+    { id: "noodler", icon: NoodlerLogo, onClick: onOpenNoodler },
   ];
   return (
     <div className="grid grid-cols-2 gap-1 rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] p-1">

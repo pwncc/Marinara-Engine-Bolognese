@@ -20,7 +20,7 @@ import {
   Avatar,
   InlineComposer,
   MobileTimelineBackButton,
-  NoodlerMark,
+  NoodlerLogo,
   NoodlerPrivateBadge,
   ProfileHeaderChrome,
   ProfileTabsAndGrid,
@@ -200,7 +200,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
             <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
               <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
                 <MobileTimelineBackButton label="Back to Hub" onClick={onBackToHome} />
-                <NoodlerMark size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
+                <NoodlerLogo size={28} className="hidden lg:block" />
                 <div className="min-w-0 flex-1">
                   <h2 className="truncate text-lg font-bold">Your NoodleR profile</h2>
                   <p className="truncate text-xs text-[var(--muted-foreground)]">
@@ -211,7 +211,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
             </div>
             <div className="flex flex-col items-center px-6 py-16 text-center">
               <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[var(--noodle-blue)] text-zinc-950">
-                <NoodlerMark size={26} />
+                <NoodlerLogo size={30} />
               </span>
               <h3 className="mt-4 text-xl font-black">Create your NoodleR profile</h3>
               <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
@@ -224,7 +224,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                 disabled={!personaAccount}
                 className="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--noodle-blue)] px-6 text-sm font-black text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <NoodlerMark size={17} />
+                <NoodlerLogo size={18} />
                 Build your NoodleR ID
               </button>
             </div>
@@ -252,7 +252,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
         <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
           <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
             <MobileTimelineBackButton label="Back to Noodle" onClick={onBackToHome} />
-            <NoodlerMark size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
+            <NoodlerLogo size={28} className="hidden lg:block" />
             <div className="min-w-0 flex-1">
               <h2 className="truncate text-lg font-bold">Meet NoodleR</h2>
               <p className="truncate text-xs text-[var(--muted-foreground)]">Noodle's private, adult-gated corner</p>
@@ -263,8 +263,8 @@ export function NoodlerHome(props: NoodlerHomeProps) {
         <section className="px-4 py-6 sm:px-6 sm:py-8">
           <div className="rounded-lg border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/8 px-4 py-4">
             <div className="flex items-start gap-3">
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[var(--noodle-blue)] text-zinc-950">
-                <NoodlerMark size={22} />
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[var(--noodle-blue)]/10">
+                <NoodlerLogo size={30} />
               </span>
               <div className="min-w-0">
                 <p className="text-xs font-black uppercase tracking-normal text-[var(--noodle-blue)]">What is NoodleR?</p>
@@ -362,7 +362,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
         >
           <Menu size={22} />
         </button>
-        <NoodlerMark size={26} className="mx-auto text-[var(--noodle-blue)]" />
+        <NoodlerLogo size={34} className="mx-auto" />
         <div aria-hidden="true" />
       </div>
       {!personaAccount && !isGlobalPersonaSelected ? (
@@ -490,7 +490,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                 <div>{noodlerTimelineItems.map(renderNoodlerTimelineItem)}</div>
               ) : privateAccountsCount > 0 ? (
                 <div className="px-8 py-14 text-center">
-                  <NoodlerMark size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
+                  <NoodlerLogo size={48} className="mx-auto mb-4" />
                   <p className="text-base font-bold">Nothing here yet.</p>
                   <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
                     NoodleR posts, comments, subscribers, and unlocks will show here.
@@ -498,7 +498,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                 </div>
               ) : (
                 <div className="px-8 py-14 text-center">
-                  <NoodlerMark size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
+                  <NoodlerLogo size={48} className="mx-auto mb-4" />
                   <p className="text-base font-bold">No NoodleR accounts yet.</p>
                   <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
                     Create a private page from a persona or character profile.
@@ -578,7 +578,7 @@ function NoodlerIdBuilder({
       <div className="sticky top-0 z-20 border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 backdrop-blur">
         <div className="flex min-h-14 items-center gap-3 px-2 py-2 lg:px-4">
           <MobileTimelineBackButton label="Back to Hub" onClick={onBack} />
-          <NoodlerMark size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
+          <NoodlerLogo size={28} className="hidden lg:block" />
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-lg font-bold">Build your NoodleR ID</h2>
             <p className="truncate text-xs text-[var(--muted-foreground)]">
