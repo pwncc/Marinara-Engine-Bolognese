@@ -10,7 +10,9 @@ Noodle is the in-app social media timeline in Marinara Engine. If you are new to
 2. In the left sidebar, click the **Settings** button (the gear icon).
 3. The panel header reads **Noodle settings**.
 
-All Noodle settings are global. They apply to every persona and every chat, not to one chat at a time. Changes save as soon as you make them.
+The settings screen is shared by Noodle and NoodleR. Noodle's global settings are always shown. NoodleR-only settings appear after NoodleR is enabled, but the screen keeps the Noodle blue theme no matter which mode you entered from. When NoodleR is enabled, the sidebar Settings button uses a split blue/pink treatment to show that both sides are configured there.
+
+Most Noodle settings are global. They apply to every persona and every chat, not to one chat at a time. NoodleR page settings apply only to the private page you are currently viewing. Changes save as soon as you make them.
 
 ## Invites
 
@@ -41,13 +43,15 @@ Automatic refreshes run inside the Marinara server. The Noodle page does not nee
 
 ## NoodleR Fan Activity
 
-The **NoodleR Fan Activity** section holds one global switch: **Enable NoodleR fan activity**, off by default. This is the kill switch for unattended fan activity (subscribers, likes, comments, and pay-per-post unlocks from your random-user roster) across every NoodleR (private) page.
+The **NoodleR Fan Activity** section is shown only after NoodleR is enabled. It holds one global switch: **Enable NoodleR fan activity**, off by default. This is the kill switch for unattended fan activity (subscribers, likes, comments, and pay-per-post unlocks from your random-user roster) across every NoodleR (private) page.
 
 Turning this on does not, by itself, make anything happen. Each NoodleR page has its own **Fan activity** section (in that page's profile settings) with an enabled toggle, an intensity dial, and an auto-schedule toggle. A page only gets unattended fan activity when all three are true: this global switch is on, that page's fan activity is enabled, and that page's auto-schedule is on. Turn the global switch off and every page's scheduled activity freezes at once, regardless of individual page settings. Turn one page's auto-schedule off and only that page stops, independent of every other page and the global switch.
 
 The manual **Simulate fan activity now** button on a NoodleR page is unaffected by any of this — it runs immediately whenever fan activity is enabled for that page, whether or not scheduling is on.
 
 Scheduled runs respect the same intensity caps as manual runs (up to 3/6/10 actions for low/medium/high), and additionally cap how often they run unattended: low runs at most once a day, medium up to three times a day, high up to six times a day, each spread out with some randomness rather than firing back-to-back.
+
+When you are viewing one of your own NoodleR pages, the shared Settings screen also shows that page's creator settings: stage identity, subscription pricing, hidden-from privacy, and per-page fan activity. If you are not viewing one of your own private pages, the page-specific area tells you to create or open a NoodleR page first.
 
 ## Active Accounts
 

@@ -3557,12 +3557,388 @@ export function NoodleView() {
               </button>
               {isNoodlerEnabled && (
                 <p className="rounded-md border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/5 px-3 py-2 text-xs leading-5 text-[var(--muted-foreground)]">
-                  Your page's stage identity, subscription pricing, and fan activity now live under NoodleR settings
-                  — switch to NoodleR mode and open Settings there.
+                  Page-specific creator tools live on each NoodleR profile. Open a page to edit its stage identity,
+                  subscription pricing, and fan activity.
                 </p>
               )}
             </div>
           </Section>
+
+          {isNoodlerEnabled && (
+            <Section
+              title="NoodleR Fan Activity"
+              help="Global kill switch for unattended fan activity across every NoodleR (private) page. Off by default. Even a page with its own auto-schedule toggle on stays dormant until this is also on; turning this off freezes every page's scheduled activity at once."
+            >
+              <div className="space-y-3">
+                <ToggleSetting
+                  label="Enable NoodleR fan activity"
+                  help="Lets the fan-activity scheduler run unattended for any NoodleR page that has both fan activity and its own auto-schedule toggle turned on. Manual 'Simulate fan activity now' is unaffected by this switch either way."
+                  checked={settings?.noodler.enableFanActivityScheduler ?? false}
+                  disabled={!settings || updateSettings.isPending}
+                  onChange={(checked) => saveSettings({ noodler: { enableFanActivityScheduler: checked } })}
+                />
+              </div>
+            </Section>
+          )}
+
+          {isNoodlerEnabled &&
+            (viewedProfileAccount && viewingOwnPrivateAccount ? (
+              <>
+                <Section title="NoodleR page" help="Page-specific creator settings for the NoodleR profile you are viewing.">
+                  <div className="space-y-3">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="block space-y-1.5">
+                        <FieldLabel help="Secret filters the linked name out of generated posts/images. This is AI-generated content moderation, not a hard guarantee.">
+                          Identity
+                        </FieldLabel>
+                        <select
+                          value={stageProfileDisclosure}
+                          onChange={(event) =>
+                            setStageProfileDisclosure(event.target.value as NoodlePrivateIdentityDisclosure)
+                          }
+                          className={fieldClass}
+                        >
+                          <option value="open">Open</option>
+                          <option value="hinted">Hinted</option>
+                          <option value="secret">Secret</option>
+                        </select>
+                      </label>
+                      <label className="block space-y-1.5">
+                        <FieldLabel>Stage name</FieldLabel>
+                        <input
+                          value={stageProfileName}
+                          onChange={(event) => setStageProfileName(event.target.value)}
+                          className={fieldClass}
+                        />
+                      </label>
+                    </div>
+                    <label className="block space-y-1.5">
+                      <FieldLabel>Private persona</FieldLabel>
+                      <textarea
+                        value={stageProfilePersonality}
+                        onChange={(event) => setStageProfilePersonality(event.target.value)}
+                        className={cn(textareaClass, "min-h-20 resize-none")}
+                      />
+                    </label>
+                    <label className="block space-y-1.5">
+                      <FieldLabel>Dynamic</FieldLabel>
+                      <input
+                        value={stageProfileDynamic}
+                        onChange={(event) => setStageProfileDynamic(event.target.value)}
+                        className={fieldClass}
+                      />
+                    </label>
+                    <label className="block space-y-1.5">
+                      <FieldLabel>Appearance/style override</FieldLabel>
+                      <textarea
+                        value={stageProfileAppearanceOverride}
+                        onChange={(event) => setStageProfileAppearanceOverride(event.target.value)}
+                        placeholder="Optional styling, outfit, or presentation notes. Your linked account's body/face is still preserved."
+                        className={cn(textareaClass, "min-h-20 resize-none")}
+                      />
+                    </label>
+                    <label className="block space-y-1.5">
+                      <FieldLabel>Bio</FieldLabel>
+                      <textarea
+                        value={stageProfileBio}
+                        onChange={(event) => setStageProfileBio(event.target.value)}
+                        className={cn(textareaClass, "min-h-20 resize-none")}
+                      />
+                    </label>
+                    <div className="space-y-1.5">
+                      <FieldLabel help="Active accounts also post themselves. Passive accounts are lurk-only and never post — this is unrelated to AI auto-posting, which stays off regardless.">
+                        Posting mode
+                      </FieldLabel>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {(
+                          [
+                            { value: "active" as const, title: "Active", detail: "This account posts too." },
+                            { value: "passive" as const, title: "Passive", detail: "Lurk only — never posts." },
+                          ]
+                        ).map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => setStageProfilePostingMode(option.value)}
+                            className={cn(
+                              "rounded-md border p-2.5 text-left transition-colors",
+                              stageProfilePostingMode === option.value
+                                ? "border-[var(--noodle-blue)] bg-[var(--noodle-blue)]/10"
+                                : "border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] hover:border-[var(--noodle-blue)]/50",
+                            )}
+                          >
+                            <p className="text-xs font-bold">{option.title}</p>
+                            <p className="mt-0.5 text-[11px] leading-4 text-[var(--muted-foreground)]">
+                              {option.detail}
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={saveStageProfile}
+                        disabled={updateAccount.isPending}
+                        className="flex h-9 items-center justify-center gap-2 rounded-md bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {updateAccount.isPending && <Loader2 size={14} className="animate-spin" />}
+                        {updateAccount.isPending ? "Saving" : "Save stage profile"}
+                      </button>
+                    </div>
+                  </div>
+                </Section>
+
+                <Section title="NoodleR monetization" help="Subscription pricing and pay-per-view bundling for this page.">
+                  <div className="space-y-3">
+                    <label className="flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={viewedProfileAccount.settings?.subscriptionIncludesPpv === true}
+                        onChange={(event) =>
+                          updateAccount.mutate({
+                            id: viewedProfileAccount.id,
+                            settings: { subscriptionIncludesPpv: event.target.checked },
+                          })
+                        }
+                        disabled={updateAccount.isPending}
+                      />
+                      <span>
+                        Subscribers automatically unlock pay-per-post content too. Off by default — subscribers still
+                        have to unlock each pay-per-post individually.
+                      </span>
+                    </label>
+                    <label className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                      <span className="shrink-0 font-semibold text-[var(--foreground)]">Subscription price</span>
+                      <span>$</span>
+                      <input
+                        key={viewedProfileAccount.id}
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        inputMode="decimal"
+                        defaultValue={
+                          typeof viewedProfileAccount.settings?.subscriptionPrice === "number"
+                            ? (viewedProfileAccount.settings.subscriptionPrice as number)
+                            : ""
+                        }
+                        placeholder="9.99"
+                        onBlur={(event) => {
+                          const value = Number.parseFloat(event.target.value);
+                          updateAccount.mutate({
+                            id: viewedProfileAccount.id,
+                            settings: { subscriptionPrice: Number.isFinite(value) && value >= 0 ? value : null },
+                          });
+                        }}
+                        className={cn(fieldClass, "h-8 w-24")}
+                      />
+                      <span>/mo · shown to fans, no real payment is processed</span>
+                    </label>
+                  </div>
+                </Section>
+
+                <Section
+                  title="NoodleR page privacy"
+                  help="Who this character knows, and who this private page should stay invisible to — separate from the public account's own visibility."
+                >
+                  <div className="space-y-4">
+                    {(() => {
+                      const linkedPublicAccount = accounts.find(
+                        (account) => account.linkedAccountId === viewedProfileAccount.id,
+                      );
+                      const linkedKnownAccountIds = linkedPublicAccount?.settings?.social as
+                        | { knownAccountIds?: unknown }
+                        | undefined;
+                      const knownAccountIds = new Set(
+                        Array.isArray(linkedKnownAccountIds?.knownAccountIds)
+                          ? (linkedKnownAccountIds!.knownAccountIds as string[])
+                          : [],
+                      );
+                      const hiddenFromSetting = viewedProfileAccount.settings?.hiddenFrom as
+                        | { hiddenFromAccountIds?: unknown }
+                        | undefined;
+                      const hiddenFromIds = new Set(
+                        Array.isArray(hiddenFromSetting?.hiddenFromAccountIds)
+                          ? (hiddenFromSetting!.hiddenFromAccountIds as string[])
+                          : [],
+                      );
+                      const otherPublicAccounts = accounts.filter(
+                        (account) => account.visibility === "public" && account.id !== linkedPublicAccount?.id,
+                      );
+                      const toggleKnown = (accountId: string) => {
+                        if (!linkedPublicAccount) return;
+                        const next = new Set(knownAccountIds);
+                        if (next.has(accountId)) next.delete(accountId);
+                        else next.add(accountId);
+                        updateAccount.mutate({
+                          id: linkedPublicAccount.id,
+                          settings: { social: { knownAccountIds: Array.from(next) } },
+                        });
+                      };
+                      const toggleHidden = (accountId: string) => {
+                        const next = new Set(hiddenFromIds);
+                        if (next.has(accountId)) next.delete(accountId);
+                        else next.add(accountId);
+                        updateAccount.mutate({
+                          id: viewedProfileAccount.id,
+                          settings: { hiddenFrom: { hiddenFromAccountIds: Array.from(next) } },
+                        });
+                      };
+                      return (
+                        <>
+                          <div>
+                            <p className="text-xs font-semibold text-[var(--foreground)]">People this character knows</p>
+                            <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
+                              Biases who this character's public account tries to interact with. It is a preference, not
+                              an access restriction.
+                            </p>
+                            {!linkedPublicAccount ? (
+                              <p className="mt-2 text-xs text-[var(--muted-foreground)]">
+                                No linked public account found for this page.
+                              </p>
+                            ) : (
+                              <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-md border border-[var(--noodle-divider)] p-2">
+                                {otherPublicAccounts.map((account) => (
+                                  <label
+                                    key={account.id}
+                                    className="flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-[var(--accent)]"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={knownAccountIds.has(account.id)}
+                                      onChange={() => toggleKnown(account.id)}
+                                      disabled={updateAccount.isPending}
+                                    />
+                                    <span className="truncate">
+                                      {account.displayName}{" "}
+                                      <span className="text-[var(--muted-foreground)]">@{account.handle}</span>
+                                    </span>
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-xs font-semibold text-[var(--foreground)]">Hide this page from</p>
+                            <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
+                              These accounts will never see or be shown this page, even in Discover.
+                            </p>
+                            <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-md border border-[var(--noodle-divider)] p-2">
+                              {otherPublicAccounts.map((account) => (
+                                <label
+                                  key={account.id}
+                                  className="flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-[var(--accent)]"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={hiddenFromIds.has(account.id)}
+                                    onChange={() => toggleHidden(account.id)}
+                                    disabled={updateAccount.isPending}
+                                  />
+                                  <span className="truncate">
+                                    {account.displayName}{" "}
+                                    <span className="text-[var(--muted-foreground)]">@{account.handle}</span>
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </Section>
+
+                <Section
+                  title="NoodleR fan activity"
+                  help="Lets existing filler accounts like, comment on, subscribe to, and unlock this page's posts on their own. Fans never write new posts."
+                >
+                  <div className="space-y-3">
+                    <label className="flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={readFanActivityEnabled(viewedProfileAccount)}
+                        onChange={(event) =>
+                          updateAccount.mutate({
+                            id: viewedProfileAccount.id,
+                            settings: {
+                              fanActivity: {
+                                ...fanActivitySettingsFromAccount(viewedProfileAccount),
+                                enabled: event.target.checked,
+                              },
+                            },
+                          })
+                        }
+                        disabled={updateAccount.isPending}
+                      />
+                      <span>Turn on fan activity for this page. Off by default.</span>
+                    </label>
+                    {readFanActivityEnabled(viewedProfileAccount) && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <select
+                          value={readFanActivityIntensity(viewedProfileAccount)}
+                          onChange={(event) =>
+                            updateAccount.mutate({
+                              id: viewedProfileAccount.id,
+                              settings: {
+                                fanActivity: {
+                                  ...fanActivitySettingsFromAccount(viewedProfileAccount),
+                                  intensity: event.target.value,
+                                },
+                              },
+                            })
+                          }
+                          disabled={updateAccount.isPending}
+                          className="h-8 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs"
+                        >
+                          <option value="low">Low (up to 3 actions/run)</option>
+                          <option value="medium">Medium (up to 6 actions/run)</option>
+                          <option value="high">High (up to 10 actions/run)</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => simulateFanActivity.mutate(viewedProfileAccount.id)}
+                          disabled={simulateFanActivity.isPending}
+                          className="ml-auto h-8 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {simulateFanActivity.isPending ? "Simulating..." : "Simulate fan activity now"}
+                        </button>
+                        <label className="mt-1 flex w-full items-start gap-2 text-xs text-[var(--muted-foreground)]">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={readFanActivityAutoSchedule(viewedProfileAccount)}
+                            onChange={(event) =>
+                              updateAccount.mutate({
+                                id: viewedProfileAccount.id,
+                                settings: {
+                                  fanActivity: {
+                                    ...fanActivitySettingsFromAccount(viewedProfileAccount),
+                                    autoSchedule: event.target.checked,
+                                  },
+                                },
+                              })
+                            }
+                            disabled={updateAccount.isPending}
+                          />
+                          <span>
+                            Run fan activity on a schedule, unattended. Also needs "Enable NoodleR fan activity" above.
+                          </span>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                </Section>
+              </>
+            ) : (
+              <Section title="NoodleR page" help="Create a NoodleR page to manage stage identity, pricing, and fan activity here.">
+                <p className="text-xs leading-5 text-[var(--muted-foreground)]">
+                  Create a NoodleR page from your public profile to unlock page-specific creator settings.
+                </p>
+              </Section>
+            ))}
 
           <Section
             title="Active Accounts"
@@ -3888,404 +4264,6 @@ export function NoodleView() {
             </button>
           </Section>
         </>
-      )}
-    </>
-  );
-
-  const noodlerSettingsContent = (
-    <>
-      <Section
-        title="NoodleR Access"
-        help="Controls whether the private NoodleR side of Noodle is available from the mode switcher and mobile navigation."
-      >
-        <div className="space-y-3">
-          <ToggleSetting
-            label="Enable NoodleR"
-            help="Unlocks the private creator network mode. Turning this off exits NoodleR mode immediately."
-            checked={isNoodlerEnabled}
-            disabled={updateSettings.isPending}
-            onChange={setNoodlerEnabled}
-          />
-          <ToggleSetting
-            label="Allow global feed persona"
-            help="Adds a 'Global' entry to the account switcher that shows every post across all personas, in both Noodle and NoodleR."
-            checked={settings?.allowGlobalPersona === true}
-            disabled={updateSettings.isPending}
-            onChange={(enabled) => saveSettings({ allowGlobalPersona: enabled })}
-          />
-        </div>
-      </Section>
-
-      <Section
-        title="NoodleR Fan Activity"
-        help="Global kill switch for unattended fan activity across every NoodleR (private) page. Off by default. Even a page with its own auto-schedule toggle on stays dormant until this is also on; turning this off freezes every page's scheduled activity at once."
-      >
-        <div className="space-y-3">
-          <ToggleSetting
-            label="Enable NoodleR fan activity"
-            help="Lets the fan-activity scheduler run unattended for any NoodleR page that has both fan activity and its own auto-schedule toggle turned on. Manual 'Simulate fan activity now' is unaffected by this switch either way."
-            checked={settings?.noodler.enableFanActivityScheduler ?? false}
-            disabled={!settings || updateSettings.isPending || !isNoodlerEnabled}
-            onChange={(checked) => saveSettings({ noodler: { enableFanActivityScheduler: checked } })}
-          />
-        </div>
-      </Section>
-
-      {viewedProfileAccount && viewingOwnPrivateAccount ? (
-        <>
-          <Section title="Stage profile" help="Controls the private creator identity shown on your NoodleR page.">
-            <div className="space-y-3">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="block space-y-1.5">
-                  <FieldLabel help="&quot;Secret&quot; filters the linked name out of generated posts/images — it's AI-generated content moderation, not a hard guarantee it can never slip through.">
-                    Identity
-                  </FieldLabel>
-                  <select
-                    value={stageProfileDisclosure}
-                    onChange={(event) =>
-                      setStageProfileDisclosure(event.target.value as NoodlePrivateIdentityDisclosure)
-                    }
-                    className={fieldClass}
-                  >
-                    <option value="open">Open</option>
-                    <option value="hinted">Hinted</option>
-                    <option value="secret">Secret</option>
-                  </select>
-                </label>
-                <label className="block space-y-1.5">
-                  <FieldLabel>Stage name</FieldLabel>
-                  <input
-                    value={stageProfileName}
-                    onChange={(event) => setStageProfileName(event.target.value)}
-                    className={fieldClass}
-                  />
-                </label>
-              </div>
-              <label className="block space-y-1.5">
-                <FieldLabel>Private persona</FieldLabel>
-                <textarea
-                  value={stageProfilePersonality}
-                  onChange={(event) => setStageProfilePersonality(event.target.value)}
-                  className={cn(textareaClass, "min-h-20 resize-none")}
-                />
-              </label>
-              <label className="block space-y-1.5">
-                <FieldLabel>Dynamic</FieldLabel>
-                <input
-                  value={stageProfileDynamic}
-                  onChange={(event) => setStageProfileDynamic(event.target.value)}
-                  className={fieldClass}
-                />
-              </label>
-              <label className="block space-y-1.5">
-                <FieldLabel>Appearance/style override</FieldLabel>
-                <textarea
-                  value={stageProfileAppearanceOverride}
-                  onChange={(event) => setStageProfileAppearanceOverride(event.target.value)}
-                  placeholder="Optional styling, outfit, or presentation notes. Your linked account's body/face is still preserved."
-                  className={cn(textareaClass, "min-h-20 resize-none")}
-                />
-              </label>
-              <label className="block space-y-1.5">
-                <FieldLabel>Bio</FieldLabel>
-                <textarea
-                  value={stageProfileBio}
-                  onChange={(event) => setStageProfileBio(event.target.value)}
-                  className={cn(textareaClass, "min-h-20 resize-none")}
-                />
-              </label>
-              <div className="space-y-1.5">
-                <FieldLabel help="Active accounts also post themselves. Passive accounts are lurk-only and never post — this is unrelated to AI auto-posting, which stays off regardless.">
-                  Posting mode
-                </FieldLabel>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {(
-                    [
-                      { value: "active" as const, title: "Active", detail: "This account posts too." },
-                      { value: "passive" as const, title: "Passive", detail: "Lurk only — never posts." },
-                    ]
-                  ).map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setStageProfilePostingMode(option.value)}
-                      className={cn(
-                        "rounded-md border p-2.5 text-left transition-colors",
-                        stageProfilePostingMode === option.value
-                          ? "border-[var(--noodle-blue)] bg-[var(--noodle-blue)]/10"
-                          : "border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] hover:border-[var(--noodle-blue)]/50",
-                      )}
-                    >
-                      <p className="text-xs font-bold">{option.title}</p>
-                      <p className="mt-0.5 text-[11px] leading-4 text-[var(--muted-foreground)]">{option.detail}</p>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={saveStageProfile}
-                  disabled={updateAccount.isPending}
-                  className="flex h-9 items-center justify-center gap-2 rounded-md bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {updateAccount.isPending && <Loader2 size={14} className="animate-spin" />}
-                  {updateAccount.isPending ? "Saving" : "Save stage profile"}
-                </button>
-              </div>
-            </div>
-          </Section>
-
-          <Section title="Monetization" help="Subscription pricing and pay-per-view bundling for your NoodleR page.">
-            <div className="space-y-3">
-              <label className="flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
-                <input
-                  type="checkbox"
-                  className="mt-0.5"
-                  checked={viewedProfileAccount.settings?.subscriptionIncludesPpv === true}
-                  onChange={(event) =>
-                    updateAccount.mutate({
-                      id: viewedProfileAccount.id,
-                      settings: { subscriptionIncludesPpv: event.target.checked },
-                    })
-                  }
-                  disabled={updateAccount.isPending}
-                />
-                <span>
-                  Subscribers automatically unlock pay-per-post content too. Off by default — subscribers still have
-                  to unlock each pay-per-post individually.
-                </span>
-              </label>
-              <label className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
-                <span className="shrink-0 font-semibold text-[var(--foreground)]">Subscription price</span>
-                <span>$</span>
-                <input
-                  key={viewedProfileAccount.id}
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  inputMode="decimal"
-                  defaultValue={
-                    typeof viewedProfileAccount.settings?.subscriptionPrice === "number"
-                      ? (viewedProfileAccount.settings.subscriptionPrice as number)
-                      : ""
-                  }
-                  placeholder="9.99"
-                  onBlur={(event) => {
-                    const value = Number.parseFloat(event.target.value);
-                    updateAccount.mutate({
-                      id: viewedProfileAccount.id,
-                      settings: { subscriptionPrice: Number.isFinite(value) && value >= 0 ? value : null },
-                    });
-                  }}
-                  className={cn(fieldClass, "h-8 w-24")}
-                />
-                <span>/mo · shown to fans, no real payment is processed</span>
-              </label>
-            </div>
-          </Section>
-
-          <Section
-            title="Relationships & privacy"
-            help="Who this character knows, and who this private page should stay invisible to — separate from the public account's own visibility."
-          >
-            <div className="space-y-4">
-              {(() => {
-                const linkedPublicAccount = accounts.find(
-                  (account) => account.linkedAccountId === viewedProfileAccount.id,
-                );
-                const linkedKnownAccountIds = linkedPublicAccount?.settings?.social as
-                  | { knownAccountIds?: unknown }
-                  | undefined;
-                const knownAccountIds = new Set(
-                  Array.isArray(linkedKnownAccountIds?.knownAccountIds)
-                    ? (linkedKnownAccountIds!.knownAccountIds as string[])
-                    : [],
-                );
-                const hiddenFromSetting = viewedProfileAccount.settings?.hiddenFrom as
-                  | { hiddenFromAccountIds?: unknown }
-                  | undefined;
-                const hiddenFromIds = new Set(
-                  Array.isArray(hiddenFromSetting?.hiddenFromAccountIds)
-                    ? (hiddenFromSetting!.hiddenFromAccountIds as string[])
-                    : [],
-                );
-                const otherPublicAccounts = accounts.filter(
-                  (account) => account.visibility === "public" && account.id !== linkedPublicAccount?.id,
-                );
-                const toggleKnown = (accountId: string) => {
-                  if (!linkedPublicAccount) return;
-                  const next = new Set(knownAccountIds);
-                  if (next.has(accountId)) next.delete(accountId);
-                  else next.add(accountId);
-                  updateAccount.mutate({
-                    id: linkedPublicAccount.id,
-                    settings: { social: { knownAccountIds: Array.from(next) } },
-                  });
-                };
-                const toggleHidden = (accountId: string) => {
-                  const next = new Set(hiddenFromIds);
-                  if (next.has(accountId)) next.delete(accountId);
-                  else next.add(accountId);
-                  updateAccount.mutate({
-                    id: viewedProfileAccount.id,
-                    settings: { hiddenFrom: { hiddenFromAccountIds: Array.from(next) } },
-                  });
-                };
-                return (
-                  <>
-                    <div>
-                      <p className="text-xs font-semibold text-[var(--foreground)]">People this character knows</p>
-                      <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
-                        Biases who this character's public account tries to interact with. Doesn't restrict anyone
-                        else — just a preference.
-                      </p>
-                      {!linkedPublicAccount ? (
-                        <p className="mt-2 text-xs text-[var(--muted-foreground)]">
-                          No linked public account found for this page.
-                        </p>
-                      ) : (
-                        <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-md border border-[var(--noodle-divider)] p-2">
-                          {otherPublicAccounts.map((account) => (
-                            <label
-                              key={account.id}
-                              className="flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-[var(--accent)]"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={knownAccountIds.has(account.id)}
-                                onChange={() => toggleKnown(account.id)}
-                                disabled={updateAccount.isPending}
-                              />
-                              <span className="truncate">
-                                {account.displayName} <span className="text-[var(--muted-foreground)]">@{account.handle}</span>
-                              </span>
-                            </label>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <div>
-                      <p className="text-xs font-semibold text-[var(--foreground)]">Hide this page from</p>
-                      <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
-                        These accounts will never see or be shown this page, even in Discover — separate from any
-                        other private page linked to a different account.
-                      </p>
-                      <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-md border border-[var(--noodle-divider)] p-2">
-                        {otherPublicAccounts.map((account) => (
-                          <label
-                            key={account.id}
-                            className="flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-[var(--accent)]"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={hiddenFromIds.has(account.id)}
-                              onChange={() => toggleHidden(account.id)}
-                              disabled={updateAccount.isPending}
-                            />
-                            <span className="truncate">
-                              {account.displayName} <span className="text-[var(--muted-foreground)]">@{account.handle}</span>
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
-          </Section>
-
-          <Section
-            title="Fan activity"
-            help="Lets existing filler accounts like, comment on, subscribe to, and unlock this page's posts on their own. Fans never write new posts — only you do that."
-          >
-            <div className="space-y-3">
-              <label className="flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
-                <input
-                  type="checkbox"
-                  className="mt-0.5"
-                  checked={readFanActivityEnabled(viewedProfileAccount)}
-                  onChange={(event) =>
-                    updateAccount.mutate({
-                      id: viewedProfileAccount.id,
-                      settings: {
-                        fanActivity: {
-                          ...fanActivitySettingsFromAccount(viewedProfileAccount),
-                          enabled: event.target.checked,
-                        },
-                      },
-                    })
-                  }
-                  disabled={updateAccount.isPending}
-                />
-                <span>Turn on fan activity for this page. Off by default.</span>
-              </label>
-              {readFanActivityEnabled(viewedProfileAccount) && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <select
-                    value={readFanActivityIntensity(viewedProfileAccount)}
-                    onChange={(event) =>
-                      updateAccount.mutate({
-                        id: viewedProfileAccount.id,
-                        settings: {
-                          fanActivity: {
-                            ...fanActivitySettingsFromAccount(viewedProfileAccount),
-                            intensity: event.target.value,
-                          },
-                        },
-                      })
-                    }
-                    disabled={updateAccount.isPending}
-                    className="h-8 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs"
-                  >
-                    <option value="low">Low (up to 3 actions/run)</option>
-                    <option value="medium">Medium (up to 6 actions/run)</option>
-                    <option value="high">High (up to 10 actions/run)</option>
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => simulateFanActivity.mutate(viewedProfileAccount.id)}
-                    disabled={simulateFanActivity.isPending}
-                    className="ml-auto h-8 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {simulateFanActivity.isPending ? "Simulating…" : "Simulate fan activity now"}
-                  </button>
-                  <label className="mt-1 flex w-full items-start gap-2 text-xs text-[var(--muted-foreground)]">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5"
-                      checked={readFanActivityAutoSchedule(viewedProfileAccount)}
-                      onChange={(event) =>
-                        updateAccount.mutate({
-                          id: viewedProfileAccount.id,
-                          settings: {
-                            fanActivity: {
-                              ...fanActivitySettingsFromAccount(viewedProfileAccount),
-                              autoSchedule: event.target.checked,
-                            },
-                          },
-                        })
-                      }
-                      disabled={updateAccount.isPending}
-                    />
-                    <span>
-                      Run fan activity on a schedule, unattended. Also needs "Enable NoodleR fan activity" above —
-                      this only opts this page in, it doesn't turn scheduling on by itself.
-                    </span>
-                  </label>
-                </div>
-              )}
-            </div>
-          </Section>
-        </>
-      ) : (
-        <Section title="Your page" help="Create a NoodleR page to manage stage identity, pricing, and fan activity here.">
-          <p className="text-xs leading-5 text-[var(--muted-foreground)]">
-            You don't have a NoodleR page linked to this persona yet. Create one from your public profile to unlock
-            these settings.
-          </p>
-        </Section>
       )}
     </>
   );
@@ -5992,7 +5970,10 @@ export function NoodleView() {
       data-component="NoodleView"
       style={
         {
-          "--noodle-blue": activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
+          "--noodle-blue": activeNoodleView === "settings" ? NOODLE_BLUE : activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
+          "--noodle-settings-accent": isNoodlerEnabled
+            ? `linear-gradient(90deg, ${NOODLE_BLUE} 0 50%, ${NOODLER_BLUE} 50% 100%)`
+            : NOODLE_BLUE,
           "--noodle-divider": "var(--marinara-chat-chrome-panel-divider)",
         } as CSSProperties
       }
@@ -6029,7 +6010,10 @@ export function NoodleView() {
               )}
               style={
                 {
-                  "--noodle-blue": activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
+                  "--noodle-blue": activeNoodleView === "settings" ? NOODLE_BLUE : activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
+                  "--noodle-settings-accent": isNoodlerEnabled
+                    ? `linear-gradient(90deg, ${NOODLE_BLUE} 0 50%, ${NOODLER_BLUE} 50% 100%)`
+                    : NOODLE_BLUE,
                   "--noodle-divider": "var(--marinara-chat-chrome-panel-divider)",
                 } as CSSProperties
               }
@@ -6102,7 +6086,14 @@ export function NoodleView() {
                   onClick={openSettings}
                   className="flex min-h-12 w-full items-center gap-4 rounded-xl px-2 text-left text-base font-bold transition-colors hover:bg-[var(--accent)]"
                 >
-                  <Settings2 size={23} />
+                  <span
+                    className={cn(
+                      "flex h-7 w-7 items-center justify-center rounded-full",
+                      isNoodlerEnabled && "bg-[image:var(--noodle-settings-accent)]",
+                    )}
+                  >
+                    <Settings2 size={23} className={cn(isNoodlerEnabled && "!text-zinc-950")} />
+                  </span>
                   Settings
                 </button>
                 <button
@@ -6313,7 +6304,14 @@ export function NoodleView() {
                     activeNoodleView === "settings" && "bg-[var(--noodle-blue)]/10",
                   )}
                 >
-                  <Settings2 size={22} className="!text-[var(--noodle-blue)]" />
+                  <span
+                    className={cn(
+                      "flex h-6 w-6 items-center justify-center rounded-full",
+                      isNoodlerEnabled && "bg-[image:var(--noodle-settings-accent)]",
+                    )}
+                  >
+                    <Settings2 size={22} className={cn("!text-[var(--noodle-blue)]", isNoodlerEnabled && "!text-zinc-950")} />
+                  </span>
                   Settings
                 </button>
               </nav>
@@ -6473,16 +6471,18 @@ export function NoodleView() {
                       />
                       <Settings2 size={22} className="hidden text-[var(--noodle-blue)] lg:block" />
                       <div className="min-w-0">
-                        <h2 className="text-lg font-bold">
-                          {activeNoodleMode === "noodler" ? "NoodleR settings" : "Noodle settings"}
-                        </h2>
+                        <h2 className="text-lg font-bold">Noodle settings</h2>
                         <p className="truncate text-xs text-[var(--muted-foreground)]">
-                          {personaAccount ? `@${personaAccount.handle}` : "Choose a persona account"}
+                          {isNoodlerEnabled
+                            ? "Noodle and NoodleR settings in one place"
+                            : personaAccount
+                              ? `@${personaAccount.handle}`
+                              : "Choose a persona account"}
                         </p>
                       </div>
                     </div>
                   </div>
-                  {activeNoodleMode === "noodler" ? noodlerSettingsContent : settingsContent}
+                  {settingsContent}
                 </div>
               ) : activeNoodleView === "notifications" && activeNoodleMode === "noodler" ? (
                 noodlerNotificationsContent
