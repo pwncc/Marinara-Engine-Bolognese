@@ -31,7 +31,8 @@ const projectKey = (accountId: string) => [...noodleKeys.all, "creator-projects"
 export function useNoodlerProjects(accountId?: string) {
   return useQuery({
     queryKey: projectKey(accountId ?? "none"),
-    queryFn: () => api.get<NoodlerCreatorProjectDetail[]>(`/noodle/accounts/${encodeURIComponent(accountId!)}/projects`),
+    queryFn: () =>
+      api.get<NoodlerCreatorProjectDetail[]>(`/noodle/accounts/${encodeURIComponent(accountId!)}/projects`),
     enabled: Boolean(accountId),
   });
 }
@@ -128,7 +129,10 @@ export function useCreatePrivateNoodleAccount() {
   return useMutation({
     mutationFn: ({ publicAccountId, input }: { publicAccountId: string; input?: NoodlePrivateAccountCreateInput }) =>
       api.post<NoodleAccount>(`/noodle/accounts/${publicAccountId}/private`, input ?? {}),
-    onSuccess: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() });
+      qc.invalidateQueries({ queryKey: [...noodleKeys.all, "hub"] });
+    },
   });
 }
 
@@ -172,7 +176,8 @@ export function useDeletePrivateNoodleAccount() {
 export function useRetryPrivateIdentityGeneration() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.post<NoodleAccount>(`/noodle/accounts/${encodeURIComponent(id)}/private/retry-identity`, {}),
+    mutationFn: (id: string) =>
+      api.post<NoodleAccount>(`/noodle/accounts/${encodeURIComponent(id)}/private/retry-identity`, {}),
     onSuccess: (account) => {
       qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current
@@ -215,6 +220,8 @@ export function useSubscribeNoodleAccount() {
             }
           : current,
       );
+      qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() });
+      qc.invalidateQueries({ queryKey: [...noodleKeys.all, "hub"] });
     },
   });
 }
@@ -248,6 +255,8 @@ export function useUnsubscribeNoodleAccount() {
             }
           : current,
       );
+      qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() });
+      qc.invalidateQueries({ queryKey: [...noodleKeys.all, "hub"] });
     },
   });
 }
@@ -295,6 +304,7 @@ export function useUnlockNoodlePost() {
             }
           : current,
       );
+      qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() });
     },
   });
 }

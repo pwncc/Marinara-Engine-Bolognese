@@ -25,14 +25,25 @@ export function validateNoodleGeneratedRefresh(
   refresh: NoodleGeneratedRefresh,
   allowedActorHandles: ReadonlySet<string>,
   knownHandles: ReadonlySet<string>,
+  requiredPostHandle?: string,
 ): string | null {
+  if (
+    requiredPostHandle &&
+    !refresh.posts.some(
+      (post) => normalizeNoodleHandle(post.authorHandle) === normalizeNoodleHandle(requiredPostHandle),
+    )
+  ) {
+    return `the response did not include the required post from @${normalizeNoodleHandle(requiredPostHandle)}`;
+  }
   const hasActivity =
     refresh.posts.length + refresh.interactions.length + refresh.follows.length + refresh.digests.length > 0;
   if (!hasActivity) return "the response contained no timeline activity";
 
   const hasUsableAttribution =
     refresh.posts.some((post) => allowedActorHandles.has(normalizeNoodleHandle(post.authorHandle))) ||
-    refresh.interactions.some((interaction) => allowedActorHandles.has(normalizeNoodleHandle(interaction.actorHandle))) ||
+    refresh.interactions.some((interaction) =>
+      allowedActorHandles.has(normalizeNoodleHandle(interaction.actorHandle)),
+    ) ||
     refresh.follows.some(
       (follow) =>
         allowedActorHandles.has(normalizeNoodleHandle(follow.actorHandle)) &&
@@ -56,7 +67,8 @@ export function parseNoodleGeneratedRefresh(value: unknown): {
   refresh: NoodleGeneratedRefresh;
   rejected: RejectedNoodleGeneratedRefreshItem[];
 } {
-  const record = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  const record =
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
   if (!record) {
     noodleGeneratedRefreshSchema.parse(value);
     return { refresh: { posts: [], interactions: [], follows: [], digests: [] }, rejected: [] };

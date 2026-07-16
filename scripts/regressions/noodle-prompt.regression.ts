@@ -25,6 +25,7 @@ import {
   NOODLE_RECALLED_MEMORY_INSTRUCTION,
   NOODLE_TONE_INSTRUCTIONS,
   NOODLE_TIMELINE_BASE_DEFAULT_PROMPT,
+  NOODLE_TIMELINE_INVARIANT_INSTRUCTIONS,
   noodleTimelineFeatureInstructions,
   sampleNoodlePastMemories,
   sampleNoodlePastMemoriesWeighted,
@@ -37,6 +38,7 @@ import {
   validateNoodleGeneratedRefresh,
 } from "../../packages/server/src/services/noodle/noodle-generated-refresh.js";
 import { normalizeNoodleImagePrompt } from "../../packages/server/src/services/noodle/noodle-image-prompt.js";
+import { injectAtDepth } from "../../packages/server/src/services/lorebook/prompt-injector.js";
 import {
   NOODLE_IMAGE_POST,
   NOODLE_TIMELINE_BASE,
@@ -181,9 +183,16 @@ const charactersOnlySelection = chooseNoodleParticipantAccounts({
   selectedGroupCharacterIds: new Set(),
   random: () => 0.9,
 });
-assert.equal(charactersOnlySelection.every((account) => account.kind === "character"), true);
+assert.equal(
+  charactersOnlySelection.every((account) => account.kind === "character"),
+  true,
+);
 const sparseCharacterSelection = chooseNoodleParticipantAccounts({
-  accounts: [participantAccounts[0]!, randomParticipant, { ...randomParticipant, id: "ambient-two", entityId: "ambient-two" }],
+  accounts: [
+    participantAccounts[0]!,
+    randomParticipant,
+    { ...randomParticipant, id: "ambient-two", entityId: "ambient-two" },
+  ],
   settings: { ...participantSettings, allowRandomUsers: true, participantMin: 3, participantMax: 3 },
   selectedGroupCharacterIds: new Set(),
   random: () => 0.9,
@@ -291,7 +300,28 @@ assert.ok(
 );
 assert.equal(
   composeNoodleTimelineSystemPrompt("Replace the base prompt entirely.", timelineVoiceTail),
-  `Replace the base prompt entirely.\n${timelineVoiceTail}`,
+  `Replace the base prompt entirely.\n${NOODLE_TIMELINE_INVARIANT_INSTRUCTIONS}\n${timelineVoiceTail}`,
+);
+assert.match(
+  composeNoodleTimelineSystemPrompt("Custom creative framing only.", timelineVoiceTail),
+  /Never generate posts, replies, likes, reposts, poll votes, or follows as a persona/u,
+);
+assert.match(
+  composeNoodleTimelineSystemPrompt("Custom creative framing only.", timelineVoiceTail),
+  /Return JSON only\. No prose outside the JSON object\./u,
+);
+const depthInjectedPrompt = injectAtDepth(
+  [
+    { role: "system", content: "system" },
+    { role: "user", content: "timeline context" },
+    { role: "user", content: "required output format" },
+  ],
+  [{ role: "system", content: "activated depth lore", depth: 0 }],
+  { minIndex: 1, anchorIndex: 2 },
+);
+assert.deepEqual(
+  depthInjectedPrompt.map((message) => message.content),
+  ["system", "timeline context", "activated depth lore", "required output format"],
 );
 assert.equal(NOODLE_CREATIVE_FORMAT_INSTRUCTIONS.length, 3);
 assert.match(NOODLE_CREATIVE_FORMAT_INSTRUCTIONS[0], /create polls in their own posts and vote in polls/u);
@@ -492,10 +522,34 @@ assert.equal(
   ),
   null,
 );
+assert.match(
+  validateNoodleGeneratedRefresh(
+    {
+      posts: [],
+      interactions: [
+        {
+          actorHandle: "alpha",
+          targetPostId: "existing-post",
+          targetTempId: null,
+          parentInteractionId: null,
+          type: "like",
+          content: null,
+          pollOptionIndex: null,
+        },
+      ],
+      follows: [],
+      digests: [],
+    },
+    new Set(["alpha"]),
+    new Set(["alpha"]),
+    "alpha",
+  ) ?? "",
+  /did not include the required post from @alpha/u,
+);
 
 assert.equal(
   normalizeNoodleImagePrompt(
-    'Post text: a long social post\nDraft image idea: cel-shaded scientist holding a test tube\nUser instructions: vivid color',
+    "Post text: a long social post\nDraft image idea: cel-shaded scientist holding a test tube\nUser instructions: vivid color",
   ),
   "cel-shaded scientist holding a test tube",
 );
@@ -568,7 +622,11 @@ assert.equal(
 
 // Explicit legacy chance/maxItems params reproduce pre-toggle behavior (enableEnhancedTimelineWriting off).
 assert.equal(
-  noodlePastMemorySampleSize(() => 0.5, NOODLE_LEGACY_PAST_MEMORY_INCLUSION_CHANCE, NOODLE_LEGACY_PAST_MEMORY_MAX_ITEMS),
+  noodlePastMemorySampleSize(
+    () => 0.5,
+    NOODLE_LEGACY_PAST_MEMORY_INCLUSION_CHANCE,
+    NOODLE_LEGACY_PAST_MEMORY_MAX_ITEMS,
+  ),
   0,
 );
 const legacyThreeItemRolls = [0, 0.999];
@@ -622,7 +680,10 @@ const partiallyInvalidGeneratedProfiles = parseNoodleGeneratedProfiles({
     { entityId: "valid", name: "Valid Character", handle: "valid_character", bio: "", location: "" },
   ],
 });
-assert.deepEqual(partiallyInvalidGeneratedProfiles.profiles.map((profile) => profile.entityId), ["valid"]);
+assert.deepEqual(
+  partiallyInvalidGeneratedProfiles.profiles.map((profile) => profile.entityId),
+  ["valid"],
+);
 assert.deepEqual(partiallyInvalidGeneratedProfiles.rejected, [{ index: 0, issueCount: 1 }]);
 
 // sampleNoodlePastMemoriesWeighted should reliably favor a much higher-weighted item over
@@ -641,10 +702,23 @@ for (let trial = 0; trial < trials; trial += 1) {
 }
 assert.ok(highWeightPicks > trials * 0.8, `expected high-weight item to dominate, got ${highWeightPicks}/${trials}`);
 assert.deepEqual(
-  sampleNoodlePastMemoriesWeighted(["only"], 5, () => 1, () => 0.5),
+  sampleNoodlePastMemoriesWeighted(
+    ["only"],
+    5,
+    () => 1,
+    () => 0.5,
+  ),
   ["only"],
 );
-assert.equal(sampleNoodlePastMemoriesWeighted(["a", "b"], 0, () => 1, () => 0.5).length, 0);
+assert.equal(
+  sampleNoodlePastMemoriesWeighted(
+    ["a", "b"],
+    0,
+    () => 1,
+    () => 0.5,
+  ).length,
+  0,
+);
 
 // noodleLorebookTokenBudget scales with active character count but is floored and capped so a
 // single-character Noodle refresh never dips below the floor, and a large roster never exceeds

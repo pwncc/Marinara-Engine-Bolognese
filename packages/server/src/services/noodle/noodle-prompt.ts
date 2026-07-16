@@ -23,6 +23,16 @@ export const NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION =
   "- The user persona is controlled exclusively by the user. Never generate posts, replies, likes, reposts, poll votes, or follows as a persona. Personas may only be mentioned or targeted by other accounts.";
 export const NOODLE_PERSONA_IDENTITY_INSTRUCTION =
   "- Every persona account is a separate user identity. Preserve the accountKey on historical posts and replies: changing the currently selected persona never changes, merges, or reattributes activity created by another persona.";
+export const NOODLE_TIMELINE_INVARIANT_LINES = [
+  NOODLE_ADULT_PLATFORM_POLICY,
+  NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION,
+  NOODLE_PERSONA_IDENTITY_INSTRUCTION,
+  "- For each interaction, set either targetTempId or targetPostId and set the unused target field to null.",
+  "- pollOptionIndex must be a zero-based integer for votes and null for every other interaction.",
+  "- An exact @handle in post or reply text tags that active account. Preserve the @handle exactly when mentioning someone.",
+  "- Return JSON only. No prose outside the JSON object.",
+] as const;
+export const NOODLE_TIMELINE_INVARIANT_INSTRUCTIONS = NOODLE_TIMELINE_INVARIANT_LINES.join("\n");
 export const NOODLE_TIMELINE_BASE_DEFAULT_PROMPT = [
   "You write a fake social media timeline for Marinara Engine's in-app parody site called Noodle.",
   NOODLE_ADULT_PLATFORM_POLICY,
@@ -54,7 +64,9 @@ export const NOODLER_TIMELINE_BASE_DEFAULT_PROMPT = [
 ].join("\n");
 
 export function composeNoodleTimelineSystemPrompt(basePromptText: string, timelineVoiceText: string): string {
-  return [basePromptText.trim(), timelineVoiceText.trim()].filter(Boolean).join("\n");
+  const base = basePromptText.trim();
+  const missingInvariants = NOODLE_TIMELINE_INVARIANT_LINES.filter((instruction) => !base.includes(instruction));
+  return [base, missingInvariants.join("\n"), timelineVoiceText.trim()].filter(Boolean).join("\n");
 }
 export const NOODLE_CREATIVE_FORMAT_INSTRUCTIONS = [
   "- Characters and random users may create polls in their own posts and vote in polls. Occasionally use a poll when an audience question or set of choices fits naturally with the account and current activity; polls are optional, not a quota.",
@@ -118,14 +130,7 @@ type NoodleTimelineFeatureSettings = Pick<
 type RandomSource = () => number;
 type NoodlePromptPost = Pick<
   NoodlePost,
-  | "id"
-  | "authorAccountId"
-  | "authorSnapshot"
-  | "content"
-  | "imageUrl"
-  | "imagePrompt"
-  | "metadata"
-  | "createdAt"
+  "id" | "authorAccountId" | "authorSnapshot" | "content" | "imageUrl" | "imagePrompt" | "metadata" | "createdAt"
 >;
 type NoodlePromptInteraction = Pick<
   NoodleInteraction,

@@ -101,6 +101,7 @@ import {
   sampleNoodlePastMemoriesWeighted,
 } from "../services/noodle/noodle-prompt.js";
 import { processLorebooks } from "../services/lorebook/index.js";
+import { injectAtDepth } from "../services/lorebook/prompt-injector.js";
 import type { DB } from "../db/connection.js";
 import {
   generateImageCaptionForDataUrl,
@@ -802,7 +803,7 @@ async function bootstrapVisibleNoodle(
   );
 }
 
-function filterPrivateNoodleBootstrapForViewer(
+export function filterPrivateNoodleBootstrapForViewer(
   bootstrap: NoodleBootstrap,
   viewerAccount: NoodleAccount | null,
 ): NoodleBootstrap {
@@ -828,13 +829,55 @@ function filterPrivateNoodleBootstrapForViewer(
     }
   }
   const visibleAccountIds = new Set([...publicAccountIds, ...accessiblePrivateAccountIds]);
-  const visiblePosts = bootstrap.posts.filter((post) => visibleAccountIds.has(post.authorAccountId));
+  const accountById = new Map(bootstrap.accounts.map((account) => [account.id, account]));
+  const subscribedCreatorIds = new Set(
+    bootstrap.subscriptions
+      .filter((subscription) => subscription.subscriberAccountId === viewerAccount?.id)
+      .map((subscription) => subscription.creatorAccountId),
+  );
+  const unlockedPostIds = new Set(
+    bootstrap.postUnlocks.filter((unlock) => unlock.accountId === viewerAccount?.id).map((unlock) => unlock.postId),
+  );
+  const lockedPostIds = new Set<string>();
+  const visiblePosts = bootstrap.posts
+    .filter((post) => visibleAccountIds.has(post.authorAccountId))
+    .map((post) => {
+      const author = accountById.get(post.authorAccountId);
+      const viewerOwnsAuthor = Boolean(
+        viewerAccount &&
+        author?.visibility === "private" &&
+        author.kind === "persona" &&
+        author.entityId === viewerAccount.entityId,
+      );
+      const subscribed = subscribedCreatorIds.has(post.authorAccountId);
+      const canReveal =
+        post.access === "public" ||
+        viewerOwnsAuthor ||
+        (post.access === "subscriber" && subscribed) ||
+        (post.access === "ppv" &&
+          (unlockedPostIds.has(post.id) || (subscribed && author?.settings.subscriptionIncludesPpv !== false)));
+      if (canReveal) return post;
+      lockedPostIds.add(post.id);
+      return {
+        ...post,
+        content: "",
+        imageUrl: null,
+        imagePrompt: null,
+        metadata: {
+          accessLocked: true,
+          hasLockedImage: Boolean(post.imageUrl || post.imagePrompt),
+          ...(typeof post.metadata.ppvPrice === "number" ? { ppvPrice: post.metadata.ppvPrice } : {}),
+        },
+      };
+    });
   const visiblePostIds = new Set(visiblePosts.map((post) => post.id));
   return {
     ...bootstrap,
     accounts: bootstrap.accounts.filter((account) => visibleAccountIds.has(account.id)),
     posts: visiblePosts,
-    interactions: bootstrap.interactions.filter((interaction) => visiblePostIds.has(interaction.postId)),
+    interactions: bootstrap.interactions.filter(
+      (interaction) => visiblePostIds.has(interaction.postId) && !lockedPostIds.has(interaction.postId),
+    ),
     subscriptions: bootstrap.subscriptions.filter(
       (subscription) =>
         visibleAccountIds.has(subscription.creatorAccountId) && visibleAccountIds.has(subscription.subscriberAccountId),
@@ -1131,7 +1174,10 @@ async function buildRefreshPrompt(input: {
       ? formatLinkedIdentityPromptBlock(linkedAuthorContext, privateStageProfile)
       : "";
   const privateStageContextBlock = privateStageProfile ? formatPrivateStagePromptBlock(privateStageProfile) : "";
-  const activeAccountList = [...input.activeAccounts, ...(input.personaAccount ? [input.personaAccount] : [])]
+  const activeAccountList = [
+    ...input.activeAccounts,
+    ...(!isolatedTargetAccount && input.personaAccount ? [input.personaAccount] : []),
+  ]
     .map(
       (account) =>
         `- ${account.displayName} (@${account.handle}) kind=${account.kind} accountKey=${account.kind}:${account.entityId} generationRole=${
@@ -1149,21 +1195,18 @@ async function buildRefreshPrompt(input: {
   // character context is appended last so entries keyed to a character's own traits stay in scan depth.
   const lorebookScanMessages = isolatedTargetAccount
     ? [
-        ...recentPosts
-          .slice()
-          .reverse()
-          .map((post) => ({ role: "user", content: post.content })),
+        {
+          role: "user",
+          content: formatNoodleTimelineForPrompt(recentPosts, recentInteractions),
+        },
         ...(linkedAuthorContextBlock ? [{ role: "user", content: linkedAuthorContextBlock }] : []),
         ...(privateStageContextBlock ? [{ role: "user", content: privateStageContextBlock }] : []),
       ]
     : [
-        ...recentPosts
-          .slice()
-          .reverse()
-          .map((post) => ({ role: "user", content: post.content })),
-        ...recentInteractions
-          .filter((interaction) => interaction.type === "reply" && interaction.content)
-          .map((interaction) => ({ role: "user", content: interaction.content ?? "" })),
+        {
+          role: "user",
+          content: formatNoodleTimelineForPrompt(recentPosts, recentInteractions),
+        },
         ...(characterContext ? [{ role: "user", content: characterContext }] : []),
       ];
   const lorebookResult = input.settings.enableLorebookContext
@@ -1314,7 +1357,7 @@ async function buildRefreshPrompt(input: {
         : []),
       "",
       "# Quotas",
-      input.requireImageForSinglePost || input.privatePostGuide
+      isolatedTargetAccount
         ? `posts: generate exactly 1 post, authored by the single active account${personaAuthorContext ? " (the persona-linked NoodleR account in the Author Persona Profile section)" : ""}.`
         : `posts: at most ${input.settings.maxGeneratedPostsPerRefresh}`,
       `replies: at most ${input.settings.maxRepliesPerRefresh}`,
@@ -1337,7 +1380,13 @@ async function buildRefreshPrompt(input: {
             "# Guided Private NoodleR Post",
             `access status: ${input.privatePostGuide.access ?? "subscriber"}`,
             `text: ${input.privatePostGuide.includeText === false ? "disabled; set content exactly to Shared an image." : "enabled; write post text that fits the guide"}`,
-            `image: ${input.privatePostGuide.includeImage === false ? "disabled; set imagePrompt to null and attachGalleryImage false" : "enabled; include a concrete imagePrompt"}`,
+            `image: ${
+              input.privatePostGuide.includeImage === false
+                ? "disabled; set imagePrompt to null and attachGalleryImage false"
+                : input.requireImageForSinglePost
+                  ? "required; include a concrete imagePrompt"
+                  : "optional; include a concrete imagePrompt when an image improves the post, otherwise set imagePrompt to null"
+            }`,
             input.privatePostGuide.theme?.trim()
               ? `theme: ${input.privatePostGuide.theme.trim()}`
               : "theme: choose a fitting private creator post theme",
@@ -1396,25 +1445,37 @@ async function buildRefreshPrompt(input: {
     ),
   ].join("\n");
 
-  const messages = [
-    { role: "system" as const, content: system },
-    {
-      role: "user" as const,
-      content: context,
-      ...(visionAttachments.length > 0 ? { images: visionAttachments.map((attachment) => attachment.dataUrl) } : {}),
-    },
-    { role: "user" as const, content: outputFormat },
-  ] satisfies ChatMessage[];
-  const textOnlyMessages = [
-    { role: "system" as const, content: system },
-    { role: "user" as const, content: textOnlyContext },
-    { role: "user" as const, content: outputFormat },
-  ] satisfies ChatMessage[];
+  const messages = injectAtDepth(
+    [
+      { role: "system" as const, content: system },
+      {
+        role: "user" as const,
+        content: context,
+        ...(visionAttachments.length > 0 ? { images: visionAttachments.map((attachment) => attachment.dataUrl) } : {}),
+      },
+      { role: "user" as const, content: outputFormat },
+    ] satisfies ChatMessage[],
+    lorebookResult?.depthEntries ?? [],
+    { minIndex: 1, anchorIndex: 2 },
+  ) as ChatMessage[];
+  const textOnlyMessages = injectAtDepth(
+    [
+      { role: "system" as const, content: system },
+      { role: "user" as const, content: textOnlyContext },
+      { role: "user" as const, content: outputFormat },
+    ] satisfies ChatMessage[],
+    lorebookResult?.depthEntries ?? [],
+    { minIndex: 1, anchorIndex: 2 },
+  ) as ChatMessage[];
+  const promptForLog = messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`).join("\n\n");
+  const textOnlyPromptForLog = textOnlyMessages
+    .map((message) => `${message.role.toUpperCase()}:\n${message.content}`)
+    .join("\n\n");
   return {
     messages,
     textOnlyMessages,
-    promptForLog: `${system}\n\n${context}\n\n${outputFormat}\n\n[${visionAttachments.length} Noodle timeline image input(s) attached]`,
-    textOnlyPromptForLog: `${system}\n\n${textOnlyContext}\n\n${outputFormat}`,
+    promptForLog: `${promptForLog}\n\n[${visionAttachments.length} Noodle timeline image input(s) attached]`,
+    textOnlyPromptForLog,
     visionAttachmentCount: visionAttachments.length,
     captionedImageCount: captionedImages.size,
     recalledPostIds: recalledPosts.map((post) => post.id),
@@ -3021,19 +3082,14 @@ export async function noodleRoutes(app: FastifyInstance) {
     // profile UI: it should always produce exactly one post, regardless of the
     // global timeline generation settings. The guided flow may disable images.
     const forceSinglePrivatePost = Boolean(targetPrivateAccount);
-    const enableImageForPrivatePost = forceSinglePrivatePost && parsed.data.privatePostGuide?.includeImage === true;
-    const requireImageForPrivatePost =
-      forceSinglePrivatePost &&
-      enableImageForPrivatePost &&
-      parsed.data.privatePostGuide?.requireImage !== false;
-    const effectiveSettings: NoodleSettings = forceSinglePrivatePost
-      ? {
-          ...settings,
-          enableImagePrompts: enableImageForPrivatePost,
-          maxImagesPerRefresh: enableImageForPrivatePost ? Math.max(settings.maxImagesPerRefresh, 1) : 0,
-          maxGeneratedPostsPerRefresh: 1,
-        }
-      : settings;
+    const imageRequestedForPrivatePost = forceSinglePrivatePost
+      ? parsed.data.privatePostGuide
+        ? parsed.data.privatePostGuide.includeImage === true
+        : settings.enableImagePrompts
+      : false;
+    const requireImageForPrivatePost = Boolean(
+      parsed.data.privatePostGuide?.includeImage === true && parsed.data.privatePostGuide.requireImage !== false,
+    );
     const imageCaptioning = await resolveImageCaptioningRuntime({
       chatMeta: {
         imageCaptioningEnabled: settings.imageCaptioningEnabled,
@@ -3042,18 +3098,33 @@ export async function noodleRoutes(app: FastifyInstance) {
       fallbackConnectionId: connectionId,
       connections,
     });
-    const imageConnection = effectiveSettings.enableImagePrompts
-      ? effectiveSettings.imageGenerationConnectionId
-        ? await connections.getWithKey(effectiveSettings.imageGenerationConnectionId)
+    const imageConnection = (forceSinglePrivatePost ? imageRequestedForPrivatePost : settings.enableImagePrompts)
+      ? settings.imageGenerationConnectionId
+        ? await connections.getWithKey(settings.imageGenerationConnectionId)
         : await connections.getDefaultForImageGeneration()
       : null;
-    if (effectiveSettings.enableImagePrompts && !imageConnection) {
+    if (
+      (!forceSinglePrivatePost && settings.enableImagePrompts && !imageConnection) ||
+      (requireImageForPrivatePost && !imageConnection)
+    ) {
       return reply.code(400).send({
         error: requireImageForPrivatePost
           ? "Select a Noodle image generation connection before generating a NoodleR post."
           : "Select a Noodle image generation connection first.",
       });
     }
+    const enableImageForPrivatePost = imageRequestedForPrivatePost && Boolean(imageConnection);
+    const effectiveSettings: NoodleSettings = forceSinglePrivatePost
+      ? {
+          ...settings,
+          enableImagePrompts: enableImageForPrivatePost,
+          maxImagesPerRefresh: enableImageForPrivatePost ? Math.max(settings.maxImagesPerRefresh, 1) : 0,
+          maxGeneratedPostsPerRefresh: 1,
+        }
+      : settings;
+    const privatePostGuide = parsed.data.privatePostGuide
+      ? { ...parsed.data.privatePostGuide, includeImage: enableImageForPrivatePost }
+      : undefined;
     const refreshScopeKey = targetPrivateAccount ? targetPrivateAccount.id : NOODLE_PUBLIC_REFRESH_SCOPE;
     if (isNoodleRefreshLocked(refreshScopeKey)) {
       return reply.code(409).send({
@@ -3210,7 +3281,7 @@ export async function noodleRoutes(app: FastifyInstance) {
         settings: effectiveSettings,
         imageCaptioning,
         requireImageForSinglePost: requireImageForPrivatePost,
-        privatePostGuide: parsed.data.privatePostGuide,
+        privatePostGuide,
       });
       logDebugOverride(debugMode, "[debug/noodle] Prompt sent to model:\n%s", promptForLog);
       if (visionAttachmentCount > 0) {
@@ -3291,7 +3362,12 @@ export async function noodleRoutes(app: FastifyInstance) {
       const knownHandles = new Set(activeAccounts.map((account) => normalizeNoodleHandle(account.handle)));
       try {
         parsedGenerated = parseNoodleGeneratedRefresh(parseGameJsonish(content));
-        retryReason = validateNoodleGeneratedRefresh(parsedGenerated.refresh, allowedActorHandles, knownHandles);
+        retryReason = validateNoodleGeneratedRefresh(
+          parsedGenerated.refresh,
+          allowedActorHandles,
+          knownHandles,
+          targetPrivateAccount?.handle,
+        );
       } catch (error) {
         retryReason = `the response was not valid timeline JSON (${getErrorMessage(error)})`;
       }
@@ -3328,6 +3404,7 @@ export async function noodleRoutes(app: FastifyInstance) {
             parsedGenerated.refresh,
             allowedActorHandles,
             knownHandles,
+            targetPrivateAccount?.handle,
           );
         } catch (error) {
           correctedRetryReason = `the response was not valid timeline JSON (${getErrorMessage(error)})`;
@@ -3390,8 +3467,6 @@ export async function noodleRoutes(app: FastifyInstance) {
         height: number;
       }> = [];
       const activeCharacterReferenceAccounts = activeAccounts.filter((account) => account.kind === "character");
-      const privatePostGuide = parsed.data.privatePostGuide;
-
       for (const generatedPost of generated.posts.slice(0, effectiveSettings.maxGeneratedPostsPerRefresh)) {
         const account = handleToAccount.get(normalizeNoodleHandle(generatedPost.authorHandle));
         if (!account) continue;
@@ -3538,7 +3613,7 @@ export async function noodleRoutes(app: FastifyInstance) {
         reply: settings.maxRepliesPerRefresh,
         vote: settings.maxLikesPerRefresh,
       };
-      for (const generatedInteraction of generated.interactions) {
+      for (const generatedInteraction of targetPrivateAccount ? [] : generated.interactions) {
         if (quotas[generatedInteraction.type] <= 0) continue;
         const actor = handleToAccount.get(normalizeNoodleHandle(generatedInteraction.actorHandle));
         if (!actor) continue;
@@ -3611,7 +3686,7 @@ export async function noodleRoutes(app: FastifyInstance) {
 
       const maxGeneratedFollows = Math.max(12, activeAccounts.length * 2);
       const seenGeneratedFollows = new Set<string>();
-      for (const generatedFollow of generated.follows.slice(0, maxGeneratedFollows)) {
+      for (const generatedFollow of (targetPrivateAccount ? [] : generated.follows).slice(0, maxGeneratedFollows)) {
         const actor = handleToAccount.get(normalizeNoodleHandle(generatedFollow.actorHandle));
         const target = handleToAccount.get(normalizeNoodleHandle(generatedFollow.targetHandle));
         if (!actor || !target || actor.id === target.id) continue;

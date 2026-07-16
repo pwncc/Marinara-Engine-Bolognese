@@ -57,10 +57,10 @@ try {
     sourceRunId: "legacy-refresh-run",
   });
 
-  assert.deepEqual(
-    (await noodle.listDigests()).map((digest) => digest.content).sort(),
-    ["canonical post digest", "linked comment digest revised"],
-  );
+  assert.deepEqual((await noodle.listDigests()).map((digest) => digest.content).sort(), [
+    "canonical post digest",
+    "linked comment digest revised",
+  ]);
 
   await noodle.deleteInteractionById(interaction.id);
   assert.deepEqual(
@@ -70,6 +70,38 @@ try {
 
   await noodle.deletePost(post.id);
   assert.deepEqual(await noodle.listDigests(), []);
+
+  const filler = await noodle.createFillerProfile({ displayName: "Temporary Filler" });
+  const fillerAccount = await noodle.upsertAccountFromProfile({
+    kind: "random_user",
+    entityId: filler.entityId,
+    displayName: filler.displayName,
+  });
+  const fillerPost = await noodle.createPost({ authorAccountId: fillerAccount.id, content: "Remove with roster" });
+  assert.ok(fillerPost);
+  const fillerReply = await noodle.createInteraction(fillerPost.id, {
+    actorAccountId: account.id,
+    type: "reply",
+    content: "Also remove this reply",
+  });
+  assert.ok(fillerReply);
+  await noodle.createDigest({
+    accountIds: [account.id, fillerAccount.id],
+    content: "Filler activity",
+    sourcePostId: fillerPost.id,
+    sourceInteractionId: fillerReply.id,
+  });
+  assert.equal(await noodle.deleteFillerProfile(filler.id), true);
+  assert.equal(await noodle.getAccountById(fillerAccount.id), null);
+  assert.equal(await noodle.getPostById(fillerPost.id), null);
+  assert.equal(
+    (await noodle.listInteractions()).some((item) => item.id === fillerReply.id),
+    false,
+  );
+  assert.equal(
+    (await noodle.listDigests()).some((item) => item.accountIds.includes(fillerAccount.id)),
+    false,
+  );
 } finally {
   await fileDb._fileStore.close();
   rmSync(storageDir, { recursive: true, force: true });

@@ -1227,8 +1227,10 @@ export function NoodleView() {
                 ? "/search"
                 : "/home";
   const canRevealPostAccess = (post: NoodlePost) => {
+    if (post.metadata.accessLocked === true) return false;
     if (post.access === "public") return true;
-    if (post.authorAccountId === personaAccount?.id) return true;
+    if (post.authorAccountId === personaAccount?.id || post.authorAccountId === personaLinkedNoodlerAccount?.id)
+      return true;
     const subscribed = subscribedCreatorIds.has(post.authorAccountId);
     if (post.access === "subscriber") return subscribed;
     if (post.access === "ppv") {
@@ -1358,14 +1360,14 @@ export function NoodleView() {
     setComposerHasText(false);
     setActiveMention(null);
     setAttachedImageUrl("");
-    setComposerAccess("public");
+    setComposerAccess(postingTargetAccount?.visibility === "private" ? "subscriber" : "public");
     setComposerPpvPrice("");
     setDraftPoll(null);
     setPollQuestion("");
     setPollOptions(["", ""]);
     setActiveComposerTool(null);
     setComposeOpen(false);
-  }, []);
+  }, [postingTargetAccount?.visibility]);
 
   useEffect(() => {
     clearPostDraft();
@@ -3727,7 +3729,11 @@ export function NoodleView() {
                         />
                         <button
                           type="button"
-                          onClick={() => deleteFillerProfile.mutate(profile.id)}
+                          onClick={() => {
+                            if (!window.confirm(`Delete ${profile.displayName} and all of their Noodle activity?`))
+                              return;
+                            deleteFillerProfile.mutate(profile.id);
+                          }}
                           disabled={deleteFillerProfile.isPending}
                           className="shrink-0 rounded-full p-1 text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/10 disabled:cursor-not-allowed disabled:opacity-50"
                           aria-label={`Delete ${profile.displayName}`}
@@ -4865,7 +4871,7 @@ export function NoodleView() {
                 <span className="text-xs text-[var(--muted-foreground)]">@{author?.handle ?? "noodle"}</span>
                 <span className="text-xs text-[var(--muted-foreground)]">{formatTime(post.createdAt)}</span>
               </div>
-              <div className="relative shrink-0">
+              <div className={cn("relative shrink-0", post.metadata.accessLocked === true && "invisible")}>
                 <button
                   type="button"
                   onClick={() => setPostMenuId((current) => (current === post.id ? null : post.id))}
@@ -4897,7 +4903,38 @@ export function NoodleView() {
                 )}
               </div>
             </div>
-            {editingPostId === post.id ? (
+            {post.metadata.accessLocked === true ? (
+              <div
+                className="mt-3 flex min-h-36 flex-col items-center justify-center gap-2 rounded-lg border border-[var(--noodle-divider)] bg-[var(--accent)]/45 px-4 py-6 text-center"
+                data-component="NoodleView.LockedPost"
+              >
+                <Lock size={22} className="text-[var(--noodle-blue)]" />
+                <p className="text-sm font-bold">{unlockLabel(post)}</p>
+                <p className="max-w-sm text-xs leading-5 text-[var(--muted-foreground)]">
+                  Subscribe{post.access === "ppv" ? " or unlock this post" : ""} to view its content.
+                </p>
+                <div className="flex flex-wrap justify-center gap-2">
+                  {post.access === "ppv" && (
+                    <button
+                      type="button"
+                      onClick={() => unlockAccessPost(post)}
+                      disabled={!personaAccount || unlockPost.isPending}
+                      className="h-9 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Unlock
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => toggleSubscription(post.authorAccountId)}
+                    disabled={!personaAccount || subscribeAccount.isPending}
+                    className="h-9 rounded-full border border-[var(--noodle-divider)] px-4 text-xs font-bold transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Subscribe
+                  </button>
+                </div>
+              </div>
+            ) : editingPostId === post.id ? (
               <div className="mt-2 space-y-2">
                 <textarea
                   value={editingPostContent}
@@ -4926,7 +4963,7 @@ export function NoodleView() {
             ) : !poll || post.content.trim() !== poll.question ? (
               <NoodlePostContent content={post.content} accountByHandle={accountByHandle} onOpenProfile={openProfile} />
             ) : null}
-            {poll && (
+            {post.metadata.accessLocked !== true && poll && (
               <NoodlePollCard
                 poll={poll}
                 votes={pollVotes}
@@ -4938,7 +4975,7 @@ export function NoodleView() {
                 onOpenProfile={openProfile}
               />
             )}
-            {post.imageUrl && canRevealPostAccess(post) ? (
+            {post.metadata.accessLocked === true ? null : post.imageUrl && canRevealPostAccess(post) ? (
               <button
                 type="button"
                 onClick={() =>
@@ -5244,14 +5281,21 @@ export function NoodleView() {
         className="group relative aspect-square overflow-hidden bg-[var(--accent)]"
         title={revealed ? post.content || author?.displayName || "Noodle post" : unlockLabel(post)}
       >
-        <img
-          src={post.imageUrl!}
-          alt={post.content || `Image posted by ${author?.displayName ?? "Noodle user"}`}
-          className={cn(
-            "h-full w-full object-cover transition-transform group-hover:scale-105",
-            !revealed && "blur-xl",
-          )}
-        />
+        {post.imageUrl ? (
+          <img
+            src={post.imageUrl}
+            alt={post.content || `Image posted by ${author?.displayName ?? "Noodle user"}`}
+            className={cn(
+              "h-full w-full object-cover transition-transform group-hover:scale-105",
+              !revealed && "blur-xl",
+            )}
+          />
+        ) : (
+          <Lock
+            size={24}
+            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[var(--noodle-blue)]"
+          />
+        )}
         {!revealed && (
           <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-[0.65rem] font-semibold text-white">
             {unlockLabel(post)}
@@ -5263,7 +5307,9 @@ export function NoodleView() {
 
   const renderPostGrid = (postsToRender: NoodlePost[]) => (
     <div className="grid grid-cols-3 gap-0.5">
-      {postsToRender.filter((post) => Boolean(post.imageUrl)).map(renderPostGridTile)}
+      {postsToRender
+        .filter((post) => Boolean(post.imageUrl) || post.metadata.hasLockedImage === true)
+        .map(renderPostGridTile)}
     </div>
   );
 

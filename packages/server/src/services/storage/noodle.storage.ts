@@ -247,17 +247,10 @@ function normalizeHandle(name: string, fallback: string) {
 // timeline refresh) silently pick whichever account comes later, so callers
 // that assign a handle should route through this to append a numeric suffix
 // on collision instead.
-async function resolveUniqueHandle(
-  db: DB,
-  name: string,
-  fallback: string,
-  excludeAccountId?: string,
-): Promise<string> {
+async function resolveUniqueHandle(db: DB, name: string, fallback: string, excludeAccountId?: string): Promise<string> {
   const base = normalizeHandle(name, fallback);
   const rows = await db.select({ id: noodleAccounts.id, handle: noodleAccounts.handle }).from(noodleAccounts);
-  const taken = new Set(
-    rows.filter((row) => row.id !== excludeAccountId).map((row) => row.handle.toLowerCase()),
-  );
+  const taken = new Set(rows.filter((row) => row.id !== excludeAccountId).map((row) => row.handle.toLowerCase()));
   if (!taken.has(base.toLowerCase())) return base;
   const trimmedBase = base.slice(0, 32);
   let suffix = 2;
@@ -574,7 +567,11 @@ export function createNoodleStorage(db: DB) {
       return rows.map(mapFillerProfile);
     },
 
-    async createFillerProfile(input: { displayName: string; bio?: string; enabled?: boolean }): Promise<NoodleFillerProfile> {
+    async createFillerProfile(input: {
+      displayName: string;
+      bio?: string;
+      enabled?: boolean;
+    }): Promise<NoodleFillerProfile> {
       const id = newId();
       const timestamp = now();
       await db.insert(noodleFillerProfiles).values({
@@ -612,10 +609,79 @@ export function createNoodleStorage(db: DB) {
     async deleteFillerProfile(id: string): Promise<boolean> {
       const existing = await db.select().from(noodleFillerProfiles).where(eq(noodleFillerProfiles.id, id));
       if (!existing[0]) return false;
-      await db.delete(noodleFillerProfiles).where(eq(noodleFillerProfiles.id, id));
-      await db
-        .delete(noodleAccounts)
+      const accounts = await db
+        .select()
+        .from(noodleAccounts)
         .where(and(eq(noodleAccounts.kind, "random_user"), eq(noodleAccounts.entityId, existing[0].entityId)));
+      const accountIds = accounts.map((account) => account.id);
+      const posts =
+        accountIds.length > 0
+          ? await db.select().from(noodlePosts).where(inArray(noodlePosts.authorAccountId, accountIds))
+          : [];
+      const postIds = posts.map((post) => post.id);
+      const allInteractions = await db.select().from(noodleInteractions);
+      const interactionIdSet = new Set(
+        allInteractions
+          .filter(
+            (interaction) => accountIds.includes(interaction.actorAccountId) || postIds.includes(interaction.postId),
+          )
+          .map((interaction) => interaction.id),
+      );
+      let foundChild = true;
+      while (foundChild) {
+        foundChild = false;
+        for (const interaction of allInteractions) {
+          if (
+            !interactionIdSet.has(interaction.id) &&
+            interaction.parentInteractionId &&
+            interactionIdSet.has(interaction.parentInteractionId)
+          ) {
+            interactionIdSet.add(interaction.id);
+            foundChild = true;
+          }
+        }
+      }
+      const interactionIds = [...interactionIdSet];
+      const digests = await db.select().from(noodleActivityDigests);
+      const digestIds = digests
+        .filter((digest) => {
+          try {
+            const ids = JSON.parse(digest.accountIds);
+            return Array.isArray(ids) && ids.some((accountId) => accountIds.includes(accountId));
+          } catch {
+            return false;
+          }
+        })
+        .map((digest) => digest.id);
+
+      await db.transaction(async (tx) => {
+        await tx.delete(noodleFillerProfiles).where(eq(noodleFillerProfiles.id, id));
+        if (digestIds.length > 0)
+          await tx.delete(noodleActivityDigests).where(inArray(noodleActivityDigests.id, digestIds));
+        if (postIds.length > 0) {
+          await tx.delete(noodleActivityDigests).where(inArray(noodleActivityDigests.sourcePostId, postIds));
+          await tx.delete(noodlePostUnlocks).where(inArray(noodlePostUnlocks.postId, postIds));
+          await tx.delete(noodlePosts).where(inArray(noodlePosts.id, postIds));
+        }
+        if (interactionIds.length > 0) {
+          await tx
+            .delete(noodleActivityDigests)
+            .where(inArray(noodleActivityDigests.sourceInteractionId, interactionIds));
+          await tx.delete(noodleInteractions).where(inArray(noodleInteractions.id, interactionIds));
+        }
+        if (accountIds.length > 0) {
+          await tx
+            .delete(noodleAccountSubscriptions)
+            .where(
+              or(
+                inArray(noodleAccountSubscriptions.subscriberAccountId, accountIds),
+                inArray(noodleAccountSubscriptions.creatorAccountId, accountIds),
+              ),
+            );
+          await tx.delete(noodlePostUnlocks).where(inArray(noodlePostUnlocks.accountId, accountIds));
+          await tx.delete(noodleAccounts).where(inArray(noodleAccounts.id, accountIds));
+        }
+      });
       return true;
     },
 
@@ -716,9 +782,14 @@ export function createNoodleStorage(db: DB) {
         postIds.length > 0
           ? await db.select().from(noodleInteractions).where(inArray(noodleInteractions.postId, postIds))
           : [];
-      const actorInteractions = await db.select().from(noodleInteractions).where(eq(noodleInteractions.actorAccountId, id));
+      const actorInteractions = await db
+        .select()
+        .from(noodleInteractions)
+        .where(eq(noodleInteractions.actorAccountId, id));
       const allInteractions = await db.select().from(noodleInteractions);
-      const interactionIdSet = new Set([...postInteractions, ...actorInteractions].map((interaction) => interaction.id));
+      const interactionIdSet = new Set(
+        [...postInteractions, ...actorInteractions].map((interaction) => interaction.id),
+      );
       let foundChild = true;
       while (foundChild) {
         foundChild = false;
@@ -742,7 +813,9 @@ export function createNoodleStorage(db: DB) {
           .where(eq(noodlerCreatorProjects.creatorAccountId, id));
         const creatorProjectIds = creatorProjects.map((project) => project.id);
         if (creatorProjectIds.length > 0) {
-          await tx.delete(noodlerProjectMilestones).where(inArray(noodlerProjectMilestones.projectId, creatorProjectIds));
+          await tx
+            .delete(noodlerProjectMilestones)
+            .where(inArray(noodlerProjectMilestones.projectId, creatorProjectIds));
           await tx.delete(noodlerCreatorProjects).where(inArray(noodlerCreatorProjects.id, creatorProjectIds));
         }
         if (postIds.length > 0) {
@@ -1080,15 +1153,13 @@ export function createNoodleStorage(db: DB) {
         await tx.delete(noodleActivityDigests);
         await tx.delete(noodleRefreshRuns);
         await tx.delete(noodlePostUnlocks);
-        await tx
-          .update(noodlerProjectMilestones)
-          .set({
-            status: "ready",
-            generatedPostId: null,
-            completionSummary: "",
-            completedAt: null,
-            updatedAt: now(),
-          });
+        await tx.update(noodlerProjectMilestones).set({
+          status: "ready",
+          generatedPostId: null,
+          completionSummary: "",
+          completedAt: null,
+          updatedAt: now(),
+        });
         await tx.delete(noodlePosts);
       });
     },
@@ -1611,7 +1682,9 @@ export function createNoodleStorage(db: DB) {
       const allPosts = [...publicPosts, ...privatePosts].sort(
         (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
       );
-      const posts = visibleAccountIds ? allPosts.filter((post) => visibleAccountIds.has(post.authorAccountId)) : allPosts;
+      const posts = visibleAccountIds
+        ? allPosts.filter((post) => visibleAccountIds.has(post.authorAccountId))
+        : allPosts;
       const scheduler = noodleRefreshSchedulerStatus(
         await this.ensureRefreshSchedule(new Date(), settings),
         new Date(),

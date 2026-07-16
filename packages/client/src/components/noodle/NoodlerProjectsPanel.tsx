@@ -169,7 +169,7 @@ export function NoodlerProjectsPanel({ accountId }: { accountId: string }) {
               {milestones.map((item, index) => (
                 <div
                   key={item.id}
-                  className="flex items-center gap-2 rounded-md bg-[var(--muted)]/35 px-2.5 py-2 text-xs"
+                  className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] items-center gap-2 rounded-md bg-[var(--muted)]/35 px-2.5 py-2 text-xs sm:flex"
                 >
                   <span className="w-5 shrink-0 text-center font-semibold text-[var(--muted-foreground)]">
                     {index + 1}
@@ -183,70 +183,76 @@ export function NoodlerProjectsPanel({ accountId }: { accountId: string }) {
                   >
                     {item.title}
                   </span>
-                  {item.status === "completed" && <Check size={13} className="text-[var(--noodle-blue)]" />}
-                  {item.status !== "completed" && (
-                    <button
-                      type="button"
-                      title="Mark ready"
-                      onClick={() =>
-                        updateMilestone.mutate({ projectId: project.id, id: item.id, patch: { status: "ready" } })
-                      }
-                      className="rounded p-1 hover:bg-[var(--accent)]"
-                    >
-                      <ChevronUp size={13} />
-                    </button>
-                  )}
-                  {item.status !== "completed" && item.status !== "skipped" && (
-                    <select
-                      value={item.access}
-                      onChange={(event) =>
-                        updateMilestone.mutate({
-                          projectId: project.id,
-                          id: item.id,
-                          patch: { access: event.target.value as "public" | "subscriber" | "ppv" },
-                        })
-                      }
-                      className="h-7 rounded border border-[var(--noodle-divider)] bg-[var(--background)] px-1.5 text-[0.68rem]"
-                      aria-label="Milestone access"
-                    >
-                      <option value="public">Public</option>
-                      <option value="subscriber">Subscribers only</option>
-                      <option value="ppv">Pay-per-view</option>
-                    </select>
-                  )}
-                  {item.status !== "completed" && item.status !== "skipped" && (
-                    <select
-                      value={item.mediaPreference}
-                      onChange={(event) =>
-                        updateMilestone.mutate({
-                          projectId: project.id,
-                          id: item.id,
-                          patch: {
-                            mediaPreference: event.target.value as "text" | "image" | "text_and_image" | "model_choice",
-                          },
-                        })
-                      }
-                      className="h-7 rounded border border-[var(--noodle-divider)] bg-[var(--background)] px-1.5 text-[0.68rem]"
-                      aria-label="Milestone media"
-                    >
-                      <option value="model_choice">Model choice</option>
-                      <option value="text">Text</option>
-                      <option value="image">Image</option>
-                      <option value="text_and_image">Text + image</option>
-                    </select>
-                  )}
-                  {item.status !== "completed" && (
-                    <button
-                      type="button"
-                      title="Skip milestone"
-                      onClick={() =>
-                        updateMilestone.mutate({ projectId: project.id, id: item.id, patch: { status: "skipped" } })
-                      }
-                      className="rounded p-1 hover:bg-[var(--accent)]"
-                    >
-                      <ChevronDown size={13} />
-                    </button>
-                  )}
+                  <div className="col-span-3 flex min-w-0 flex-wrap items-center justify-end gap-1.5 sm:contents">
+                    {item.status === "completed" && <Check size={13} className="text-[var(--noodle-blue)]" />}
+                    {item.status !== "completed" && (
+                      <button
+                        type="button"
+                        title="Mark ready"
+                        onClick={() =>
+                          updateMilestone.mutate({ projectId: project.id, id: item.id, patch: { status: "ready" } })
+                        }
+                        className="rounded p-1 hover:bg-[var(--accent)]"
+                      >
+                        <ChevronUp size={13} />
+                      </button>
+                    )}
+                    {item.status !== "completed" && item.status !== "skipped" && (
+                      <select
+                        value={item.access}
+                        onChange={(event) =>
+                          updateMilestone.mutate({
+                            projectId: project.id,
+                            id: item.id,
+                            patch: { access: event.target.value as "public" | "subscriber" | "ppv" },
+                          })
+                        }
+                        className="h-7 rounded border border-[var(--noodle-divider)] bg-[var(--background)] px-1.5 text-[0.68rem]"
+                        aria-label="Milestone access"
+                      >
+                        <option value="public">Public</option>
+                        <option value="subscriber">Subscribers only</option>
+                        <option value="ppv">Pay-per-view</option>
+                      </select>
+                    )}
+                    {item.status !== "completed" && item.status !== "skipped" && (
+                      <select
+                        value={item.mediaPreference}
+                        onChange={(event) =>
+                          updateMilestone.mutate({
+                            projectId: project.id,
+                            id: item.id,
+                            patch: {
+                              mediaPreference: event.target.value as
+                                | "text"
+                                | "image"
+                                | "text_and_image"
+                                | "model_choice",
+                            },
+                          })
+                        }
+                        className="h-7 rounded border border-[var(--noodle-divider)] bg-[var(--background)] px-1.5 text-[0.68rem]"
+                        aria-label="Milestone media"
+                      >
+                        <option value="model_choice">Model choice</option>
+                        <option value="text">Text</option>
+                        <option value="image">Image</option>
+                        <option value="text_and_image">Text + image</option>
+                      </select>
+                    )}
+                    {item.status !== "completed" && (
+                      <button
+                        type="button"
+                        title="Skip milestone"
+                        onClick={() =>
+                          updateMilestone.mutate({ projectId: project.id, id: item.id, patch: { status: "skipped" } })
+                        }
+                        className="rounded p-1 hover:bg-[var(--accent)]"
+                      >
+                        <ChevronDown size={13} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
               <div className="flex gap-2 pt-1">

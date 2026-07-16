@@ -10,6 +10,7 @@ import {
   eligibleNoodlerCreatorAccounts,
   selectNoodlerCreator,
 } from "../../packages/server/src/services/noodle/noodler-creator-selection.js";
+import { filterPrivateNoodleBootstrapForViewer } from "../../packages/server/src/routes/noodle.routes.js";
 
 const storageDir = mkdtempSync(join(tmpdir(), "marinara-noodler-projects-"));
 process.env.FILE_STORAGE_DIR = storageDir;
@@ -46,9 +47,10 @@ try {
     },
   });
   assert.ok(activePrivateAccount);
-  assert.deepEqual(eligibleNoodlerCreatorAccounts([publicAccount, activePrivateAccount]).map((item) => item.id), [
-    activePrivateAccount.id,
-  ]);
+  assert.deepEqual(
+    eligibleNoodlerCreatorAccounts([publicAccount, activePrivateAccount]).map((item) => item.id),
+    [activePrivateAccount.id],
+  );
   assert.equal(selectNoodlerCreator([activePrivateAccount], () => 0)?.id, activePrivateAccount.id);
 
   const detail = await projects.create(activePrivateAccount.id, {
@@ -90,6 +92,38 @@ try {
   const completed = await projects.getDetail(detail.project.id);
   assert.equal(completed?.milestones[0]?.generatedPostId, "post-1");
   assert.equal(completed?.milestones[0]?.status, "completed");
+
+  const subscriberPost = await noodle.createPost({
+    authorAccountId: activePrivateAccount.id,
+    content: "Subscriber-only secret",
+    imageUrl: "https://example.com/protected.png",
+    imagePrompt: "Protected image prompt",
+    access: "subscriber",
+    metadata: { poll: { question: "Protected poll" }, ppvPrice: 8 },
+  });
+  const viewer = await noodle.upsertAccountFromProfile({
+    kind: "persona",
+    entityId: "project-viewer",
+    displayName: "Project Viewer",
+  });
+  await noodle.updateSettings({ enableNoodler: true });
+  const bootstrap = await noodle.bootstrap();
+  const locked = filterPrivateNoodleBootstrapForViewer(bootstrap, viewer).posts.find(
+    (post) => post.id === subscriberPost.id,
+  );
+  assert.ok(locked);
+  assert.equal(locked.content, "");
+  assert.equal(locked.imageUrl, null);
+  assert.equal(locked.imagePrompt, null);
+  assert.deepEqual(locked.metadata, { accessLocked: true, hasLockedImage: true, ppvPrice: 8 });
+
+  await noodle.subscribe(viewer.id, activePrivateAccount.id);
+  const subscribedBootstrap = await noodle.bootstrap();
+  const revealed = filterPrivateNoodleBootstrapForViewer(subscribedBootstrap, viewer).posts.find(
+    (post) => post.id === subscriberPost.id,
+  );
+  assert.equal(revealed?.content, "Subscriber-only secret");
+  assert.equal(revealed?.imageUrl, "https://example.com/protected.png");
   await db._fileStore.close();
   console.log("NoodleR creator projects regression passed.");
 } finally {

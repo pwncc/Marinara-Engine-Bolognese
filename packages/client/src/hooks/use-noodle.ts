@@ -391,7 +391,9 @@ export function useDeleteNoodleInteraction() {
 export function useRefreshNoodle() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: Pick<NoodleRefreshInput, "personaId" | "connectionId" | "targetAccountId" | "privatePostGuide">) =>
+    mutationFn: (
+      input: Pick<NoodleRefreshInput, "personaId" | "connectionId" | "targetAccountId" | "privatePostGuide">,
+    ) =>
       api.post<NoodleRefreshResult>("/noodle/refresh", {
         ...input,
         debugMode: useUIStore.getState().debugMode,
@@ -432,7 +434,8 @@ export function useNoodleFillerProfiles(enabled = true) {
 export function useCreateNoodleFillerProfile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: NoodleFillerProfileCreateInput) => api.post<NoodleFillerProfile>("/noodle/filler-accounts", input),
+    mutationFn: (input: NoodleFillerProfileCreateInput) =>
+      api.post<NoodleFillerProfile>("/noodle/filler-accounts", input),
     onSuccess: () => qc.invalidateQueries({ queryKey: [...noodleKeys.all, "filler-accounts"] }),
   });
 }
@@ -450,6 +453,9 @@ export function useDeleteNoodleFillerProfile() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.delete<{ ok: boolean }>(`/noodle/filler-accounts/${encodeURIComponent(id)}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: [...noodleKeys.all, "filler-accounts"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [...noodleKeys.all, "filler-accounts"] });
+      qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() });
+    },
   });
 }

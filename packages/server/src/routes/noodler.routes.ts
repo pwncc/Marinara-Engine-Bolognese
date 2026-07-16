@@ -62,7 +62,7 @@ export async function noodlerRoutes(app: FastifyInstance) {
         const projectDetails = await projects.list(account.id);
         const activeProject = projectDetails.find((detail) => detail.project.status === "active") ?? null;
         const nextMilestone = activeProject
-          ? activeProject.milestones.find((item) => item.status === "ready" || item.status === "planned") ?? null
+          ? (activeProject.milestones.find((item) => item.status === "ready" || item.status === "planned") ?? null)
           : null;
         return { account, activeProject: activeProject?.project ?? null, nextMilestone };
       }),
@@ -72,7 +72,8 @@ export async function noodlerRoutes(app: FastifyInstance) {
   app.get("/accounts/:id/projects", async (req, reply) => {
     const { id } = req.params as { id: string };
     const account = await noodle.getAccountById(id);
-    if (!account || account.visibility !== "private") return reply.code(404).send({ error: "NoodleR profile not found" });
+    if (!account || account.visibility !== "private")
+      return reply.code(404).send({ error: "NoodleR profile not found" });
     return projects.list(id);
   });
 
@@ -121,22 +122,27 @@ export async function noodlerRoutes(app: FastifyInstance) {
     const detail = await projects.getDetail(id);
     if (!detail) return reply.code(404).send({ error: "NoodleR project not found" });
     const account = await noodle.getAccountById(detail.project.creatorAccountId);
-    if (!account || account.visibility !== "private") return reply.code(404).send({ error: "NoodleR profile not found" });
+    if (!account || account.visibility !== "private")
+      return reply.code(404).send({ error: "NoodleR profile not found" });
     if (!isNoodlePrivatePostingActive(account)) {
       return reply.code(403).send({ error: "Passive NoodleR profiles cannot generate project posts." });
     }
     const next = request.data.milestoneId
-      ? detail.milestones.find(
-          (item) =>
-            item.id === request.data.milestoneId && (item.status === "planned" || item.status === "ready"),
-        ) ?? null
+      ? (detail.milestones.find(
+          (item) => item.id === request.data.milestoneId && (item.status === "planned" || item.status === "ready"),
+        ) ?? null)
       : await projects.nextMilestone(id);
     if (!next) return reply.code(400).send({ error: "This project has no milestone ready to generate." });
     const existingProjectPost = (
       await noodle.listSurfacePosts("private", { authorAccountId: account.id, limit: 100 })
     ).find((post) => post.metadata.projectMilestoneId === next.id);
     if (existingProjectPost) {
-      const updated = await projects.completeMilestone(id, next.id, existingProjectPost.id, existingProjectPost.content);
+      const updated = await projects.completeMilestone(
+        id,
+        next.id,
+        existingProjectPost.id,
+        existingProjectPost.content,
+      );
       return { project: updated, post: existingProjectPost };
     }
     const completed = detail.milestones
@@ -149,7 +155,8 @@ export async function noodlerRoutes(app: FastifyInstance) {
         : detail.project.influence === "focused"
           ? "Directly fulfill this beat without quoting the planning text or mentioning the project."
           : "Clearly advance this beat while preserving spontaneous character voice.";
-    const includeImage = next.mediaPreference === "image" || next.mediaPreference === "text_and_image";
+    const includeImage = next.mediaPreference !== "text";
+    const requireImage = next.mediaPreference === "image" || next.mediaPreference === "text_and_image";
     const projectPrompt = [
       `Current milestone: ${next.title.slice(0, 240)}. ${next.notes.slice(0, 300)}`,
       influence,
@@ -172,7 +179,7 @@ export async function noodlerRoutes(app: FastifyInstance) {
           ...(next.ppvPrice !== null ? { ppvPrice: next.ppvPrice } : {}),
           includeText: next.mediaPreference !== "image",
           includeImage,
-          requireImage: next.mediaPreference !== "model_choice",
+          requireImage,
           theme: detail.project.title,
           prompt: projectPrompt,
         },
