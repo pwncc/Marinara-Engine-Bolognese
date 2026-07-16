@@ -48,19 +48,58 @@ function quoteBareObjectValues(source: string): string {
   return normalized;
 }
 
+function normalizePythonLiterals(source: string): string {
+  const literals = new Map([
+    ["True", "true"],
+    ["False", "false"],
+    ["None", "null"],
+  ]);
+  let normalized = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index]!;
+    if (inString) {
+      normalized += character;
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      normalized += character;
+      continue;
+    }
+
+    const match = [...literals].find(
+      ([literal]) =>
+        source.startsWith(literal, index) &&
+        !/[A-Za-z0-9_$]/u.test(source[index - 1] ?? "") &&
+        !/[A-Za-z0-9_$]/u.test(source[index + literal.length] ?? ""),
+    );
+    if (!match) {
+      normalized += character;
+      continue;
+    }
+    normalized += match[1];
+    index += match[0].length - 1;
+  }
+
+  return normalized;
+}
+
 export function parseCustomParametersDraft(draft: string): CustomParametersParseResult {
   const trimmed = draft.trim();
   if (!trimmed) return { ok: true, value: {} };
 
-  const pythonLiteralNormalized = trimmed
-    .replace(/\bTrue\b/g, "true")
-    .replace(/\bFalse\b/g, "false")
-    .replace(/\bNone\b/g, "null");
+  const pythonLiteralNormalized = normalizePythonLiterals(trimmed);
   const attempts = Array.from(
     new Set([
       trimmed,
-      quoteBareObjectValues(trimmed),
       pythonLiteralNormalized,
+      quoteBareObjectValues(trimmed),
       quoteBareObjectValues(pythonLiteralNormalized),
     ]),
   );
