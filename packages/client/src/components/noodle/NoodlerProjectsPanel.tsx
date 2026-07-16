@@ -37,18 +37,18 @@ export function NoodlerProjectsPanel({ accountId }: { accountId: string }) {
       });
       setTitle("");
       setBrief("");
-      toast.success("Creator project added.");
+      toast.success("NoodleR project created.");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not add the creator project.");
+      toast.error(error instanceof Error ? error.message : "Could not create the NoodleR project.");
     }
   };
 
   return (
     <section className="space-y-3 border-t border-[var(--noodle-divider)] pt-4" data-component="NoodlerProjectsPanel">
       <div>
-        <h3 className="text-sm font-bold text-[var(--foreground)]">Creator projects</h3>
+        <h3 className="text-sm font-bold text-[var(--foreground)]">Posting projects</h3>
         <p className="mt-1 max-w-[68ch] text-xs leading-5 text-[var(--muted-foreground)]">
-          Give this creator an evolving posting arc. Milestones guide the next generated post without writing it for them.
+          Plan a multi-post story arc. Each beat guides the next AI-generated post without scripting its final wording.
         </p>
       </div>
 
@@ -63,7 +63,7 @@ export function NoodlerProjectsPanel({ accountId }: { accountId: string }) {
         <input
           value={brief}
           onChange={(event) => setBrief(event.target.value)}
-          placeholder="What is the creator working toward?"
+          placeholder="What story or goal should these posts build toward?"
           maxLength={4000}
           className="h-9 rounded-md border border-[var(--noodle-divider)] bg-[var(--background)] px-3 text-xs"
         />
@@ -73,7 +73,7 @@ export function NoodlerProjectsPanel({ accountId }: { accountId: string }) {
           disabled={!title.trim() || createProject.isPending}
           className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-[var(--noodle-blue)] px-3 text-xs font-bold text-white disabled:opacity-50"
         >
-          {createProject.isPending ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Add
+          {createProject.isPending ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Create
         </button>
       </div>
 
@@ -83,7 +83,10 @@ export function NoodlerProjectsPanel({ accountId }: { accountId: string }) {
         const active = project.status === "active";
         const terminal = project.status === "completed" || project.status === "archived";
         return (
-          <article key={project.id} className="rounded-lg border border-[var(--noodle-divider)] bg-[var(--background)] p-3">
+          <article
+            key={project.id}
+            className="rounded-lg border border-[var(--noodle-divider)] bg-[var(--background)] p-3"
+          >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -95,7 +98,9 @@ export function NoodlerProjectsPanel({ accountId }: { accountId: string }) {
                     {milestones.filter((item) => item.status === "completed").length}/{milestones.length} beats
                   </span>
                 </div>
-                {project.brief && <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">{project.brief}</p>}
+                {project.brief && (
+                  <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">{project.brief}</p>
+                )}
               </div>
               <div className="flex flex-wrap gap-1.5">
                 <select
@@ -115,7 +120,9 @@ export function NoodlerProjectsPanel({ accountId }: { accountId: string }) {
                 </select>
                 <button
                   type="button"
-                  onClick={() => updateProject.mutate({ id: project.id, patch: { status: active ? "paused" : "active" } })}
+                  onClick={() =>
+                    updateProject.mutate({ id: project.id, patch: { status: active ? "paused" : "active" } })
+                  }
                   disabled={terminal}
                   className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--noodle-divider)] px-2 text-xs font-semibold disabled:opacity-45"
                 >
@@ -142,35 +149,52 @@ export function NoodlerProjectsPanel({ accountId }: { accountId: string }) {
                   type="button"
                   onClick={() =>
                     generateNext.mutate(project.id, {
-                      onSuccess: () => toast.success("The next project post was published."),
-                      onError: (error) => toast.error(error instanceof Error ? error.message : "Could not generate the post."),
+                      onSuccess: () => toast.success("Next project post published."),
+                      onError: (error) =>
+                        toast.error(
+                          error instanceof Error ? error.message : "Could not generate the next project post.",
+                        ),
                     })
                   }
                   disabled={!active || !next || generateNext.isPending}
                   className="inline-flex h-8 items-center gap-1 rounded-md bg-[var(--noodle-blue)] px-2.5 text-xs font-bold text-white disabled:opacity-45"
                 >
-                  {generateNext.isPending ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />} Generate next
+                  {generateNext.isPending ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}{" "}
+                  Generate next
                 </button>
               </div>
             </div>
 
             <div className="mt-3 space-y-1.5">
               {milestones.map((item, index) => (
-                <div key={item.id} className="flex items-center gap-2 rounded-md bg-[var(--muted)]/35 px-2.5 py-2 text-xs">
-                  <span className="w-5 shrink-0 text-center font-semibold text-[var(--muted-foreground)]">{index + 1}</span>
-                  <span className={item.status === "completed" || item.status === "skipped" ? "flex-1 line-through opacity-60" : "flex-1"}>
+                <div
+                  key={item.id}
+                  className="flex items-center gap-2 rounded-md bg-[var(--muted)]/35 px-2.5 py-2 text-xs"
+                >
+                  <span className="w-5 shrink-0 text-center font-semibold text-[var(--muted-foreground)]">
+                    {index + 1}
+                  </span>
+                  <span
+                    className={
+                      item.status === "completed" || item.status === "skipped"
+                        ? "flex-1 line-through opacity-60"
+                        : "flex-1"
+                    }
+                  >
                     {item.title}
                   </span>
                   {item.status === "completed" && <Check size={13} className="text-[var(--noodle-blue)]" />}
                   {item.status !== "completed" && (
                     <button
-                    type="button"
-                    title="Mark ready"
-                    onClick={() => updateMilestone.mutate({ projectId: project.id, id: item.id, patch: { status: "ready" } })}
-                    className="rounded p-1 hover:bg-[var(--accent)]"
-                  >
-                    <ChevronUp size={13} />
-                  </button>
+                      type="button"
+                      title="Mark ready"
+                      onClick={() =>
+                        updateMilestone.mutate({ projectId: project.id, id: item.id, patch: { status: "ready" } })
+                      }
+                      className="rounded p-1 hover:bg-[var(--accent)]"
+                    >
+                      <ChevronUp size={13} />
+                    </button>
                   )}
                   {item.status !== "completed" && item.status !== "skipped" && (
                     <select
@@ -185,9 +209,9 @@ export function NoodlerProjectsPanel({ accountId }: { accountId: string }) {
                       className="h-7 rounded border border-[var(--noodle-divider)] bg-[var(--background)] px-1.5 text-[0.68rem]"
                       aria-label="Milestone access"
                     >
-                      <option value="public">Public preview</option>
-                      <option value="subscriber">Subscriber</option>
-                      <option value="ppv">PPV</option>
+                      <option value="public">Public</option>
+                      <option value="subscriber">Subscribers only</option>
+                      <option value="ppv">Pay-per-view</option>
                     </select>
                   )}
                   {item.status !== "completed" && item.status !== "skipped" && (
@@ -213,21 +237,25 @@ export function NoodlerProjectsPanel({ accountId }: { accountId: string }) {
                   )}
                   {item.status !== "completed" && (
                     <button
-                    type="button"
-                    title="Skip milestone"
-                    onClick={() => updateMilestone.mutate({ projectId: project.id, id: item.id, patch: { status: "skipped" } })}
-                    className="rounded p-1 hover:bg-[var(--accent)]"
-                  >
-                    <ChevronDown size={13} />
-                  </button>
+                      type="button"
+                      title="Skip milestone"
+                      onClick={() =>
+                        updateMilestone.mutate({ projectId: project.id, id: item.id, patch: { status: "skipped" } })
+                      }
+                      className="rounded p-1 hover:bg-[var(--accent)]"
+                    >
+                      <ChevronDown size={13} />
+                    </button>
                   )}
                 </div>
               ))}
               <div className="flex gap-2 pt-1">
                 <input
                   value={milestoneDrafts[project.id] ?? ""}
-                  onChange={(event) => setMilestoneDrafts((current) => ({ ...current, [project.id]: event.target.value }))}
-                  placeholder="Add the next posting beat"
+                  onChange={(event) =>
+                    setMilestoneDrafts((current) => ({ ...current, [project.id]: event.target.value }))
+                  }
+                  placeholder="Add the next story beat"
                   maxLength={240}
                   className="h-8 min-w-0 flex-1 rounded-md border border-[var(--noodle-divider)] bg-[var(--background)] px-2.5 text-xs"
                 />
@@ -255,7 +283,7 @@ export function NoodlerProjectsPanel({ accountId }: { accountId: string }) {
                   }}
                   className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--noodle-divider)] px-2.5 text-xs font-semibold"
                 >
-                  <Plus size={12} /> Beat
+                  <Plus size={12} /> Add beat
                 </button>
               </div>
             </div>

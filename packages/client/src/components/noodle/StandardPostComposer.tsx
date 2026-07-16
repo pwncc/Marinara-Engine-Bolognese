@@ -49,6 +49,7 @@ export function StandardPostComposer({
         <button
           type="button"
           onClick={() => setExpanded(true)}
+          title={`Open the composer and roleplay as @${account.handle}`}
           className="h-8 rounded-full border border-[var(--noodle-divider)] px-3 text-xs font-semibold text-[var(--muted-foreground)] transition-colors hover:border-[var(--noodle-blue)]/50 hover:bg-[var(--noodle-blue)]/5 hover:text-[var(--foreground)]"
         >
           Post as @{account.handle}

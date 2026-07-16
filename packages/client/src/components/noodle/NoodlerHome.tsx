@@ -1,10 +1,6 @@
 // ──────────────────────────────────────────────
-// NoodleR: private creator hub (verification screen, hub tabs:
-// timeline/subscriptions/discover/owned). Mechanical extraction
-// from NoodleView.tsx (Phase 5 of MARI_NOODLER_SEPARATION_TASK.md)
-// — this component is purely presentational. All state, data
-// fetching, and mutation handlers still live in the NoodleView
-// shell and are passed down as props.
+// NoodleR: private creator hub, profile creation, and profile view.
+// State and mutations live in NoodleView and are passed down as props.
 // ──────────────────────────────────────────────
 import { AtSign, Check, ImageIcon, Loader2, Menu, Trash2, User } from "lucide-react";
 import type { ChangeEvent, ReactNode, RefObject } from "react";
@@ -136,7 +132,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                 <MobileTimelineBackButton label="Back to Hub" onClick={onBackToHome} />
                 <NoodlerLogo size={28} className="hidden lg:block" />
                 <div className="min-w-0 flex-1">
-                  <h2 className="truncate text-lg font-bold">Your NoodleR profile</h2>
+                  <h2 className="truncate text-lg font-bold">NoodleR profile</h2>
                   <p className="truncate text-xs text-[var(--muted-foreground)]">
                     {personaAccount ? `@${personaAccount.handle}` : "Choose a persona account"}
                   </p>
@@ -147,10 +143,10 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[var(--noodle-blue)] text-zinc-950">
                 <NoodlerLogo size={30} />
               </span>
-              <h3 className="mt-4 text-xl font-black">Create your NoodleR profile</h3>
+              <h3 className="mt-4 text-xl font-black">Create a NoodleR profile</h3>
               <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                This is where you post as your NoodleR persona — subscriptions, pay-per-view unlocks, and all. Set it up
-                once to start posting to the Hub.
+                Give this persona a separate NoodleR identity for subscriber and pay-per-view posts. You can edit it
+                later from the profile page.
               </p>
               <button
                 type="button"
@@ -159,7 +155,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                 className="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--noodle-blue)] px-6 text-sm font-black text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <NoodlerLogo size={18} />
-                Build your NoodleR ID
+                Create NoodleR profile
               </button>
             </div>
           </div>
@@ -188,8 +184,10 @@ export function NoodlerHome(props: NoodlerHomeProps) {
             <MobileTimelineBackButton label="Back to Noodle" onClick={onBackToHome} />
             <NoodlerLogo size={28} className="hidden lg:block" />
             <div className="min-w-0 flex-1">
-              <h2 className="truncate text-lg font-bold">Meet NoodleR</h2>
-              <p className="truncate text-xs text-[var(--muted-foreground)]">Noodle's private, adult-gated corner</p>
+              <h2 className="truncate text-lg font-bold">About NoodleR</h2>
+              <p className="truncate text-xs text-[var(--muted-foreground)]">
+                Optional private creator profiles for adults
+              </p>
             </div>
           </div>
         </div>
@@ -202,13 +200,12 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               </span>
               <div className="min-w-0">
                 <p className="text-xs font-black uppercase tracking-normal text-[var(--noodle-blue)]">
-                  What is NoodleR?
+                  Before you continue
                 </p>
-                <h3 className="mt-1 text-2xl font-black leading-tight">Noodle's private, 18+ corner.</h3>
+                <h3 className="mt-1 text-2xl font-black leading-tight">NoodleR is an optional 18+ space.</h3>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--muted-foreground)]">
-                  NoodleR is a separate, opt-in space for adult creator content — subscriptions and per-post unlocks,
-                  kept entirely out of the main Noodle timeline. It's off by default; turning it on for this install is
-                  the only step required to see it.
+                  NoodleR keeps creator profiles, subscriptions, and pay-per-view posts separate from the public Noodle
+                  timeline. Enable it only if you want adult creator content in this installation.
                 </p>
               </div>
             </div>
@@ -218,24 +215,23 @@ export function NoodlerHome(props: NoodlerHomeProps) {
             {[
               {
                 icon: User,
-                title: "Private by default",
-                detail: "NoodleR accounts and posts never show up in the main Noodle feed.",
+                title: "Separate from Noodle",
+                detail: "NoodleR profiles and posts stay out of the public Noodle timeline.",
               },
               {
                 icon: ImageIcon,
-                title: "Subscriptions & unlocks",
-                detail: "Pages can be subscriber-only or unlock individual posts, unlike free-to-view Noodle posts.",
+                title: "Subscriptions and unlocks",
+                detail: "Posts can be public, subscriber-only, or pay-per-view. Payments are simulated.",
               },
               {
                 icon: AtSign,
-                title: "Its own profile",
-                detail:
-                  "Posting here requires setting up a dedicated NoodleR profile, separate from your Noodle handle.",
+                title: "Dedicated profiles",
+                detail: "Each NoodleR identity has its own profile, stage persona, and posting settings.",
               },
               {
                 icon: Check,
-                title: "18+ content",
-                detail: "This corner exists for adult creator content — only turn it on if that's what you want.",
+                title: "Adults only",
+                detail: "Enable NoodleR only if you are an adult and want this content in Marinara.",
               },
             ].map((item, index) => {
               const Icon = item.icon;
@@ -271,7 +267,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--noodle-blue)] px-5 text-sm font-black text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {updateSettingsPending ? <Loader2 size={17} className="animate-spin" /> : <Check size={17} />}
-              {updateSettingsPending ? "Enabling" : "Enable NoodleR for this install"}
+              {updateSettingsPending ? "Enabling..." : "I am 18+ and want to enable NoodleR"}
             </button>
             <button
               type="button"
@@ -343,7 +339,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                   className="border-b border-[var(--noodle-divider)] px-4 py-3 text-sm text-[var(--muted-foreground)]"
                   data-component="NoodlerHome.GlobalComposerNotice"
                 >
-                  Global mode is view-only. Switch to a persona account to post.
+                  Global mode is view-only. Select a persona to post, subscribe, or unlock content.
                 </div>
               ) : !hasNoodlerAccount ? (
                 <div
@@ -357,7 +353,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                   >
                     Create a NoodleR profile
                   </button>{" "}
-                  to post yourself.
+                  to post from the Hub.
                 </div>
               ) : (
                 <>
@@ -374,17 +370,17 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               ) : privateAccountsCount > 0 ? (
                 <div className="px-8 py-14 text-center">
                   <NoodlerLogo size={48} className="mx-auto mb-4" />
-                  <p className="text-base font-bold">Nothing here yet.</p>
+                  <p className="text-base font-bold">No NoodleR activity yet.</p>
                   <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                    NoodleR posts, comments, subscribers, and unlocks will show here.
+                    Posts and fan activity visible to this persona will appear here.
                   </p>
                 </div>
               ) : (
                 <div className="px-8 py-14 text-center">
                   <NoodlerLogo size={48} className="mx-auto mb-4" />
-                  <p className="text-base font-bold">No NoodleR accounts yet.</p>
+                  <p className="text-base font-bold">No NoodleR profiles yet.</p>
                   <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                    Create a private page from a persona or character profile.
+                    Open a persona or character profile to create its NoodleR profile.
                   </p>
                 </div>
               )}
@@ -394,7 +390,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               <div>{noodlerHub.subscribed.map((account) => renderNoodlerAccountRow(account, false))}</div>
             ) : (
               <p className="px-4 py-4 text-sm text-[var(--muted-foreground)]">
-                Not subscribed to any NoodleR creators yet.
+                This persona is not subscribed to any NoodleR profiles yet.
               </p>
             )
           ) : activeNoodlerHubTab === "discover" ? (
@@ -402,20 +398,20 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               <div>{sortedNoodlerDiscoverAccounts.map(renderNoodlerDiscoverCard)}</div>
             ) : (
               <p className="px-4 py-4 text-sm text-[var(--muted-foreground)]">
-                No other NoodleR creators to discover yet.
+                No NoodleR profiles are available to discover yet.
               </p>
             )
           ) : noodlerHub && noodlerHub.owned.length > 0 ? (
             <>
               <p className="border-b border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/8 px-4 py-3 text-xs leading-5 text-[var(--muted-foreground)]">
-                Creator Pages is your director workspace for the persona and character pages you manage. Viewer
-                subscriptions and unlocks still follow the selected persona.
+                Creator Pages shows every persona and character profile you can direct. Subscriptions and unlocks still
+                belong to the selected persona.
               </p>
               <div>{noodlerHub.owned.map((account) => renderNoodlerAccountRow(account, true))}</div>
             </>
           ) : (
             <p className="px-4 py-4 text-sm text-[var(--muted-foreground)]">
-              No creator pages yet. Create one from a persona or character profile.
+              No creator pages yet. Open a persona or character profile to create one.
             </p>
           )}
         </>
@@ -425,8 +421,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
 }
 
 // ──────────────────────────────────────────────
-// NoodleR ID builder: the profile-creation flow, themed as a faux
-// government-ID card the user fills out. Flavor only — nothing here
+// NoodleR profile builder, themed as a faux ID card. Flavor only; nothing here
 // is real identity verification. Completing it creates the actual
 // NoodleR account (via onSubmit -> createPrivateAccount).
 // ──────────────────────────────────────────────
@@ -469,7 +464,7 @@ function NoodlerIdBuilder({
           <MobileTimelineBackButton label="Back to Hub" onClick={onBack} />
           <NoodlerLogo size={28} className="hidden lg:block" />
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-lg font-bold">Build your NoodleR ID</h2>
+            <h2 className="truncate text-lg font-bold">Create NoodleR profile</h2>
             <p className="truncate text-xs text-[var(--muted-foreground)]">
               {personaAccount ? `@${personaAccount.handle}` : "Choose a persona account"}
             </p>
@@ -478,20 +473,21 @@ function NoodlerIdBuilder({
       </div>
 
       <section className="mx-auto max-w-xl px-4 py-6 sm:px-6 sm:py-8">
-        {/* ID card mockup: live-updates as the fields below change */}
+        {/* Profile preview updates as the fields below change. */}
         <div className="relative overflow-hidden rounded-xl border border-[var(--noodle-divider)] bg-[var(--card)] p-4 shadow-sm">
           <div className="flex items-start gap-4">
             {personaAccount && <Avatar account={personaAccount} size="lg" />}
             <div className="min-w-0 flex-1">
               <p className="text-[0.65rem] font-black uppercase tracking-widest text-[var(--noodle-blue)]">
-                NoodleR ID
+                NoodleR profile
               </p>
               <p className="mt-1 truncate text-lg font-black leading-tight">{draft.stageName.trim() || "Unnamed"}</p>
               <p className="mt-0.5 truncate text-xs text-[var(--muted-foreground)]">
                 {draft.stageBio.trim() || "No bio yet"}
               </p>
               <p className="mt-2 text-[0.65rem] font-bold uppercase tracking-wide text-[var(--muted-foreground)]">
-                Disclosure: {draft.identityDisclosure} &middot; {draft.postingMode === "active" ? "Active" : "Passive"}
+                {draft.identityDisclosure} identity &middot;{" "}
+                {draft.postingMode === "active" ? "AI posting available" : "Manual posts only"}
               </p>
             </div>
           </div>
@@ -514,12 +510,12 @@ function NoodlerIdBuilder({
         <div className="mt-5 space-y-4">
           <label className="block space-y-1.5">
             <span className="text-[0.68rem] font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">
-              Name on ID
+              Profile name
             </span>
             <input
               value={draft.stageName}
               onChange={(event) => onChange({ stageName: event.target.value })}
-              placeholder="Leave blank for a generated alias"
+              placeholder="Choose a stage name"
               className={fieldClass}
             />
           </label>
@@ -531,31 +527,31 @@ function NoodlerIdBuilder({
             <textarea
               value={draft.stageBio}
               onChange={(event) => onChange({ stageBio: event.target.value })}
-              placeholder="Leave blank for a generated private profile bio"
+              placeholder="Introduce this NoodleR profile"
               className={cn(textareaClass, "min-h-20 resize-none")}
             />
           </label>
 
           <label className="block space-y-1.5">
             <span className="text-[0.68rem] font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">
-              Private persona
+              Stage persona
             </span>
             <textarea
               value={draft.stagePersonality}
               onChange={(event) => onChange({ stagePersonality: event.target.value })}
-              placeholder="Submissive but well-spoken, bratty, anonymous, polished, confident..."
+              placeholder="Voice, attitude, boundaries, and creator persona"
               className={cn(textareaClass, "min-h-24 resize-none")}
             />
           </label>
 
           <label className="block space-y-1.5">
             <span className="text-[0.68rem] font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">
-              Dynamic
+              Creator dynamic
             </span>
             <input
               value={draft.stageDynamic}
               onChange={(event) => onChange({ stageDynamic: event.target.value })}
-              placeholder="soft-spoken tease, controlled submissive, confident domme"
+              placeholder="How this profile relates to its audience or collaborators"
               className={fieldClass}
             />
           </label>
@@ -576,27 +572,27 @@ function NoodlerIdBuilder({
               <option value="secret">Secret</option>
             </select>
             <p className="text-[11px] leading-4 text-[var(--muted-foreground)]">
-              "Open" lets generated posts reuse the linked name/handle directly. "Hinted" keeps the linked name out of
-              generated text but still allows subtle allusions and in-jokes. "Secret" also filters out the linked handle
-              and first name — it's AI-generated content moderation, not a hard guarantee it can never slip through.
+              Open allows AI-generated posts to use the linked public identity. Hinted avoids the public name but allows
+              subtle references. Secret asks generation to avoid identifying details. These are AI instructions, not a
+              privacy guarantee.
             </p>
           </label>
 
           <div className="space-y-1.5">
             <span className="text-[0.68rem] font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">
-              How will this account participate?
+              AI posting
             </span>
             <div className="grid gap-2 sm:grid-cols-2">
               {[
                 {
                   value: "active" as const,
                   title: "Active",
-                  detail: "This account posts too — you'll be able to publish from it.",
+                  detail: "Manual posts, guided AI, and scheduled AI posting are available.",
                 },
                 {
                   value: "passive" as const,
                   title: "Passive",
-                  detail: "Lurk only — this account never posts, just browses and subscribes.",
+                  detail: "Manual roleplay posts remain available; AI-generated posting is disabled.",
                 },
               ].map((option) => (
                 <button
@@ -625,7 +621,7 @@ function NoodlerIdBuilder({
               className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--noodle-blue)]"
             />
             <span className="text-xs leading-5 text-[var(--muted-foreground)]">
-              I confirm I'm here for adult creator content and I'm of age.
+              I confirm that I am 18 or older and want to create an adult NoodleR profile.
             </span>
           </label>
         </div>
@@ -638,7 +634,7 @@ function NoodlerIdBuilder({
             className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--noodle-blue)] px-6 text-sm font-black text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {pending ? <Loader2 size={17} className="animate-spin" /> : <Check size={17} />}
-            {pending ? "Scanning" : "Create NoodleR profile"}
+            {pending ? "Creating..." : "Create NoodleR profile"}
           </button>
           <button
             type="button"
@@ -655,13 +651,7 @@ function NoodlerIdBuilder({
 }
 
 // ──────────────────────────────────────────────
-// Private profile view (activeNoodleMode === "noodler"). Renders the
-// shared ProfileHeaderChrome with the private-mode action row
-// (Edit Profile / Subscribe, plus Delete NoodleR profile when it's
-// the viewer's own page), the stage-profile panel, the creator-tools
-// composer, the fan-activity panel, and the locked post grid. Public
-// profile is NoodleHome's PublicProfileView instead — see
-// MARI_NOODLER_SEPARATION_TASK.md Phase 5/6.
+// Private profile view with shared profile chrome, posting, and tabs.
 // ──────────────────────────────────────────────
 export interface PrivateProfileViewProps {
   onBackToHome: () => void;

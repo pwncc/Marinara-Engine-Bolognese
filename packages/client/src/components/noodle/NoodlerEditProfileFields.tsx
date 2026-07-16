@@ -132,7 +132,10 @@ export function NoodlerEditProfileFields({
 
   return (
     <div className="space-y-4">
-      <SubSection title="Stage identity" help="Page-specific creator settings for this NoodleR profile.">
+      <SubSection
+        title="Stage identity"
+        help="Define how this profile presents itself and how AI-generated posts should sound."
+      >
         <div className="space-y-3">
           {identityGenerationFailed && (
             <div className="flex flex-col gap-2 rounded-lg border border-[var(--destructive)]/40 bg-[var(--destructive)]/10 px-3 py-2 text-xs text-[var(--destructive)] sm:flex-row sm:items-center sm:justify-between">
@@ -154,7 +157,7 @@ export function NoodlerEditProfileFields({
           )}
 
           <label className="block space-y-1.5">
-            <FieldLabel help="Secret filters the linked name out of generated posts/images. This is AI-generated content moderation, not a hard guarantee.">
+            <FieldLabel help="Secret asks AI generation to avoid the linked public name. It is guidance, not a privacy guarantee.">
               Identity disclosure
             </FieldLabel>
             <select
@@ -172,7 +175,9 @@ export function NoodlerEditProfileFields({
           </label>
 
           <label className="block space-y-1.5">
-            <FieldLabel>Private persona</FieldLabel>
+            <FieldLabel help="Voice, attitude, and traits used only for this NoodleR profile.">
+              Stage persona
+            </FieldLabel>
             <textarea
               value={draft.privatePersona}
               onChange={(event) => onChange({ privatePersona: event.target.value })}
@@ -183,7 +188,9 @@ export function NoodlerEditProfileFields({
 
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block space-y-1.5">
-              <FieldLabel>Dynamic</FieldLabel>
+              <FieldLabel help="A short description of this profile's relationship or creator dynamic.">
+                Creator dynamic
+              </FieldLabel>
               <input
                 value={draft.dynamic}
                 onChange={(event) => onChange({ dynamic: event.target.value })}
@@ -199,8 +206,8 @@ export function NoodlerEditProfileFields({
                 disabled={savePending}
                 className={fieldClass}
               >
-                <option value="active">Active - this account posts too</option>
-                <option value="passive">Passive - lurk only</option>
+                <option value="active">Active - AI posting is available</option>
+                <option value="passive">Passive - manual posts only</option>
               </select>
             </label>
           </div>
@@ -218,7 +225,10 @@ export function NoodlerEditProfileFields({
         </div>
       </SubSection>
 
-      <SubSection title="Monetization" help="Subscription pricing and pay-per-view bundling for this page.">
+      <SubSection
+        title="Access and pricing"
+        help="Set simulated subscription and pay-per-view options for this profile."
+      >
         <div className="space-y-3">
           <label className="flex items-start gap-2 text-xs leading-5 text-[var(--muted-foreground)]">
             <input
@@ -228,9 +238,7 @@ export function NoodlerEditProfileFields({
               disabled={savePending}
               className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--noodle-blue)]"
             />
-            <span>
-              Subscribers automatically unlock pay-per-post content too. Off means each post is unlocked separately.
-            </span>
+            <span>Let subscribers view pay-per-view posts without unlocking each one separately.</span>
           </label>
           <label className="block space-y-1.5 sm:max-w-xs">
             <FieldLabel>Subscription price per month</FieldLabel>
@@ -255,14 +263,14 @@ export function NoodlerEditProfileFields({
       </SubSection>
 
       <SubSection
-        title="Page privacy"
-        help="Manage who this character knows and who this private page should remain invisible to."
+        title="Visibility and connections"
+        help="Control social context and which accounts can discover this profile."
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="min-w-0">
             <p className="text-xs font-semibold text-[var(--foreground)]">People this character knows</p>
             <p className="mt-0.5 text-xs leading-4 text-[var(--muted-foreground)]">
-              Biases interactions; it is not an access restriction.
+              Guides generated interactions. It does not grant access.
             </p>
             {!linkedPublicAccount ? (
               <p className="mt-2 text-xs text-[var(--muted-foreground)]">No linked public account found.</p>
@@ -294,7 +302,7 @@ export function NoodlerEditProfileFields({
 
       <SubSection
         title="Fan activity"
-        help="Lets filler accounts like, comment, subscribe, and unlock posts. The global NoodleR fan activity setting must also be enabled."
+        help="Let simulated fan accounts like, comment, subscribe, and unlock posts. Global NoodleR fan activity must also be enabled."
       >
         <div className="space-y-3">
           <label className="flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
@@ -305,7 +313,7 @@ export function NoodlerEditProfileFields({
               disabled={savePending}
               className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--noodle-blue)]"
             />
-            <span>Turn on fan activity for this page. Off by default.</span>
+            <span>Enable simulated fan activity for this profile.</span>
           </label>
           {draft.fanActivityEnabled && (
             <div className="grid gap-3 sm:grid-cols-2">
@@ -349,7 +357,7 @@ export function NoodlerEditProfileFields({
                 className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-full border border-[var(--noodle-blue)]/50 px-4 text-xs font-bold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
               >
                 {simulateFanActivityPending ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-                {simulateFanActivityPending ? "Simulating..." : "Simulate fan activity now"}
+                {simulateFanActivityPending ? "Simulating..." : "Run fan activity now"}
               </button>
             </div>
           )}
@@ -358,7 +366,7 @@ export function NoodlerEditProfileFields({
 
       <SubSection
         title="Automatic posting"
-        help="Includes this page in bulk NoodleR refreshes and the global automatic creator-post schedule. Passive pages still never generate posts."
+        help="Include this profile in manual refreshes and scheduled AI posting. Passive profiles remain manual-only."
       >
         <div className="space-y-3">
           <label className="flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
@@ -369,11 +377,13 @@ export function NoodlerEditProfileFields({
               disabled={savePending}
               className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--noodle-blue)]"
             />
-            <span>Include this Active page in eligible refreshes and automatic creator posting.</span>
+            <span>Include this Active profile when refreshing NoodleR or running scheduled AI posts.</span>
           </label>
           {draft.autoPostEnabled && (
             <label className="block space-y-1.5 sm:max-w-xs">
-              <FieldLabel>Posting frequency</FieldLabel>
+              <FieldLabel help="Controls how often this profile is chosen relative to other eligible profiles.">
+                Posting frequency
+              </FieldLabel>
               <select
                 value={draft.autoPostIntensity}
                 onChange={(event) => onChange({ autoPostIntensity: event.target.value as NoodleFanActivityIntensity })}
@@ -382,7 +392,7 @@ export function NoodlerEditProfileFields({
               >
                 {intensityOptions.map((option) => (
                   <option key={option.value} value={option.value}>
-                    {option.label} (selection weight {option.value === "low" ? "1" : option.value === "medium" ? "2" : "4"})
+                    {option.label}
                   </option>
                 ))}
               </select>

@@ -167,7 +167,7 @@ export const NOODLE_SETTINGS_GROUPS: ReadonlyArray<{
   { id: "content", label: "Content", icon: Sparkles, description: "Images, tone, and lore." },
   { id: "appearance", label: "Appearance", icon: Palette, description: "Feed layout and global feed visibility." },
   { id: "chat", label: "Chat Integration", icon: MessageCircle, description: "Carrying Noodle activity into chats." },
-  { id: "noodler", label: "NoodleR", icon: Lock, description: "Private creator network access and per-page settings." },
+  { id: "noodler", label: "NoodleR", icon: Lock, description: "Adult creator profiles, access, and automation." },
   { id: "danger", label: "Danger Zone", icon: Trash2, description: "Reset Noodle's timeline." },
 ];
 
@@ -280,7 +280,7 @@ export function subscribeLabel(account: Pick<NoodleAccount, "settings">, subscri
 export function unlockLabel(post: Pick<NoodlePost, "access" | "metadata">) {
   if (post.access !== "ppv") return "Subscribers only";
   const price = post.metadata?.ppvPrice;
-  return typeof price === "number" ? `Unlock · $${price.toFixed(2)}` : "Pay-per-post";
+  return typeof price === "number" ? `Unlock · $${price.toFixed(2)}` : "Pay-per-view";
 }
 
 export function createNoodleLightboxImage(id: string, url: string, prompt = ""): ChatImage {
@@ -791,7 +791,9 @@ export function InlineComposer(props: InlineComposerProps) {
           </div>
           {onOpenGuidedPost && (
             <NoodleToolButton
-              title={guidedPostDisabled ? "Passive profiles cannot generate guided posts" : "Generate with AI"}
+              title={
+                guidedPostDisabled ? "Guided AI is unavailable while this profile is Passive" : "Generate post with AI"
+              }
               onClick={() => {
                 if (!guidedPostDisabled && !guidedPostPending) onOpenGuidedPost();
               }}
@@ -816,8 +818,8 @@ export function InlineComposer(props: InlineComposerProps) {
               className="h-8 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs font-semibold text-[var(--foreground)]"
             >
               <option value="public">Public</option>
-              <option value="subscriber">Subscribers</option>
-              <option value="ppv">PPV</option>
+              <option value="subscriber">Subscribers only</option>
+              <option value="ppv">Pay-per-view</option>
             </select>
           )}
           {postAccess === "ppv" && onPpvPriceChange && (
@@ -829,8 +831,8 @@ export function InlineComposer(props: InlineComposerProps) {
               inputMode="decimal"
               value={ppvPrice}
               onChange={(event) => onPpvPriceChange(event.target.value)}
-              placeholder="Price"
-              aria-label="PPV price"
+              placeholder="$0.00"
+              aria-label="Pay-per-view price"
               className="h-8 w-20 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs text-[var(--foreground)] outline-none focus:border-[var(--noodle-blue)]"
             />
           )}
@@ -1205,7 +1207,7 @@ export function ProfileTabsAndGrid({
         )
       ) : (
         <div className="px-8 py-14 text-center">
-          <p className="text-sm font-semibold text-[var(--muted-foreground)]">Nothing boiling here yet.</p>
+          <p className="text-sm font-semibold text-[var(--muted-foreground)]">No posts in this view yet.</p>
         </div>
       )}
     </div>

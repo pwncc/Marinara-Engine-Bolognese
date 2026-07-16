@@ -967,7 +967,9 @@ export function NoodleView() {
   const hasMorePersonaAccounts = visiblePersonaAccounts.length < sortedPersonaAccounts.length;
   const posts = useMemo(() => data?.posts ?? [], [data?.posts]);
   const oldestLoadedPostCreatedAt = useMemo(() => {
-    const publicAccountIds = new Set(accounts.filter((account) => account.visibility === "public").map((account) => account.id));
+    const publicAccountIds = new Set(
+      accounts.filter((account) => account.visibility === "public").map((account) => account.id),
+    );
     let oldest: string | null = null;
     for (const post of posts) {
       if (!publicAccountIds.has(post.authorAccountId)) continue;
@@ -1203,7 +1205,7 @@ export function NoodleView() {
   const composeActionLabel = isGlobalPersonaSelected
     ? "Pick a persona to post"
     : activeNoodleMode === "noodler"
-      ? "NoodleR Post"
+      ? "Post"
       : "Post";
   const composePlaceholder = isGlobalPersonaSelected
     ? "Switch to a persona account to post."
@@ -1391,7 +1393,7 @@ export function NoodleView() {
       { enableNoodler: true },
       {
         onSuccess: () => {
-          toast.success("Verification complete. Welcome to NoodleR — start by creating a NoodlerID.");
+          toast.success("NoodleR enabled. Create a NoodleR profile when you're ready to post.");
           trackAchievement.mutate("noodler_discovered");
           transitionNoodleMode("noodler");
         },
@@ -1588,13 +1590,15 @@ export function NoodleView() {
         });
       }
       setProfileEditing(false);
-      toast.success("Noodle profile updated.");
+      toast.success(
+        viewedProfileAccount.visibility === "private" ? "NoodleR profile updated." : "Noodle profile updated.",
+      );
     } catch (error) {
       const detail = error instanceof Error ? error.message : "Unknown error";
       toast.error(
         privateProfileSaved && linkedPublicAccount
           ? `Profile fields saved, but known accounts were not saved. Keep editing and retry: ${detail}`
-          : `Could not update Noodle profile: ${detail}`,
+          : `Could not update ${viewedProfileAccount.visibility === "private" ? "NoodleR" : "Noodle"} profile: ${detail}`,
       );
     } finally {
       setProfileSavePending(false);
@@ -2621,7 +2625,7 @@ export function NoodleView() {
               ? `Post as @${account.handle} to NoodleR...`
               : `Post as @${account.handle}...`
       }
-      composeActionLabel={mode === "noodler" ? "NoodleR Post" : "Post"}
+      composeActionLabel="Post"
       renderComposerMentionSuggestions={renderComposerMentionSuggestions}
       renderDraftPoll={renderDraftPoll}
       attachedImageUrl={attachedImageUrl}
@@ -2743,7 +2747,12 @@ export function NoodleView() {
       },
       {
         onSuccess: clearPostDraft,
-        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not post to Noodle."),
+        onError: (error) =>
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : `Could not post to ${postingTargetAccount.visibility === "private" ? "NoodleR" : "Noodle"}.`,
+          ),
       },
     );
   };
@@ -3031,7 +3040,7 @@ export function NoodleView() {
   const triggerRefresh = () => {
     if (imagePromptReviewItems.length > 0) return;
     if (!settings?.generationConnectionId) {
-      toast.error("Choose a generation connection for Noodle first.");
+      toast.error("Choose a Noodle generation connection in Settings first.");
       return;
     }
     const defaultImageConnectionId = readString(imageConnections.find((connection) => connection.defaultForAgents)?.id);
@@ -3057,14 +3066,14 @@ export function NoodleView() {
   const triggerNoodlerRefresh = async () => {
     if (imagePromptReviewItems.length > 0) return;
     if (!settings?.generationConnectionId) {
-      toast.error("Choose a generation connection for Noodle first.");
+      toast.error("Choose a Noodle generation connection in Settings first.");
       return;
     }
     const eligibleAccounts = privateAccounts.filter(
       (account) => readAutoPostEnabled(account) && readPrivatePostingMode(account) === "active",
     );
     if (eligibleAccounts.length === 0) {
-      toast.info("No NoodleR pages have automatic posting enabled.");
+      toast.info("No Active NoodleR profiles are included in automatic posting.");
       return;
     }
     try {
@@ -3101,12 +3110,12 @@ export function NoodleView() {
       return;
     }
     if (!settings?.generationConnectionId) {
-      toast.error("Choose a generation connection for Noodle first.");
+      toast.error("Choose a Noodle generation connection in Settings first.");
       return;
     }
     const defaultImageConnectionId = readString(imageConnections.find((connection) => connection.defaultForAgents)?.id);
     if (privateGuideIncludeImage && !settings.imageGenerationConnectionId && !defaultImageConnectionId) {
-      toast.error("Choose an image generation connection for Noodle first.");
+      toast.error("Choose a Noodle image generation connection in Settings first.");
       return;
     }
     refreshNoodle.mutate(
@@ -4399,20 +4408,20 @@ export function NoodleView() {
             <NoodleSettingsGroupHeading groupId="noodler" />
             <Section
               id={getNoodleSettingsSectionAnchorId("noodler-access")}
-              title="NoodleR Access"
-              help="Controls whether the private NoodleR side of Noodle is available from the mode switcher and mobile navigation."
+              title="NoodleR access"
+              help="Controls whether NoodleR is available from the mode switcher and mobile navigation."
             >
               <div className="space-y-3">
                 <ToggleSetting
                   label="Enable NoodleR"
-                  help="Unlocks the private creator network mode. The first activation runs a completely serious verification screen."
+                  help="Makes adult NoodleR profiles and creator features available in this installation."
                   checked={isNoodlerEnabled}
                   disabled={updateSettings.isPending}
                   onChange={setNoodlerEnabled}
                 />
                 {!isNoodlerEnabled && (
                   <p className="rounded-md border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/5 px-3 py-2 text-xs leading-5 text-[var(--muted-foreground)]">
-                    NoodleR stays tucked away until this is enabled. Attempts to enter NoodleR will open verification
+                    NoodleR stays hidden until it is enabled. Opening NoodleR will show the 18+ confirmation screen
                     first.
                   </p>
                 )}
@@ -4422,12 +4431,12 @@ export function NoodleView() {
                   className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-[var(--noodle-divider)] px-3 text-xs font-bold transition-colors hover:bg-[var(--accent)]"
                 >
                   <Lock size={14} />
-                  Test verification screen
+                  Preview 18+ confirmation
                 </button>
                 {isNoodlerEnabled && (
                   <p className="rounded-md border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/5 px-3 py-2 text-xs leading-5 text-[var(--muted-foreground)]">
-                    Page-specific creator tools live on each NoodleR profile. Open a page to edit its stage identity,
-                    subscription pricing, and fan activity.
+                    Open a NoodleR profile and choose Edit Profile to manage its stage identity, access and pricing, fan
+                    activity, automatic posting, and projects.
                   </p>
                 )}
               </div>
@@ -4436,20 +4445,20 @@ export function NoodleView() {
             {isNoodlerEnabled && (
               <Section
                 id={getNoodleSettingsSectionAnchorId("noodler-automatic-posting")}
-                title="NoodleR Automatic Creator Posts"
-                help="Schedules creator-owned NoodleR posts independently from fan activity. The daily rate is shared across every eligible Active creator page."
+                title="Automatic NoodleR posts"
+                help="Schedules AI-generated posts independently from fan activity. The daily rate is shared across every eligible Active profile."
               >
                 <div className="space-y-3">
                   <ToggleSetting
-                    label="Enable automatic creator posts"
-                    help="Runs while Marinara is running. Each due slot selects one Active creator page that has its own Automatic posting toggle enabled."
+                    label="Enable automatic NoodleR posts"
+                    help="Runs while Marinara is open. Each due slot selects an Active profile with Automatic posting enabled."
                     checked={settings.noodler.creatorPosts.enabled}
                     disabled={updateSettings.isPending}
                     onChange={(enabled) => saveSettings({ noodler: { creatorPosts: { enabled } } })}
                   />
                   <NumberSetting
-                    label="Creator posts/day"
-                    help="Total automatic NoodleR posts across all eligible creator pages, not a per-character quota."
+                    label="Automatic posts per day"
+                    help="Total posts across all eligible NoodleR profiles, not a per-profile quota."
                     value={settings.noodler.creatorPosts.postsPerDay}
                     min={0}
                     max={24}
@@ -4457,7 +4466,7 @@ export function NoodleView() {
                   />
                   <label className="block space-y-1.5">
                     <FieldLabel help="Leave blank to use the normal Noodle generation connection.">
-                      Creator generation connection
+                      NoodleR generation connection
                     </FieldLabel>
                     <select
                       value={settings.noodler.creatorPosts.generationConnectionId ?? ""}
@@ -4479,7 +4488,7 @@ export function NoodleView() {
                   <div className="rounded-md border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/5 px-3 py-2.5 text-xs">
                     <div className="flex items-center justify-between gap-3">
                       <span className="inline-flex items-center gap-2 font-semibold text-[var(--foreground)]">
-                        <RefreshCw size={14} /> Automatic creator schedule
+                        <RefreshCw size={14} /> Automatic posting schedule
                       </span>
                       <span className="text-[var(--muted-foreground)]">
                         {data?.noodlerScheduler.completedSlots ?? 0}/{data?.noodlerScheduler.refreshesPerDay ?? 0} slots
@@ -4492,8 +4501,9 @@ export function NoodleView() {
                     </p>
                     {(data?.noodlerScheduler.scheduledTimes.length ?? 0) > 0 && (
                       <p className="mt-1 text-[0.68rem] text-[var(--muted-foreground)]">
-                        Planned: {data!.noodlerScheduler.scheduledTimes.map((time) => formatNoodleRefreshTime(time)).join(" · ")}. The
-                        creator is selected when each slot becomes due.
+                        Planned:{" "}
+                        {data!.noodlerScheduler.scheduledTimes.map((time) => formatNoodleRefreshTime(time)).join(" · ")}
+                        . A profile is selected when each slot becomes due.
                       </p>
                     )}
                   </div>
@@ -4504,8 +4514,8 @@ export function NoodleView() {
             {isNoodlerEnabled && (
               <Section
                 id={getNoodleSettingsSectionAnchorId("noodler-prompt")}
-                title="NoodleR Prompt"
-                help="Controls the editable base instructions used to write NoodleR (private page) activity. Separate from the public Noodle prompt. Timeline voice and tone instructions are appended after this prompt."
+                title="NoodleR prompt"
+                help="Controls the base instructions used to write NoodleR activity. It is separate from the public Noodle prompt; timeline voice and tone instructions are added afterward."
               >
                 <div data-component="NoodleView.PromptSetting" className="space-y-3">
                   <div className="flex items-start gap-3">
@@ -4562,13 +4572,13 @@ export function NoodleView() {
             {isNoodlerEnabled && (
               <Section
                 id={getNoodleSettingsSectionAnchorId("noodler-fan-activity-global")}
-                title="NoodleR Fan Activity"
-                help="Global kill switch for unattended fan activity across every NoodleR (private) page. Off by default. Even a page with its own auto-schedule toggle on stays dormant until this is also on; turning this off freezes every page's scheduled activity at once."
+                title="NoodleR fan activity"
+                help="Controls scheduled fan activity across all NoodleR profiles. It is off by default, and each profile must also have fan activity and its schedule enabled."
               >
                 <div className="space-y-3">
                   <ToggleSetting
                     label="Enable NoodleR fan activity"
-                    help="Lets the fan-activity scheduler run unattended for any NoodleR page that has both fan activity and its own auto-schedule toggle turned on. Manual 'Simulate fan activity now' is unaffected by this switch either way."
+                    help="Runs scheduled activity for eligible profiles while Marinara is open. The Run fan activity now action remains available when this is off."
                     checked={settings?.noodler.enableFanActivityScheduler ?? false}
                     disabled={!settings || updateSettings.isPending}
                     onChange={(checked) => saveSettings({ noodler: { enableFanActivityScheduler: checked } })}
@@ -6183,33 +6193,33 @@ export function NoodleView() {
     editExtraContent:
       viewedProfileAccount?.visibility === "private" && noodlerEditDraft ? (
         <div className="space-y-5">
-        <NoodlerEditProfileFields
-          account={viewedProfileAccount}
-          accounts={accounts}
-          draft={noodlerEditDraft}
-          onChange={(patch) => setNoodlerEditDraft((current) => (current ? { ...current, ...patch } : current))}
-          savePending={updateAccount.isPending || profileSavePending}
-          onSimulateFanActivity={(accountId) =>
-            simulateNoodlerFanActivity.mutate(accountId, {
-              onSuccess: (result) =>
-                toast.success(
-                  `Fan activity simulated: ${result.interactionsCreated} interactions, ${result.newSubscribers} subscribers.`,
-                ),
-              onError: (error) =>
-                toast.error(error instanceof Error ? error.message : "Could not simulate NoodleR fan activity."),
-            })
-          }
-          simulateFanActivityPending={simulateNoodlerFanActivity.isPending}
-          onRetryIdentity={(accountId) =>
-            retryPrivateIdentity.mutate(accountId, {
-              onSuccess: () => toast.success("NoodleR identity generation retried."),
-              onError: (error) =>
-                toast.error(error instanceof Error ? error.message : "Could not retry NoodleR identity generation."),
-            })
-          }
-          retryIdentityPending={retryPrivateIdentity.isPending}
-        />
-        <NoodlerProjectsPanel accountId={viewedProfileAccount.id} />
+          <NoodlerEditProfileFields
+            account={viewedProfileAccount}
+            accounts={accounts}
+            draft={noodlerEditDraft}
+            onChange={(patch) => setNoodlerEditDraft((current) => (current ? { ...current, ...patch } : current))}
+            savePending={updateAccount.isPending || profileSavePending}
+            onSimulateFanActivity={(accountId) =>
+              simulateNoodlerFanActivity.mutate(accountId, {
+                onSuccess: (result) =>
+                  toast.success(
+                    `Fan activity complete: ${result.interactionsCreated} interactions and ${result.newSubscribers} new subscribers.`,
+                  ),
+                onError: (error) =>
+                  toast.error(error instanceof Error ? error.message : "Could not run NoodleR fan activity."),
+              })
+            }
+            simulateFanActivityPending={simulateNoodlerFanActivity.isPending}
+            onRetryIdentity={(accountId) =>
+              retryPrivateIdentity.mutate(accountId, {
+                onSuccess: () => toast.success("NoodleR identity regenerated."),
+                onError: (error) =>
+                  toast.error(error instanceof Error ? error.message : "Could not regenerate the NoodleR identity."),
+              })
+            }
+            retryIdentityPending={retryPrivateIdentity.isPending}
+          />
+          <NoodlerProjectsPanel accountId={viewedProfileAccount.id} />
         </div>
       ) : null,
     postingTools: viewedProfileAccount
@@ -6864,7 +6874,7 @@ export function NoodleView() {
                         {profileConnectionTab === "following" ? "Not following anyone yet." : "No followers yet."}
                       </p>
                       <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                        Nothing boiling here yet.
+                        No accounts in this group yet.
                       </p>
                     </div>
                   )}

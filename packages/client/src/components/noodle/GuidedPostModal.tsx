@@ -53,7 +53,7 @@ export function GuidedPostModal(props: GuidedPostModalProps) {
       onClose={() => {
         if (!isPending) onCancel();
       }}
-      title="Generate NoodleR Post"
+      title={`Generate post as @${account.handle}`}
       width="max-w-lg"
       panelClassName={NOODLE_ICON_SCOPE_CLASS}
       panelStyle={{ "--noodle-blue": NOODLE_BLUE } as CSSProperties}
@@ -61,19 +61,19 @@ export function GuidedPostModal(props: GuidedPostModalProps) {
       <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block space-y-1.5">
-            <span className={labelClass}>Status</span>
+            <span className={labelClass}>Who can view</span>
             <select
               value={access}
               onChange={(event) => onAccessChange(event.target.value as NoodlePostAccess)}
               className={fieldClass}
             >
-              <option value="public">Free</option>
+              <option value="public">Public</option>
               <option value="subscriber">Subscribers only</option>
-              <option value="ppv">Pay-per-post</option>
+              <option value="ppv">Pay-per-view</option>
             </select>
           </label>
           <label className="block space-y-1.5">
-            <span className={labelClass}>Theme</span>
+            <span className={labelClass}>Post theme</span>
             <input
               value={theme}
               onChange={(event) => onThemeChange(event.target.value)}
@@ -84,7 +84,7 @@ export function GuidedPostModal(props: GuidedPostModalProps) {
         </div>
         {access === "ppv" && (
           <label className="block space-y-1.5 sm:max-w-xs">
-            <span className={labelClass}>PPV price</span>
+            <span className={labelClass}>Pay-per-view price</span>
             <input
               type="number"
               min={0}
@@ -119,11 +119,11 @@ export function GuidedPostModal(props: GuidedPostModalProps) {
           </label>
         </div>
         <label className="block space-y-1.5">
-          <span className={labelClass}>Prompt</span>
+          <span className={labelClass}>Direction</span>
           <textarea
             value={prompt}
             onChange={(event) => onPromptChange(event.target.value)}
-            placeholder="Tell the generator what this private post should be about."
+            placeholder="Describe what this post should say, show, or imply."
             className={cn(textareaClass, "min-h-28 resize-none")}
           />
         </label>
@@ -143,7 +143,7 @@ export function GuidedPostModal(props: GuidedPostModalProps) {
             className="flex h-9 items-center justify-center gap-2 rounded-md bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isPending && <Loader2 size={14} className="animate-spin" />}
-            {isPending ? "Generating" : "Generate"}
+            {isPending ? "Generating..." : "Generate post"}
           </button>
         </div>
       </div>

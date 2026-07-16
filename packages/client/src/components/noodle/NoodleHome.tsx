@@ -1,9 +1,7 @@
 // ──────────────────────────────────────────────
 // Noodle: public feed (home timeline, search, notifications).
-// Mechanical extraction from NoodleView.tsx (Phase 5 of
-// MARI_NOODLER_SEPARATION_TASK.md) — this component is purely
-// presentational. All state, data fetching, and mutation handlers
-// still live in the NoodleView shell and are passed down as props.
+// Presentational public-feed surface. State, data fetching, and
+// mutation handlers live in NoodleView and are passed down as props.
 // ──────────────────────────────────────────────
 import { AtSign, Bell, Heart, Menu, MessageCircle, Search, X } from "lucide-react";
 import type { ChangeEvent, ReactNode, RefObject } from "react";
@@ -240,7 +238,7 @@ export function NoodleHome(props: NoodleHomeProps) {
           </div>
         ) : (
           <p className="px-4 py-6 text-sm text-[var(--muted-foreground)]">
-            {followableCharacterAccountsCount > 0 ? "You're following everyone!" : "No one's cooking yet…"}
+            {followableCharacterAccountsCount > 0 ? "You're following everyone." : "No accounts to suggest yet."}
           </p>
         )}
       </section>
@@ -259,7 +257,7 @@ export function NoodleHome(props: NoodleHomeProps) {
             <div className="min-w-0">
               <h2 className="truncate text-lg font-bold">Notifications</h2>
               <p className="truncate text-xs text-[var(--muted-foreground)]">
-                {personaAccount ? `Public social timeline · @${personaAccount.handle}` : "Choose a persona account"}
+                {personaAccount ? `For @${personaAccount.handle}` : "Choose a persona to view notifications"}
               </p>
             </div>
           </div>
@@ -303,7 +301,7 @@ export function NoodleHome(props: NoodleHomeProps) {
               <Bell size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
               <p className="text-base font-bold">No follows yet.</p>
               <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                Accounts following you will show here.
+                New followers for this persona will show here.
               </p>
             </div>
           )
@@ -314,7 +312,7 @@ export function NoodleHome(props: NoodleHomeProps) {
             <MessageCircle size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
             <p className="text-base font-bold">No replies or mentions yet.</p>
             <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-              Replies to your posts and @{personaAccount?.handle ?? "mentions"} will show here.
+              Replies to your posts and mentions of @{personaAccount?.handle ?? "your handle"} will show here.
             </p>
           </div>
         )}
@@ -426,15 +424,15 @@ export function NoodleHome(props: NoodleHomeProps) {
           <AtSign size={38} className="mx-auto mb-4 text-[var(--noodle-blue)]" />
           <p className="text-base font-bold">Nothing from followed characters yet.</p>
           <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-            Follow characters from the suggestions panel, then refresh Noodle.
+            Follow characters from Who to follow, then refresh the timeline.
           </p>
         </div>
       ) : postsCount === 0 ? (
         <div className="px-8 py-14 text-center">
           <NoodleLogo className="mx-auto mb-5 h-16 w-24 opacity-95" />
-          <p className="text-base font-bold">The plate is empty.</p>
+          <p className="text-base font-bold">Your timeline is ready to fill.</p>
           <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-            Go to the Settings on the left first, invite characters, pick a generation connection, then refresh.
+            Invite characters and choose a generation connection in Settings, then refresh the timeline.
           </p>
         </div>
       ) : settings?.layout === "grid" ? (
@@ -459,12 +457,7 @@ export function NoodleHome(props: NoodleHomeProps) {
 }
 
 // ──────────────────────────────────────────────
-// Public profile view (activeNoodleMode === "noodle"). Renders the
-// shared ProfileHeaderChrome with the public-mode action row (Edit
-// Profile / Follow, plus Create/Open NoodleR when applicable) and
-// the public post grid. Private-only panels (creator tools,
-// subscribe, fan activity) live in NoodlerHome's PrivateProfileView
-// instead — see MARI_NOODLER_SEPARATION_TASK.md Phase 5/6.
+// Public profile view with shared profile chrome, posting, and tabs.
 // ──────────────────────────────────────────────
 export interface PublicProfileViewProps {
   onBackToHome: () => void;
@@ -623,7 +616,7 @@ export function PublicProfileView(props: PublicProfileViewProps) {
                 type="button"
                 onClick={() => onOpenLinkedNoodler(linkedNoodlerAccount)}
                 className="mb-1 h-9 rounded-full border border-[var(--noodle-divider)] px-5 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)]"
-                title="View private NoodleR account"
+                title="Open this account's NoodleR profile"
               >
                 Open NoodleR
               </button>
@@ -633,7 +626,7 @@ export function PublicProfileView(props: PublicProfileViewProps) {
                 onClick={() => onCreateNoodler(viewedProfileAccount)}
                 disabled={createPrivateAccountPending}
                 className="mb-1 h-9 rounded-full border border-[var(--noodle-divider)] px-5 text-xs font-bold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-                title="Create a private NoodleR account linked to this profile"
+                title="Create a NoodleR profile linked to this account"
               >
                 {createPrivateAccountPending ? "Creating…" : "Create NoodleR"}
               </button>
