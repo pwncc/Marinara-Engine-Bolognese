@@ -25,8 +25,20 @@ const VERSIONS = join(ROOT, "versions");
 const REGISTRY = join(ROOT, "installed.json");
 const AVAILABILITY_MIGRATION = join(ROOT, "availability-migration-v1.json");
 const NON_DOWNLOADABLE_CORE_PACKAGE_IDS = new Set(["about-me-keeper"]);
-const CATALOG_URL = process.env.MARINARA_AGENT_CATALOG_URL?.trim() ||
-  "https://raw.githubusercontent.com/Pasta-Devs/Marinara-Agents/main/catalog/catalog.json";
+const OFFICIAL_CATALOG_ROOT = "https://raw.githubusercontent.com/Pasta-Devs/Marinara-Agents/main/catalog";
+const ENGINE_RELEASE_VERSION_PATTERN = /^v?(\d+)\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+export function resolveCapabilityCatalogUrl(
+  engineVersion = APP_VERSION,
+  configuredUrl = process.env.MARINARA_AGENT_CATALOG_URL,
+): string {
+  const override = configuredUrl?.trim();
+  if (override) return override;
+  const match = ENGINE_RELEASE_VERSION_PATTERN.exec(engineVersion.trim());
+  return match
+    ? `${OFFICIAL_CATALOG_ROOT}/v${Number(match[1])}/catalog.json`
+    : `${OFFICIAL_CATALOG_ROOT}/catalog.json`;
+}
+const CATALOG_URL = resolveCapabilityCatalogUrl();
 const MAX_ARTIFACT_BYTES = 100 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 250 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
