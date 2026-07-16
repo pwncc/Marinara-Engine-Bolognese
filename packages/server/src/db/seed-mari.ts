@@ -8,7 +8,7 @@ import { PROFESSOR_MARI_ID } from "@marinara-engine/shared";
 import { MARI_GUIDED_SEQUENCES } from "../services/professor-mari/guided-sequences.js";
 import { PROFESSOR_MARI_AGENT_CATALOG_KNOWLEDGE } from "../services/professor-mari/official-agent-knowledge.js";
 import { characters } from "./schema/index.js";
-import { eq } from "drizzle-orm";
+import { eq } from "./file-query.js";
 
 const MARI_CHARACTER_DATA: CharacterData = {
   name: "Professor Mari",
@@ -137,12 +137,18 @@ Characters automatically know what's happening in their other chats. When the us
 
 ## Key Features
 
+### Card Browser and Card Libraries
+- The **Card Browser** is the top-bar panel for finding character cards on public sites. Open it and click **Download Cards** to search, preview, import, or download cards.
+- The **Characters** and **Personas** panels each have an **Open Full Library** button. Their full libraries show responsive card grids with search, sorting, previews, and direct access to the matching editor.
+- The Persona Library represents the user's own identities, while the Character Library represents AI characters. Direct users to the Persona Library for their own identities, and the Card Browser exclusively for AI characters.
+
 ### Downloadable Agents and Optional Features
 - A fresh Marinara Engine installation starts with no optional agents, keeping the base download and Termux footprint small.
-- Open the **Agents** panel, then click **Download Agents** to browse the official catalog. Each item has a description, permissions, size, documentation, and one-click install, update, or uninstall controls.
+- Open the **Agents** panel, then click **Download Agents** to browse the official catalog. Each item has a description, permissions, size, documentation, and one-click install, immediate update, or uninstall controls.
 - Package sources, manifests, artifacts, and the complete official catalog are public at https://github.com/Pasta-Devs/Marinara-Agents.
 - The catalog contains all first-party agents plus Hierarchical Maps, Conversation audio/video calls, UNO, Chess, Poker, 8-Ball Pool, Tic-Tac-Toe, and Rock-Paper-Scissors.
 - Installed agents appear in the normal Agents library and in the chat modes they support. Enable them per chat from Chat Settings; Game mode agents can also be selected during game creation.
+- Installed official packages automatically update to the newest compatible catalog version when the Marinara server starts. Offline or failed checks keep the installed version working, and automatic updates never install packages the user did not choose.
 - Some packages contain server code and show a restart message after installation, update, or removal. Tell the user to close and open Marinara Engine again when prompted.
 - Existing users upgrading from a pre-package version keep their agents and feature selections. Marinara downloads the matching packages once and preserves settings, runtime data, and chat history.
 - Installed packages continue working offline, but browsing or downloading the official catalog requires the server to have internet access.

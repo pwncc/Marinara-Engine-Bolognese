@@ -1,4 +1,20 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+
+const TRANSPARENT_GIF_BASE64 = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+const WHATS_NEW_SEEN_VERSION_KEY = "marinara:whats-new:seen-version";
+const WHATS_NEW_E2E_BYPASS_KEY = "marinara:e2e:show-whats-new";
+const APP_VERSION = (
+  JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }
+).version;
+
+function createDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
 
 function collectUnexpectedErrors(page: Page) {
   const errors: string[] = [];
@@ -13,7 +29,10 @@ function collectUnexpectedErrors(page: Page) {
 }
 
 async function prepareFreshClient(page: Page) {
-  await page.addInitScript(() => {
+  await page.addInitScript((appVersion) => {
+    if (sessionStorage.getItem("marinara:e2e:show-whats-new") !== "true") {
+      localStorage.setItem("marinara:whats-new:seen-version", appVersion);
+    }
     if (localStorage.getItem("marinara-engine-ui")) return;
     localStorage.setItem(
       "marinara-engine-ui",
@@ -26,7 +45,7 @@ async function prepareFreshClient(page: Page) {
         version: 65,
       }),
     );
-  });
+  }, APP_VERSION);
 }
 
 async function expectHomeContentFits(page: Page) {
@@ -48,8 +67,76 @@ test.beforeEach(async ({ page }) => {
   await prepareFreshClient(page);
 });
 
-test("initial Roleplay character assignment does not block greeting seeding", async ({ request }, testInfo) => {
-  test.skip(!testInfo.project.name.includes("desktop"), "Roleplay setup regression is covered on desktop.");
+test("What's New opens once for each Marinara Engine version", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(
+    ({ bypassKey, seenKey }) => {
+      sessionStorage.setItem(bypassKey, "true");
+      localStorage.removeItem(seenKey);
+    },
+    { bypassKey: WHATS_NEW_E2E_BYPASS_KEY, seenKey: WHATS_NEW_SEEN_VERSION_KEY },
+  );
+  await page.reload();
+
+  const announcement = page.getByRole("dialog", { name: "What's New?" });
+  await expect(announcement).toBeVisible();
+  await expect(announcement.getByText(`Version ${APP_VERSION}`)).toBeVisible();
+  await expect(announcement.getByRole("heading", { name: "A quick patch with bug fixes!" })).toBeVisible();
+  await expect(announcement.getByText("Marinara Engine has been updated.", { exact: true })).toHaveCount(0);
+  await expect(announcement.getByText("Hierarchical Maps")).toHaveCount(0);
+  await expect(announcement.getByText("Tactical Combat Mode in Games")).toHaveCount(0);
+  await expect(announcement.getByRole("link", { name: "View release" })).toHaveAttribute(
+    "href",
+    `https://github.com/Pasta-Devs/Marinara-Engine/releases/tag/v${APP_VERSION}`,
+  );
+
+  await expect
+    .poll(() => page.evaluate((key) => localStorage.getItem(key), WHATS_NEW_SEEN_VERSION_KEY))
+    .toBe(APP_VERSION);
+  await announcement.getByRole("button", { name: "Got it" }).click();
+  await expect(announcement).toBeHidden();
+
+  await page.reload();
+  await expect(announcement).toBeHidden();
+
+  await page.evaluate(({ key, previousVersion }) => localStorage.setItem(key, previousVersion), {
+    key: WHATS_NEW_SEEN_VERSION_KEY,
+    previousVersion: "2.2.1",
+  });
+  await page.reload();
+  await expect(announcement).toBeVisible();
+});
+
+test("turning off the custom mouse pointer persists immediately and after reload", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("desktop"), "Appearance preference persistence is covered on desktop.");
+
+  await page.goto("/");
+  await page.locator('[data-tour="panel-settings"]').click();
+  await page.getByRole("tab", { name: "Appearance" }).click();
+
+  const cursorToggle = page.getByLabel("Custom Mouse Pointer");
+  await expect(cursorToggle).toBeChecked();
+  await page.getByText("Custom Mouse Pointer", { exact: true }).click();
+  await expect(cursorToggle).not.toBeChecked();
+  await page.waitForTimeout(100);
+
+  const persistedCursorPreference = await page.evaluate(() => {
+    const persisted = JSON.parse(localStorage.getItem("marinara-engine-ui") ?? '{"state":{}}') as {
+      state?: { customCursorEnabled?: unknown };
+    };
+    return persisted.state?.customCursorEnabled;
+  });
+  expect(persistedCursorPreference).toBe(false);
+
+  await page.reload();
+  await expect(page.getByLabel("Custom Mouse Pointer")).not.toBeChecked();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.dataset.marinaraCustomCursor ?? null))
+    .toBeNull();
+});
+
+test("Conversation membership notices begin only after the chat starts", async ({ request }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("desktop"), "Conversation membership regression is covered on desktop.");
 
   const createCharacter = async (name: string) => {
     const response = await request.post("/api/characters", {
@@ -61,8 +148,9 @@ test("initial Roleplay character assignment does not block greeting seeding", as
 
   const firstCharacter = await createCharacter("Greeting Seed One");
   const secondCharacter = await createCharacter("Greeting Seed Two");
+  const thirdCharacter = await createCharacter("Later Join Three");
   const chatResponse = await request.post("/api/chats", {
-    data: { name: "Roleplay Greeting Seed Smoke", mode: "roleplay", characterIds: [] },
+    data: { name: "Conversation Membership Smoke", mode: "conversation", characterIds: [] },
   });
   expect(chatResponse.ok()).toBeTruthy();
   const chat = (await chatResponse.json()) as { id: string };
@@ -82,6 +170,21 @@ test("initial Roleplay character assignment does not block greeting seeding", as
       data: { characterIds: [firstCharacter.id, secondCharacter.id] },
     });
     expect(laterAssignment.ok()).toBeTruthy();
+    const messagesAfterSetupChanges = (await (await request.get(`/api/chats/${chat.id}/messages`)).json()) as Array<{
+      role: string;
+      content: string;
+    }>;
+    expect(messagesAfterSetupChanges).toEqual([]);
+
+    const finishSetup = await request.patch(`/api/chats/${chat.id}/metadata`, {
+      data: { conversationSetupComplete: true },
+    });
+    expect(finishSetup.ok()).toBeTruthy();
+
+    const postStartAssignment = await request.patch(`/api/chats/${chat.id}`, {
+      data: { characterIds: [firstCharacter.id, secondCharacter.id, thirdCharacter.id] },
+    });
+    expect(postStartAssignment.ok()).toBeTruthy();
     const messagesAfterLaterJoin = (await (await request.get(`/api/chats/${chat.id}/messages`)).json()) as Array<{
       role: string;
       content: string;
@@ -89,12 +192,13 @@ test("initial Roleplay character assignment does not block greeting seeding", as
     expect(messagesAfterLaterJoin).toHaveLength(1);
     expect(messagesAfterLaterJoin[0]).toMatchObject({
       role: "system",
-      content: "Greeting Seed Two has joined the chat.",
+      content: "Later Join Three has joined the chat.",
     });
   } finally {
     await request.delete(`/api/chats/${chat.id}`);
     await request.delete(`/api/characters/${firstCharacter.id}`);
     await request.delete(`/api/characters/${secondCharacter.id}`);
+    await request.delete(`/api/characters/${thirdCharacter.id}`);
   }
 });
 
@@ -708,9 +812,7 @@ test("Game history above the dialogue box opens a historical Peek Prompt", async
     await expect(peekButton).toBeVisible();
     await peekButton.click();
     await expect(page.getByRole("heading", { name: "Assembled Prompt" })).toBeVisible();
-    await expect(
-      page.getByText("This is the exact cached text prompt sent for the selected Game Mode turn."),
-    ).toBeVisible();
+    await expect(page.getByText("This is the exact cached text prompt sent for the selected turn.")).toBeVisible();
     await page.getByRole("button", { name: /System/ }).click();
     await expect(page.getByText("Exact historical Game Master prompt")).toBeVisible();
   } finally {
@@ -725,6 +827,9 @@ test("home shell and primary topbar panels open without client errors", async ({
   await expect(page.locator('[data-component="TopBar"]')).toBeVisible();
   await expect(page.getByRole("heading", { name: "Marinara Engine" })).toBeVisible();
 
+  const charactersButton = page.locator('[data-tour="panel-characters"]');
+  await expect(charactersButton.locator("svg")).toHaveClass(/mari-topbar-accent-icon/);
+
   for (const selector of [
     '[data-tour="sidebar-toggle"]',
     '[data-tour="panel-bot-browser"]',
@@ -738,11 +843,58 @@ test("home shell and primary topbar panels open without client errors", async ({
   ]) {
     await page.locator(selector).click();
     await expect(page.locator('[data-component="TopBar"]')).toBeVisible();
+    if (selector === '[data-tour="panel-characters"]') {
+      await expect(page.locator('[data-component="RightPanelHeaderIcon"]')).toHaveClass(
+        /mari-panel-gradient--characters/,
+      );
+    }
   }
 
   const health = await page.request.get("/api/health");
   expect(health.ok()).toBeTruthy();
   expect(errors).toEqual([]);
+});
+
+test("Card Browser labels and the Persona full library stay available across viewports", async ({ page }) => {
+  const errors = collectUnexpectedErrors(page);
+  await page.route("**/api/bot-browser/chub/search?*", async (route) => {
+    await route.fulfill({
+      status: 503,
+      json: { error: "offline" },
+    });
+  });
+  await page.goto("/");
+
+  await page.locator('[data-tour="panel-bot-browser"]').click();
+  await expect(page.getByText("Card Browser", { exact: true })).toBeVisible();
+  const downloadCards = page.getByRole("button", { name: "Download Cards" });
+  await expect(downloadCards).toBeVisible();
+  await downloadCards.click();
+
+  const cardLibrary = page.locator('[data-component="BotBrowserView"]');
+  await expect(cardLibrary.getByText("Cards Library", { exact: true })).toBeVisible();
+  await expect(cardLibrary.getByRole("heading", { name: "Browse character cards online" })).toBeVisible();
+  const searchError = cardLibrary.getByText("Search failed", { exact: true });
+  await expect(searchError).toBeVisible();
+  await expect(searchError).toHaveClass(/marinara-chat-chrome-panel-title/);
+  const closeCardLibrary = cardLibrary.getByRole("button", { name: "Close library" });
+  await expect(closeCardLibrary).toBeVisible();
+  await closeCardLibrary.click();
+
+  await page.locator('[data-tour="panel-personas"]').click();
+  const openPersonaLibrary = page.getByRole("button", { name: "Open Full Library" });
+  await expect(openPersonaLibrary).toBeVisible();
+  await openPersonaLibrary.click();
+
+  await expect(page.getByText("Persona Library", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Browse your personas" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New persona" })).toBeVisible();
+  await expect(
+    page.locator('[data-component="CharacterLibraryView"]').getByPlaceholder("Search personas"),
+  ).toBeVisible();
+  await expect(page.locator('[data-tour="panel-personas"]')).toHaveClass(/mari-topbar-panel-icon--active/);
+  await expect(page.locator('[data-tour="panel-characters"]')).not.toHaveClass(/bg-\[var\(--accent\)\]/);
+  expect(errors.filter((error) => !error.includes("status of 503 (Service Unavailable)"))).toEqual([]);
 });
 
 test("downloadable agent catalog is usable on desktop and mobile", async ({ page }, testInfo) => {
@@ -820,6 +972,9 @@ test("downloadable agent catalog is usable on desktop and mobile", async ({ page
   await page.locator('[data-tour="panel-characters"]').click();
   await page.getByRole("button", { name: "Open Full Library" }).click();
   await expect(page.getByRole("heading", { name: "Browse your characters" })).toBeVisible();
+  await expect(
+    page.locator('[data-component="CharacterLibraryView"]').getByPlaceholder('Search characters or -tag:"tag name"'),
+  ).toBeVisible();
   if (testInfo.project.name.includes("mobile")) {
     await expect(page.locator('[data-component="RightPanelMobile"]')).toHaveCount(0);
   } else {
@@ -829,7 +984,7 @@ test("downloadable agent catalog is usable on desktop and mobile", async ({ page
 
   await page.locator('[data-tour="panel-agents"]').click();
   await expect(page.getByText("No Agents installed yet, click Download Agents to add them!")).toBeVisible();
-  await page.getByRole("button", { name: "Download Agents" }).click();
+  await page.getByLabel("Agents").getByRole("button", { name: "Download Agents", exact: true }).click();
 
   const catalogView = page.locator('[data-component="AgentCatalogView"]');
   if (testInfo.project.name.includes("mobile")) {
@@ -863,6 +1018,107 @@ test("downloadable agent catalog is usable on desktop and mobile", async ({ page
     "https://github.com/Pasta-Devs/Marinara-Agents#uno",
   );
   await expect(catalogView.getByRole("button", { name: "Install", exact: true })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("Music Player links to Music DJ while its package is unavailable", async ({ page }) => {
+  const errors = collectUnexpectedErrors(page);
+  let musicDjInstalled = false;
+  const musicDjManifest = {
+    schemaVersion: 1,
+    id: "spotify",
+    name: "Music DJ",
+    version: "1.0.0",
+    description: "Matches scene mood with Spotify, YouTube, or local music.",
+    engine: { min: "2.3.0", maxExclusive: "3.0.0" },
+    kind: ["agent"],
+    entrypoints: { agents: "agents.json" },
+    files: [],
+    permissions: ["agent-runtime", "chat-read", "prompt-context", "ui"],
+    restartRequired: false,
+  };
+  await page.route("**/api/capability-packages/installed", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        musicDjInstalled
+          ? [
+              {
+                id: "spotify",
+                version: "1.0.0",
+                manifest: musicDjManifest,
+                installedAt: "2026-07-15T00:00:00.000Z",
+                status: "active",
+                error: null,
+                legacy: false,
+              },
+            ]
+          : [],
+      ),
+    });
+  });
+  await page.route("**/api/capability-packages/catalog", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        generatedAt: "2026-07-15T00:00:00.000Z",
+        packages: [
+          {
+            category: "misc",
+            manifest: musicDjManifest,
+            artifact: { url: "https://example.com/spotify.zip", sha256: "a".repeat(64), bytes: 2048 },
+          },
+        ],
+      }),
+    });
+  });
+
+  const openMusicPlayerSetting = async () => {
+    await page.locator('[data-tour="panel-settings"]').click();
+    const row = page.locator("#settings-control-music-player");
+    await expect(row).toBeVisible();
+    return row;
+  };
+  const expandUnavailablePlayer = async () => {
+    const openPrompt = page.getByRole("button", { name: "Open Music DJ download prompt" });
+    if (await openPrompt.isVisible()) await openPrompt.click();
+  };
+
+  await page.goto("/");
+  let unavailablePlayer = page.locator('[data-component="MusicDjUnavailablePlayer"]');
+  await expect(unavailablePlayer).toBeVisible();
+  await expandUnavailablePlayer();
+  await expect(unavailablePlayer.getByText("Download Music DJ Agent to configure", { exact: true })).toBeVisible();
+  let musicPlayerRow = await openMusicPlayerSetting();
+  const musicPlayerToggle = musicPlayerRow.locator('input[type="checkbox"]');
+  await expect(musicPlayerToggle).toHaveCount(1);
+  await expect(musicPlayerToggle).toBeChecked();
+  await musicPlayerRow.getByText("Music Player", { exact: true }).click();
+  await expect(musicPlayerToggle).not.toBeChecked();
+  await expect(page.locator('[data-component="MusicDjUnavailablePlayer"]')).toHaveCount(0);
+  await musicPlayerRow.getByText("Music Player", { exact: true }).click();
+  await expect(musicPlayerToggle).toBeChecked();
+  unavailablePlayer = page.locator('[data-component="MusicDjUnavailablePlayer"]');
+  await expect(unavailablePlayer).toBeVisible();
+  await expandUnavailablePlayer();
+
+  musicDjInstalled = true;
+  await page.reload();
+  await expect(page.locator('[data-component="MusicDjUnavailablePlayer"]')).toHaveCount(0);
+  musicPlayerRow = await openMusicPlayerSetting();
+  await expect(musicPlayerRow.locator('input[type="checkbox"]')).toHaveCount(1);
+
+  musicDjInstalled = false;
+  await page.reload();
+  unavailablePlayer = page.locator('[data-component="MusicDjUnavailablePlayer"]');
+  await expect(unavailablePlayer).toBeVisible();
+  await expandUnavailablePlayer();
+  await unavailablePlayer.getByRole("button", { name: "Download Agents" }).click();
+  await expect(page.locator('[data-component="AgentCatalogView"]')).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Download Agents" })).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -1099,7 +1355,7 @@ test("agent catalog can install and uninstall every package", async ({ page }, t
   expect(errors).toEqual([]);
 });
 
-test("uninstalling a package immediately removes its agent from the open desktop sidebar", async ({
+test("installed package artwork appears in the sidebar and clears immediately on uninstall", async ({
   page,
 }, testInfo) => {
   test.skip(!testInfo.project.name.includes("desktop"), "The persistent Agents sidebar is a desktop workflow.");
@@ -1140,6 +1396,7 @@ test("uninstalling a package immediately removes its agent from the open desktop
         packages: [
           {
             category: "writer",
+            iconUrl: "https://example.com/prose-guardian-artwork.gif",
             manifest: packageManifest,
             artifact: {
               url: "https://example.com/prose-guardian.zip",
@@ -1182,6 +1439,13 @@ test("uninstalling a package immediately removes its agent from the open desktop
   await page.route("**/api/agents", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
+  await page.route("https://example.com/prose-guardian-artwork.gif", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "image/gif",
+      body: Buffer.from(TRANSPARENT_GIF_BASE64, "base64"),
+    });
+  });
   await page.route("**/api/capability-packages/prose-guardian", async (route) => {
     if (route.request().method() !== "DELETE") {
       await route.fallback();
@@ -1198,7 +1462,12 @@ test("uninstalling a package immediately removes its agent from the open desktop
   await page.goto("/");
   await page.locator('[data-tour="panel-agents"]').click();
   const agentsSidebar = page.locator('[data-component="RightPanelDesktop"]');
-  await expect(agentsSidebar.getByText("Prose Guardian", { exact: true })).toBeVisible();
+  const proseGuardianCard = agentsSidebar.locator('[data-agent-name="Prose Guardian"]');
+  await expect(proseGuardianCard).toBeVisible();
+  await expect(proseGuardianCard.locator('[data-component="AgentArtwork"]')).toHaveAttribute(
+    "src",
+    "https://example.com/prose-guardian-artwork.gif",
+  );
 
   await agentsSidebar.getByRole("button", { name: "Download Agents" }).click();
   const catalogView = page.locator('[data-component="AgentCatalogView"]');
@@ -1390,7 +1659,8 @@ test("Conversation feature packages expose commands and settings without per-cha
     expect(
       await illustratorSettings.evaluate(
         (illustrator, calls) =>
-          calls instanceof Node && Boolean(illustrator.compareDocumentPosition(calls) & Node.DOCUMENT_POSITION_FOLLOWING),
+          calls instanceof Node &&
+          Boolean(illustrator.compareDocumentPosition(calls) & Node.DOCUMENT_POSITION_FOLLOWING),
         callsSettingsHandle,
       ),
     ).toBe(true);
@@ -1411,6 +1681,11 @@ test("Conversation setup commands follow the installed agent library", async ({ 
   const beforeResponse = await request.get("/api/chats");
   const beforeChats = (await beforeResponse.json()) as Array<{ id: string }>;
   const existingChatIds = new Set(beforeChats.map((chat) => chat.id));
+  const connectionResponse = await request.post("/api/connections", {
+    data: { name: `Conversation Setup Smoke ${Date.now()}`, provider: "custom" },
+  });
+  expect(connectionResponse.ok()).toBeTruthy();
+  const connection = (await connectionResponse.json()) as { id: string };
   let illustratorInstalled = false;
   const illustratorManifest = {
     id: "illustrator",
@@ -1465,8 +1740,14 @@ test("Conversation setup commands follow the installed agent library", async ({ 
       (response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/chats",
     );
     await newConversationButton.evaluate((button: HTMLButtonElement) => button.click());
+    const connectionGate = page.getByRole("heading", { name: "Set Up Conversation", exact: true });
+    const wizardHeading = page.getByRole("heading", { name: "New Conversation", exact: true });
+    await expect(connectionGate.or(wizardHeading)).toBeVisible();
+    if (await connectionGate.isVisible()) {
+      await page.getByRole("button", { name: "Create Chat", exact: true }).click();
+    }
     expect((await chatCreated).ok()).toBeTruthy();
-    await expect(page.getByRole("heading", { name: "New Conversation", exact: true })).toBeVisible();
+    await expect(wizardHeading).toBeVisible();
     const nextButton = page.getByRole("button", { name: "Next", exact: true });
     await nextButton.click();
     await nextButton.click();
@@ -1482,7 +1763,8 @@ test("Conversation setup commands follow the installed agent library", async ({ 
     await expect(page.getByText("Memories", { exact: true })).toBeVisible();
     await expect(page.getByText("Selfies", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Calls", { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Download Agents", exact: true })).toBeVisible();
+    let setupWizard = page.getByRole("heading", { name: "New Conversation", exact: true }).locator("../..");
+    await expect(setupWizard.getByRole("button", { name: "Download Agents", exact: true })).toBeVisible();
 
     illustratorInstalled = true;
     await page.reload();
@@ -1490,7 +1772,8 @@ test("Conversation setup commands follow the installed agent library", async ({ 
     await expect(page.getByText("Schedule Updates", { exact: true })).toBeVisible();
     await expect(page.getByText("Selfies", { exact: true })).toBeVisible();
     await expect(page.getByText("Calls", { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Download Agents", exact: true })).toHaveCount(0);
+    setupWizard = page.getByRole("heading", { name: "New Conversation", exact: true }).locator("../..");
+    await expect(setupWizard.getByRole("button", { name: "Download Agents", exact: true })).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally {
     const afterResponse = await request.get("/api/chats");
@@ -1500,6 +1783,7 @@ test("Conversation setup commands follow the installed agent library", async ({ 
         .filter((chat) => !existingChatIds.has(chat.id))
         .map((chat) => request.delete(`/api/chats/${chat.id}`, { timeout: 10_000 })),
     );
+    await request.delete(`/api/connections/${connection.id}`, { timeout: 10_000 });
   }
 });
 
@@ -1565,7 +1849,7 @@ test("Game setup only shows features owned by installed agents", async ({ page, 
     await route.fulfill({
       status: 200,
       contentType: "image/gif",
-      body: Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"),
+      body: Buffer.from(TRANSPARENT_GIF_BASE64, "base64"),
     });
   });
   await page.addInitScript((chatId) => {
@@ -1694,7 +1978,7 @@ test("Roleplay and Game chat settings link empty agent libraries to Download Age
     await route.fulfill({
       status: 200,
       contentType: "image/gif",
-      body: Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"),
+      body: Buffer.from(TRANSPARENT_GIF_BASE64, "base64"),
     });
   });
 
@@ -1727,13 +2011,18 @@ test("Roleplay and Game chat settings link empty agent libraries to Download Age
   }
 });
 
-test("Roleplay setup points empty agent libraries to the Agents tab", async ({ page }, testInfo) => {
+test("Roleplay setup points empty agent libraries to the Agents tab", async ({ page, request }, testInfo) => {
   test.skip(!testInfo.project.name.includes("desktop"), "Roleplay setup empty-state regression is covered on desktop.");
 
   const errors = collectUnexpectedErrors(page);
-  const beforeResponse = await page.request.get("/api/chats");
+  const beforeResponse = await request.get("/api/chats");
   const beforeChats = (await beforeResponse.json()) as Array<{ id: string }>;
   const existingChatIds = new Set(beforeChats.map((chat) => chat.id));
+  const connectionResponse = await request.post("/api/connections", {
+    data: { name: `Roleplay Setup Smoke ${Date.now()}`, provider: "custom" },
+  });
+  expect(connectionResponse.ok()).toBeTruthy();
+  const connection = (await connectionResponse.json()) as { id: string };
   await page.route("**/api/capability-packages/agents", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
@@ -1747,7 +2036,7 @@ test("Roleplay setup points empty agent libraries to the Agents tab", async ({ p
     await route.fulfill({
       status: 200,
       contentType: "image/gif",
-      body: Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"),
+      body: Buffer.from(TRANSPARENT_GIF_BASE64, "base64"),
     });
   });
 
@@ -1756,7 +2045,13 @@ test("Roleplay setup points empty agent libraries to the Agents tab", async ({ p
     await page.locator('[data-tour="sidebar-toggle"]').click();
     await page.locator('[data-tour="chat-mode-roleplay"]').click();
     await page.getByLabel("New Roleplay").click();
-    await expect(page.getByRole("heading", { name: "New Roleplay" })).toBeVisible();
+    const connectionGate = page.getByRole("heading", { name: "Set Up Roleplay", exact: true });
+    const wizardHeading = page.getByRole("heading", { name: "New Roleplay", exact: true });
+    await expect(connectionGate.or(wizardHeading)).toBeVisible();
+    if (await connectionGate.isVisible()) {
+      await page.getByRole("button", { name: "Create Chat", exact: true }).click();
+    }
+    await expect(wizardHeading).toBeVisible();
     const nextButton = page.getByRole("button", { name: "Next", exact: true });
     await nextButton.click();
     await expect(page.getByRole("heading", { name: "Pick a Preset", exact: true })).toBeVisible();
@@ -1781,13 +2076,12 @@ test("Roleplay setup points empty agent libraries to the Agents tab", async ({ p
     await expect(page.getByRole("button", { name: "Download Agents" })).toBeVisible();
     expect(errors).toEqual([]);
   } finally {
-    const afterResponse = await page.request.get("/api/chats");
+    const afterResponse = await request.get("/api/chats");
     const afterChats = (await afterResponse.json()) as Array<{ id: string }>;
     await Promise.all(
-      afterChats
-        .filter((chat) => !existingChatIds.has(chat.id))
-        .map((chat) => page.request.delete(`/api/chats/${chat.id}`)),
+      afterChats.filter((chat) => !existingChatIds.has(chat.id)).map((chat) => request.delete(`/api/chats/${chat.id}`)),
     );
+    await request.delete(`/api/connections/${connection.id}`, { timeout: 10_000 });
   }
 });
 
@@ -1876,6 +2170,106 @@ test("desktop resource editors open beside their source sidebars", async ({ page
         page.request.delete(`/api/connections/${connection.id}`),
         page.request.delete(`/api/agents/${agent.id}`),
         page.request.delete(`/api/characters/personas/${persona.id}`),
+      ]);
+    }
+  }
+});
+
+test("desktop Connections and Lorebooks folders expand without a React hook error", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name.includes("mobile"), "Desktop right-sidebar folder regression.");
+  await page.setViewportSize({ width: 1360, height: 900 });
+
+  const suffix = Date.now().toString(36);
+  const connectionName = `Folder Connection ${suffix}`;
+  const connectionFolderName = `Connection Folder ${suffix}`;
+  const lorebookName = `Folder Lorebook ${suffix}`;
+  const lorebookFolderName = `Lorebook Folder ${suffix}`;
+  const connectionResponse = await page.request.post("/api/connections", {
+    data: { name: connectionName, provider: "custom" },
+  });
+  expect(connectionResponse.ok()).toBeTruthy();
+  const connection = (await connectionResponse.json()) as { id: string };
+  const connectionFolderResponse = await page.request.post("/api/connection-folders", {
+    data: { name: connectionFolderName },
+  });
+  expect(connectionFolderResponse.ok()).toBeTruthy();
+  const connectionFolder = (await connectionFolderResponse.json()) as { id: string };
+  expect(
+    (
+      await page.request.post("/api/connection-folders/move-connection", {
+        data: { connectionId: connection.id, folderId: connectionFolder.id },
+      })
+    ).ok(),
+  ).toBeTruthy();
+  expect(
+    (
+      await page.request.patch(`/api/connection-folders/${connectionFolder.id}`, {
+        data: { collapsed: true },
+      })
+    ).ok(),
+  ).toBeTruthy();
+
+  const lorebookResponse = await page.request.post("/api/lorebooks", {
+    data: {
+      name: lorebookName,
+      description: "Folder expansion regression fixture.",
+      category: "world",
+      enabled: true,
+    },
+  });
+  expect(lorebookResponse.ok()).toBeTruthy();
+  const lorebook = (await lorebookResponse.json()) as { id: string };
+  await page.addInitScript(
+    ({ folderName, lorebookId }) => {
+      const now = new Date().toISOString();
+      localStorage.setItem(
+        "marinara-library-folders-v1",
+        JSON.stringify([
+          {
+            id: "folder-expansion-regression",
+            scope: "lorebooks",
+            name: folderName,
+            collapsed: true,
+            sortOrder: 0,
+            itemIds: [lorebookId],
+            createdAt: now,
+            updatedAt: now,
+          },
+        ]),
+      );
+    },
+    { folderName: lorebookFolderName, lorebookId: lorebook.id },
+  );
+
+  const errors = collectUnexpectedErrors(page);
+  try {
+    await page.goto("/");
+
+    await page.locator('[data-tour="panel-connections"]').click();
+    const resourceSidebar = page.locator('[data-component="RightPanelDesktop"]');
+    const connectionFolderToggle = resourceSidebar.locator(
+      `[data-connection-folder-id="${connectionFolder.id}"] > [role="button"]`,
+    );
+    await expect(connectionFolderToggle).toBeVisible();
+    await connectionFolderToggle.click();
+    await expect(connectionFolderToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(resourceSidebar.getByText(connectionName, { exact: true })).toBeVisible();
+
+    await page.locator('[data-tour="panel-lorebooks"]').click();
+    const lorebookFolderToggle = resourceSidebar.locator(
+      '[data-lorebook-folder-id="folder-expansion-regression"] > [role="button"]',
+    );
+    await expect(lorebookFolderToggle).toBeVisible();
+    await lorebookFolderToggle.click();
+    await expect(lorebookFolderToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(resourceSidebar.getByText(lorebookName, { exact: true })).toBeVisible();
+    expect(errors).toEqual([]);
+  } finally {
+    if (!page.isClosed()) {
+      await Promise.all([
+        page.request.delete(`/api/connections/${connection.id}`),
+        page.request.delete(`/api/connection-folders/${connectionFolder.id}`),
+        page.request.delete(`/api/lorebooks/${lorebook.id}`),
       ]);
     }
   }
@@ -2233,6 +2627,7 @@ test("Noodle interface icons consistently use Noodle blue", async ({ page }, tes
   await expectBlueIcons('[data-component="NoodleView"]');
   await noodle.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(noodle.getByRole("button", { name: "Reset Noodle Timeline" })).toBeVisible();
+  await expect(noodle.getByRole("button", { name: "Uninvite everybody" })).toHaveCSS("color", "rgb(126, 167, 255)");
   const scheduleCard = noodle.locator('[data-component="NoodleView.RefreshSchedule"]');
   await expect(scheduleCard).toBeVisible();
   await expect(scheduleCard.getByText("Automatic schedule")).toBeVisible();
@@ -2273,6 +2668,78 @@ test("Noodle interface icons consistently use Noodle blue", async ({ page }, tes
   await resetDialog.getByRole("button", { name: "Cancel" }).click();
 
   expect(errors).toEqual([]);
+});
+
+test("Noodle settings edit and restore the timeline base prompt", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("desktop"), "The complete prompt editing flow is covered on desktop.");
+
+  const promptKey = "noodle.timelineBase";
+  const initialDetailResponse = await page.request.get(`/api/prompt-overrides/${promptKey}`);
+  expect(initialDetailResponse.ok()).toBe(true);
+  const initialDetail = (await initialDetailResponse.json()) as {
+    override: { template: string; enabled: boolean } | null;
+  };
+  const customPrompt = `Custom Noodle timeline base prompt ${Date.now()}.`;
+
+  try {
+    await page.goto("/");
+    await page.locator('[data-tour="noodle-tab"]').click();
+    const noodle = page.locator('[data-component="NoodleView"]');
+    await noodle.getByRole("button", { name: "Settings", exact: true }).click();
+
+    const promptSetting = noodle.locator('[data-component="NoodleView.PromptSetting"]');
+    await expect(promptSetting).toBeVisible();
+    const promptRect = await promptSetting.boundingBox();
+    const invitesRect = await noodle.getByRole("heading", { name: "Invites" }).boundingBox();
+    expect(promptRect).not.toBeNull();
+    expect(invitesRect).not.toBeNull();
+    expect(promptRect!.y).toBeLessThan(invitesRect!.y);
+
+    const editPromptButton = promptSetting.getByRole("button", { name: "Edit prompt" });
+    await expect(editPromptButton).toHaveCSS("align-items", "center");
+    await expect(editPromptButton).toHaveCSS("justify-content", "center");
+    await expect(editPromptButton.locator("svg")).toBeVisible();
+    await expect(editPromptButton.locator("svg")).toHaveCSS("color", "rgb(126, 167, 255)");
+    await editPromptButton.click();
+    const editor = page.locator('[data-component="ExpandedTextarea"]');
+    await expect(editor.getByRole("heading", { name: "Edit Noodle Prompt" })).toBeVisible();
+    const promptTextarea = editor.locator("textarea");
+    await expect(promptTextarea).toHaveValue(
+      /You write a fake social media timeline for Marinara Engine's in-app parody site called Noodle\./,
+    );
+    await promptTextarea.fill(customPrompt);
+    const saveResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        new URL(response.url()).pathname === `/api/prompt-overrides/${promptKey}`,
+    );
+    await editor.getByRole("button", { name: "Save prompt" }).click();
+    expect((await saveResponse).ok()).toBe(true);
+    await expect(promptSetting).toContainText(customPrompt);
+    await expect(promptSetting).toContainText("Custom");
+
+    const restoreResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "DELETE" &&
+        new URL(response.url()).pathname === `/api/prompt-overrides/${promptKey}`,
+    );
+    await promptSetting.getByRole("button", { name: "Restore default" }).click();
+    expect((await restoreResponse).ok()).toBe(true);
+    await expect(promptSetting).toContainText("Default");
+
+    await promptSetting.getByRole("button", { name: "Edit prompt" }).click();
+    await expect(page.locator('[data-component="ExpandedTextarea"] textarea')).toHaveValue(
+      /You write a fake social media timeline for Marinara Engine's in-app parody site called Noodle\./,
+    );
+  } finally {
+    if (initialDetail.override) {
+      await page.request.put(`/api/prompt-overrides/${promptKey}`, {
+        data: initialDetail.override,
+      });
+    } else {
+      await page.request.delete(`/api/prompt-overrides/${promptKey}`);
+    }
+  }
 });
 
 test("Noodle settings persist through refetch and reload", async ({ page }, testInfo) => {
@@ -2399,10 +2866,11 @@ test("Noodle settings persist through refetch and reload", async ({ page }, test
   }
 });
 
-test("Noodle restores the last selected persona after reload", async ({ page }, testInfo) => {
+test("Noodle restores the selected persona and preserves per-persona post authorship", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.includes("desktop"), "Noodle persona persistence is covered on desktop.");
 
   const createdPersonaIds: string[] = [];
+  const createdPostIds: string[] = [];
   try {
     for (const name of ["Noodle Persona One", "Noodle Persona Two"]) {
       const response = await page.request.post("/api/characters/personas", {
@@ -2413,6 +2881,30 @@ test("Noodle restores the last selected persona after reload", async ({ page }, 
     }
     const selectedPersonaId = createdPersonaIds[1]!;
     expect((await page.request.get("/api/noodle")).ok()).toBe(true);
+    const authoredPosts = [];
+    for (const [index, personaId] of createdPersonaIds.entries()) {
+      const response = await page.request.post("/api/noodle/posts", {
+        data: {
+          authorKind: "persona",
+          authorEntityId: personaId,
+          content: `Authorship regression post ${index + 1}`,
+        },
+      });
+      expect(response.ok()).toBe(true);
+      const post = (await response.json()) as {
+        id: string;
+        authorAccountId: string;
+        authorSnapshot: { kind: string; entityId: string; displayName: string; handle: string } | null;
+      };
+      createdPostIds.push(post.id);
+      authoredPosts.push(post);
+      expect(post.authorSnapshot).toMatchObject({
+        kind: "persona",
+        entityId: personaId,
+        displayName: `Noodle Persona ${index === 0 ? "One" : "Two"}`,
+      });
+    }
+    expect(authoredPosts[0]?.authorAccountId).not.toBe(authoredPosts[1]?.authorAccountId);
 
     await page.goto("/");
     await page.locator('[data-tour="noodle-tab"]').click();
@@ -2438,7 +2930,15 @@ test("Noodle restores the last selected persona after reload", async ({ page }, 
     await page.locator('[data-tour="noodle-tab"]').click();
     await expect(noodle).toBeVisible();
     await expect(accountSwitcher).toContainText("Noodle Persona Two");
+    for (const [index, post] of authoredPosts.entries()) {
+      const article = noodle.locator(`[data-noodle-post-id="${post.id}"]`);
+      await expect(article).toContainText(`Noodle Persona ${index === 0 ? "One" : "Two"}`);
+      await expect(article).toContainText(`@${post.authorSnapshot?.handle}`);
+    }
   } finally {
+    for (const postId of createdPostIds) {
+      await page.request.delete(`/api/noodle/posts/${postId}`, { timeout: 5_000 }).catch(() => undefined);
+    }
     for (const personaId of createdPersonaIds) {
       await page.request.delete(`/api/characters/personas/${personaId}`, { timeout: 5_000 }).catch(() => undefined);
     }
@@ -2675,7 +3175,6 @@ test("liking one Noodle post leaves unrelated reaction controls visually stable"
   let personaId = activePersona?.id ?? null;
   let createdPersonaId: string | null = null;
   const createdPostIds: string[] = [];
-  let releaseReactionRequest: (() => void) | null = null;
   if (!personaId) {
     const personaResponse = await page.request.post("/api/characters/personas", {
       data: { name: "Noodle Reaction Regression", description: "Temporary browser regression persona." },
@@ -2701,6 +3200,9 @@ test("liking one Noodle post leaves unrelated reaction controls visually stable"
     createdPostIds.push(((await response.json()) as { id: string }).id);
   }
 
+  const reactionRequestStarted = createDeferred();
+  const releaseReaction = createDeferred();
+
   try {
     await page.goto("/");
     await page.locator('[data-tour="noodle-tab"]').click();
@@ -2716,17 +3218,10 @@ test("liking one Noodle post leaves unrelated reaction controls visually stable"
     await expect(targetLike.locator("svg")).toHaveAttribute("fill", "none");
     const unrelatedClass = await unrelatedLike.getAttribute("class");
     const unrelatedText = await unrelatedLike.textContent();
-    let markReactionRequestStarted: (() => void) | null = null;
-    const reactionRequestStarted = new Promise<void>((resolve) => {
-      markReactionRequestStarted = resolve;
-    });
-    const releaseReaction = new Promise<void>((resolve) => {
-      releaseReactionRequest = resolve;
-    });
     await page.route("**/api/noodle/posts/*/interactions", async (route) => {
       if (route.request().method() === "POST") {
-        markReactionRequestStarted?.();
-        await releaseReaction;
+        reactionRequestStarted.resolve();
+        await releaseReaction.promise;
       }
       await route.continue();
     });
@@ -2741,15 +3236,14 @@ test("liking one Noodle post leaves unrelated reaction controls visually stable"
 
     countBootstrapRequests = true;
     await targetLike.click();
-    await reactionRequestStarted;
+    await reactionRequestStarted.promise;
     await expect(targetLike).toBeDisabled();
     await expect(targetLike).toHaveAttribute("aria-busy", "true");
     await expect(unrelatedLike).toBeEnabled();
     await expect(unrelatedLike).toHaveAttribute("class", unrelatedClass ?? "");
     await expect(unrelatedLike).toHaveText(unrelatedText ?? "");
 
-    releaseReactionRequest?.();
-    releaseReactionRequest = null;
+    releaseReaction.resolve();
     const targetUnlike = targetPost.getByRole("button", { name: "Unlike post" });
     await expect(targetUnlike).toBeEnabled();
     await expect(targetUnlike.locator("svg")).toHaveAttribute("fill", "currentColor");
@@ -2759,7 +3253,7 @@ test("liking one Noodle post leaves unrelated reaction controls visually stable"
     expect(bootstrapRequestsAfterLike).toBe(0);
     expect(errors).toEqual([]);
   } finally {
-    releaseReactionRequest?.();
+    releaseReaction.resolve();
     for (const postId of createdPostIds) {
       await page.request.delete(`/api/noodle/posts/${postId}`, { timeout: 5_000 }).catch(() => undefined);
     }
@@ -3257,7 +3751,7 @@ test("Noodle only bumps posts when another account replies to the persona's comm
           (elements, postIds) =>
             elements
               .map((element) => element.getAttribute("data-noodle-post-id"))
-              .filter((postId): postId is string => Boolean(postId) && postIds.includes(postId)),
+              .filter((postId): postId is string => postId !== null && postIds.includes(postId)),
           [olderPost.id, newerPost.id],
         );
 
@@ -3381,6 +3875,17 @@ test("Noodle mobile shell keeps navigation usable across every view", async ({ p
   await accountMenu.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(drawer).toHaveCount(0);
   await expect(noodle.getByRole("heading", { name: "Noodle settings" })).toBeVisible();
+  const promptSetting = noodle.locator('[data-component="NoodleView.PromptSetting"]');
+  await expect(promptSetting).toBeVisible();
+  const editPromptButton = promptSetting.getByRole("button", { name: "Edit prompt" });
+  await expect(editPromptButton).toHaveCSS("justify-content", "center");
+  await expect(editPromptButton.locator("svg")).toBeVisible();
+  await expect(editPromptButton.locator("svg")).toHaveCSS("color", "rgb(126, 167, 255)");
+  await editPromptButton.click();
+  const promptEditor = page.locator('[data-component="ExpandedTextarea"]');
+  await expect(promptEditor.getByRole("heading", { name: "Edit Noodle Prompt" })).toBeVisible();
+  await promptEditor.getByRole("button", { name: "Cancel" }).first().click();
+  await expect(promptEditor).toBeHidden();
   await expect(bottomNav).toBeVisible();
   await noodle.getByRole("button", { name: "Back to Noodle timeline" }).click();
   await expect(header).toBeVisible();

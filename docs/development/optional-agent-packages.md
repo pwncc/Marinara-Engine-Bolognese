@@ -37,6 +37,8 @@ The base keeps the package manager, catalog client, generic agent pipeline contr
 
 The official catalog is a schema-validated, versioned JSON document fetched over HTTPS. Each release entry includes immutable artifact URLs, SHA-256 digests, byte sizes, engine compatibility, permissions, and whether its runtime requires a restart.
 
+At server startup, the host fetches the catalog once when at least one official package is installed, selects only newer versions compatible with the running Engine and capability API, verifies them through the normal installation pipeline, and installs them before package runtimes activate. Failures are isolated per package. Existing files and registry state remain usable when the catalog is offline or verification fails, and server-runtime readiness failures use the previous-version rollback path.
+
 The installer must:
 
 1. require privileged loopback/admin access;
@@ -78,7 +80,7 @@ Every uninstall requires confirmation. Affected chats fall back to their ordinar
 
 ## Catalog interface
 
-The Agents panel contains a `Download Agents` control matching Bot Browser's `Browse Online` affordance. It opens a full-screen responsive library with search, package kinds, compatibility information, install/update state, permissions, storage cost, documentation, and uninstall controls.
+The Agents panel contains a `Download Agents` control matching the Card Browser's `Download Cards` affordance. It opens a full-screen responsive library with search, package kinds, compatibility information, install/update state, permissions, storage cost, documentation, and uninstall controls.
 
 Desktop uses a browse list with an adjacent detail region. Mobile uses one pane with explicit back navigation and touch-sized actions. Empty, offline, incompatible, corrupt-download, interrupted-install, update, rollback, and restart-required states are first-class.
 

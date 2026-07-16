@@ -30,7 +30,7 @@ import {
   useUploadAgentImage,
   type AgentConfigRow,
 } from "../../hooks/use-agents";
-import { useCapabilityAgentRegistry } from "../../hooks/use-capability-packages";
+import { useCapabilityAgentRegistry, useCapabilityCatalog } from "../../hooks/use-capability-packages";
 import { useCreateCustomTool, useCustomTools, type CustomToolRow } from "../../hooks/use-custom-tools";
 import {
   BUILT_IN_AGENTS,
@@ -75,6 +75,7 @@ import {
 } from "../../hooks/use-library-folders";
 import { handleFolderRenameKeyDown, useFolderRenameGesture } from "../../hooks/use-folder-rename-gesture";
 import { SmoothFolderContent } from "../ui/SmoothFolderContent";
+import { AgentArtwork } from "../agents/AgentArtwork";
 
 type JsonRecord = Record<string, unknown>;
 const AGENT_GRADIENT_SURFACE =
@@ -250,6 +251,7 @@ function getReferencedCustomTools(agents: AgentConfigRow[], customTools: CustomT
 export function AgentsPanel() {
   const { data: agentConfigs, isLoading } = useAgentConfigs();
   const { data: capabilityAgents } = useCapabilityAgentRegistry();
+  const { data: capabilityCatalog } = useCapabilityCatalog();
   const { data: customTools } = useCustomTools();
   const createAgent = useCreateAgent();
   const createCustomTool = useCreateCustomTool();
@@ -292,6 +294,13 @@ export function AgentsPanel() {
   const builtInAgentIds = useMemo(
     () => new Set(availableBuiltInAgents.map((agent) => agent.id)),
     [availableBuiltInAgents],
+  );
+  const catalogArtworkByAgentId = useMemo(
+    () =>
+      new Map(
+        (capabilityCatalog?.packages ?? []).map((entry) => [entry.manifest.id, entry.iconUrl ?? null] as const),
+      ),
+    [capabilityCatalog],
   );
   const customToolRows = useMemo(() => (customTools ?? []) as CustomToolRow[], [customTools]);
   const visibleAgentConfigs = useMemo(
@@ -668,7 +677,7 @@ export function AgentsPanel() {
         name: getAgentLibraryDisplayName(agent),
         description: agent.description,
         category,
-        imagePath: agent.imagePath ?? null,
+        imagePath: agent.imagePath || (builtInMeta ? catalogArtworkByAgentId.get(agent.type) : null) || null,
         custom,
         openAgentDetail,
         onDuplicate: () => void handleDuplicateAgent(agent),
@@ -707,6 +716,7 @@ export function AgentsPanel() {
     },
     [
       availableBuiltInAgents,
+      catalogArtworkByAgentId,
       deleteAgent,
       draggedAgentId,
       getDraggedAgentIds,
@@ -1070,7 +1080,7 @@ export function AgentsPanel() {
                   name: agent.name,
                   description: agent.description,
                   category: agent.category,
-                  imagePath: sourceAgent.imagePath,
+                  imagePath: sourceAgent.imagePath || catalogArtworkByAgentId.get(agent.id) || null,
                   custom: false,
                   openAgentDetail,
                   onDuplicate: () => void handleDuplicateAgent(sourceAgent),
@@ -1217,14 +1227,9 @@ function renderAgentCard({
   touchSafeDragMode?: boolean;
   suppressClickRef?: { current: boolean };
 }) {
-  const iconContent = imagePath ? (
-    <img src={imagePath} alt="" className="h-full w-full object-cover" draggable={false} />
-  ) : (
-    <Sparkles size="1rem" />
-  );
   const iconClasses = cn(
     "relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl shadow-sm",
-    imagePath ? "bg-[var(--muted)]" : AGENT_GRADIENT_SURFACE,
+    AGENT_GRADIENT_SURFACE,
   );
 
   return (
@@ -1304,7 +1309,7 @@ function renderAgentCard({
         title={selectionMode ? "Select agent" : imagePath ? "Replace agent picture" : "Upload agent picture"}
         aria-label={selectionMode ? "Select agent" : imagePath ? "Replace agent picture" : "Upload agent picture"}
       >
-        {iconContent}
+        <AgentArtwork imageUrl={imagePath} alt="" iconSize="1rem" />
         {!selectionMode && (
           <span className="absolute inset-0 flex items-center justify-center bg-black/45 opacity-0 transition-opacity group-hover:opacity-100">
             <Camera size="0.875rem" />

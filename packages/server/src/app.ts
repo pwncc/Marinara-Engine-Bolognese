@@ -13,7 +13,6 @@ import { basicAuthHook } from "./middleware/basic-auth.js";
 import { csrfProtectionHook } from "./middleware/csrf-protection.js";
 import { rateLimitHook } from "./middleware/rate-limit.js";
 import { securityHeadersHook } from "./middleware/security-headers.js";
-import { runMigrations } from "./db/migrate.js";
 import { seedDefaultPreset } from "./db/seed.js";
 import { seedProfessorMari } from "./db/seed-mari.js";
 import { seedDefaultConnection } from "./db/seed-connection.js";
@@ -33,10 +32,8 @@ import {
   getLogLevel,
   getNodeEnv,
   isRequestLoggingDisabled,
-  isFileStorageBackend,
   isAutoCreateDefaultConnectionDisabled,
   getFileStorageDir,
-  getDatabaseFilePath,
 } from "./config/runtime-config.js";
 import { corsDelegate } from "./config/cors-config.js";
 import { sidecarProcessService } from "./services/sidecar/sidecar-process.service.js";
@@ -57,9 +54,7 @@ const NO_STORE_FILES = new Set(["manifest.json", "sw.js", "registerSW.js"]);
 const MAX_UPLOAD_BYTES = 256 * 1024 * 1024;
 
 export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
-  const databaseFile = getDatabaseFilePath();
-  const hadUserStateBeforeStartup =
-    existsSync(join(getFileStorageDir(), "manifest.json")) || (databaseFile !== null && existsSync(databaseFile));
+  const hadUserStateBeforeStartup = existsSync(join(getFileStorageDir(), "manifest.json"));
   const app = Fastify({
     logger: {
       level: getLogLevel(),
@@ -85,7 +80,7 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
     },
   });
 
-  // ── Database ──
+  // ── Storage ──
   const db = await getDB();
   app.decorate("db", db);
   app.addHook("onClose", async () => {
@@ -105,12 +100,8 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
     }
   });
 
-  // ── Legacy SQLite migrations (file-native storage imports old DBs without runtime migrations) ──
-  if (!isFileStorageBackend()) {
-    await runMigrations(db);
-  }
-
-  // Existing installations retain the capabilities the previous release shipped. Fresh installs stay empty.
+  // Existing installations retain their selected capabilities and receive compatible package updates.
+  // Fresh installs stay empty.
   let migratedLegacyCapabilities = false;
   if (getNodeEnv() !== "test") {
     try {
@@ -123,8 +114,31 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
     } catch (error) {
       app.log.warn(error, "Optional package availability migration did not complete; it will retry next startup");
     }
+    if (!migratedLegacyCapabilities) {
+      try {
+        const packageUpdates = await capabilityPackageManager.updateInstalledPackagesToLatest();
+        for (const update of packageUpdates.updated) {
+          app.log.info(
+            "Automatically updated capability package %s from %s to %s",
+            update.id,
+            update.previousVersion,
+            update.version,
+          );
+        }
+        for (const failure of packageUpdates.failures) {
+          app.log.warn(
+            failure.error,
+            "Could not automatically update capability package %s from %s to %s; keeping the installed version",
+            failure.id,
+            failure.previousVersion,
+            failure.version,
+          );
+        }
+      } catch (error) {
+        app.log.warn(error, "Automatic capability package update check failed; installed versions remain available");
+      }
+    }
   }
-  await initializeCapabilityAgentRegistry();
   resetTurnGameRegistry(false);
   if (migratedLegacyCapabilities) await migrateLegacyChatCapabilitySelections(db);
 
@@ -191,6 +205,10 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
 
   // Trusted downloaded server capabilities register while Fastify is still mutable.
   await capabilityModuleRuntime.start(app);
+  // Server-backed agent definitions are visible only after their runtime reaches
+  // functional readiness. Packages without a server entrypoint remain available
+  // as soon as their verified files are installed.
+  await initializeCapabilityAgentRegistry();
 
   // ── Server extensions ──
   await serverExtensionRuntime.start(app, db);
@@ -263,12 +281,26 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   // ── Health Check ──
   app.get("/api/health", async () => {
     const commit = getBuildCommit();
+    let capabilityPackages: Awaited<ReturnType<typeof capabilityPackageManager.diagnostics>> | null = null;
+    try {
+      capabilityPackages = await capabilityPackageManager.diagnostics();
+    } catch (error) {
+      app.log.warn(error, "Capability package diagnostics are unavailable");
+    }
     return {
       status: "ok",
       version: APP_VERSION,
       commit,
       build: getBuildLabel(),
       timestamp: new Date().toISOString(),
+      capabilityPackages: {
+        status: capabilityPackages
+          ? capabilityPackages.every((item) => item.ready || item.status === "restart-required")
+            ? "ok"
+            : "degraded"
+          : "error",
+        packages: capabilityPackages ?? [],
+      },
     };
   });
 

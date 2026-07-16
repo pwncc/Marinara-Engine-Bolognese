@@ -13,8 +13,7 @@ export const capabilityPermissionSchema = z.enum([
   "ui",
 ]);
 
-export const capabilityPackageManifestSchema = z.object({
-  schemaVersion: z.literal(1),
+const capabilityPackageManifestBaseSchema = z.object({
   id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(80),
   name: z.string().min(1).max(120),
   version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
@@ -63,6 +62,33 @@ export const capabilityPackageManifestSchema = z.object({
   restartRequired: z.boolean().default(false),
 }).strict();
 
+export const supportedCapabilityApi = Object.freeze({ major: 1, minor: 0 } as const);
+
+const capabilityApiVersionSchema = z.object({
+  major: z.number().int().positive(),
+  minor: z.number().int().nonnegative(),
+}).strict();
+
+const capabilityPackageBuiltAgainstSchema = z.object({
+  engineVersion: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
+  engineCommit: z.string().regex(/^[a-f0-9]{40}$/),
+}).strict();
+
+export const capabilityPackageManifestV1Schema = capabilityPackageManifestBaseSchema.extend({
+  schemaVersion: z.literal(1),
+}).strict();
+
+export const capabilityPackageManifestV2Schema = capabilityPackageManifestBaseSchema.extend({
+  schemaVersion: z.literal(2),
+  capabilityApi: capabilityApiVersionSchema,
+  builtAgainst: capabilityPackageBuiltAgainstSchema,
+}).strict();
+
+export const capabilityPackageManifestSchema = z.discriminatedUnion("schemaVersion", [
+  capabilityPackageManifestV1Schema,
+  capabilityPackageManifestV2Schema,
+]);
+
 export const capabilityCatalogPackageSchema = z.object({
   manifest: capabilityPackageManifestSchema,
   category: z.enum(["writer", "tracker", "misc"]).default("misc"),
@@ -81,6 +107,8 @@ export const capabilityCatalogSchema = z.object({
   packages: z.array(capabilityCatalogPackageSchema),
 }).strict();
 
+export const capabilityPackageReadinessSchema = z.enum(["pending", "registered", "ready", "error"]);
+
 export const installedCapabilityPackageSchema = z.object({
   id: z.string(),
   version: z.string(),
@@ -88,6 +116,8 @@ export const installedCapabilityPackageSchema = z.object({
   installedAt: z.string().datetime(),
   status: z.enum(["active", "restart-required", "error"]),
   error: z.string().nullable(),
+  readiness: capabilityPackageReadinessSchema.default("pending"),
+  readinessError: z.string().nullable().default(null),
   legacy: z.boolean().default(false),
   previousVersion: z.string().optional(),
 });
@@ -132,3 +162,50 @@ export type CapabilityCatalogPackage = z.infer<typeof capabilityCatalogPackageSc
 export type CapabilityCatalog = z.infer<typeof capabilityCatalogSchema>;
 export type InstalledCapabilityPackage = z.infer<typeof installedCapabilityPackageSchema>;
 export type PackagedAgentDefinition = z.infer<typeof packagedAgentDefinitionSchema>;
+
+export function getCapabilityApiCompatibilityIssue(manifest: CapabilityPackageManifest): string | null {
+  if (manifest.schemaVersion === 1) return null;
+  const required = manifest.capabilityApi;
+  const supported = supportedCapabilityApi;
+  if (required.major !== supported.major || required.minor > supported.minor) {
+    return `Package requires capability API ${required.major}.${required.minor}; this Engine supports ${supported.major}.${supported.minor}`;
+  }
+  return null;
+}
+
+function parseCapabilityPackageVersion(value: string) {
+  const prereleaseSeparator = value.indexOf("-");
+  const core = prereleaseSeparator >= 0 ? value.slice(0, prereleaseSeparator) : value;
+  const prerelease = prereleaseSeparator >= 0 ? value.slice(prereleaseSeparator + 1).split(".") : [];
+  return { core: core.split(".").map((part) => Number.parseInt(part, 10)), prerelease };
+}
+
+export function compareCapabilityPackageVersions(left: string, right: string): number {
+  const a = parseCapabilityPackageVersion(left);
+  const b = parseCapabilityPackageVersion(right);
+  for (let index = 0; index < Math.max(a.core.length, b.core.length); index += 1) {
+    const difference = (a.core[index] ?? 0) - (b.core[index] ?? 0);
+    if (difference !== 0) return difference > 0 ? 1 : -1;
+  }
+  if (a.prerelease.length === 0 || b.prerelease.length === 0) {
+    if (a.prerelease.length === b.prerelease.length) return 0;
+    return a.prerelease.length === 0 ? 1 : -1;
+  }
+  for (let index = 0; index < Math.max(a.prerelease.length, b.prerelease.length); index += 1) {
+    const leftPart = a.prerelease[index];
+    const rightPart = b.prerelease[index];
+    if (leftPart === undefined || rightPart === undefined) return leftPart === undefined ? -1 : 1;
+    if (leftPart === rightPart) continue;
+    const leftNumeric = /^\d+$/u.test(leftPart);
+    const rightNumeric = /^\d+$/u.test(rightPart);
+    if (leftNumeric && rightNumeric) return Number(leftPart) > Number(rightPart) ? 1 : -1;
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+    return leftPart > rightPart ? 1 : -1;
+  }
+  return 0;
+}
+
+export function isInstalledCapabilityReady(installed: InstalledCapabilityPackage): boolean {
+  if (installed.status !== "active") return false;
+  return !installed.manifest.entrypoints.server || installed.readiness === "ready";
+}

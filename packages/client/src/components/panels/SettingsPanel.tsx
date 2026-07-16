@@ -2664,7 +2664,7 @@ function GeneralSettings() {
             label="Music Player"
             checked={musicPlayerEnabled}
             onChange={setMusicPlayerEnabled}
-            help="Shows the compact Music Player. Switch between Spotify and YouTube from the player itself or the Music DJ agent settings."
+            help="Shows the compact Music Player. Switch between Spotify, YouTube, and Custom from the player itself or the Music DJ agent settings."
           />
           <ToggleSetting
             anchorId={getSettingsControlAnchorId("mini-mari")}

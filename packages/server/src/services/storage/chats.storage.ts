@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Storage: Chats
 // ──────────────────────────────────────────────
-import { eq, desc, and, gt, inArray, isNull, isNotNull } from "drizzle-orm";
+import { eq, desc, and, gt, inArray, isNull, isNotNull } from "../../db/file-query.js";
 import type { DB } from "../../db/connection.js";
 import {
   chats,
@@ -34,6 +34,7 @@ import {
   type TimestampOverrides,
 } from "../import/import-timestamps.js";
 import { scheduleNeedsRefresh, type CharacterSchedules, type WeekSchedule } from "../conversation/schedule.service.js";
+import { resolveConversationTimeZone, toZonedWallClockDate } from "../conversation/timezone.js";
 import { logger } from "../../lib/logger.js";
 
 const GALLERY_DIR = join(DATA_DIR, "gallery");
@@ -411,9 +412,11 @@ export function createChatsStorage(db: DB) {
       if (chat.id === excludeChatId || chat.mode !== "conversation") continue;
       const meta = parseMetadata(chat.metadata);
       if (!areConversationSchedulesEnabled(meta) || !hasConversationSchedules(meta.characterSchedules)) continue;
+      const scheduleNow = toZonedWallClockDate(new Date(), resolveConversationTimeZone(meta));
 
       for (const [characterId, schedule] of Object.entries(meta.characterSchedules)) {
-        if (!wanted.has(characterId) || sharedSchedules[characterId] || scheduleNeedsRefresh(schedule)) continue;
+        if (!wanted.has(characterId) || sharedSchedules[characterId] || scheduleNeedsRefresh(schedule, scheduleNow))
+          continue;
         sharedSchedules[characterId] = schedule;
       }
 
@@ -479,9 +482,10 @@ export function createChatsStorage(db: DB) {
 
       const characterIds = parseCharacterIds(chat.characterIds);
       const currentSchedules = hasConversationSchedules(meta.characterSchedules) ? meta.characterSchedules : {};
+      const scheduleNow = toZonedWallClockDate(new Date(), resolveConversationTimeZone(meta));
       const missingOrStaleIds = characterIds.filter((characterId) => {
         const existing = currentSchedules[characterId];
-        return !existing || scheduleNeedsRefresh(existing);
+        return !existing || scheduleNeedsRefresh(existing, scheduleNow);
       });
       if (missingOrStaleIds.length === 0) return currentSchedules;
 
@@ -787,11 +791,8 @@ export function createChatsStorage(db: DB) {
     // ── Messages ──
 
     async lastContactByCharacter(chatId: string): Promise<Record<string, string>> {
-      // Aggregate in JS rather than via SQL GROUP BY / MAX(): the default
-      // file-storage backend's query builder implements where()/orderBy() but
-      // not groupBy() (and doesn't evaluate sql`MAX()` aggregates), so the SQL
-      // form throws "groupBy is not a function" there. Selecting the plain
-      // columns and reducing here works on both the file store and libsql.
+      // Aggregate in JS because the file-native query builder intentionally
+      // exposes only row selection, filtering, ordering, and pagination.
       // created_at is a TEXT (ISO) column, so lexicographic `>` is chronological.
       const rows = await db
         .select({
@@ -984,10 +985,7 @@ export function createChatsStorage(db: DB) {
 
       const lastTimestamp = latestTrustedTimestamp(createdTimestamps) ?? batchTimestamps.updatedAt;
 
-      // Batch in chunks of 500 to stay within SQLite variable limits.
-      // Deliberately avoids db.transaction() — libSQL's stateful transaction
-      // objects trigger a use-after-free / race on Windows when the loop is
-      // large, causing an access-violation crash (see #73).
+      // Batch large imports to bound the amount of work performed per write.
       const CHUNK = 500;
       for (let i = 0; i < msgRows.length; i += CHUNK) {
         await db.insert(messages).values(msgRows.slice(i, i + CHUNK));
@@ -1134,7 +1132,7 @@ export function createChatsStorage(db: DB) {
         // partial state is the `flipped` set. Undo exactly those so the call is
         // all-or-nothing and a caller never records ownership of a half-applied
         // batch. (db.transaction() is intentionally avoided in this store — see the
-        // bulk-insert note re: the libSQL stateful-transaction crash #73 — so this
+        // bounded bulk-insert path above — so this
         // compensating undo is the atomicity mechanism.) A clean undo preserves
         // the original error. A failed undo is surfaced as a compound failure so
         // callers never mistake a partially restored batch for a clean rollback.

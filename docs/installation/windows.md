@@ -153,7 +153,7 @@ HOST=0.0.0.0
 
 ## Optional: AI sprite background removal
 
-Marinara Engine has built in background cleanup for character sprites. You can also install a stronger optional tool called `backgroundremover`. It gives cleaner transparent cutouts. It is optional because it downloads large machine learning files.
+Marinara Engine requests native transparency for generated still sprites and has built-in adaptive matte cleanup for flat chroma and older white backgrounds. You can also install an optional tool called `backgroundremover` as a fallback for detailed scenery and other non-flat backgrounds. It is optional because it downloads large machine learning files.
 
 To use it you first need Python. Install Python 3.11 from the official site, then run the install command from the `Marinara-Engine` folder:
 

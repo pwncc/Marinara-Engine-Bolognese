@@ -3170,9 +3170,6 @@ function SpritesTab({
   const spriteGenerationReason = spriteCapabilities?.reason ?? "Sprite generation is unavailable on this platform.";
   const backgroundCleanupUnavailable = spriteCapabilities?.backgroundRemovalAvailable === false;
   const backgroundCleanupReason = spriteCapabilities?.reason ?? "Background cleanup is unavailable on this platform.";
-  const backgroundRemoverUnavailable = spriteCapabilities?.backgroundRemover?.installed === false;
-  const backgroundRemoverReason =
-    spriteCapabilities?.backgroundRemover?.reason ?? "Local backgroundremover is not installed.";
 
   const categoryTabs = (
     <div className="inline-flex rounded-xl bg-[var(--secondary)] p-1 ring-1 ring-[var(--border)]">
@@ -3372,10 +3369,10 @@ function SpritesTab({
         setLastCleanupBackupId(result.backupId ?? null);
         const engineDetails =
           result.backgroundRemoverProcessed && result.builtinProcessed
-            ? ` with backgroundremover and built-in fallback`
+            ? ` with automatic matte cleanup and AI fallback`
             : result.backgroundRemoverProcessed
-              ? ` with backgroundremover`
-              : ` with built-in cleanup`;
+              ? ` with AI fallback`
+              : ` with automatic matte cleanup`;
         toast.success(`Cleaned ${result.processed} saved sprite${result.processed === 1 ? "" : "s"}${engineDetails}.`);
       }
       if (result.failed.length > 0) {
@@ -3605,7 +3602,7 @@ function SpritesTab({
         {cleaningSprites && (
           <div className="flex items-center gap-2 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs text-[var(--muted-foreground)]">
             <Loader2 size="0.75rem" className="animate-spin text-[var(--primary)]" />
-            Running local backgroundremover on saved sprites…
+            Applying automatic matte cleanup to saved sprites…
           </div>
         )}
         {lastCleanupBackupId && (
@@ -3630,11 +3627,6 @@ function SpritesTab({
         {backgroundCleanupUnavailable && !spriteGenerationUnavailable && (
           <div className="rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs text-[var(--muted-foreground)]">
             {backgroundCleanupReason}
-          </div>
-        )}
-        {backgroundRemoverUnavailable && !backgroundCleanupUnavailable && (
-          <div className="rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs text-[var(--muted-foreground)]">
-            {backgroundRemoverReason}
           </div>
         )}
         <div className="flex gap-2">

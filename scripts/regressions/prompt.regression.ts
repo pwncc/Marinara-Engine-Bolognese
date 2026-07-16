@@ -28,6 +28,7 @@ import {
   type AgentContext,
   type ChatMLMessage,
   DEFAULT_AGENT_PROMPT_TEMPLATE_ID,
+  DEFAULT_CONVERSATION_PROMPT,
   getDefaultAgentPrompt,
   replaceBuiltInAgentDefinitions,
   GAME_GM_BUILT_IN_PROMPT_TEMPLATES,
@@ -62,6 +63,70 @@ import {
   selectConditionalPayloadBranch,
 } from "../../packages/shared/src/index.js";
 import { replaceBuiltInAgentDefinitions as replaceBuiltInAgentDefinitionsDist } from "../../packages/shared/dist/index.js";
+import {
+  formatNoodleTimelineForPrompt,
+  NOODLE_PERSONA_IDENTITY_INSTRUCTION,
+} from "../../packages/server/src/services/noodle/noodle-prompt.js";
+
+const personaA = {
+  id: "noodle-account-a",
+  kind: "persona" as const,
+  entityId: "persona-a",
+  handle: "persona_a",
+  displayName: "Persona A",
+  avatarUrl: null,
+  avatarCrop: null,
+};
+const personaB = {
+  id: "noodle-account-b",
+  kind: "persona" as const,
+  entityId: "persona-b",
+  handle: "persona_b",
+  displayName: "Persona B",
+  avatarUrl: null,
+  avatarCrop: null,
+};
+const formattedPersonaTimeline = formatNoodleTimelineForPrompt(
+  [
+    {
+      id: "post-a",
+      authorAccountId: personaA.id,
+      authorSnapshot: personaA,
+      content: "Post from A",
+      imageUrl: null,
+      imagePrompt: null,
+      metadata: {},
+      createdAt: "2026-07-16T00:00:00.000Z",
+    },
+    {
+      id: "post-b",
+      authorAccountId: personaB.id,
+      authorSnapshot: personaB,
+      content: "Post from B",
+      imageUrl: null,
+      imagePrompt: null,
+      metadata: {},
+      createdAt: "2026-07-16T00:01:00.000Z",
+    },
+  ],
+  [
+    {
+      id: "reply-b",
+      postId: "post-a",
+      parentInteractionId: null,
+      actorAccountId: personaB.id,
+      actorSnapshot: personaB,
+      type: "reply",
+      content: "B replies as B",
+      imageUrl: null,
+      createdAt: "2026-07-16T00:02:00.000Z",
+    },
+  ],
+);
+assert.match(formattedPersonaTimeline, /Persona A \(@persona_a; persona accountKey=persona:persona-a\)/);
+assert.match(formattedPersonaTimeline, /Persona B \(@persona_b; persona accountKey=persona:persona-b\)/);
+assert.match(formattedPersonaTimeline, /replyId=reply-b.*accountKey=persona:persona-b/);
+assert.match(NOODLE_PERSONA_IDENTITY_INSTRUCTION, /separate user identity/);
 
 const REGRESSION_AGENT_IDS = [
   "about-me-keeper", "background", "card-evolution-auditor", "character-tracker", "combat", "continuity",
@@ -121,15 +186,35 @@ import {
 } from "../../packages/server/src/services/video/prompt-context.js";
 import { resolveGameGmPromptTemplate } from "../../packages/server/src/services/generation/game-gm-prompt-runtime.js";
 import { countUserMessagesAfterSummaryAnchor } from "../../packages/server/src/services/conversation/auto-summary.service.js";
-import { buildNpcPortraitProviderPrompt } from "../../packages/server/src/services/game/game-asset-generation.js";
-import { resolveNpcPortraitAppearance } from "../../packages/server/src/routes/game.routes.js";
+import {
+  prepareConversationPromptHistory,
+  resolveConversationMembershipHistoryEvent,
+} from "../../packages/server/src/routes/generate/conversation-history-runtime.js";
+import { formatConversationGroupOutputFormat } from "../../packages/server/src/routes/generate/conversation-prompt-formatting.js";
+import {
+  LEGACY_DEFAULT_CONVERSATION_PROMPT_LEAD,
+  migrateLegacyDefaultConversationPromptLead,
+} from "../../packages/server/src/db/default-conversation-prompt-migration.js";
+import {
+  buildNpcPortraitProviderPrompt,
+  buildSceneIllustrationProviderPrompt,
+} from "../../packages/server/src/services/game/game-asset-generation.js";
+import {
+  buildGameIllustratorAppearanceContextBlock,
+  buildIllustrationNarrationSummaryMessages,
+  buildStoryboardIllustratorMessages,
+  extractCharacterAppearanceText,
+  resolveNpcPortraitAppearance,
+  selectStoryboardAppearanceCharacterNames,
+} from "../../packages/server/src/routes/game.routes.js";
 import { buildLegacyDefaultAgentConfigUpdate } from "../../packages/server/src/services/agents/default-prompt-migration.js";
 import { buildMemoryRecallBlock } from "../../packages/server/src/services/generation/memory-recall-context.js";
+import { createAboutMeMacroResolver } from "../../packages/server/src/services/conversation/about-me-macros.js";
 import { truncateRecalledMemory } from "../../packages/server/src/services/generation/memory-recall-pack.js";
 import { mergeConversationCharacterMemories } from "../../packages/server/src/services/generation/conversation-memory-context.js";
 import { injectIdentityFallbackMessages } from "../../packages/server/src/services/generation/character-prompt-context.js";
 import { injectSceneContextMessages } from "../../packages/server/src/services/generation/scene-context-runtime.js";
-import { expandMarker } from "../../packages/server/src/services/prompt/marker-expander.js";
+import { expandMarker, type MarkerContext } from "../../packages/server/src/services/prompt/marker-expander.js";
 import {
   buildRuntimeAgentSectionEligibleTypesForTest,
   clearUnusedRuntimeAgentSectionsForTest,
@@ -160,6 +245,10 @@ import {
   type SimpleMessage,
 } from "../../packages/server/src/routes/generate/generate-route-utils.js";
 import { resolveGenerationPromptPresetChoices } from "../../packages/server/src/routes/generate/prompt-preset-selection.js";
+import {
+  calibrateLorebookSimilarity,
+  lorebookSimilarityBaseline,
+} from "../../packages/server/src/services/lorebook/embeddings.js";
 import { scanForActivatedEntries } from "../../packages/server/src/services/lorebook/keyword-scanner.js";
 import { fitMessagesForModelAccess } from "../../packages/server/src/services/generation/model-access-policy.js";
 import { assemblePrompt, type AssemblerInput } from "../../packages/server/src/services/prompt/index.js";
@@ -189,6 +278,7 @@ import { resolveCharacterAdvancedPromptIds } from "../../packages/server/src/ser
 import {
   illustratorPromptRequestsRenderedText,
   mergeIllustratorNegativePrompt,
+  readIllustratorAppearance,
   resolveIllustratorCharacterReferences,
 } from "../../packages/server/src/routes/generate/illustrator-references.js";
 import {
@@ -293,6 +383,32 @@ const keywordOptions = {
 };
 
 const cases: RegressionCase[] = [
+  {
+    name: "Conversation About Me AI Write resolves card and persona macros before provider submission",
+    run() {
+      const resolvePersona = createAboutMeMacroResolver({
+        kind: "persona",
+        name: "{{user}}",
+        activePersonaName: "Mari",
+        source: {
+          description: "{{user}} builds strange machines.",
+          personality: "Curious",
+        },
+      });
+      assert.equal(resolvePersona("Name: {{user}}"), "Name: Mari");
+      assert.equal(resolvePersona("{{personaDescription}}"), "Mari builds strange machines.");
+
+      const resolveCharacter = createAboutMeMacroResolver({
+        kind: "character",
+        name: "Echo",
+        activePersonaName: "Mari",
+        activePersonaFields: { description: "An engineer" },
+        source: { description: "{{char}} trusts {{user}}." },
+      });
+      assert.equal(resolveCharacter("{{description}}"), "Echo trusts Mari.");
+      assert.equal(resolveCharacter("{{personaDescription}}"), "An engineer");
+    },
+  },
   {
     name: "installed Conversation feature commands do not require per-chat agent attachment",
     run() {
@@ -808,7 +924,7 @@ const cases: RegressionCase[] = [
         user: "Mari",
         char: "Dottore",
         characters: ["Dottore"],
-        variables: {},
+        variables: {} as Record<string, string>,
         personaFields: {
           description: "{{setvar::personaTouched::yes}}Unused persona description",
         },
@@ -1263,6 +1379,7 @@ const cases: RegressionCase[] = [
       const ctx = {
         sceneTitleLine: "Mira at the gate.",
         scenePrompt: "Mira braces beneath a storm-lit archway.",
+        finalVisibilityRuleLine: "Final visibility rule: Only depict these named visible characters: Mira.",
         narrativePurposeLine: "Narrative purpose: arrival.",
         charactersLine: "Characters: Mira.",
         referenceHandlingLine: "Reference handling: match the attached portrait.",
@@ -1292,10 +1409,12 @@ const cases: RegressionCase[] = [
 
       assert.equal(legacyPrompt, "GLOBAL SCENE Mira braces beneath a storm-lit archway.");
       assert.match(optimizedPrompt, /Storyboard keyframe: Mira braces beneath a storm-lit archway/);
+      assert.match(optimizedPrompt, /Final visibility rule: Only depict these named visible characters: Mira/);
       assert.match(optimizedPrompt, /Reference handling: match the attached portrait/);
       assert.match(optimizedPrompt, /Art direction: painterly fantasy/);
       assert.doesNotMatch(optimizedPrompt, /GLOBAL SCENE/);
       assert.equal(customPrompt, "CUSTOM Mira braces beneath a storm-lit archway. Art direction: painterly fantasy.");
+      assert.doesNotMatch(customPrompt, /Final visibility rule/);
       assert.equal(GAME_STORYBOARD_IMAGE_BUILT_IN_PROMPT_TEMPLATES.length, 2);
       assert.equal(
         GAME_STORYBOARD_IMAGE_BUILT_IN_PROMPT_TEMPLATES.find(
@@ -1496,6 +1615,234 @@ const cases: RegressionCase[] = [
       assert.deepEqual(resolution.characterIds, ["character-maukie", "character-dottore"]);
       assert.equal(resolution.personaId, "persona-mari");
       assert.deepEqual(resolution.referenceImages, []);
+    },
+  },
+  {
+    name: "Game planner always receives card appearance while final attachment stays optional",
+    async run() {
+      const appearance = "auburn hair, green eyes, leather jacket";
+      const description = "A verbose roleplay card description that must not be sent as visual appearance.";
+
+      assert.equal(extractCharacterAppearanceText({ extensions: { appearance }, description }), appearance);
+      assert.equal(
+        extractCharacterAppearanceText({
+          extensions: { appearance: `${appearance} {{// author-only note}}` },
+          description,
+        }),
+        appearance,
+      );
+      assert.equal(extractCharacterAppearanceText({ appearance, description }), appearance);
+      assert.equal(extractCharacterAppearanceText({ description }), "");
+      assert.equal(
+        extractCharacterAppearanceText({ extensions: { appearance }, description }),
+        readIllustratorAppearance({ extensions: { appearance }, description }),
+      );
+      const longAppearance = "silver braided hair with violet ribbon ".repeat(80).trim();
+      const boundedLongAppearance = readIllustratorAppearance({ appearance: longAppearance });
+      assert.ok(boundedLongAppearance);
+      assert.ok(boundedLongAppearance.length <= 1400);
+      assert.match(boundedLongAppearance, /(?:silver|braided|hair|with|violet|ribbon)\.\.\.$/u);
+
+      const appearanceContextBlock = buildGameIllustratorAppearanceContextBlock([
+        `Lyra's Appearance: ${extractCharacterAppearanceText({ extensions: { appearance }, description })}`,
+      ]);
+      assert.match(appearanceContextBlock, /^<character_appearance_context>/u);
+      assert.match(appearanceContextBlock, new RegExp(appearance, "u"));
+      assert.doesNotMatch(appearanceContextBlock, new RegExp(description, "u"));
+
+      assert.deepEqual(
+        selectStoryboardAppearanceCharacterNames({
+          sourceNarration: "You raise your hand beside 2B- as the shrine begins to glow.",
+          sections: [],
+          allowedCharacterNames: ["2B-", "matt", "Mara Venn"],
+          activePersonaName: "matt",
+        }),
+        ["matt", "2B-"],
+      );
+      assert.deepEqual(
+        selectStoryboardAppearanceCharacterNames({
+          sourceNarration: "You raise your hand beside 2B- as the shrine begins to glow.",
+          sections: [],
+          allowedCharacterNames: ["2B-", "matt", "Mara Venn"],
+        }),
+        ["2B-"],
+      );
+
+      const narrationSummaryMessages = await buildIllustrationNarrationSummaryMessages({
+        illustration: {
+          prompt: "Lyra stands beneath the moon while rain darkens her jacket and the forest around her.",
+          characters: ["Lyra"],
+        },
+        narration: "Lyra stands beneath the moon while rain darkens her jacket and the forest around her.",
+        characterAppearanceContextBlock: appearanceContextBlock,
+      });
+      const narrationSummarySystemPrompt = narrationSummaryMessages[0]?.content ?? "";
+      assert.match(narrationSummarySystemPrompt, /^You are Marinara's Game Mode narration summarizer/u);
+      assert.ok(narrationSummarySystemPrompt.indexOf(appearanceContextBlock) > 0);
+      assert.ok(
+        narrationSummarySystemPrompt.indexOf(appearanceContextBlock) <
+          narrationSummarySystemPrompt.indexOf("Read the completed turn narration"),
+      );
+      assert.match(narrationSummarySystemPrompt, /never invent or contradict a supplied hair color/iu);
+
+      const narrationSummaryWithoutAppearance = await buildIllustrationNarrationSummaryMessages({
+        illustration: {
+          prompt: "Lyra stands beneath the moon while rain darkens the forest around her.",
+          characters: ["Lyra"],
+        },
+        narration: "Lyra stands beneath the moon while rain darkens the forest around her.",
+      });
+      assert.doesNotMatch(narrationSummaryWithoutAppearance[0]?.content ?? "", /character_appearance_context/u);
+
+      const storyboardMessages = await buildStoryboardIllustratorMessages({
+        promptOverridesStorage: {} as never,
+        meta: {},
+        setupConfig: null,
+        latestState: null,
+        sourceNarration: "Lyra stands beneath the moon while rain darkens the forest around her.",
+        sections: [
+          {
+            index: 0,
+            kind: "narration",
+            content: "Lyra stands beneath the moon while rain darkens the forest around her.",
+          },
+        ],
+        keyframeCount: 1,
+        durationSeconds: 6,
+        aspectRatio: "16:9",
+        generateVideos: false,
+        allowedCharacterNames: ["Lyra"],
+        maxVisibleCharacters: 1,
+        characterAppearanceContextBlock: appearanceContextBlock,
+      });
+      assert.match(storyboardMessages.systemPrompt, /^You are Marinara's Game Mode Storyboard Illustrator/u);
+      assert.ok(storyboardMessages.systemPrompt.indexOf(appearanceContextBlock) > 0);
+      assert.ok(
+        storyboardMessages.systemPrompt.indexOf(appearanceContextBlock) <
+          storyboardMessages.systemPrompt.indexOf("Turn exactly one completed GM narration"),
+      );
+      assert.match(storyboardMessages.systemPrompt, /omit it instead of guessing/iu);
+
+      const compiled = await buildSceneIllustrationProviderPrompt({
+        chatId: "prompt-regression",
+        prompt:
+          "Lyra standing in a moonlit forest Final visibility rule: Only depict these named visible characters: Lyra.",
+        characters: ["Lyra"],
+        characterDescriptions: [`Lyra's Appearance: ${appearance}`],
+        imgModel: "unused",
+        imgBaseUrl: "",
+        imgApiKey: "",
+      });
+      assert.match(compiled.prompt, /Character appearance notes:\s*Lyra's Appearance:/u);
+      assert.match(compiled.prompt, /Final visibility rule: Only depict these named visible characters: Lyra/iu);
+      assert.doesNotMatch(compiled.prompt, /without an attached reference image/iu);
+      assert.doesNotMatch(compiled.prompt, new RegExp(description, "u"));
+
+      const separatedVisibilityCompiled = await buildSceneIllustrationProviderPrompt({
+        chatId: "prompt-regression",
+        prompt:
+          "Lyra standing in a moonlit forest Final visibility rule: Only depict these named visible characters: Lyra.",
+        characters: ["Lyra"],
+        storyboardImagePromptTemplateId: "separated-visibility",
+        storyboardImagePromptTemplates: [
+          {
+            id: "separated-visibility",
+            name: "Separated Visibility",
+            promptTemplate: "SCENE ${scenePrompt}\nSCOPE ${finalVisibilityRuleLine}",
+          },
+        ],
+        imgModel: "unused",
+        imgBaseUrl: "",
+        imgApiKey: "",
+      });
+      assert.equal(
+        separatedVisibilityCompiled.prompt,
+        "SCENE Lyra standing in a moonlit forest\nSCOPE Final visibility rule: Only depict these named visible characters: Lyra.",
+      );
+
+      const compiledWithoutAttachedAppearance = await buildSceneIllustrationProviderPrompt({
+        chatId: "prompt-regression",
+        prompt: "Lyra standing in a moonlit forest",
+        characters: ["Lyra"],
+        imgModel: "unused",
+        imgBaseUrl: "",
+        imgApiKey: "",
+      });
+      assert.doesNotMatch(compiledWithoutAttachedAppearance.prompt, /Character appearance notes:/u);
+
+      const longCharacterNames = ["Lyra", "Korr", "Mira", "Tarin", "Sable", "Orin"];
+      const longCompiled = await buildSceneIllustrationProviderPrompt({
+        chatId: "prompt-regression",
+        prompt: "Six adventurers regroup around a moonlit shrine.",
+        characters: longCharacterNames,
+        characterDescriptions: longCharacterNames.map(
+          (name) => `${name}'s Appearance: ${"silver braided hair with violet ribbon ".repeat(80).trim()}`,
+        ),
+        imgModel: "unused",
+        imgBaseUrl: "",
+        imgApiKey: "",
+      });
+      assert.ok(longCompiled.prompt.length <= 7000);
+      const longAppearanceBlock = longCompiled.prompt.split("Character appearance notes:\n")[1] ?? "";
+      const longAppearanceLines = longAppearanceBlock.split("\n").filter((line) => line.includes("'s Appearance:"));
+      assert.equal(longAppearanceLines.length, longCharacterNames.length);
+      for (const name of longCharacterNames)
+        assert.match(longAppearanceBlock, new RegExp(`${name}'s Appearance:`, "u"));
+      for (const line of longAppearanceLines) {
+        assert.ok(line.length > 300);
+        assert.match(line, /(?:silver|braided|hair|with|violet|ribbon)\.\.\.$/u);
+      }
+
+      const directCompiled = await buildSceneIllustrationProviderPrompt({
+        chatId: "prompt-regression",
+        title: "Moonlit meeting",
+        prompt:
+          "Lyra standing in a moonlit forest Final visibility rule: Only depict these named visible characters: Lyra.",
+        reason: "Key emotional moment",
+        characters: ["Lyra"],
+        characterDescriptions: [`Lyra's Appearance: ${appearance}`],
+        imagePromptInstructions: "Keep the moon visible.",
+        useGamePromptTemplate: false,
+        imgModel: "unused",
+        imgBaseUrl: "",
+        imgApiKey: "",
+      });
+      assert.match(directCompiled.prompt, /^Lyra standing in a moonlit forest/u);
+      assert.match(
+        directCompiled.prompt,
+        /Final visibility rule: Only depict these named visible characters: Lyra/iu,
+      );
+      assert.match(directCompiled.prompt, /Character appearance notes:\s*Lyra's Appearance:/u);
+      assert.match(directCompiled.prompt, /User image instructions: Keep the moon visible/u);
+      assert.doesNotMatch(
+        directCompiled.prompt,
+        /(?:^|\n)(?:Scene moment|Narrative purpose|Characters|Reference handling|Art direction):/iu,
+      );
+
+      const chatSettingsSource = readFileSync(
+        new URL("../../packages/client/src/components/chat/ChatSettingsDrawer.tsx", import.meta.url),
+        "utf8",
+      );
+      const gameSurfaceSource = readFileSync(
+        new URL("../../packages/client/src/components/game/GameSurface.tsx", import.meta.url),
+        "utf8",
+      );
+      const gameRouteSource = readFileSync(
+        new URL("../../packages/server/src/routes/game.routes.ts", import.meta.url),
+        "utf8",
+      );
+      assert.match(chatSettingsSource, /label="Use Storyboard Template"/u);
+      assert.doesNotMatch(chatSettingsSource, /Use Storyboard Prompt Directly|gameStoryboardUseDirectScenePrompt/u);
+      assert.match(chatSettingsSource, /gameStoryboardUsePromptTemplate:\s*!gameStoryboardUsePromptTemplate/u);
+      assert.doesNotMatch(gameSurfaceSource, /useGamePromptTemplate/u);
+      assert.match(gameRouteSource, /characterAppearanceContextBlock:\s*storyboardAppearanceContextBlock/u);
+      assert.equal(gameRouteSource.match(/^\s+characterAppearanceContextBlock,\s*$/gmu)?.length, 2);
+      assert.equal(gameRouteSource.match(/includeCharacterDescriptions:\s*true,/gu)?.length, 1);
+      assert.equal(gameRouteSource.match(/includeCharacterDescriptions:\s*includeCharacterAppearance,/gu)?.length, 5);
+      assert.doesNotMatch(
+        gameRouteSource,
+        /const storyboardAppearanceCharacterNames\s*=\s*includeCharacterAppearance/gu,
+      );
     },
   },
   {
@@ -2578,7 +2925,7 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
         activatedEntries: [],
         budgetSkippedEntries: [],
       };
-      const markerCtx = {
+      const markerCtx: MarkerContext = {
         db: undefined as unknown as DB,
         chatId: "chat-lorebook-markup",
         characterIds: [],
@@ -2896,6 +3243,187 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
     },
   },
   {
+    name: "Conversation group output rule follows the preset wrap format",
+    run() {
+      const instruction = "Remember to prefix messages with `Name: message`!";
+      const responseBoundary =
+        "Only respond for these characters: Dottore, Pantalone. Never respond for Mari or write Mari's messages.";
+      const formatOutput = (wrapFormat: "xml" | "markdown" | "none") =>
+        formatConversationGroupOutputFormat({
+          wrapFormat,
+          characterNames: ["Dottore", "Pantalone"],
+          userName: "Mari",
+        });
+      assert.equal(
+        formatOutput("xml"),
+        `<output_format>\n    ${instruction}\n    ${responseBoundary}\n</output_format>`,
+      );
+      assert.equal(formatOutput("markdown"), `## Output Format\n${instruction}\n${responseBoundary}`);
+      assert.equal(formatOutput("none"), `${instruction}\n${responseBoundary}`);
+
+      const contextSource = readFileSync(
+        new URL("../../packages/server/src/routes/generate/conversation-context-block.ts", import.meta.url),
+        "utf8",
+      );
+      assert.equal(contextSource.includes(instruction), false);
+    },
+  },
+  {
+    name: "Conversation reaction syntax is advertised only inside Commands",
+    run() {
+      const routeSource = readFileSync(
+        new URL("../../packages/server/src/routes/generate.routes.ts", import.meta.url),
+        "utf8",
+      );
+      const commandSource = readFileSync(
+        new URL(
+          "../../packages/server/src/services/generation/conversation-command-runtime.ts",
+          import.meta.url,
+        ),
+        "utf8",
+      );
+      assert.equal(routeSource.includes("each character reacts for themselves"), false);
+      assert.match(commandSource, /\[react: emoji="😂"\].*\[react: emoji=":name:"\]/u);
+    },
+  },
+  {
+    name: "Conversation membership events recognize tagged and legacy timeline notices",
+    run() {
+      assert.equal(
+        resolveConversationMembershipHistoryEvent({
+          role: "system",
+          content: "Arlecchino has joined the chat.",
+          extra: { conversationMembershipEvent: "joined" },
+        }),
+        "joined",
+      );
+      assert.equal(
+        resolveConversationMembershipHistoryEvent({ role: "system", content: "Arlecchino has left the chat." }),
+        "left",
+      );
+      assert.equal(
+        resolveConversationMembershipHistoryEvent({ role: "system", content: "Stay in character." }),
+        null,
+      );
+    },
+  },
+  {
+    name: "default Conversation identity wording is safe for DMs and groups",
+    run() {
+      assert.match(
+        DEFAULT_CONVERSATION_PROMPT,
+        /^You are \{\{charName\}\} chatting with the user called \{\{userName\}\} in a casual private DM conversation\. You are real and autonomous people\./u,
+      );
+      const customizedTail = "\nKeep this installation-specific instruction.";
+      assert.equal(
+        migrateLegacyDefaultConversationPromptLead(
+          LEGACY_DEFAULT_CONVERSATION_PROMPT_LEAD + customizedTail,
+          DEFAULT_CONVERSATION_PROMPT,
+        ),
+        DEFAULT_CONVERSATION_PROMPT.split("\n", 1)[0] + customizedTail,
+      );
+      assert.equal(
+        migrateLegacyDefaultConversationPromptLead("A genuinely custom opening.", DEFAULT_CONVERSATION_PROMPT),
+        "A genuinely custom opening.",
+      );
+    },
+  },
+  {
+    name: "past Conversation scene summaries compact into day and week summaries",
+    async run() {
+      const oldCreatedAt = "2026-06-23T12:00:00.000Z";
+      const currentCreatedAt = "2026-07-15T12:00:00.000Z";
+      const oldSceneSummary = "OLD_SCENE_SUMMARY_MUST_NOT_REMAIN_VERBATIM";
+      const currentSceneSummary = "CURRENT_SCENE_SUMMARY_MUST_REMAIN_VERBATIM";
+      const authoredSystemInstruction = "AUTHORED_SYSTEM_INSTRUCTION_MUST_REMAIN";
+      const legacySetupMembership = "SETUP_ONLY has joined the chat.";
+      const currentMembership = "Tartaglia has joined the chat.";
+      const chatMessages = [
+        { id: "legacy-setup-membership", role: "system", content: legacySetupMembership, createdAt: oldCreatedAt },
+        { id: "old-user", role: "user", content: "An older conversation turn.", createdAt: oldCreatedAt },
+        { id: "old-scene", role: "narrator", content: oldSceneSummary, createdAt: oldCreatedAt },
+        { id: "authored-system", role: "system", content: authoredSystemInstruction, createdAt: oldCreatedAt },
+        { id: "current-scene", role: "narrator", content: currentSceneSummary, createdAt: currentCreatedAt },
+        {
+          id: "current-membership",
+          role: "system",
+          content: currentMembership,
+          createdAt: currentCreatedAt,
+          extra: { conversationMembershipEvent: "joined" },
+        },
+      ];
+      const finalMessages = [
+        {
+          id: "legacy-setup-membership",
+          role: "system" as const,
+          content: legacySetupMembership,
+          contextKind: "history" as const,
+        },
+        { id: "old-user", role: "user" as const, content: "An older conversation turn.", contextKind: "history" as const },
+        { id: "old-scene", role: "system" as const, content: oldSceneSummary, contextKind: "history" as const },
+        {
+          id: "authored-system",
+          role: "system" as const,
+          content: authoredSystemInstruction,
+          contextKind: "history" as const,
+        },
+        { id: "current-scene", role: "system" as const, content: currentSceneSummary, contextKind: "history" as const },
+        {
+          id: "current-membership",
+          role: "system" as const,
+          content: currentMembership,
+          contextKind: "history" as const,
+        },
+      ];
+
+      const prepared = await prepareConversationPromptHistory({
+        finalMessages,
+        chatMessages,
+        scopedMessages: chatMessages,
+        chatMeta: {
+          summaryTailMessages: 1,
+          daySummaries: {
+            "23.06.2026": { summary: "Compact day summary.", keyDetails: [] },
+          },
+          weekSummaries: {
+            "22.06.2026": { summary: "COMPACT_WEEK_SUMMARY", keyDetails: [] },
+          },
+        },
+        chatId: "conversation-scene-summary-regression",
+        chats: {
+          async patchMetadata() {
+            throw new Error("Existing day and week summaries should not require a metadata patch");
+          },
+        },
+        chars: {
+          async getById() {
+            return null;
+          },
+        },
+        characterIds: ["char-echo"],
+        allCharacterIds: ["char-echo"],
+        convoCharInfo: [{ name: "Echo" }],
+        convoCharNames: ["Echo"],
+        personaName: "User",
+        nowInstant: new Date("2026-07-15T18:00:00.000Z"),
+        promptTimeZone: "UTC",
+        wrapFormat: "xml",
+        connection: { provider: "openai", apiKey: "", model: "regression-model" },
+        connectionId: "regression-connection",
+        baseUrl: "https://example.invalid/v1",
+      });
+      const promptText = prepared.finalMessages.map((message) => message.content).join("\n");
+
+      assert.match(promptText, /COMPACT_WEEK_SUMMARY/u);
+      assert.equal(promptText.includes(oldSceneSummary), false, promptText);
+      assert.match(promptText, /An older conversation turn\./u);
+      assert.match(promptText, new RegExp(currentSceneSummary, "u"));
+      assert.match(promptText, new RegExp(authoredSystemInstruction, "u"));
+      assert.equal(promptText.includes(legacySetupMembership), false, promptText);
+      assert.match(promptText, new RegExp(currentMembership, "u"));
+    },
+  },
+  {
     name: "chat prompt preset defaults fill missing chat preset choices",
     run() {
       assert.deepEqual(
@@ -3178,6 +3706,35 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
         },
       );
       assert.equal(belowThreshold.length, 0);
+
+      assert.equal(calibrateLorebookSimilarity(0.97, 0.97), 0);
+      assert.ok(calibrateLorebookSimilarity(0.99, 0.97) > 0.6);
+      assert.ok(
+        Math.abs(lorebookSimilarityBaseline([[1, 0], [0.97, Math.sqrt(1 - 0.97 ** 2)]]) - 0.97) < 1e-12,
+      );
+
+      const clusteredIrrelevant = scanForActivatedEntries(
+        [{ role: "user", content: "unrelated query" }],
+        [{ ...entry, id: "entry-clustered-irrelevant", keys: [], embedding: [0.97, Math.sqrt(1 - 0.97 ** 2)] } as any],
+        {
+          chatEmbedding: [1, 0],
+          semanticSimilarityBaseline: 0.97,
+          semanticThresholdByLorebookId: new Map([["book-semantic", 0.3]]),
+        },
+      );
+      assert.equal(clusteredIrrelevant.length, 0);
+
+      const clusteredRelevant = scanForActivatedEntries(
+        [{ role: "user", content: "related query" }],
+        [{ ...entry, id: "entry-clustered-relevant", keys: [], embedding: [0.99, Math.sqrt(1 - 0.99 ** 2)] } as any],
+        {
+          chatEmbedding: [1, 0],
+          semanticSimilarityBaseline: 0.97,
+          semanticThresholdByLorebookId: new Map([["book-semantic", 0.3]]),
+        },
+      );
+      assert.equal(clusteredRelevant.length, 1);
+      assert.match(clusteredRelevant[0]?.matchedKeys[0] ?? "", /^\[semantic:0\.66/u);
     },
   },
 ];

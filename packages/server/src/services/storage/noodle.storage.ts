@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Storage: Noodle Fake Social Media
 // ──────────────────────────────────────────────
-import { and, desc, eq, gt, inArray, isNull, lt, or } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, lt, or } from "../../db/file-query.js";
 import {
   DEFAULT_NOODLE_SETTINGS,
   noodleSettingsSchema,
@@ -26,12 +26,14 @@ import {
   type NoodlePostUpdateInput,
   type NoodlePostSource,
   type NoodlePostUnlock,
+  type NoodleRefreshAttempt,
   type NoodleRefreshRun,
   type NoodleRemoveInteractionInput,
   type NoodleSettings,
   type NoodleSettingsUpdateInput,
 } from "@marinara-engine/shared";
 import type { DB } from "../../db/connection.js";
+import { isFileUniqueConstraintError } from "../../db/file-schema.js";
 import {
   noodleAccounts,
   noodleAccountSubscriptions,
@@ -116,6 +118,43 @@ function parseRecord(value: unknown): Record<string, unknown> {
     }
   }
   return typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function parseRefreshAttempts(value: unknown): NoodleRefreshAttempt[] {
+  let parsed = value;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((entry): NoodleRefreshAttempt[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const candidate = entry as Record<string, unknown>;
+    const kind = candidate.kind;
+    if (kind !== "initial" && kind !== "text_only_fallback" && kind !== "correction") return [];
+    if (
+      typeof candidate.sequence !== "number" ||
+      !Number.isInteger(candidate.sequence) ||
+      candidate.sequence < 1 ||
+      typeof candidate.response !== "string" ||
+      (candidate.rejectionReason !== null && typeof candidate.rejectionReason !== "string") ||
+      typeof candidate.createdAt !== "string"
+    ) {
+      return [];
+    }
+    return [
+      {
+        sequence: candidate.sequence,
+        kind,
+        response: candidate.response,
+        rejectionReason: candidate.rejectionReason,
+        createdAt: candidate.createdAt,
+      },
+    ];
+  });
 }
 
 export function parseNoodleAvatarCrop(value: unknown): NoodleAvatarCrop | null {
@@ -246,11 +285,6 @@ function legacyCarryoverMode(targets: NoodleCarryoverTarget[]): NoodleCarryoverM
 
 function isToggleInteractionType(type: NoodleInteractionType) {
   return type === "like" || type === "repost";
-}
-
-function isUniqueConstraintError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return /SQLITE_CONSTRAINT|unique constraint failed|constraint failed/i.test(message);
 }
 
 export function normalizeNoodleSettings(raw: unknown): NoodleSettings {
@@ -413,6 +447,7 @@ function mapRefreshRun(row: RefreshRunRow): NoodleRefreshRun {
     prompt: row.prompt ?? "",
     result: row.result ?? null,
     error: row.error ?? null,
+    attempts: parseRefreshAttempts(row.attempts),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -1067,7 +1102,11 @@ export function createNoodleStorage(db: DB) {
           createdAt: now(),
         });
       } catch (error) {
-        if (isUniqueConstraintError(error)) {
+        const toggleKeys = ["postId", "actorAccountId", "type", "parentInteractionId"];
+        if (
+          isToggleInteractionType(input.type) &&
+          isFileUniqueConstraintError(error, "noodle_interactions", toggleKeys)
+        ) {
           const existing = await readExistingToggleInteraction();
           if (existing) return existing;
         }
@@ -1097,9 +1136,7 @@ export function createNoodleStorage(db: DB) {
       const existing = rows[0];
       if (!existing) return null;
       await db.transaction(async (tx) => {
-        await tx
-          .delete(noodleActivityDigests)
-          .where(eq(noodleActivityDigests.sourceInteractionId, existing.id));
+        await tx.delete(noodleActivityDigests).where(eq(noodleActivityDigests.sourceInteractionId, existing.id));
         await tx.delete(noodleInteractions).where(eq(noodleInteractions.id, existing.id));
       });
       return mapInteraction(existing);
@@ -1220,6 +1257,7 @@ export function createNoodleStorage(db: DB) {
         prompt: input.prompt,
         result: null,
         error: null,
+        attempts: "[]",
         createdAt: timestamp,
         updatedAt: timestamp,
       });
@@ -1237,6 +1275,21 @@ export function createNoodleStorage(db: DB) {
             .limit(limit)
         : await baseQuery.orderBy(desc(noodleRefreshRuns.createdAt)).limit(limit);
       return rows.map(mapRefreshRun);
+    },
+
+    async recordRefreshAttempt(id: string, attempt: NoodleRefreshAttempt): Promise<NoodleRefreshRun | null> {
+      const rows = await db.select().from(noodleRefreshRuns).where(eq(noodleRefreshRuns.id, id));
+      const current = rows[0];
+      if (!current) return null;
+      await db
+        .update(noodleRefreshRuns)
+        .set({
+          attempts: JSON.stringify([...parseRefreshAttempts(current.attempts), attempt]),
+          updatedAt: now(),
+        })
+        .where(eq(noodleRefreshRuns.id, id));
+      const updatedRows = await db.select().from(noodleRefreshRuns).where(eq(noodleRefreshRuns.id, id));
+      return updatedRows[0] ? mapRefreshRun(updatedRows[0]) : null;
     },
 
     async finishRefreshRun(
@@ -1277,7 +1330,7 @@ export function createNoodleStorage(db: DB) {
           createdAt: now(),
         });
       } catch (error) {
-        if (!isUniqueConstraintError(error)) throw error;
+        if (!isFileUniqueConstraintError(error)) throw error;
       }
       const rows = await db
         .select()
@@ -1338,7 +1391,7 @@ export function createNoodleStorage(db: DB) {
       try {
         await db.insert(noodlePostUnlocks).values({ id, accountId, postId, createdAt: now() });
       } catch (error) {
-        if (!isUniqueConstraintError(error)) throw error;
+        if (!isFileUniqueConstraintError(error)) throw error;
       }
       const rows = await db
         .select()

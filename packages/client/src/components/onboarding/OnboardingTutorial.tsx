@@ -49,8 +49,8 @@ const STEPS: TourStep[] = [
   },
   {
     target: "panel-bot-browser",
-    title: "Bot Browser",
-    body: "The Bot Browser allows you to browse and import downloadable character cards and resources. Start here when you want new characters or ready-made material to bring into your library.",
+    title: "Card Browser",
+    body: "The Card Browser lets you find and import downloadable character cards. Start here when you want new characters to add to your library.",
     side: "bottom",
     openPanel: "bot-browser",
     sprite: { src: "/sprites/mari/Mari_point_up_left.png", flip: true },
@@ -451,16 +451,10 @@ function TourCardContent({
 
       {/* Buttons */}
       <div className="flex items-center justify-between">
-        <button
-          onClick={onSkip}
-          className={TUTORIAL_SECONDARY_BUTTON_CLASS}
-        >
+        <button onClick={onSkip} className={TUTORIAL_SECONDARY_BUTTON_CLASS}>
           {step === 0 ? "Skip Tutorial" : "Skip"}
         </button>
-        <button
-          onClick={onNext}
-          className={TUTORIAL_PRIMARY_BUTTON_CLASS}
-        >
+        <button onClick={onNext} className={TUTORIAL_PRIMARY_BUTTON_CLASS}>
           {isLast ? "Get Started" : "Next"}
           {!isLast && <ChevronRight size="0.75rem" />}
         </button>

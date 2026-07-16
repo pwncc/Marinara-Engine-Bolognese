@@ -48,6 +48,10 @@ import {
   stripConversationResponseEnvelope,
 } from "../../packages/server/src/services/conversation/transcript-sanitize.js";
 import { resolveInitialGameGmConnectionId } from "../../packages/server/src/services/game/initial-game-setup.js";
+import {
+  resolveIllustratorPromptRuntime,
+  type IllustratorPromptConnection,
+} from "../../packages/server/src/services/generation/illustrator-prompt-runtime.js";
 import { annotateContentWithReactions } from "../../packages/server/src/routes/generate/conversation-custom-assets.js";
 import {
   buildGameSessionReplayTurns,
@@ -65,6 +69,7 @@ import {
 } from "../../packages/client/src/lib/emoji-shortcodes.js";
 import { persistGeneratedImageToEntityGalleries } from "../../packages/server/src/services/image/generated-image-entity-gallery.js";
 import { fetchBotBrowserJson } from "../../packages/server/src/services/bot-browser/fetch-json.js";
+import { isAllowedResponseContentType } from "../../packages/server/src/utils/security.js";
 import { runImageGenerationRequest } from "../../packages/server/src/services/image/image-generation-queue.js";
 import {
   parseIllustratorPromptReviewOverride,
@@ -80,6 +85,23 @@ import {
   isAutonomousDailyBudgetExhausted,
 } from "../../packages/server/src/services/conversation/autonomous.service.js";
 import type { WeekSchedule } from "../../packages/server/src/services/conversation/schedule.service.js";
+import { resolveGroupGenerationMode } from "../../packages/server/src/routes/generate/generate-route-utils.js";
+import { parseDockerDefaultGatewayIp } from "../../packages/server/src/middleware/ip-allowlist.js";
+
+const dockerDesktopRouteTable = `Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask
+eth0\t00000000\t01D7A8C0\t0003\t0\t0\t100\t00000000
+eth0\t00D7A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF`;
+assert.strictEqual(parseDockerDefaultGatewayIp(dockerDesktopRouteTable), "192.168.215.1");
+assert.strictEqual(
+  parseDockerDefaultGatewayIp(`${dockerDesktopRouteTable}\neth1\t00000000\t010011AC\t0003\t0\t0\t50\t00000000`),
+  "172.17.0.1",
+);
+assert.strictEqual(parseDockerDefaultGatewayIp("Iface\tDestination\tGateway\tFlags\tMetric\n"), null);
+
+assert.equal(resolveGroupGenerationMode("conversation", "individual"), "merged");
+assert.equal(resolveGroupGenerationMode("conversation", "merged"), "merged");
+assert.equal(resolveGroupGenerationMode("roleplay", "individual"), "individual");
+assert.equal(resolveGroupGenerationMode("roleplay", "merged"), "merged");
 
 const minimalProfessorMariPersona = buildPersonaCreateRow(
   { name: "Minimal helper persona" },
@@ -114,6 +136,64 @@ assert.equal(resolveInitialGameGmConnectionId(undefined, "chat-connection"), "ch
 assert.equal(resolveInitialGameGmConnectionId("explicit-connection", "chat-connection"), "explicit-connection");
 assert.equal(resolveInitialGameGmConnectionId(undefined, null), null);
 assert.equal(DEFAULT_GENERATION_PARAMS.reasoningEffort, "maximum");
+
+const mainPromptConnection: IllustratorPromptConnection = {
+  id: "main-prompt-connection",
+  name: "Main prompt connection",
+  provider: "openai",
+  baseUrl: "https://main.example.test/v1",
+  apiKey: "main-key",
+  model: "gpt-4o",
+};
+const selfiePromptConnection: IllustratorPromptConnection = {
+  id: "selfie-prompt-connection",
+  name: "Selfie prompt connection",
+  provider: "openai",
+  baseUrl: "https://selfie.example.test/v1",
+  apiKey: "selfie-key",
+  model: "gpt-4.1-mini",
+};
+const requestedSelfiePromptConnections: string[] = [];
+const selfiePromptConnections = {
+  async getWithKey(id: string) {
+    requestedSelfiePromptConnections.push(id);
+    return id === selfiePromptConnection.id ? selfiePromptConnection : null;
+  },
+  async getFallbackForAgents() {
+    return null;
+  },
+};
+const overriddenSelfiePromptRuntime = await resolveIllustratorPromptRuntime({
+  chatMetadata: { illustratorPromptConnectionId: selfiePromptConnection.id },
+  defaultConnection: mainPromptConnection,
+  defaultConnectionId: mainPromptConnection.id,
+  connections: selfiePromptConnections,
+  resolveBaseUrl: (connection) => connection.baseUrl ?? "",
+});
+assert.equal(overriddenSelfiePromptRuntime.connectionId, selfiePromptConnection.id);
+assert.equal(overriddenSelfiePromptRuntime.model, selfiePromptConnection.model);
+assert.deepEqual(requestedSelfiePromptConnections, [selfiePromptConnection.id]);
+
+const defaultSelfiePromptRuntime = await resolveIllustratorPromptRuntime({
+  chatMetadata: {},
+  defaultConnection: mainPromptConnection,
+  defaultConnectionId: mainPromptConnection.id,
+  connections: selfiePromptConnections,
+  resolveBaseUrl: (connection) => connection.baseUrl ?? "",
+});
+assert.equal(defaultSelfiePromptRuntime.connectionId, mainPromptConnection.id);
+assert.equal(defaultSelfiePromptRuntime.model, mainPromptConnection.model);
+
+await assert.rejects(
+  resolveIllustratorPromptRuntime({
+    chatMetadata: { illustratorPromptConnectionId: "deleted-selfie-prompt-connection" },
+    defaultConnection: mainPromptConnection,
+    defaultConnectionId: mainPromptConnection.id,
+    connections: selfiePromptConnections,
+    resolveBaseUrl: (connection) => connection.baseUrl ?? "",
+  }),
+  /selected selfie Prompt Model connection could not be found/u,
+);
 
 const autonomousSchedule = (talkativeness: number, cap: number): WeekSchedule => ({
   weekStart: "2026-07-13",
@@ -167,6 +247,10 @@ await assert.rejects(
   fetchBotBrowserJson("https://example.com/search", { allowedHosts: ["api.chub.ai"] }),
   /rejected untrusted host/u,
 );
+assert.equal(isAllowedResponseContentType(null, ["application/json"]), false);
+assert.equal(isAllowedResponseContentType(null, ["application/json"], true), true);
+assert.equal(isAllowedResponseContentType("application/json; charset=utf-8", ["application/json"], true), true);
+assert.equal(isAllowedResponseContentType("text/html; charset=utf-8", ["application/json"], true), false);
 
 const searchableCharacter = parseCharacterDisplayData({
   data: JSON.stringify({
@@ -221,6 +305,14 @@ const connectionsPanelSource = readFileSync(
   "utf8",
 );
 const globalStyles = readFileSync(new URL("../../packages/client/src/styles/globals.css", import.meta.url), "utf8");
+const galleryRoutesSource = readFileSync(
+  new URL("../../packages/server/src/routes/gallery.routes.ts", import.meta.url),
+  "utf8",
+);
+const conversationSelfieRuntimeSource = readFileSync(
+  new URL("../../packages/server/src/services/generation/conversation-selfie-command-runtime.ts", import.meta.url),
+  "utf8",
+);
 assert.match(appSource, /--marinara-app-accent-static-gradient/u);
 assert.match(appSource, /swipeDirections=\{\["left", "right", "top"\]\}/u);
 assert.doesNotMatch(agentEditorSource, /fetch\(["']\/api\/game-assets\/pick-local-music-folder/u);
@@ -235,6 +327,15 @@ assert.doesNotMatch(gameAssetStoreSource, /api\.|fetchManifest|rescanAssets|\/ga
 assert.match(sidecarStoreSource, /consumeSidecarDownloadStream/u);
 assert.doesNotMatch(sidecarStoreSource, /readSseData|Best-effort delete|Best-effort unload/u);
 assert.match(connectionsPanelSource, /Failed to delete the Local Whisper model/u);
+assert.match(galleryRoutesSource, /resolveIllustratorPromptRuntime\(\{[\s\S]*chatMetadata: meta/u);
+assert.match(
+  conversationSelfieRuntimeSource,
+  /resolveIllustratorPromptRuntime\(\{[\s\S]*chatMetadata: args\.chatMeta/u,
+);
+assert.match(
+  conversationSelfieRuntimeSource,
+  /logDebugOverride\([\s\S]*\[debug\/commands\/selfie\] prompt-builder system/u,
+);
 assert.match(
   globalStyles,
   /\[data-marinara-accent-animation\] \.mari-editor-content \{[\s\S]*--primary: var\(--marinara-app-accent-static\);[\s\S]*--marinara-chat-chrome-accent: var\(--marinara-app-accent-static\);[\s\S]*\}/u,
@@ -525,7 +626,6 @@ const sharedGameSetup = formatGameSetupShareText({
     gameGmPromptTemplateId: "anime-game-prompt",
     gameStoryboardAnimationPromptTemplateId: "comic-page-animation",
     gameStoryboardVideoPromptTemplateId: "comic-page-game-video",
-    gameStoryboardUseDirectScenePrompt: true,
     enableLorebookKeeper: true,
     customHudWidgets: [
       {
