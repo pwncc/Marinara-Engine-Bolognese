@@ -137,17 +137,17 @@ export const NOODLE_SETTINGS_GROUPS: ReadonlyArray<{
   description: string;
 }> = [
   { id: "invites", label: "Invites", icon: UserPlus, description: "Who can participate in a refresh." },
-  { id: "refresh", label: "Refresh", icon: RefreshCw, description: "Generation connection and automatic schedule." },
-  { id: "noodler", label: "NoodleR", icon: Lock, description: "Private creator network access and per-page settings." },
   {
     id: "participants-activity",
     label: "Participants & Activity",
     icon: Layers,
     description: "How many accounts join a refresh and how much they can do.",
   },
+  { id: "refresh", label: "Refresh", icon: RefreshCw, description: "Generation connection and automatic schedule." },
   { id: "content", label: "Content", icon: Sparkles, description: "Images, appearance, tone, and lore." },
   { id: "chat", label: "Chat Integration", icon: MessageCircle, description: "Carrying Noodle activity into chats." },
   { id: "danger", label: "Danger Zone", icon: Trash2, description: "Reset Noodle's timeline." },
+  { id: "noodler", label: "NoodleR", icon: Lock, description: "Private creator network access and per-page settings." },
 ];
 
 export function getNoodleSettingsSectionAnchorId(id: string) {
@@ -403,6 +403,7 @@ export function NoodleModeSwitcher({
   onOpenNoodle: () => void;
   onOpenNoodler: () => void;
 }) {
+  const modeColor = activeMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE;
   const modes: Array<{
     id: NoodleMode;
     icon: (props: { size?: number; className?: string }) => ReactNode;
@@ -422,12 +423,13 @@ export function NoodleModeSwitcher({
             type="button"
             onClick={mode.onClick}
             aria-pressed={active}
+            style={active ? ({ "--mode-color": modeColor } as CSSProperties) : undefined}
             className={cn(
               "flex min-h-8 min-w-0 items-center justify-center gap-1 rounded px-1.5 text-[0.7rem] font-bold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
-              active && "bg-[var(--noodle-blue)]/15 text-[var(--foreground)] ring-1 ring-[var(--noodle-blue)]/30",
+              active && "bg-[var(--mode-color)]/15 text-[var(--foreground)] ring-1 ring-[var(--mode-color)]/30",
             )}
           >
-            <Icon size={12} className={cn(active && "!text-[var(--noodle-blue)]")} />
+            <Icon size={12} className={cn(active && "![color:var(--mode-color)]")} />
             <span className="truncate">{NOODLE_MODE_META[mode.id].label}</span>
           </button>
         );
