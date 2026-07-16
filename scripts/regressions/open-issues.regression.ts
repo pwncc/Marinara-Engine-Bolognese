@@ -69,6 +69,7 @@ import {
 } from "../../packages/client/src/lib/emoji-shortcodes.js";
 import { persistGeneratedImageToEntityGalleries } from "../../packages/server/src/services/image/generated-image-entity-gallery.js";
 import { fetchBotBrowserJson } from "../../packages/server/src/services/bot-browser/fetch-json.js";
+import { isAllowedResponseContentType } from "../../packages/server/src/utils/security.js";
 import { runImageGenerationRequest } from "../../packages/server/src/services/image/image-generation-queue.js";
 import {
   parseIllustratorPromptReviewOverride,
@@ -84,6 +85,12 @@ import {
   isAutonomousDailyBudgetExhausted,
 } from "../../packages/server/src/services/conversation/autonomous.service.js";
 import type { WeekSchedule } from "../../packages/server/src/services/conversation/schedule.service.js";
+import { resolveGroupGenerationMode } from "../../packages/server/src/routes/generate/generate-route-utils.js";
+
+assert.equal(resolveGroupGenerationMode("conversation", "individual"), "merged");
+assert.equal(resolveGroupGenerationMode("conversation", "merged"), "merged");
+assert.equal(resolveGroupGenerationMode("roleplay", "individual"), "individual");
+assert.equal(resolveGroupGenerationMode("roleplay", "merged"), "merged");
 
 const minimalProfessorMariPersona = buildPersonaCreateRow(
   { name: "Minimal helper persona" },
@@ -229,6 +236,10 @@ await assert.rejects(
   fetchBotBrowserJson("https://example.com/search", { allowedHosts: ["api.chub.ai"] }),
   /rejected untrusted host/u,
 );
+assert.equal(isAllowedResponseContentType(null, ["application/json"]), false);
+assert.equal(isAllowedResponseContentType(null, ["application/json"], true), true);
+assert.equal(isAllowedResponseContentType("application/json; charset=utf-8", ["application/json"], true), true);
+assert.equal(isAllowedResponseContentType("text/html; charset=utf-8", ["application/json"], true), false);
 
 const searchableCharacter = parseCharacterDisplayData({
   data: JSON.stringify({
