@@ -77,7 +77,11 @@ import {
 } from "../../packages/server/src/services/image/illustrator-prompt-review.js";
 import { resolveReviewedImagePromptSubmission } from "../../packages/server/src/services/image/image-prompt-review.js";
 import { resolveSceneVideoPrompt } from "../../packages/server/src/services/video/scene-video-prompt-review.js";
-import { buildPersonaCreateRow } from "../../packages/server/src/services/mari-db/mari-db.service.js";
+import {
+  buildLorebookEntryCreateRow,
+  buildPersonaCreateRow,
+  normalizeCharacterActionData,
+} from "../../packages/server/src/services/mari-db/mari-db.service.js";
 import {
   checkAutonomousMessaging,
   clearChatActivity,
@@ -112,6 +116,36 @@ assert.equal(minimalProfessorMariPersona.phoneticName, "");
 assert.equal(minimalProfessorMariPersona.convoDisplayName, "");
 assert.equal(minimalProfessorMariPersona.aboutMe, "");
 assert.equal(minimalProfessorMariPersona.convoBehavior, "");
+
+const generatedCharacterData = normalizeCharacterActionData({
+  firstMessage: "Welcome to the laboratory.",
+  mesExample: "{{char}}: Observe carefully.",
+  systemPrompt: "Stay in character.",
+  postHistoryInstructions: "Remain concise.",
+  alternateGreetings: ["You made it."],
+});
+assert.equal(generatedCharacterData.first_mes, "Welcome to the laboratory.");
+assert.equal(generatedCharacterData.mes_example, "{{char}}: Observe carefully.");
+assert.equal(generatedCharacterData.system_prompt, "Stay in character.");
+assert.equal(generatedCharacterData.post_history_instructions, "Remain concise.");
+assert.deepEqual(generatedCharacterData.alternate_greetings, ["You made it."]);
+assert.equal(Object.hasOwn(generatedCharacterData, "firstMessage"), false);
+
+const generatedLorebookEntry = buildLorebookEntryCreateRow(
+  {
+    name: "Glass City",
+    content: "A city made from black glass.",
+    keys: ["Glass City", "black glass"],
+    secondaryKeys: ["rain"],
+  },
+  "lorebook-generated",
+  "entry-generated",
+  "2026-07-16T00:00:00.000Z",
+);
+assert.equal(generatedLorebookEntry.lorebookId, "lorebook-generated");
+assert.equal(generatedLorebookEntry.content, "A city made from black glass.");
+assert.deepEqual(generatedLorebookEntry.keys, ["Glass City", "black glass"]);
+assert.deepEqual(generatedLorebookEntry.secondaryKeys, ["rain"]);
 
 const completeProfessorMariPersona = buildPersonaCreateRow(
   {

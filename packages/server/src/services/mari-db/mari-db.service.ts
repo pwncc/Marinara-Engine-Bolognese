@@ -745,10 +745,32 @@ function actionDataWithTopLevel(source: Row, recordKeys: string[], scalarKeys: s
   return out;
 }
 
-function normalizeCharacterActionData(input: Row): Row {
+export function normalizeCharacterActionData(input: Row): Row {
   const out: Row = { ...input };
   if (out.firstMes !== undefined && out.first_mes === undefined) out.first_mes = out.firstMes;
+  if (out.firstMessage !== undefined && out.first_mes === undefined) out.first_mes = out.firstMessage;
+  if (out.greeting !== undefined && out.first_mes === undefined) out.first_mes = out.greeting;
+  if (out.mesExample !== undefined && out.mes_example === undefined) out.mes_example = out.mesExample;
   if (out.creatorNotes !== undefined && out.creator_notes === undefined) out.creator_notes = out.creatorNotes;
+  if (out.systemPrompt !== undefined && out.system_prompt === undefined) out.system_prompt = out.systemPrompt;
+  if (out.postHistoryInstructions !== undefined && out.post_history_instructions === undefined) {
+    out.post_history_instructions = out.postHistoryInstructions;
+  }
+  if (out.characterVersion !== undefined && out.character_version === undefined) {
+    out.character_version = out.characterVersion;
+  }
+  if (out.alternateGreetings !== undefined && out.alternate_greetings === undefined) {
+    out.alternate_greetings = out.alternateGreetings;
+  }
+  delete out.firstMes;
+  delete out.firstMessage;
+  delete out.greeting;
+  delete out.mesExample;
+  delete out.creatorNotes;
+  delete out.systemPrompt;
+  delete out.postHistoryInstructions;
+  delete out.characterVersion;
+  delete out.alternateGreetings;
   const extensions = isRecord(out.extensions) ? { ...(out.extensions as Row) } : {};
   if (typeof out.backstory === "string") {
     extensions.backstory = out.backstory;
@@ -760,6 +782,54 @@ function normalizeCharacterActionData(input: Row): Row {
   }
   if (Object.keys(extensions).length > 0) out.extensions = extensions;
   return out;
+}
+
+export function buildLorebookEntryCreateRow(
+  data: Row,
+  lorebookId: string,
+  id: string,
+  timestamp: string,
+  defaultOrder = 100,
+): Row {
+  return {
+    id,
+    lorebookId,
+    name: requiredString(data, ["name"], "lorebook entry name"),
+    content: firstString(data, ["content"]) ?? "",
+    description: firstString(data, ["description"]) ?? "",
+    tag: firstString(data, ["tag"]) ?? "",
+    keys: firstStringList(data, ["keys"]) ?? [],
+    secondaryKeys: firstStringList(data, ["secondaryKeys", "secondary_keys"]) ?? [],
+    enabled: boolText(firstBoolean(data, ["enabled"]) ?? true),
+    constant: boolText(firstBoolean(data, ["constant"]) ?? false),
+    selective: "false",
+    selectiveLogic: "and",
+    matchWholeWords: "false",
+    caseSensitive: "false",
+    useRegex: "false",
+    characterFilterMode: "any",
+    characterFilterIds: [],
+    characterTagFilterMode: "any",
+    characterTagFilters: [],
+    generationTriggerFilterMode: "any",
+    generationTriggerFilters: [],
+    additionalMatchingSources: [],
+    position: firstNumber(data, ["position"]) ?? 0,
+    depth: firstNumber(data, ["depth"]) ?? 4,
+    order: firstNumber(data, ["order"]) ?? defaultOrder,
+    role: firstString(data, ["role"]) ?? "system",
+    group: firstString(data, ["group"]) ?? "",
+    relationships: {},
+    dynamicState: {},
+    activationConditions: [],
+    preventRecursion: "true",
+    excludeRecursion: "false",
+    delayUntilRecursion: "false",
+    excludeFromVectorization: "false",
+    locked: "false",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
 }
 
 function normalizePersonaConvoBehavior(value: unknown): unknown {
@@ -2073,6 +2143,7 @@ export class MariDbService {
           "vectorScoreThreshold",
           "vectorMaxResults",
           "scope",
+          "entries",
         ]);
         const name = requiredString(data, ["name"], "lorebook name");
         const timestamp = now();
@@ -2101,6 +2172,14 @@ export class MariDbService {
           updatedAt: timestamp,
         };
         this.assignLorebookActionFields(row, data);
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+        const relatedInserts = entries.map((entry, index) => {
+          if (!isRecord(entry)) throw new Error(`lorebook entry ${index + 1} must be an object`);
+          return {
+            table: "lorebook_entries",
+            row: buildLorebookEntryCreateRow(entry, id, newId(), timestamp, (index + 1) * 100),
+          };
+        });
         return this.executeMutation(
           {
             kind: "insert",
@@ -2112,6 +2191,7 @@ export class MariDbService {
             cascade: false,
             reason: firstString(args, ["reason"]) ?? null,
             cwd: context.cwd,
+            relatedInserts,
           },
           context.command,
           context.sessionId,
@@ -2181,48 +2261,9 @@ export class MariDbService {
           "role",
           "group",
         ]);
-        const entryName = requiredString(data, ["name"], "lorebook entry name");
         const timestamp = now();
         const id = firstString(args, ["entryId", "id"]) ?? newId();
-        const row: Row = {
-          id,
-          lorebookId,
-          name: entryName,
-          content: "",
-          description: "",
-          tag: "",
-          keys: [],
-          secondaryKeys: [],
-          enabled: "true",
-          constant: "false",
-          selective: "false",
-          selectiveLogic: "and",
-          matchWholeWords: "false",
-          caseSensitive: "false",
-          useRegex: "false",
-          characterFilterMode: "any",
-          characterFilterIds: [],
-          characterTagFilterMode: "any",
-          characterTagFilters: [],
-          generationTriggerFilterMode: "any",
-          generationTriggerFilters: [],
-          additionalMatchingSources: [],
-          position: 0,
-          depth: 4,
-          order: 100,
-          role: "system",
-          group: "",
-          relationships: {},
-          dynamicState: {},
-          activationConditions: [],
-          preventRecursion: "true",
-          excludeRecursion: "false",
-          delayUntilRecursion: "false",
-          excludeFromVectorization: "false",
-          locked: "false",
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        };
+        const row = buildLorebookEntryCreateRow(data, lorebookId, id, timestamp);
         this.assignLorebookEntryActionFields(row, data);
         return this.executeMutation(
           {
