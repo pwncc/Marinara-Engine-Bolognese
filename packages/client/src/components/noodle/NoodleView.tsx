@@ -3371,6 +3371,26 @@ export function NoodleView() {
         help="Choose who can participate in Noodle refreshes. Direct character invites, selected character folders, and optional random users form the pool the generator can draw from."
       >
         <div className="space-y-4">
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] p-2 text-left transition-colors hover:bg-foreground/5"
+            disabled={!settings || updateSettings.isPending}
+            onClick={() => saveSettings({ allowRandomUsers: !(settings?.allowRandomUsers ?? false) })}
+          >
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
+              <Dices size={16} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-xs font-semibold">Random users</span>
+              <span className="block truncate text-[0.68rem] text-[var(--muted-foreground)]">
+                {(settings?.allowRandomUsers ?? false) ? "Enabled" : "Ambient fake profiles"}
+              </span>
+            </span>
+            <span className={iconButtonClass}>
+              {(settings?.allowRandomUsers ?? false) ? <UserMinus size={15} /> : <UserPlus size={15} />}
+            </span>
+          </button>
+
           <ToggleSetting
             label="Professor Mari participates"
             help="When off, Professor Mari is hidden from Noodle account discovery and excluded from future generated posts, replies, reactions, mentions, profiles, and chat carryover. Existing timeline history is preserved."
@@ -3533,25 +3553,6 @@ export function NoodleView() {
               </button>
             </div>
             <div className="max-h-96 overflow-y-auto rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] [scrollbar-gutter:stable]">
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 border-b border-[var(--marinara-chat-chrome-panel-border)] p-2 text-left transition-colors hover:bg-foreground/5"
-                disabled={!settings || updateSettings.isPending}
-                onClick={() => saveSettings({ allowRandomUsers: !(settings?.allowRandomUsers ?? false) })}
-              >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
-                  <Dices size={16} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-xs font-semibold">Random users</span>
-                  <span className="block truncate text-[0.68rem] text-[var(--muted-foreground)]">
-                    {(settings?.allowRandomUsers ?? false) ? "Enabled" : "Ambient fake profiles"}
-                  </span>
-                </span>
-                <span className={iconButtonClass}>
-                  {(settings?.allowRandomUsers ?? false) ? <UserMinus size={15} /> : <UserPlus size={15} />}
-                </span>
-              </button>
               <button
                 type="button"
                 className="flex w-full items-center justify-between border-b border-[var(--marinara-chat-chrome-panel-border)] px-2 py-1.5 text-left text-[0.68rem] font-semibold text-[var(--muted-foreground)] transition-colors hover:bg-foreground/5"
@@ -4080,26 +4081,6 @@ export function NoodleView() {
           </Section>
 
           <Section
-            id={getNoodleSettingsSectionAnchorId("appearance")}
-            title="Appearance"
-            help="Controls how the timeline and profiles render posts."
-          >
-            <label className="block space-y-1.5">
-              <FieldLabel help="Timeline shows posts as Twitter-style cards. Grid shows an image-first, Instagram-style grid on the main feed and on profile tabs (posts without an image are skipped in Grid).">
-                Feed layout
-              </FieldLabel>
-              <select
-                value={settings.layout}
-                onChange={(event) => saveSettings({ layout: event.target.value as NoodleSettingsUpdateInput["layout"] })}
-                className={fieldClass}
-              >
-                <option value="timeline">Timeline</option>
-                <option value="grid">Grid</option>
-              </select>
-            </label>
-          </Section>
-
-          <Section
             id={getNoodleSettingsSectionAnchorId("timeline-writing")}
             title="Timeline Writing"
             help="Tunes how the refresh writer approaches tone and long-term memory. Off by default; existing timelines keep their current behavior until you turn this on."
@@ -4127,6 +4108,38 @@ export function NoodleView() {
                 checked={settings.enableLorebookContext}
                 disabled={updateSettings.isPending}
                 onChange={(checked) => saveSettings({ enableLorebookContext: checked })}
+              />
+            </div>
+          </Section>
+          </div>
+
+          <div id={getNoodleSettingsGroupAnchorId("appearance")} className="scroll-mt-3">
+          <NoodleSettingsGroupHeading groupId="appearance" />
+          <Section
+            id={getNoodleSettingsSectionAnchorId("appearance")}
+            title="Appearance"
+            help="Controls how the timeline and profiles render posts."
+          >
+            <div className="space-y-3">
+              <label className="block space-y-1.5">
+                <FieldLabel help="Timeline shows posts as Twitter-style cards. Grid shows an image-first, Instagram-style grid on the main feed and on profile tabs (posts without an image are skipped in Grid).">
+                  Feed layout
+                </FieldLabel>
+                <select
+                  value={settings.layout}
+                  onChange={(event) => saveSettings({ layout: event.target.value as NoodleSettingsUpdateInput["layout"] })}
+                  className={fieldClass}
+                >
+                  <option value="timeline">Timeline</option>
+                  <option value="grid">Grid</option>
+                </select>
+              </label>
+              <ToggleSetting
+                label="Allow global feed persona"
+                help="Adds a 'Global' entry to the account switcher that shows every post across all personas, in both Noodle and NoodleR."
+                checked={settings.allowGlobalPersona === true}
+                disabled={updateSettings.isPending}
+                onChange={(enabled) => saveSettings({ allowGlobalPersona: enabled })}
               />
             </div>
           </Section>
@@ -4187,29 +4200,6 @@ export function NoodleView() {
           </Section>
           </div>
 
-          <div id={getNoodleSettingsGroupAnchorId("danger")} className="scroll-mt-3">
-          <NoodleSettingsGroupHeading groupId="danger" />
-          <Section
-            id={getNoodleSettingsSectionAnchorId("reset-noodle")}
-            title="Reset Noodle"
-            help="Clears timeline content while keeping profiles, follows, invites, and Noodle settings."
-          >
-            <button
-              type="button"
-              onClick={resetTimeline}
-              disabled={resetNoodleTimeline.isPending}
-              className="flex min-h-10 w-full items-center justify-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {resetNoodleTimeline.isPending ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <Trash2 size={14} className="text-[var(--noodle-blue)]" />
-              )}
-              {resetNoodleTimeline.isPending ? "Resetting Noodle" : "Reset Noodle Timeline"}
-            </button>
-          </Section>
-          </div>
-
           <div id={getNoodleSettingsGroupAnchorId("noodler")} className="scroll-mt-3">
           <NoodleSettingsGroupHeading groupId="noodler" />
           <Section
@@ -4224,13 +4214,6 @@ export function NoodleView() {
                 checked={isNoodlerEnabled}
                 disabled={updateSettings.isPending}
                 onChange={setNoodlerEnabled}
-              />
-              <ToggleSetting
-                label="Allow global feed persona"
-                help="Adds a 'Global' entry to the account switcher that shows every post across all personas, in both Noodle and NoodleR."
-                checked={settings?.allowGlobalPersona === true}
-                disabled={updateSettings.isPending}
-                onChange={(enabled) => saveSettings({ allowGlobalPersona: enabled })}
               />
               {!isNoodlerEnabled && (
                 <p className="rounded-md border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/5 px-3 py-2 text-xs leading-5 text-[var(--muted-foreground)]">
@@ -4708,6 +4691,29 @@ export function NoodleView() {
                 </p>
               </Section>
             ))}
+          </div>
+
+          <div id={getNoodleSettingsGroupAnchorId("danger")} className="scroll-mt-3">
+          <NoodleSettingsGroupHeading groupId="danger" />
+          <Section
+            id={getNoodleSettingsSectionAnchorId("reset-noodle")}
+            title="Reset Noodle"
+            help="Clears timeline content while keeping profiles, follows, invites, and Noodle settings."
+          >
+            <button
+              type="button"
+              onClick={resetTimeline}
+              disabled={resetNoodleTimeline.isPending}
+              className="flex min-h-10 w-full items-center justify-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {resetNoodleTimeline.isPending ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Trash2 size={14} className="text-[var(--noodle-blue)]" />
+              )}
+              {resetNoodleTimeline.isPending ? "Resetting Noodle" : "Reset Noodle Timeline"}
+            </button>
+          </Section>
           </div>
         </>
       )}
@@ -6417,9 +6423,7 @@ export function NoodleView() {
       style={
         {
           "--noodle-blue": activeNoodleView === "settings" ? NOODLE_BLUE : activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
-          "--noodle-settings-accent": isNoodlerEnabled
-            ? `linear-gradient(90deg, ${NOODLE_BLUE} 0 50%, ${NOODLER_BLUE} 50% 100%)`
-            : NOODLE_BLUE,
+          "--noodle-settings-accent": activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
           "--noodle-divider": "var(--marinara-chat-chrome-panel-divider)",
         } as CSSProperties
       }
@@ -6457,9 +6461,7 @@ export function NoodleView() {
               style={
                 {
                   "--noodle-blue": activeNoodleView === "settings" ? NOODLE_BLUE : activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
-                  "--noodle-settings-accent": isNoodlerEnabled
-                    ? `linear-gradient(90deg, ${NOODLE_BLUE} 0 50%, ${NOODLER_BLUE} 50% 100%)`
-                    : NOODLE_BLUE,
+                  "--noodle-settings-accent": activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
                   "--noodle-divider": "var(--marinara-chat-chrome-panel-divider)",
                 } as CSSProperties
               }
@@ -6532,13 +6534,8 @@ export function NoodleView() {
                   onClick={openSettings}
                   className="flex min-h-12 w-full items-center gap-4 rounded-xl px-2 text-left text-base font-bold transition-colors hover:bg-[var(--accent)]"
                 >
-                  <span
-                    className={cn(
-                      "flex h-7 w-7 items-center justify-center rounded-full",
-                      isNoodlerEnabled && "bg-[image:var(--noodle-settings-accent)]",
-                    )}
-                  >
-                    <Settings2 size={23} className={cn(isNoodlerEnabled && "!text-zinc-950")} />
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--noodle-settings-accent)]">
+                    <Settings2 size={23} className="!text-zinc-950" />
                   </span>
                   Settings
                 </button>
@@ -6750,13 +6747,8 @@ export function NoodleView() {
                     activeNoodleView === "settings" && "bg-[var(--noodle-blue)]/10",
                   )}
                 >
-                  <span
-                    className={cn(
-                      "flex h-6 w-6 items-center justify-center rounded-full",
-                      isNoodlerEnabled && "bg-[image:var(--noodle-settings-accent)]",
-                    )}
-                  >
-                    <Settings2 size={22} className={cn("!text-[var(--noodle-blue)]", isNoodlerEnabled && "!text-zinc-950")} />
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--noodle-settings-accent)]">
+                    <Settings2 size={22} className="!text-zinc-950" />
                   </span>
                   Settings
                 </button>

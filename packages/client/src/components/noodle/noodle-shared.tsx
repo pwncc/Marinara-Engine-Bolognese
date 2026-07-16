@@ -14,6 +14,7 @@ import {
   Lock,
   MapPin,
   MessageCircle,
+  Palette,
   RefreshCw,
   Search,
   Smile,
@@ -127,6 +128,7 @@ export type NoodleSettingsGroupId =
   | "noodler"
   | "participants-activity"
   | "content"
+  | "appearance"
   | "chat"
   | "danger";
 
@@ -144,10 +146,11 @@ export const NOODLE_SETTINGS_GROUPS: ReadonlyArray<{
     description: "How many accounts join a refresh and how much they can do.",
   },
   { id: "refresh", label: "Refresh", icon: RefreshCw, description: "Generation connection and automatic schedule." },
-  { id: "content", label: "Content", icon: Sparkles, description: "Images, appearance, tone, and lore." },
+  { id: "content", label: "Content", icon: Sparkles, description: "Images, tone, and lore." },
+  { id: "appearance", label: "Appearance", icon: Palette, description: "Feed layout and global feed visibility." },
   { id: "chat", label: "Chat Integration", icon: MessageCircle, description: "Carrying Noodle activity into chats." },
-  { id: "danger", label: "Danger Zone", icon: Trash2, description: "Reset Noodle's timeline." },
   { id: "noodler", label: "NoodleR", icon: Lock, description: "Private creator network access and per-page settings." },
+  { id: "danger", label: "Danger Zone", icon: Trash2, description: "Reset Noodle's timeline." },
 ];
 
 export function getNoodleSettingsSectionAnchorId(id: string) {
