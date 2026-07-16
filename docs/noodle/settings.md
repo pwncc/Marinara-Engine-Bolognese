@@ -16,7 +16,7 @@ Most Noodle settings are global. They apply to every persona and every chat, not
 
 ### Finding a setting
 
-Sections are grouped into five category tabs under the search box: **Invites & Reach**, **Refresh & Activity**, **Content**, **Chat Integration**, and **NoodleR**. Only the sections that apply to the tab you have selected are shown. Type in the **Search Noodle settings** box to jump straight to a section by name or keyword (for example, typing "lorebook" jumps to World / Lore under Content) — search results switch to the right tab and scroll and focus that section for you.
+Sections are grouped by theme, in this order: **Invites**, **Refresh**, **NoodleR**, **Participants & Activity**, **Content**, **Chat Integration**, and **Danger Zone**. Every group's sections are always visible on the page — nothing is hidden behind a tab. A row of quick-jump chips at the top of the screen scrolls straight to any group's heading.
 
 ## Invites
 

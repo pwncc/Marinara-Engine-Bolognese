@@ -7,10 +7,11 @@
 // shell and are passed down as props.
 // ──────────────────────────────────────────────
 import { AtSign, Check, ImageIcon, Loader2, Menu, Trash2, User } from "lucide-react";
-import type { ChangeEvent, CSSProperties, ReactNode, RefObject } from "react";
+import type { ChangeEvent, ReactNode, RefObject } from "react";
 import type { NoodleAccount, NoodlePost, NoodlePostAccess, NoodlePostingMode } from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
 import type { AvatarCropValue } from "../../lib/utils";
+import { CreatorToolsPanel } from "./CreatorToolsPanel";
 import {
   fieldClass,
   textareaClass,
@@ -969,120 +970,24 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
 
       {viewingOwnPrivateAccount && viewedProfileAccount && (
         <div className="border-t border-[var(--noodle-divider)] px-4 py-3">
-          <details className="group rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)]/60" open>
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-bold text-[var(--foreground)] marker:hidden [&::-webkit-details-marker]:hidden">
-              <span>NoodleR creator tools</span>
-              <span className="text-[0.65rem] font-semibold uppercase tracking-wide text-[var(--muted-foreground)] group-open:hidden">
-                Open
-              </span>
-              <span className="hidden text-[0.65rem] font-semibold uppercase tracking-wide text-[var(--muted-foreground)] group-open:inline">
-                Hide
-              </span>
-            </summary>
-            <div className="space-y-3 border-t border-[var(--noodle-divider)] p-3 pt-2">
-              <p className="text-xs leading-5 text-[var(--muted-foreground)]">
-                Generate a guided post or post manually. Stage identity, pricing, fan activity, and automatic posting
-                live in Settings.
-              </p>
-
-          <div className="flex flex-col gap-2 rounded-md border border-[var(--noodle-divider)] p-2.5 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <h5 className="text-xs font-bold text-[var(--foreground)]">Generate with AI</h5>
-              <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
-                One guided post — choose access, theme, and whether to include text and/or an image.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => onOpenGuidedPrivatePost(viewedProfileAccount)}
-              disabled={refreshNoodlePending}
-              className="h-8 shrink-0 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Generate guided post
-            </button>
-          </div>
-
-          {(viewedProfileAccount?.settings?.stageIdentityGenerationFailed === true ||
-            viewedProfileAccount?.settings?.avatarGenerationFailed === true) && (
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--destructive)]/40 bg-[var(--destructive)]/10 px-3 py-2 text-xs text-[var(--destructive)]">
-              <span>
-                {viewedProfileAccount?.settings?.stageIdentityGenerationFailed === true
-                  ? (viewedProfileAccount.settings.stageIdentityGenerationError as string | undefined) ||
-                    "Stage identity generation failed — this profile is using placeholder defaults."
-                  : (viewedProfileAccount?.settings?.avatarGenerationError as string | undefined) ||
-                    "Avatar generation failed for this profile."}
-              </span>
-              <button
-                type="button"
-                onClick={() => viewedProfileAccount && onRetryPrivateIdentity(viewedProfileAccount.id)}
-                disabled={retryPrivateIdentityPending}
-                className="h-7 shrink-0 rounded-full border border-[var(--destructive)]/50 px-3 font-bold transition-colors hover:bg-[var(--destructive)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {retryPrivateIdentityPending ? "Retrying…" : "Retry"}
-              </button>
-            </div>
-          )}
-          <textarea
-            value={privateComposerText}
-            onChange={(event) => onPrivateComposerTextChange(event.target.value)}
-            placeholder="Post to your NoodleR…"
-            className={cn(textareaClass, "min-h-14 w-full resize-none bg-transparent")}
+          <CreatorToolsPanel
+            mode="noodler"
+            account={viewedProfileAccount}
+            onOpenGuidedPost={onOpenGuidedPrivatePost}
+            guidedPostPending={refreshNoodlePending}
+            onRetryIdentity={onRetryPrivateIdentity}
+            retryIdentityPending={retryPrivateIdentityPending}
+            composerText={privateComposerText}
+            onComposerTextChange={onPrivateComposerTextChange}
+            composerAccess={privateComposerAccess}
+            onComposerAccessChange={onPrivateComposerAccessChange}
+            composerPpvPrice={privateComposerPpvPrice}
+            onComposerPpvPriceChange={onPrivateComposerPpvPriceChange}
+            composerImageUrl={privateComposerImageUrl}
+            onComposerImageUrlChange={onPrivateComposerImageUrlChange}
+            onSubmitPost={onSubmitPrivatePost}
+            createPostPending={createPostPending}
           />
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {(
-              [
-                { value: "public", label: "Public" },
-                {
-                  value: "subscriber",
-                  label:
-                    typeof viewedProfileAccount?.settings?.subscriptionPrice === "number"
-                      ? `Subscribers · $${(viewedProfileAccount.settings.subscriptionPrice as number).toFixed(2)}/mo`
-                      : "Subscribers only",
-                },
-                { value: "ppv", label: "Pay-per-view" },
-              ] as const
-            ).map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => onPrivateComposerAccessChange(option.value)}
-                style={{ "--chip-tint": "var(--noodle-blue)" } as CSSProperties}
-                className={cn(
-                  "mari-suggestion-chip",
-                  privateComposerAccess === option.value && "mari-suggestion-chip--selected",
-                )}
-              >
-                {option.label}
-              </button>
-            ))}
-            {privateComposerAccess === "ppv" && (
-              <input
-                value={privateComposerPpvPrice}
-                onChange={(event) => onPrivateComposerPpvPriceChange(event.target.value)}
-                placeholder="Price (optional)"
-                inputMode="decimal"
-                className={cn(fieldClass, "h-7 w-28")}
-              />
-            )}
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <input
-              value={privateComposerImageUrl}
-              onChange={(event) => onPrivateComposerImageUrlChange(event.target.value)}
-              placeholder="Image URL (optional)"
-              className={cn(fieldClass, "h-8 flex-1")}
-            />
-            <button
-              type="button"
-              onClick={onSubmitPrivatePost}
-              disabled={createPostPending || (!privateComposerText.trim() && !privateComposerImageUrl.trim())}
-              className="ml-auto h-8 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Post
-            </button>
-          </div>
-            </div>
-          </details>
         </div>
       )}
 

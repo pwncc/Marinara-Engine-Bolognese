@@ -85,6 +85,7 @@ import {
 } from "../chat/ConversationMediaPickerPanel";
 import { ChatImageLightbox } from "../chat/ChatImageLightbox";
 import { Modal } from "../ui/Modal";
+import { GuidedPostModal } from "./GuidedPostModal";
 import {
   ImagePromptReviewModal,
   type ImagePromptOverride,
@@ -168,11 +169,10 @@ import {
   autoPostSettingsFromAccount,
   readAutoPostEnabled,
   readAutoPostIntensity,
-  NOODLE_SETTINGS_TABS,
+  NOODLE_SETTINGS_GROUPS,
   getNoodleSettingsSectionAnchorId,
-  searchNoodleSettings,
-  type NoodleSettingsTabId,
-  type NoodleSettingsSectionMeta,
+  getNoodleSettingsGroupAnchorId,
+  type NoodleSettingsGroupId,
   type ActiveComposerMention,
   type ComposerTool,
   type NoodleMode,
@@ -614,6 +614,21 @@ function FieldLabel({ children, help }: { children: React.ReactNode; help?: Reac
   );
 }
 
+function NoodleSettingsGroupHeading({ groupId }: { groupId: NoodleSettingsGroupId }) {
+  const group = NOODLE_SETTINGS_GROUPS.find((entry) => entry.id === groupId);
+  if (!group) return null;
+  const Icon = group.icon;
+  return (
+    <div className="flex items-center gap-2 border-b border-[var(--noodle-divider)] bg-[var(--accent)]/40 px-4 py-2.5">
+      <Icon size={14} className="shrink-0 text-[var(--noodle-blue)]" />
+      <div className="min-w-0">
+        <p className="text-xs font-bold text-[var(--foreground)]">{group.label}</p>
+        <p className="truncate text-[0.65rem] text-[var(--muted-foreground)]">{group.description}</p>
+      </div>
+    </div>
+  );
+}
+
 function Section({
   id,
   title,
@@ -810,29 +825,15 @@ export function NoodleView() {
     );
   }, [fillerProfiles, noodleFillerSort]);
   const [noodlerPageSectionsOpen, setNoodlerPageSectionsOpen] = useState(true);
-  const [noodleSettingsSearch, setNoodleSettingsSearch] = useState("");
-  const rawNoodleSettingsTab = useUIStore((state) => state.noodleSettingsTab);
-  const setNoodleSettingsTabState = useUIStore((state) => state.setNoodleSettingsTab);
-  const noodleSettingsTab: NoodleSettingsTabId = NOODLE_SETTINGS_TABS.some((tab) => tab.id === rawNoodleSettingsTab)
-    ? (rawNoodleSettingsTab as NoodleSettingsTabId)
-    : "invites";
   const noodleSettingsPanelRef = useRef<HTMLDivElement | null>(null);
-  const setNoodleSettingsTab = (tab: NoodleSettingsTabId) => setNoodleSettingsTabState(tab);
-  const jumpToNoodleSettingsSection = useCallback((section: NoodleSettingsSectionMeta) => {
-    setNoodleSettingsTabState(section.tab);
+  const jumpToNoodleSettingsGroup = useCallback((groupId: NoodleSettingsGroupId) => {
     window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        const panel = noodleSettingsPanelRef.current;
-        const target = document.getElementById(getNoodleSettingsSectionAnchorId(section.id));
-        if (!panel || !target) return;
-        panel.scrollTo({ top: Math.max(0, target.offsetTop - 12), behavior: "smooth" });
-        const focusTarget = target.querySelector<HTMLElement>(
-          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        );
-        focusTarget?.focus({ preventScroll: true });
-      });
+      const panel = noodleSettingsPanelRef.current;
+      const target = document.getElementById(getNoodleSettingsGroupAnchorId(groupId));
+      if (!panel || !target) return;
+      panel.scrollTo({ top: Math.max(0, target.offsetTop - 12), behavior: "smooth" });
     });
-  }, [setNoodleSettingsTabState]);
+  }, []);
   const [replyPostId, setReplyPostId] = useState<string | null>(null);
   const [replyParentInteractionId, setReplyParentInteractionId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
@@ -3240,7 +3241,8 @@ export function NoodleView() {
 
   const settingsContent = (
     <>
-      {noodleSettingsTab === "invites" && (
+      <div id={getNoodleSettingsGroupAnchorId("invites")} className="scroll-mt-3">
+      <NoodleSettingsGroupHeading groupId="invites" />
       <Section
         id={getNoodleSettingsSectionAnchorId("invites")}
         title="Invites"
@@ -3581,11 +3583,12 @@ export function NoodleView() {
           </div>
         </div>
       </Section>
-      )}
+      </div>
 
       {settings && (
         <>
-          {noodleSettingsTab === "refresh" && (
+          <div id={getNoodleSettingsGroupAnchorId("refresh")} className="scroll-mt-3">
+          <NoodleSettingsGroupHeading groupId="refresh" />
           <Section
             id={getNoodleSettingsSectionAnchorId("refresh")}
             title="Refresh"
@@ -3732,10 +3735,10 @@ export function NoodleView() {
               )}
             </div>
           </Section>
-          )}
+          </div>
 
-          {noodleSettingsTab === "noodler" && (
-          <>
+          <div id={getNoodleSettingsGroupAnchorId("noodler")} className="scroll-mt-3">
+          <NoodleSettingsGroupHeading groupId="noodler" />
           <Section
             id={getNoodleSettingsSectionAnchorId("noodler-access")}
             title="NoodleR Access"
@@ -4232,10 +4235,10 @@ export function NoodleView() {
                 </p>
               </Section>
             ))}
-          </>
-          )}
+          </div>
 
-          {noodleSettingsTab === "invites" && (
+          <div id={getNoodleSettingsGroupAnchorId("participants-activity")} className="scroll-mt-3">
+          <NoodleSettingsGroupHeading groupId="participants-activity" />
           <Section
             id={getNoodleSettingsSectionAnchorId("active-accounts")}
             title="Active Accounts"
@@ -4293,9 +4296,7 @@ export function NoodleView() {
               )}
             </div>
           </Section>
-          )}
 
-          {noodleSettingsTab === "refresh" && (
           <Section
             id={getNoodleSettingsSectionAnchorId("activity")}
             title="Activity"
@@ -4336,10 +4337,10 @@ export function NoodleView() {
               />
             </div>
           </Section>
-          )}
+          </div>
 
-          {noodleSettingsTab === "content" && (
-          <>
+          <div id={getNoodleSettingsGroupAnchorId("content")} className="scroll-mt-3">
+          <NoodleSettingsGroupHeading groupId="content" />
           <Section
             id={getNoodleSettingsSectionAnchorId("image-generation")}
             title="Image Generation"
@@ -4507,10 +4508,10 @@ export function NoodleView() {
               />
             </div>
           </Section>
-          </>
-          )}
+          </div>
 
-          {noodleSettingsTab === "chat" && (
+          <div id={getNoodleSettingsGroupAnchorId("chat")} className="scroll-mt-3">
+          <NoodleSettingsGroupHeading groupId="chat" />
           <Section
             id={getNoodleSettingsSectionAnchorId("carryover")}
             title="Carryover"
@@ -4562,9 +4563,10 @@ export function NoodleView() {
               </div>
             </div>
           </Section>
-          )}
+          </div>
 
-          {noodleSettingsTab === "refresh" && (
+          <div id={getNoodleSettingsGroupAnchorId("danger")} className="scroll-mt-3">
+          <NoodleSettingsGroupHeading groupId="danger" />
           <Section
             id={getNoodleSettingsSectionAnchorId("reset-noodle")}
             title="Reset Noodle"
@@ -4584,7 +4586,7 @@ export function NoodleView() {
               {resetNoodleTimeline.isPending ? "Resetting Noodle" : "Reset Noodle Timeline"}
             </button>
           </Section>
-          )}
+          </div>
         </>
       )}
     </>
@@ -6805,84 +6807,19 @@ export function NoodleView() {
                     </div>
                   </div>
 
-                  <div className="shrink-0 border-b border-[var(--noodle-divider)] px-2 py-2 lg:px-4">
-                    <label className="relative block">
-                      <Search
-                        size={14}
-                        className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]"
-                      />
-                      <input
-                        value={noodleSettingsSearch}
-                        onChange={(event) => setNoodleSettingsSearch(event.target.value)}
-                        placeholder="Search Noodle settings"
-                        className={cn(fieldClass, "pl-8 pr-8")}
-                      />
-                      {noodleSettingsSearch && (
-                        <button
-                          type="button"
-                          onClick={() => setNoodleSettingsSearch("")}
-                          aria-label="Clear settings search"
-                          className="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-                        >
-                          <X size={12} />
-                        </button>
-                      )}
-                    </label>
-                    {noodleSettingsSearch.trim() && (
-                      <div className="mt-2 max-h-40 overflow-y-auto rounded-md border border-[var(--noodle-divider)] bg-[var(--background)] p-1.5">
-                        {searchNoodleSettings(noodleSettingsSearch).length ? (
-                          <div className="grid gap-1">
-                            {searchNoodleSettings(noodleSettingsSearch).map((section) => (
-                              <button
-                                key={section.id}
-                                type="button"
-                                onClick={() => jumpToNoodleSettingsSection(section)}
-                                className="grid min-w-0 gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--accent)]"
-                              >
-                                <span className="truncate text-xs font-semibold text-[var(--foreground)]">
-                                  {section.label}
-                                </span>
-                                <span className="truncate text-[0.68rem] text-[var(--muted-foreground)]">
-                                  {NOODLE_SETTINGS_TABS.find((tab) => tab.id === section.tab)?.label} /{" "}
-                                  {section.description}
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="px-2 py-2 text-[0.68rem] text-[var(--muted-foreground)]">
-                            No matching settings.
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <div
-                    role="tablist"
-                    aria-label="Noodle settings categories"
-                    className="grid shrink-0 grid-cols-5 gap-1 border-b border-[var(--noodle-divider)] p-1.5"
-                  >
-                    {NOODLE_SETTINGS_TABS.map((tab) => {
-                      const Icon = tab.icon;
-                      const active = noodleSettingsTab === tab.id;
+                  <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-[var(--noodle-divider)] px-2 py-2 lg:px-4">
+                    {NOODLE_SETTINGS_GROUPS.map((group) => {
+                      const Icon = group.icon;
                       return (
                         <button
-                          key={tab.id}
+                          key={group.id}
                           type="button"
-                          role="tab"
-                          aria-selected={active}
-                          onClick={() => setNoodleSettingsTab(tab.id)}
-                          title={tab.description}
-                          className={cn(
-                            "flex min-h-12 flex-col items-center justify-center gap-1 rounded-md px-1 py-1 text-center text-[0.625rem] font-semibold leading-tight transition-colors",
-                            active
-                              ? "bg-[var(--noodle-blue)]/12 text-[var(--foreground)]"
-                              : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
-                          )}
+                          onClick={() => jumpToNoodleSettingsGroup(group.id)}
+                          title={group.description}
+                          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-[var(--marinara-chat-chrome-panel-border)] px-2.5 text-[0.68rem] font-semibold text-[var(--muted-foreground)] transition-colors hover:border-[var(--noodle-blue)]/50 hover:bg-[var(--noodle-blue)]/10 hover:text-[var(--foreground)]"
                         >
-                          <Icon size={14} className={active ? "text-[var(--noodle-blue)]" : undefined} />
-                          <span className="w-full truncate px-0.5">{tab.label}</span>
+                          <Icon size={12} />
+                          {group.label}
                         </button>
                       );
                     })}
@@ -7189,90 +7126,22 @@ export function NoodleView() {
         </div>
       )}
       {privateGuideAccount && (
-        <Modal
-          open={Boolean(privateGuideAccount)}
-          onClose={() => {
-            if (!refreshNoodle.isPending) setPrivateGuideAccountId(null);
-          }}
-          title="Generate NoodleR Post"
-          width="max-w-lg"
-          panelClassName={NOODLE_ICON_SCOPE_CLASS}
-          panelStyle={{ "--noodle-blue": NOODLE_BLUE } as CSSProperties}
-        >
-          <div className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="block space-y-1.5">
-                <span className={labelClass}>Status</span>
-                <select
-                  value={privateGuideAccess}
-                  onChange={(event) => setPrivateGuideAccess(event.target.value as NoodlePrivatePostAccess)}
-                  className={fieldClass}
-                >
-                  <option value="public">Free</option>
-                  <option value="subscriber">Subscribers only</option>
-                  <option value="ppv">Pay-per-post</option>
-                </select>
-              </label>
-              <label className="block space-y-1.5">
-                <span className={labelClass}>Theme</span>
-                <input
-                  value={privateGuideTheme}
-                  onChange={(event) => setPrivateGuideTheme(event.target.value)}
-                  placeholder="Behind the scenes, outfit drop, flirt, teaser"
-                  className={fieldClass}
-                />
-              </label>
-            </div>
-            <div className="flex flex-wrap gap-3 text-xs font-semibold text-[var(--foreground)]">
-              <label className="inline-flex h-8 items-center gap-2 rounded-full border border-[var(--noodle-divider)] px-3">
-                <input
-                  type="checkbox"
-                  checked={privateGuideIncludeText}
-                  onChange={(event) => setPrivateGuideIncludeText(event.target.checked)}
-                  className="h-3.5 w-3.5 accent-[var(--noodle-blue)]"
-                />
-                Text
-              </label>
-              <label className="inline-flex h-8 items-center gap-2 rounded-full border border-[var(--noodle-divider)] px-3">
-                <input
-                  type="checkbox"
-                  checked={privateGuideIncludeImage}
-                  onChange={(event) => setPrivateGuideIncludeImage(event.target.checked)}
-                  className="h-3.5 w-3.5 accent-[var(--noodle-blue)]"
-                />
-                Image
-              </label>
-            </div>
-            <label className="block space-y-1.5">
-              <span className={labelClass}>Prompt</span>
-              <textarea
-                value={privateGuidePrompt}
-                onChange={(event) => setPrivateGuidePrompt(event.target.value)}
-                placeholder="Tell the generator what this private post should be about."
-                className={cn(textareaClass, "min-h-28 resize-none")}
-              />
-            </label>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setPrivateGuideAccountId(null)}
-                disabled={refreshNoodle.isPending}
-                className="h-9 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] px-4 text-xs font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => generateGuidedPrivatePost(privateGuideAccount)}
-                disabled={refreshNoodle.isPending || (!privateGuideIncludeText && !privateGuideIncludeImage)}
-                className="flex h-9 items-center justify-center gap-2 rounded-md bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {refreshNoodle.isPending && <Loader2 size={14} className="animate-spin" />}
-                {refreshNoodle.isPending ? "Generating" : "Generate"}
-              </button>
-            </div>
-          </div>
-        </Modal>
+        <GuidedPostModal
+          account={privateGuideAccount}
+          access={privateGuideAccess}
+          onAccessChange={setPrivateGuideAccess}
+          theme={privateGuideTheme}
+          onThemeChange={setPrivateGuideTheme}
+          includeText={privateGuideIncludeText}
+          onIncludeTextChange={setPrivateGuideIncludeText}
+          includeImage={privateGuideIncludeImage}
+          onIncludeImageChange={setPrivateGuideIncludeImage}
+          prompt={privateGuidePrompt}
+          onPromptChange={setPrivateGuidePrompt}
+          onCancel={() => setPrivateGuideAccountId(null)}
+          onGenerate={generateGuidedPrivatePost}
+          isPending={refreshNoodle.isPending}
+        />
       )}
       {confirmAction && (
         <Modal

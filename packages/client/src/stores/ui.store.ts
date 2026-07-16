@@ -443,7 +443,6 @@ interface UIState {
   trackerPanelCollapsedSections: TrackerPanelCollapsedSections;
   trackerPanelSectionOrder: TrackerPanelSectionOrder;
   settingsTab: string;
-  noodleSettingsTab: string;
   modal: { type: string; props?: Record<string, unknown> } | null;
   theme: "dark" | "light";
   appBackgroundColor: string;
@@ -789,7 +788,6 @@ interface UIState {
   closeRightPanel: () => void;
   toggleRightPanel: (panel: Panel) => void;
   setSettingsTab: (tab: string) => void;
-  setNoodleSettingsTab: (tab: string) => void;
   openModal: (type: string, props?: Record<string, unknown>) => void;
   closeModal: () => void;
   setTheme: (theme: "dark" | "light") => void;
@@ -1199,7 +1197,6 @@ export const useUIStore = create<UIState>()(
       trackerPanelCollapsedSections: {},
       trackerPanelSectionOrder: [...TRACKER_DATA_PANEL_SECTIONS],
       settingsTab: "general",
-      noodleSettingsTab: "invites",
       modal: null,
       theme: "dark" as const,
       appBackgroundColor: "",
@@ -1465,7 +1462,6 @@ export const useUIStore = create<UIState>()(
         }),
 
       setSettingsTab: (tab) => set({ settingsTab: tab }),
-      setNoodleSettingsTab: (tab) => set({ noodleSettingsTab: tab }),
       openModal: (type, props) => set({ modal: { type, props } }),
       closeModal: () => set({ modal: null }),
       setTheme: (theme) => set({ theme }),
@@ -2732,7 +2728,6 @@ export const useUIStore = create<UIState>()(
         rightPanelWidth: state.rightPanelWidth,
         rightPanel: state.rightPanel,
         settingsTab: state.settingsTab,
-        noodleSettingsTab: state.noodleSettingsTab,
         characterDetailId: state.characterDetailId,
         lorebookDetailId: state.lorebookDetailId,
         presetDetailId: state.presetDetailId,
