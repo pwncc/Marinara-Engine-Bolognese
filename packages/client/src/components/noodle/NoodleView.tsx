@@ -3709,6 +3709,108 @@ export function NoodleView() {
 
       {settings && (
         <>
+          <div id={getNoodleSettingsGroupAnchorId("participants-activity")} className="scroll-mt-3">
+          <NoodleSettingsGroupHeading groupId="participants-activity" />
+          <Section
+            id={getNoodleSettingsSectionAnchorId("active-accounts")}
+            title="Active Accounts"
+            help="Controls how many eligible characters or random users are active during one generation of the timeline."
+          >
+            <div className="space-y-3">
+              <label className="block space-y-1.5">
+                <FieldLabel help="Selects how many invited characters or random users are active during one timeline generation. All uses every eligible account, Random range chooses between Min active and Max active, and Exact count uses one fixed count.">
+                  Active selection
+                </FieldLabel>
+                <select
+                  value={settings.participantSelectionMode}
+                  onChange={(event) =>
+                    saveSettings({
+                      participantSelectionMode: event.target
+                        .value as NoodleSettingsUpdateInput["participantSelectionMode"],
+                    })
+                  }
+                  className={fieldClass}
+                >
+                  <option value="random_range">Random range</option>
+                  <option value="exact">Exact count</option>
+                  <option value="all">All invited</option>
+                </select>
+              </label>
+              {settings.participantSelectionMode === "random_range" && (
+                <div className="grid grid-cols-2 gap-2">
+                  <NumberSetting
+                    label="Min active"
+                    help="Lowest number of eligible character or random-user accounts that can participate in one timeline generation."
+                    value={settings.participantMin}
+                    min={1}
+                    max={100}
+                    onCommit={(value) => saveSettings({ participantMin: value })}
+                  />
+                  <NumberSetting
+                    label="Max active"
+                    help="Highest number of eligible character or random-user accounts that can participate in one timeline generation."
+                    value={settings.participantMax}
+                    min={1}
+                    max={100}
+                    onCommit={(value) => saveSettings({ participantMax: value })}
+                  />
+                </div>
+              )}
+              {settings.participantSelectionMode === "exact" && (
+                <NumberSetting
+                  label="Active count"
+                  help="Exact number of eligible character or random-user accounts that participate in one timeline generation."
+                  value={settings.participantMax}
+                  min={1}
+                  max={100}
+                  onCommit={(value) => saveSettings({ participantMin: value, participantMax: value })}
+                />
+              )}
+            </div>
+          </Section>
+
+          <Section
+            id={getNoodleSettingsSectionAnchorId("activity")}
+            title="Activity"
+            help="Limits how much generated Noodle activity one refresh may create."
+          >
+            <div className="grid grid-cols-2 gap-2">
+              <NumberSetting
+                label="Posts"
+                help="Maximum new top-level posts the model may create in one refresh."
+                value={settings.maxGeneratedPostsPerRefresh}
+                min={0}
+                max={100}
+                onCommit={(value) => saveSettings({ maxGeneratedPostsPerRefresh: value })}
+              />
+              <NumberSetting
+                label="Replies"
+                help="Maximum reply interactions the model may add in one refresh."
+                value={settings.maxRepliesPerRefresh}
+                min={0}
+                max={200}
+                onCommit={(value) => saveSettings({ maxRepliesPerRefresh: value })}
+              />
+              <NumberSetting
+                label="Reposts"
+                help="Maximum repost interactions the model may add in one refresh."
+                value={settings.maxRepostsPerRefresh}
+                min={0}
+                max={100}
+                onCommit={(value) => saveSettings({ maxRepostsPerRefresh: value })}
+              />
+              <NumberSetting
+                label="Likes"
+                help="Maximum like interactions the model may add in one refresh."
+                value={settings.maxLikesPerRefresh}
+                min={0}
+                max={500}
+                onCommit={(value) => saveSettings({ maxLikesPerRefresh: value })}
+              />
+            </div>
+          </Section>
+          </div>
+
           <div id={getNoodleSettingsGroupAnchorId("refresh")} className="scroll-mt-3">
           <NoodleSettingsGroupHeading groupId="refresh" />
           <Section
@@ -3856,6 +3958,255 @@ export function NoodleView() {
                 </div>
               )}
             </div>
+          </Section>
+          </div>
+
+          <div id={getNoodleSettingsGroupAnchorId("content")} className="scroll-mt-3">
+          <NoodleSettingsGroupHeading groupId="content" />
+          <Section
+            id={getNoodleSettingsSectionAnchorId("image-generation")}
+            title="Image Generation"
+            help="Controls generated post images and whether characters can reuse existing gallery images."
+          >
+            <div className="space-y-3">
+              <ToggleSetting
+                label="Image generation"
+                help="Generates actual post images from Noodle visual requests, using image connection defaults and the global image style profile system."
+                checked={settings.enableImagePrompts}
+                disabled={updateSettings.isPending}
+                onChange={(checked) => saveSettings({ enableImagePrompts: checked })}
+              />
+              {settings.enableImagePrompts && (
+                <>
+                  <label className="block space-y-1.5">
+                    <FieldLabel help="The image-generation connection used to create Noodle post images. Leaving it as Default uses the connection marked default for image generation.">
+                      Image generation connection
+                    </FieldLabel>
+                    <select
+                      value={settings.imageGenerationConnectionId ?? ""}
+                      onChange={(event) => saveSettings({ imageGenerationConnectionId: event.target.value || null })}
+                      className={fieldClass}
+                    >
+                      <option value="">Default image generation connection</option>
+                      {imageConnections.map((connection) => (
+                        <option key={String(connection.id)} value={String(connection.id)}>
+                          {String(connection.name ?? connection.model ?? "Image connection")}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block space-y-1.5">
+                    <FieldLabel help="Extra instructions passed into the Noodle Post Image prompt override. The full template is also available in Settings, Generations, Image Generation Prompt Overrides.">
+                      Prompt instructions
+                    </FieldLabel>
+                    <textarea
+                      value={imageGenerationPromptDraft}
+                      onChange={(event) => setImageGenerationPromptDraft(event.target.value)}
+                      onBlur={() => {
+                        if (imageGenerationPromptDraft !== settings.imageGenerationPrompt) {
+                          saveSettings({ imageGenerationPrompt: imageGenerationPromptDraft });
+                        }
+                      }}
+                      className={textareaClass}
+                    />
+                  </label>
+                  <ToggleSetting
+                    label="Use avatar references"
+                    help="Sends character avatars or preferred full-body references to the image provider when a character's post image is generated."
+                    checked={settings.imageGenerationUseAvatarReferences}
+                    disabled={updateSettings.isPending}
+                    onChange={(checked) => saveSettings({ imageGenerationUseAvatarReferences: checked })}
+                  />
+                  <ToggleSetting
+                    label="Include descriptions"
+                    help="Adds character appearance and description notes to the final image prompt before style-profile compilation."
+                    checked={settings.imageGenerationIncludeDescriptions}
+                    disabled={updateSettings.isPending}
+                    onChange={(checked) => saveSettings({ imageGenerationIncludeDescriptions: checked })}
+                  />
+                  <NumberSetting
+                    label="Images/refresh"
+                    help="Maximum number of generated post images Noodle may create during each manual or automatic timeline refresh."
+                    value={settings.maxImagesPerRefresh}
+                    min={0}
+                    max={50}
+                    onCommit={(value) => saveSettings({ maxImagesPerRefresh: value })}
+                  />
+                </>
+              )}
+              <ToggleSetting
+                label="Attach gallery images"
+                help="Lets characters attach existing images from their own galleries or chats they are in when the timeline writer asks for a gallery attachment."
+                checked={settings.allowGalleryImageAttachments}
+                disabled={updateSettings.isPending}
+                onChange={(checked) => saveSettings({ allowGalleryImageAttachments: checked })}
+              />
+            </div>
+          </Section>
+
+          <Section
+            id={getNoodleSettingsSectionAnchorId("image-understanding")}
+            title="Image Understanding"
+            help="Lets a vision-capable connection describe timeline images for the Noodle writer, including text-only models."
+          >
+            <div className="space-y-3">
+              <ToggleSetting
+                label="Image captioning"
+                help="Converts timeline images into concise descriptions before refresh generation, so text-only models can understand what was posted."
+                checked={settings.imageCaptioningEnabled}
+                disabled={updateSettings.isPending || connections.length === 0}
+                onChange={(checked) => saveSettings({ imageCaptioningEnabled: checked })}
+              />
+              {settings.imageCaptioningEnabled && (
+                <label className="block space-y-1.5">
+                  <FieldLabel help="Choose a vision-capable text connection. Default uses the Noodle generation connection; select another connection when that model cannot see images.">
+                    Captioning connection
+                  </FieldLabel>
+                  <select
+                    value={settings.imageCaptioningConnectionId ?? ""}
+                    onChange={(event) => saveSettings({ imageCaptioningConnectionId: event.target.value || null })}
+                    className={fieldClass}
+                  >
+                    <option value="">Use Noodle generation connection</option>
+                    {connections.map((connection) => (
+                      <option key={String(connection.id)} value={String(connection.id)}>
+                        {String(connection.name ?? connection.model ?? "Connection")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+          </Section>
+
+          <Section
+            id={getNoodleSettingsSectionAnchorId("appearance")}
+            title="Appearance"
+            help="Controls how the timeline and profiles render posts."
+          >
+            <label className="block space-y-1.5">
+              <FieldLabel help="Timeline shows posts as Twitter-style cards. Grid shows an image-first, Instagram-style grid on the main feed and on profile tabs (posts without an image are skipped in Grid).">
+                Feed layout
+              </FieldLabel>
+              <select
+                value={settings.layout}
+                onChange={(event) => saveSettings({ layout: event.target.value as NoodleSettingsUpdateInput["layout"] })}
+                className={fieldClass}
+              >
+                <option value="timeline">Timeline</option>
+                <option value="grid">Grid</option>
+              </select>
+            </label>
+          </Section>
+
+          <Section
+            id={getNoodleSettingsSectionAnchorId("timeline-writing")}
+            title="Timeline Writing"
+            help="Tunes how the refresh writer approaches tone and long-term memory. Off by default; existing timelines keep their current behavior until you turn this on."
+          >
+            <div className="space-y-3">
+              <ToggleSetting
+                label="Enhanced tone & continuity"
+                help="When on: each account's voice is grounded more strongly in its own personality instead of a default upbeat tone, accounts are encouraged to react to each other's posts in the same refresh, and older-post recall happens more often and favors posts relevant to currently active accounts. When off, refreshes use the original tone and recall behavior. The Noodle Timeline Voice & Tone prompt override (Settings -> Generations -> Image Generation Prompt Overrides) still lets you rewrite the tone text directly regardless of this toggle."
+                checked={settings.enableEnhancedTimelineWriting}
+                disabled={updateSettings.isPending}
+                onChange={(checked) => saveSettings({ enableEnhancedTimelineWriting: checked })}
+              />
+            </div>
+          </Section>
+
+          <Section
+            id={getNoodleSettingsSectionAnchorId("world-lore")}
+            title="World / Lore"
+            help="Lets Noodle refreshes pull matching lorebook entries into the timeline prompt, the same lorebook system used by chat generation."
+          >
+            <div className="space-y-3">
+              <ToggleSetting
+                label="Lorebook context"
+                help="Scans recent Noodle activity and character profiles for lorebook keyword matches and includes them as world/lore context. Off by default; existing timelines are unaffected until you turn this on."
+                checked={settings.enableLorebookContext}
+                disabled={updateSettings.isPending}
+                onChange={(checked) => saveSettings({ enableLorebookContext: checked })}
+              />
+            </div>
+          </Section>
+          </div>
+
+          <div id={getNoodleSettingsGroupAnchorId("chat")} className="scroll-mt-3">
+          <NoodleSettingsGroupHeading groupId="chat" />
+          <Section
+            id={getNoodleSettingsSectionAnchorId("carryover")}
+            title="Carryover"
+            help="Controls whether recent Noodle activity is appended to chat, roleplay, or game context."
+          >
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <FieldLabel help="Toggle each mode that should receive recent Noodle activity involving the current persona or chat characters. When all three are off, nothing is carried into chat context.">
+                  Carryover to chats
+                </FieldLabel>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <ToggleSetting
+                    label="Conversations"
+                    checked={carryoverTargets.has("conversation")}
+                    disabled={updateSettings.isPending}
+                    onChange={(checked) => toggleCarryoverTarget("conversation", checked)}
+                  />
+                  <ToggleSetting
+                    label="Roleplays"
+                    checked={carryoverTargets.has("roleplay")}
+                    disabled={updateSettings.isPending}
+                    onChange={(checked) => toggleCarryoverTarget("roleplay", checked)}
+                  />
+                  <ToggleSetting
+                    label="Games"
+                    checked={carryoverTargets.has("game")}
+                    disabled={updateSettings.isPending}
+                    onChange={(checked) => toggleCarryoverTarget("game", checked)}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberSetting
+                  label="Carry hours"
+                  help="How far back Noodle looks for activity digests when adding recent social media context to chats."
+                  value={settings.carryoverHours}
+                  min={1}
+                  max={720}
+                  onCommit={(value) => saveSettings({ carryoverHours: value })}
+                />
+                <NumberSetting
+                  label="Carry items"
+                  help="Maximum number of recent Noodle activity summaries appended to a chat context."
+                  value={settings.carryoverMaxItems}
+                  min={1}
+                  max={50}
+                  onCommit={(value) => saveSettings({ carryoverMaxItems: value })}
+                />
+              </div>
+            </div>
+          </Section>
+          </div>
+
+          <div id={getNoodleSettingsGroupAnchorId("danger")} className="scroll-mt-3">
+          <NoodleSettingsGroupHeading groupId="danger" />
+          <Section
+            id={getNoodleSettingsSectionAnchorId("reset-noodle")}
+            title="Reset Noodle"
+            help="Clears timeline content while keeping profiles, follows, invites, and Noodle settings."
+          >
+            <button
+              type="button"
+              onClick={resetTimeline}
+              disabled={resetNoodleTimeline.isPending}
+              className="flex min-h-10 w-full items-center justify-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {resetNoodleTimeline.isPending ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Trash2 size={14} className="text-[var(--noodle-blue)]" />
+              )}
+              {resetNoodleTimeline.isPending ? "Resetting Noodle" : "Reset Noodle Timeline"}
+            </button>
           </Section>
           </div>
 
@@ -4357,357 +4708,6 @@ export function NoodleView() {
                 </p>
               </Section>
             ))}
-          </div>
-
-          <div id={getNoodleSettingsGroupAnchorId("participants-activity")} className="scroll-mt-3">
-          <NoodleSettingsGroupHeading groupId="participants-activity" />
-          <Section
-            id={getNoodleSettingsSectionAnchorId("active-accounts")}
-            title="Active Accounts"
-            help="Controls how many eligible characters or random users are active during one generation of the timeline."
-          >
-            <div className="space-y-3">
-              <label className="block space-y-1.5">
-                <FieldLabel help="Selects how many invited characters or random users are active during one timeline generation. All uses every eligible account, Random range chooses between Min active and Max active, and Exact count uses one fixed count.">
-                  Active selection
-                </FieldLabel>
-                <select
-                  value={settings.participantSelectionMode}
-                  onChange={(event) =>
-                    saveSettings({
-                      participantSelectionMode: event.target
-                        .value as NoodleSettingsUpdateInput["participantSelectionMode"],
-                    })
-                  }
-                  className={fieldClass}
-                >
-                  <option value="random_range">Random range</option>
-                  <option value="exact">Exact count</option>
-                  <option value="all">All invited</option>
-                </select>
-              </label>
-              {settings.participantSelectionMode === "random_range" && (
-                <div className="grid grid-cols-2 gap-2">
-                  <NumberSetting
-                    label="Min active"
-                    help="Lowest number of eligible character or random-user accounts that can participate in one timeline generation."
-                    value={settings.participantMin}
-                    min={1}
-                    max={100}
-                    onCommit={(value) => saveSettings({ participantMin: value })}
-                  />
-                  <NumberSetting
-                    label="Max active"
-                    help="Highest number of eligible character or random-user accounts that can participate in one timeline generation."
-                    value={settings.participantMax}
-                    min={1}
-                    max={100}
-                    onCommit={(value) => saveSettings({ participantMax: value })}
-                  />
-                </div>
-              )}
-              {settings.participantSelectionMode === "exact" && (
-                <NumberSetting
-                  label="Active count"
-                  help="Exact number of eligible character or random-user accounts that participate in one timeline generation."
-                  value={settings.participantMax}
-                  min={1}
-                  max={100}
-                  onCommit={(value) => saveSettings({ participantMin: value, participantMax: value })}
-                />
-              )}
-            </div>
-          </Section>
-
-          <Section
-            id={getNoodleSettingsSectionAnchorId("activity")}
-            title="Activity"
-            help="Limits how much generated Noodle activity one refresh may create."
-          >
-            <div className="grid grid-cols-2 gap-2">
-              <NumberSetting
-                label="Posts"
-                help="Maximum new top-level posts the model may create in one refresh."
-                value={settings.maxGeneratedPostsPerRefresh}
-                min={0}
-                max={100}
-                onCommit={(value) => saveSettings({ maxGeneratedPostsPerRefresh: value })}
-              />
-              <NumberSetting
-                label="Replies"
-                help="Maximum reply interactions the model may add in one refresh."
-                value={settings.maxRepliesPerRefresh}
-                min={0}
-                max={200}
-                onCommit={(value) => saveSettings({ maxRepliesPerRefresh: value })}
-              />
-              <NumberSetting
-                label="Reposts"
-                help="Maximum repost interactions the model may add in one refresh."
-                value={settings.maxRepostsPerRefresh}
-                min={0}
-                max={100}
-                onCommit={(value) => saveSettings({ maxRepostsPerRefresh: value })}
-              />
-              <NumberSetting
-                label="Likes"
-                help="Maximum like interactions the model may add in one refresh."
-                value={settings.maxLikesPerRefresh}
-                min={0}
-                max={500}
-                onCommit={(value) => saveSettings({ maxLikesPerRefresh: value })}
-              />
-            </div>
-          </Section>
-          </div>
-
-          <div id={getNoodleSettingsGroupAnchorId("content")} className="scroll-mt-3">
-          <NoodleSettingsGroupHeading groupId="content" />
-          <Section
-            id={getNoodleSettingsSectionAnchorId("image-generation")}
-            title="Image Generation"
-            help="Controls generated post images and whether characters can reuse existing gallery images."
-          >
-            <div className="space-y-3">
-              <ToggleSetting
-                label="Image generation"
-                help="Generates actual post images from Noodle visual requests, using image connection defaults and the global image style profile system."
-                checked={settings.enableImagePrompts}
-                disabled={updateSettings.isPending}
-                onChange={(checked) => saveSettings({ enableImagePrompts: checked })}
-              />
-              {settings.enableImagePrompts && (
-                <>
-                  <label className="block space-y-1.5">
-                    <FieldLabel help="The image-generation connection used to create Noodle post images. Leaving it as Default uses the connection marked default for image generation.">
-                      Image generation connection
-                    </FieldLabel>
-                    <select
-                      value={settings.imageGenerationConnectionId ?? ""}
-                      onChange={(event) => saveSettings({ imageGenerationConnectionId: event.target.value || null })}
-                      className={fieldClass}
-                    >
-                      <option value="">Default image generation connection</option>
-                      {imageConnections.map((connection) => (
-                        <option key={String(connection.id)} value={String(connection.id)}>
-                          {String(connection.name ?? connection.model ?? "Image connection")}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block space-y-1.5">
-                    <FieldLabel help="Extra instructions passed into the Noodle Post Image prompt override. The full template is also available in Settings, Generations, Image Generation Prompt Overrides.">
-                      Prompt instructions
-                    </FieldLabel>
-                    <textarea
-                      value={imageGenerationPromptDraft}
-                      onChange={(event) => setImageGenerationPromptDraft(event.target.value)}
-                      onBlur={() => {
-                        if (imageGenerationPromptDraft !== settings.imageGenerationPrompt) {
-                          saveSettings({ imageGenerationPrompt: imageGenerationPromptDraft });
-                        }
-                      }}
-                      className={textareaClass}
-                    />
-                  </label>
-                  <ToggleSetting
-                    label="Use avatar references"
-                    help="Sends character avatars or preferred full-body references to the image provider when a character's post image is generated."
-                    checked={settings.imageGenerationUseAvatarReferences}
-                    disabled={updateSettings.isPending}
-                    onChange={(checked) => saveSettings({ imageGenerationUseAvatarReferences: checked })}
-                  />
-                  <ToggleSetting
-                    label="Include descriptions"
-                    help="Adds character appearance and description notes to the final image prompt before style-profile compilation."
-                    checked={settings.imageGenerationIncludeDescriptions}
-                    disabled={updateSettings.isPending}
-                    onChange={(checked) => saveSettings({ imageGenerationIncludeDescriptions: checked })}
-                  />
-                  <NumberSetting
-                    label="Images/refresh"
-                    help="Maximum number of generated post images Noodle may create during each manual or automatic timeline refresh."
-                    value={settings.maxImagesPerRefresh}
-                    min={0}
-                    max={50}
-                    onCommit={(value) => saveSettings({ maxImagesPerRefresh: value })}
-                  />
-                </>
-              )}
-              <ToggleSetting
-                label="Attach gallery images"
-                help="Lets characters attach existing images from their own galleries or chats they are in when the timeline writer asks for a gallery attachment."
-                checked={settings.allowGalleryImageAttachments}
-                disabled={updateSettings.isPending}
-                onChange={(checked) => saveSettings({ allowGalleryImageAttachments: checked })}
-              />
-            </div>
-          </Section>
-
-          <Section
-            id={getNoodleSettingsSectionAnchorId("image-understanding")}
-            title="Image Understanding"
-            help="Lets a vision-capable connection describe timeline images for the Noodle writer, including text-only models."
-          >
-            <div className="space-y-3">
-              <ToggleSetting
-                label="Image captioning"
-                help="Converts timeline images into concise descriptions before refresh generation, so text-only models can understand what was posted."
-                checked={settings.imageCaptioningEnabled}
-                disabled={updateSettings.isPending || connections.length === 0}
-                onChange={(checked) => saveSettings({ imageCaptioningEnabled: checked })}
-              />
-              {settings.imageCaptioningEnabled && (
-                <label className="block space-y-1.5">
-                  <FieldLabel help="Choose a vision-capable text connection. Default uses the Noodle generation connection; select another connection when that model cannot see images.">
-                    Captioning connection
-                  </FieldLabel>
-                  <select
-                    value={settings.imageCaptioningConnectionId ?? ""}
-                    onChange={(event) => saveSettings({ imageCaptioningConnectionId: event.target.value || null })}
-                    className={fieldClass}
-                  >
-                    <option value="">Use Noodle generation connection</option>
-                    {connections.map((connection) => (
-                      <option key={String(connection.id)} value={String(connection.id)}>
-                        {String(connection.name ?? connection.model ?? "Connection")}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-            </div>
-          </Section>
-
-          <Section
-            id={getNoodleSettingsSectionAnchorId("appearance")}
-            title="Appearance"
-            help="Controls how the timeline and profiles render posts."
-          >
-            <label className="block space-y-1.5">
-              <FieldLabel help="Timeline shows posts as Twitter-style cards. Grid shows an image-first, Instagram-style grid on the main feed and on profile tabs (posts without an image are skipped in Grid).">
-                Feed layout
-              </FieldLabel>
-              <select
-                value={settings.layout}
-                onChange={(event) => saveSettings({ layout: event.target.value as NoodleSettingsUpdateInput["layout"] })}
-                className={fieldClass}
-              >
-                <option value="timeline">Timeline</option>
-                <option value="grid">Grid</option>
-              </select>
-            </label>
-          </Section>
-
-          <Section
-            id={getNoodleSettingsSectionAnchorId("timeline-writing")}
-            title="Timeline Writing"
-            help="Tunes how the refresh writer approaches tone and long-term memory. Off by default; existing timelines keep their current behavior until you turn this on."
-          >
-            <div className="space-y-3">
-              <ToggleSetting
-                label="Enhanced tone & continuity"
-                help="When on: each account's voice is grounded more strongly in its own personality instead of a default upbeat tone, accounts are encouraged to react to each other's posts in the same refresh, and older-post recall happens more often and favors posts relevant to currently active accounts. When off, refreshes use the original tone and recall behavior. The Noodle Timeline Voice & Tone prompt override (Settings -> Generations -> Image Generation Prompt Overrides) still lets you rewrite the tone text directly regardless of this toggle."
-                checked={settings.enableEnhancedTimelineWriting}
-                disabled={updateSettings.isPending}
-                onChange={(checked) => saveSettings({ enableEnhancedTimelineWriting: checked })}
-              />
-            </div>
-          </Section>
-
-          <Section
-            id={getNoodleSettingsSectionAnchorId("world-lore")}
-            title="World / Lore"
-            help="Lets Noodle refreshes pull matching lorebook entries into the timeline prompt, the same lorebook system used by chat generation."
-          >
-            <div className="space-y-3">
-              <ToggleSetting
-                label="Lorebook context"
-                help="Scans recent Noodle activity and character profiles for lorebook keyword matches and includes them as world/lore context. Off by default; existing timelines are unaffected until you turn this on."
-                checked={settings.enableLorebookContext}
-                disabled={updateSettings.isPending}
-                onChange={(checked) => saveSettings({ enableLorebookContext: checked })}
-              />
-            </div>
-          </Section>
-          </div>
-
-          <div id={getNoodleSettingsGroupAnchorId("chat")} className="scroll-mt-3">
-          <NoodleSettingsGroupHeading groupId="chat" />
-          <Section
-            id={getNoodleSettingsSectionAnchorId("carryover")}
-            title="Carryover"
-            help="Controls whether recent Noodle activity is appended to chat, roleplay, or game context."
-          >
-            <div className="space-y-3">
-              <div className="space-y-2">
-                <FieldLabel help="Toggle each mode that should receive recent Noodle activity involving the current persona or chat characters. When all three are off, nothing is carried into chat context.">
-                  Carryover to chats
-                </FieldLabel>
-                <div className="grid gap-2 sm:grid-cols-3">
-                  <ToggleSetting
-                    label="Conversations"
-                    checked={carryoverTargets.has("conversation")}
-                    disabled={updateSettings.isPending}
-                    onChange={(checked) => toggleCarryoverTarget("conversation", checked)}
-                  />
-                  <ToggleSetting
-                    label="Roleplays"
-                    checked={carryoverTargets.has("roleplay")}
-                    disabled={updateSettings.isPending}
-                    onChange={(checked) => toggleCarryoverTarget("roleplay", checked)}
-                  />
-                  <ToggleSetting
-                    label="Games"
-                    checked={carryoverTargets.has("game")}
-                    disabled={updateSettings.isPending}
-                    onChange={(checked) => toggleCarryoverTarget("game", checked)}
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <NumberSetting
-                  label="Carry hours"
-                  help="How far back Noodle looks for activity digests when adding recent social media context to chats."
-                  value={settings.carryoverHours}
-                  min={1}
-                  max={720}
-                  onCommit={(value) => saveSettings({ carryoverHours: value })}
-                />
-                <NumberSetting
-                  label="Carry items"
-                  help="Maximum number of recent Noodle activity summaries appended to a chat context."
-                  value={settings.carryoverMaxItems}
-                  min={1}
-                  max={50}
-                  onCommit={(value) => saveSettings({ carryoverMaxItems: value })}
-                />
-              </div>
-            </div>
-          </Section>
-          </div>
-
-          <div id={getNoodleSettingsGroupAnchorId("danger")} className="scroll-mt-3">
-          <NoodleSettingsGroupHeading groupId="danger" />
-          <Section
-            id={getNoodleSettingsSectionAnchorId("reset-noodle")}
-            title="Reset Noodle"
-            help="Clears timeline content while keeping profiles, follows, invites, and Noodle settings."
-          >
-            <button
-              type="button"
-              onClick={resetTimeline}
-              disabled={resetNoodleTimeline.isPending}
-              className="flex min-h-10 w-full items-center justify-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {resetNoodleTimeline.isPending ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <Trash2 size={14} className="text-[var(--noodle-blue)]" />
-              )}
-              {resetNoodleTimeline.isPending ? "Resetting Noodle" : "Reset Noodle Timeline"}
-            </button>
-          </Section>
           </div>
         </>
       )}
