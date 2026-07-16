@@ -69,7 +69,14 @@ export type NotificationTab = "likes" | "follows" | "replies";
 export type TimelineTab = "main" | "following";
 export type NoodlerHubTab = "timeline" | "subscriptions" | "discover" | "owned";
 export type NoodleMode = "noodle" | "noodler";
-export type NoodleViewId = "home" | "search" | "notifications" | "profile" | "settings" | "noodler" | "noodler-verification";
+export type NoodleViewId =
+  | "home"
+  | "search"
+  | "notifications"
+  | "profile"
+  | "settings"
+  | "noodler"
+  | "noodler-verification";
 export type NoodleNotificationFocusTarget = {
   postId: string;
   interactionId: string | null;
@@ -688,11 +695,15 @@ export function InlineComposer(props: InlineComposerProps) {
   return (
     <div className="border-b border-[var(--noodle-divider)] px-4 py-3" data-component={dataComponent}>
       <div className="grid grid-cols-[2.75rem_minmax(0,1fr)] gap-3">
-        {personaAccount ? <Avatar account={personaAccount} /> : <AtSign size={28} className="text-[var(--noodle-blue)]" />}
+        {personaAccount ? (
+          <Avatar account={personaAccount} />
+        ) : (
+          <AtSign size={28} className="text-[var(--noodle-blue)]" />
+        )}
         <div className="min-w-0">
           <textarea
             ref={inlineComposerRef}
-            defaultValue={composer}
+            value={composer}
             onChange={onComposerChange}
             onBlur={onComposerBlur}
             onKeyDown={onComposerKeyDown}
@@ -866,6 +877,8 @@ export interface ProfileHeaderChromeProps {
   profileLocationPreview: string;
   /** Mode-specific chips rendered below the location line — e.g. identity/dynamic chips on private profiles. */
   belowBioContent?: ReactNode;
+  /** Additional controlled fields rendered inside Edit Profile. */
+  editExtraContent?: ReactNode;
   profileFollowingCount: number;
   profileFollowerCount: number;
   onOpenFollowing: () => void;
@@ -906,6 +919,7 @@ export function ProfileHeaderChrome(props: ProfileHeaderChromeProps) {
     emojiKeyPrefix,
     profileLocationPreview,
     belowBioContent,
+    editExtraContent,
     profileFollowingCount,
     profileFollowerCount,
     onOpenFollowing,
@@ -1024,6 +1038,7 @@ export function ProfileHeaderChrome(props: ProfileHeaderChromeProps) {
                 className={cn(fieldClass, "h-24 resize-none py-2")}
               />
             </label>
+            {editExtraContent}
             <label className="block space-y-1.5">
               <span className={labelClass}>Location</span>
               <input
@@ -1043,7 +1058,11 @@ export function ProfileHeaderChrome(props: ProfileHeaderChromeProps) {
             <p className="text-sm text-[var(--muted-foreground)]">@{profileDisplayHandle || "noodle"}</p>
             {profileBioPreview && (
               <p className="mt-3 whitespace-pre-wrap text-sm leading-6">
-                <NoodleCustomEmojiText text={profileBioPreview} emojiMap={noodleCustomEmojiMap} keyPrefix={emojiKeyPrefix} />
+                <NoodleCustomEmojiText
+                  text={profileBioPreview}
+                  emojiMap={noodleCustomEmojiMap}
+                  keyPrefix={emojiKeyPrefix}
+                />
               </p>
             )}
             {profileLocationPreview && (
@@ -1054,10 +1073,18 @@ export function ProfileHeaderChrome(props: ProfileHeaderChromeProps) {
             )}
             {belowBioContent}
             <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm text-[var(--muted-foreground)]">
-              <button type="button" onClick={onOpenFollowing} className="transition-colors hover:text-[var(--noodle-blue)]">
+              <button
+                type="button"
+                onClick={onOpenFollowing}
+                className="transition-colors hover:text-[var(--noodle-blue)]"
+              >
                 <span className="font-bold text-[var(--foreground)]">{profileFollowingCount}</span> Following
               </button>
-              <button type="button" onClick={onOpenFollowers} className="transition-colors hover:text-[var(--noodle-blue)]">
+              <button
+                type="button"
+                onClick={onOpenFollowers}
+                className="transition-colors hover:text-[var(--noodle-blue)]"
+              >
                 <span className="font-bold text-[var(--foreground)]">{profileFollowerCount}</span> Followers
               </button>
             </div>

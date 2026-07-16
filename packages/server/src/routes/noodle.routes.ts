@@ -132,8 +132,11 @@ import { normalizeNoodleHandle } from "../services/noodle/noodle-handle.js";
 import { resolveNoodleAvatarCropAfterProfileUpdate } from "../services/noodle/noodle-profile-avatar.js";
 import {
   createManualNoodlePost,
+  isNoodlePrivatePostingActive,
   mentionedAccountMetadata,
   mentionedCharacterAccounts,
+  noodlePpvPriceMetadata,
+  readAutoPostEnabled,
   resolvePersonaAccount,
 } from "../services/noodle/noodle-manual-post.js";
 
@@ -217,7 +220,6 @@ function getErrorMessage(error: unknown): string {
 
 type NoodlePrivatePostGuide = NonNullable<z.infer<typeof noodleRefreshSchema>["privatePostGuide"]>;
 
-
 function sinceHoursIso(hours: number) {
   return new Date(Date.now() - Math.max(1, hours) * 60 * 60 * 1000).toISOString();
 }
@@ -288,7 +290,6 @@ function compactLines(lines: Array<string | null | undefined>) {
   return lines.map((line) => line?.trim()).filter((line): line is string => Boolean(line));
 }
 
-
 function characterPersonalityFromRow(row: { data: unknown }) {
   const data = parseRecord(row.data);
   const extensions = parseRecord(data.extensions);
@@ -300,10 +301,7 @@ function characterPersonalityFromRow(row: { data: unknown }) {
   ]).join("\n");
 }
 
-function personaAppearanceFromRow(row: {
-  description?: string | null;
-  appearance?: string | null;
-}) {
+function personaAppearanceFromRow(row: { description?: string | null; appearance?: string | null }) {
   return row.appearance?.trim() || row.description?.trim() || "";
 }
 
@@ -558,7 +556,6 @@ function shuffle<T>(items: T[]): T[] {
   }
   return next;
 }
-
 
 const PROFESSOR_MARI_NOODLE_BIO =
   "She/Her | 18+ | Skill Issue | Your Assistant After Hours (hey, I get to do fun stuff, too!) | Simp for Il Dottore 24/7 | LLMs Fan";
@@ -826,7 +823,8 @@ function filterPrivateNoodleBootstrapForViewer(
       }
     }
     for (const subscription of bootstrap.subscriptions) {
-      if (subscription.subscriberAccountId === viewerAccount.id) accessiblePrivateAccountIds.add(subscription.creatorAccountId);
+      if (subscription.subscriberAccountId === viewerAccount.id)
+        accessiblePrivateAccountIds.add(subscription.creatorAccountId);
     }
   }
   const visibleAccountIds = new Set([...publicAccountIds, ...accessiblePrivateAccountIds]);
@@ -842,7 +840,9 @@ function filterPrivateNoodleBootstrapForViewer(
         visibleAccountIds.has(subscription.creatorAccountId) && visibleAccountIds.has(subscription.subscriberAccountId),
     ),
     postUnlocks: bootstrap.postUnlocks.filter((unlock) => visibleAccountIds.has(unlock.accountId)),
-    digests: bootstrap.digests.filter((digest) => digest.accountIds.every((accountId) => visibleAccountIds.has(accountId))),
+    digests: bootstrap.digests.filter((digest) =>
+      digest.accountIds.every((accountId) => visibleAccountIds.has(accountId)),
+    ),
   };
 }
 
@@ -929,23 +929,26 @@ async function buildOptedInChatContext(
       })
       .filter((line): line is string => Boolean(line));
     const messageLines = await Promise.all(
-      messages.flatMap((message) => {
-        if (options.focusOnlySelectedCharacters && message.characterId && !selected.has(message.characterId)) return [];
-        return [message];
-      }).map(async (message) => {
-        const role = messageRoleLabel(message.role);
-        let speaker = role === "user" ? personaName : role === "narrator" ? "Narrator" : "Assistant";
-        if (message.characterId) {
-          speaker =
-            speakerNameByCharacterId.get(message.characterId) ??
-            (await resolveCharacterName(characters, message.characterId, characterNameCache));
-        }
-        const content = String(message.content ?? "")
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, 900);
-        return `- ${speaker} (${role}): ${content}`;
-      }),
+      messages
+        .flatMap((message) => {
+          if (options.focusOnlySelectedCharacters && message.characterId && !selected.has(message.characterId))
+            return [];
+          return [message];
+        })
+        .map(async (message) => {
+          const role = messageRoleLabel(message.role);
+          let speaker = role === "user" ? personaName : role === "narrator" ? "Narrator" : "Assistant";
+          if (message.characterId) {
+            speaker =
+              speakerNameByCharacterId.get(message.characterId) ??
+              (await resolveCharacterName(characters, message.characterId, characterNameCache));
+          }
+          const content = String(message.content ?? "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 900);
+          return `- ${speaker} (${role}): ${content}`;
+        }),
     );
     if (messageLines.length === 0) continue;
     blocks.push(
@@ -1019,7 +1022,11 @@ async function buildRefreshPrompt(input: {
     ? 0
     : enhancedTimelineWriting
       ? noodlePastMemorySampleSize()
-      : noodlePastMemorySampleSize(Math.random, NOODLE_LEGACY_PAST_MEMORY_INCLUSION_CHANCE, NOODLE_LEGACY_PAST_MEMORY_MAX_ITEMS);
+      : noodlePastMemorySampleSize(
+          Math.random,
+          NOODLE_LEGACY_PAST_MEMORY_INCLUSION_CHANCE,
+          NOODLE_LEGACY_PAST_MEMORY_MAX_ITEMS,
+        );
   const olderPosts =
     pastMemorySampleSize > 0
       ? (await input.noodle.listPostsBefore(noodlePastMemoryCutoff())).filter((post) => !recentPostById.has(post.id))
@@ -1107,9 +1114,10 @@ async function buildRefreshPrompt(input: {
   const linkedAuthorContext = isolatedTargetAccount
     ? await resolveNoodleLinkedAuthorContext({ account: isolatedTargetAccount, characters: input.characters })
     : null;
-  const linkedAuthorContextBlock = linkedAuthorContext && privateStageProfile
-    ? formatLinkedIdentityPromptBlock(linkedAuthorContext, privateStageProfile)
-    : "";
+  const linkedAuthorContextBlock =
+    linkedAuthorContext && privateStageProfile
+      ? formatLinkedIdentityPromptBlock(linkedAuthorContext, privateStageProfile)
+      : "";
   const privateStageContextBlock = privateStageProfile ? formatPrivateStagePromptBlock(privateStageProfile) : "";
   const activeAccountList = [...input.activeAccounts, ...(input.personaAccount ? [input.personaAccount] : [])]
     .map(
@@ -1147,24 +1155,19 @@ async function buildRefreshPrompt(input: {
         ...(characterContext ? [{ role: "user", content: characterContext }] : []),
       ];
   const lorebookResult = input.settings.enableLorebookContext
-    ? await processLorebooks(
-        input.db,
-        lorebookScanMessages,
-        null,
-        {
-          characterIds:
-            isolatedTargetAccount?.kind === "character" ? [isolatedTargetAccount.entityId] : selectedCharacterIds,
-          personaId:
-            isolatedTargetAccount?.kind === "persona"
-              ? isolatedTargetAccount.entityId
-              : isolatedTargetAccount
-                ? null
-                : input.personaAccount?.entityId ?? null,
-          tokenBudget: noodleLorebookTokenBudget(isolatedTargetAccount ? 1 : activeCharacters.length),
-          generationTriggers: ["noodle"],
-          previewOnly: true,
-        },
-      )
+    ? await processLorebooks(input.db, lorebookScanMessages, null, {
+        characterIds:
+          isolatedTargetAccount?.kind === "character" ? [isolatedTargetAccount.entityId] : selectedCharacterIds,
+        personaId:
+          isolatedTargetAccount?.kind === "persona"
+            ? isolatedTargetAccount.entityId
+            : isolatedTargetAccount
+              ? null
+              : (input.personaAccount?.entityId ?? null),
+        tokenBudget: noodleLorebookTokenBudget(isolatedTargetAccount ? 1 : activeCharacters.length),
+        generationTriggers: ["noodle"],
+        previewOnly: true,
+      })
     : null;
   const loreContext = lorebookResult
     ? [lorebookResult.worldInfoBefore, lorebookResult.worldInfoAfter].filter(Boolean).join("\n")
@@ -1261,11 +1264,7 @@ async function buildRefreshPrompt(input: {
           ]
         : []),
       ...(linkedAuthorContextBlock
-        ? [
-            "# Underlying Linked Identity (hidden continuity source for private NoodleR)",
-            linkedAuthorContextBlock,
-            "",
-          ]
+        ? ["# Underlying Linked Identity (hidden continuity source for private NoodleR)", linkedAuthorContextBlock, ""]
         : []),
       ...(privateStageContextBlock
         ? ["# Private Stage Persona (visible creator role for this NoodleR account)", privateStageContextBlock, ""]
@@ -1611,7 +1610,9 @@ async function generatePrivateAccountStageIdentity(input: {
         input.requestedStageProfile?.stagePersonality
           ? `requestedPrivatePersona: ${input.requestedStageProfile.stagePersonality}`
           : "",
-        input.requestedStageProfile?.stageDynamic ? `requestedDynamic: ${input.requestedStageProfile.stageDynamic}` : "",
+        input.requestedStageProfile?.stageDynamic
+          ? `requestedDynamic: ${input.requestedStageProfile.stageDynamic}`
+          : "",
         contextBlock,
         knownAppearance ? `Established appearance: ${knownAppearance}` : "",
         "",
@@ -1716,7 +1717,13 @@ async function generatePrivateAccountAvatar(input: {
         fallback: imageFallback,
       }),
     (error, attempt, maxAttempts) => {
-      logger.warn(error, "[noodle] Avatar generation attempt %d/%d failed for %s", attempt, maxAttempts, input.displayName);
+      logger.warn(
+        error,
+        "[noodle] Avatar generation attempt %d/%d failed for %s",
+        attempt,
+        maxAttempts,
+        input.displayName,
+      );
     },
   );
   const filePath = saveImageToDisk("noodle", image.base64, image.ext);
@@ -2996,9 +3003,9 @@ export async function noodleRoutes(app: FastifyInstance) {
     const connectionId = parsed.data.connectionId ?? settings.generationConnectionId;
     const conn = connectionId ? await connections.getWithKey(connectionId) : await connections.getDefaultForAgents();
     if (!conn) {
-      return reply
-        .code(connectionId ? 404 : 400)
-        .send({ error: connectionId ? "Noodle generation connection not found" : "Select a Noodle generation connection first." });
+      return reply.code(connectionId ? 404 : 400).send({
+        error: connectionId ? "Noodle generation connection not found" : "Select a Noodle generation connection first.",
+      });
     }
     const targetPrivateAccount = parsed.data.targetAccountId
       ? await noodle.getAccountById(parsed.data.targetAccountId)
@@ -3008,6 +3015,16 @@ export async function noodleRoutes(app: FastifyInstance) {
     }
     if (parsed.data.privatePostGuide && !targetPrivateAccount) {
       return reply.code(400).send({ error: "Guided NoodleR posts require a private target account." });
+    }
+    if (parsed.data.privatePostGuide && targetPrivateAccount && !isNoodlePrivatePostingActive(targetPrivateAccount)) {
+      return reply.code(403).send({ error: "Passive NoodleR profiles cannot generate guided posts." });
+    }
+    if (
+      targetPrivateAccount &&
+      !parsed.data.privatePostGuide &&
+      (!isNoodlePrivatePostingActive(targetPrivateAccount) || !readAutoPostEnabled(targetPrivateAccount))
+    ) {
+      return reply.code(403).send({ error: "Automatic posting is not enabled for this NoodleR profile." });
     }
     // NoodleR "generate a post" is a single-account request from the private
     // profile UI: it should always produce exactly one post, regardless of the
@@ -3295,15 +3312,12 @@ export async function noodleRoutes(app: FastifyInstance) {
           `Follow targets may additionally use these known handles: ${knownTargetHandles.join(", ")}.`,
           "Do not invent, rename, or omit an authorHandle, actorHandle, or targetHandle. Return JSON only.",
         ].join("\n");
-        result = await provider.chatComplete([...requestMessages, { role: "user", content: correction }], completionOptions);
-        content = result.content ?? "";
-        logDebugOverride(
-          debugMode,
-          "[debug/noodle] Raw model response (%s attempt %d):\n%s",
-          "correction",
-          2,
-          content,
+        result = await provider.chatComplete(
+          [...requestMessages, { role: "user", content: correction }],
+          completionOptions,
         );
+        content = result.content ?? "";
+        logDebugOverride(debugMode, "[debug/noodle] Raw model response (%s attempt %d):\n%s", "correction", 2, content);
         parsedGenerated = null;
         let correctedRetryReason: string | null = null;
         try {
@@ -3482,6 +3496,7 @@ export async function noodleRoutes(app: FastifyInstance) {
             ...mediaMetadata,
             ...mentionedAccountMetadata(mentionedAccounts),
             ...(poll ? { poll } : {}),
+            ...noodlePpvPriceMetadata(access, privatePostGuide?.ppvPrice),
             ...(identityRedactionApplied ? { identityRedactionApplied: true } : {}),
           },
         });

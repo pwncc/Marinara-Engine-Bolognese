@@ -12,6 +12,8 @@ export interface GuidedPostModalProps {
   account: NoodleAccount;
   access: NoodlePostAccess;
   onAccessChange: (access: NoodlePostAccess) => void;
+  ppvPrice: string;
+  onPpvPriceChange: (price: string) => void;
   theme: string;
   onThemeChange: (theme: string) => void;
   includeText: boolean;
@@ -30,6 +32,8 @@ export function GuidedPostModal(props: GuidedPostModalProps) {
     account,
     access,
     onAccessChange,
+    ppvPrice,
+    onPpvPriceChange,
     theme,
     onThemeChange,
     includeText,
@@ -78,6 +82,22 @@ export function GuidedPostModal(props: GuidedPostModalProps) {
             />
           </label>
         </div>
+        {access === "ppv" && (
+          <label className="block space-y-1.5 sm:max-w-xs">
+            <span className={labelClass}>PPV price</span>
+            <input
+              type="number"
+              min={0}
+              max={999999}
+              step="0.01"
+              inputMode="decimal"
+              value={ppvPrice}
+              onChange={(event) => onPpvPriceChange(event.target.value)}
+              placeholder="9.99"
+              className={fieldClass}
+            />
+          </label>
+        )}
         <div className="flex flex-wrap gap-3 text-xs font-semibold text-[var(--foreground)]">
           <label className="inline-flex h-8 items-center gap-2 rounded-full border border-[var(--noodle-divider)] px-3">
             <input

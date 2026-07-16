@@ -71,7 +71,12 @@ import {
   type NoodleSettingsUpdateInput,
 } from "@marinara-engine/shared";
 import { cn, parseAvatarCropJson, type AvatarCropValue } from "../../lib/utils";
-import { BASIC_PANEL_SORT_OPTIONS, normalizeBasicPanelSort, sortBasicPanelItems, type BasicPanelSort } from "../../lib/panel-sort";
+import {
+  BASIC_PANEL_SORT_OPTIONS,
+  normalizeBasicPanelSort,
+  sortBasicPanelItems,
+  type BasicPanelSort,
+} from "../../lib/panel-sort";
 import { useActivePersona, useCharacterGroups, useCharacters, usePersonas } from "../../hooks/use-characters";
 import { useConnections } from "../../hooks/use-connections";
 import { useNoodleCustomEmojiMap } from "../../hooks/use-noodle-custom-emojis";
@@ -128,6 +133,7 @@ import {
   useDeletePrivateNoodleAccount,
   useNoodlerHub,
   useRetryPrivateIdentityGeneration,
+  useSimulateNoodlerFanActivity,
   useSubscribeNoodleAccount,
   useUnlockNoodlePost,
   useUnsubscribeNoodleAccount,
@@ -136,6 +142,12 @@ import { useUIStore } from "../../stores/ui.store";
 import { useTrackAchievement } from "../../hooks/use-achievements";
 import { NoodleHome, type NoodleHomeProps } from "./NoodleHome";
 import type { NoodlerHomeProps } from "./NoodlerHome";
+import { PostingTools } from "./PostingTools";
+import {
+  NoodlerEditProfileFields,
+  noodlerEditProfileDraftFromAccounts,
+  type NoodlerEditProfileDraft,
+} from "./NoodlerEditProfileFields";
 import {
   Avatar,
   BrowserChrome,
@@ -168,6 +180,7 @@ import {
   readPrivatePostingMode,
   type PrivateStageDraft,
   readAutoPostEnabled,
+  readAutoPostIntensity,
   NOODLE_SETTINGS_GROUPS,
   getNoodleSettingsSectionAnchorId,
   getNoodleSettingsGroupAnchorId,
@@ -541,29 +554,29 @@ function NoodlePollCard({
           return (
             <Fragment key={option.id}>
               <button
-              type="button"
-              onClick={() => onVote(option.id)}
-              disabled={disabled || pending}
-              aria-pressed={selected}
-              aria-label={`${option.label}, ${optionVotes} ${optionVotes === 1 ? "vote" : "votes"}, ${percentage}%`}
-              className={cn(
-                "relative flex min-h-10 w-full items-center overflow-hidden rounded-lg border px-3 text-left text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--noodle-blue)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)] disabled:cursor-not-allowed",
-                selected
-                  ? "border-[var(--noodle-blue)] bg-[var(--noodle-blue)]/10"
-                  : "border-[var(--noodle-divider)] hover:border-[var(--noodle-blue)]/55 hover:bg-[var(--noodle-blue)]/5",
-              )}
-              data-noodle-poll-option={option.id}
-            >
-              <span
-                aria-hidden="true"
-                className="absolute inset-0 origin-left bg-[var(--noodle-blue)]/15 transition-transform duration-300 ease-out"
-                style={{ transform: `scaleX(${percentage / 100})` }}
-              />
-              <span className="relative flex min-w-0 flex-1 items-center gap-2">
-                {selected && <Check size={14} className="shrink-0 text-[var(--noodle-blue)]" />}
-                <span className="min-w-0 flex-1 break-words">{option.label}</span>
-                <span className="shrink-0 text-[var(--muted-foreground)]">{percentage}%</span>
-              </span>
+                type="button"
+                onClick={() => onVote(option.id)}
+                disabled={disabled || pending}
+                aria-pressed={selected}
+                aria-label={`${option.label}, ${optionVotes} ${optionVotes === 1 ? "vote" : "votes"}, ${percentage}%`}
+                className={cn(
+                  "relative flex min-h-10 w-full items-center overflow-hidden rounded-lg border px-3 text-left text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--noodle-blue)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)] disabled:cursor-not-allowed",
+                  selected
+                    ? "border-[var(--noodle-blue)] bg-[var(--noodle-blue)]/10"
+                    : "border-[var(--noodle-divider)] hover:border-[var(--noodle-blue)]/55 hover:bg-[var(--noodle-blue)]/5",
+                )}
+                data-noodle-poll-option={option.id}
+              >
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-0 origin-left bg-[var(--noodle-blue)]/15 transition-transform duration-300 ease-out"
+                  style={{ transform: `scaleX(${percentage / 100})` }}
+                />
+                <span className="relative flex min-w-0 flex-1 items-center gap-2">
+                  {selected && <Check size={14} className="shrink-0 text-[var(--noodle-blue)]" />}
+                  <span className="min-w-0 flex-1 break-words">{option.label}</span>
+                  <span className="shrink-0 text-[var(--muted-foreground)]">{percentage}%</span>
+                </span>
               </button>
               {showVoters && optionVotes > 0 && (
                 <div className="flex flex-wrap gap-1 px-1" aria-label={`Voters for ${option.label}`}>
@@ -703,6 +716,7 @@ export function NoodleView() {
   const createPrivateAccount = useCreatePrivateNoodleAccount();
   const deletePrivateAccount = useDeletePrivateNoodleAccount();
   const retryPrivateIdentity = useRetryPrivateIdentityGeneration();
+  const simulateNoodlerFanActivity = useSimulateNoodlerFanActivity();
   const loadOlderPosts = useLoadOlderNoodlePosts();
   const [fillerAccountsExpanded, setFillerAccountsExpanded] = useState(false);
   const [newFillerAccountName, setNewFillerAccountName] = useState("");
@@ -747,6 +761,7 @@ export function NoodleView() {
   const replyMediaToolRef = useRef<HTMLDivElement | null>(null);
   const accountSwitcherRef = useRef<HTMLDivElement | null>(null);
   const timelineScrollRef = useRef<HTMLElement | null>(null);
+  const profileDraftAccountIdRef = useRef<string | null>(null);
 
   const characters = useMemo(
     () => (Array.isArray(charactersRaw) ? (charactersRaw as RawCharacter[]) : []),
@@ -775,6 +790,7 @@ export function NoodleView() {
 
   const [composer, setComposer] = useState("");
   const [composerHasText, setComposerHasText] = useState(false);
+  const [composerTargetAccountId, setComposerTargetAccountId] = useState<string | null>(null);
   const [activeMention, setActiveMention] = useState<ActiveComposerMention | null>(null);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [postSearch, setPostSearch] = useState("");
@@ -786,6 +802,7 @@ export function NoodleView() {
   const [profileLocation, setProfileLocation] = useState("");
   const [profileUploadTarget, setProfileUploadTarget] = useState<"avatar" | "banner" | null>(null);
   const [profileEditing, setProfileEditing] = useState(false);
+  const [profileSavePending, setProfileSavePending] = useState(false);
   const [profileTab, setProfileTab] = useState<ProfileTab>("posts");
   const [profileConnectionTab, setProfileConnectionTab] = useState<ProfileConnectionTab | null>(null);
   const [notificationTab, setNotificationTab] = useState<NotificationTab>("likes");
@@ -866,17 +883,16 @@ export function NoodleView() {
   const [mediaPickerTab, setMediaPickerTab] = useState<ConversationMediaPickerTabId>("emoji");
   const [attachedImageUrl, setAttachedImageUrl] = useState("");
   const [composerAccess, setComposerAccess] = useState<NoodlePostAccess>("public");
-  const [privateComposerText, setPrivateComposerText] = useState("");
-  const [privateComposerImageUrl, setPrivateComposerImageUrl] = useState("");
-  const [privateComposerAccess, setPrivateComposerAccess] = useState<NoodlePostAccess>("public");
-  const [privateComposerPpvPrice, setPrivateComposerPpvPrice] = useState("");
+  const [composerPpvPrice, setComposerPpvPrice] = useState("");
   const [privateGuideAccess, setPrivateGuideAccess] = useState<NoodlePrivatePostAccess>("subscriber");
+  const [privateGuidePpvPrice, setPrivateGuidePpvPrice] = useState("");
   const [privateGuideIncludeText, setPrivateGuideIncludeText] = useState(true);
   const [privateGuideIncludeImage, setPrivateGuideIncludeImage] = useState(true);
   const [privateGuideTheme, setPrivateGuideTheme] = useState("");
   const [privateGuidePrompt, setPrivateGuidePrompt] = useState("");
   const [privateGuideAccountId, setPrivateGuideAccountId] = useState<string | null>(null);
   const [privateStageDraft, setPrivateStageDraft] = useState<PrivateStageDraft | null>(null);
+  const [noodlerEditDraft, setNoodlerEditDraft] = useState<NoodlerEditProfileDraft | null>(null);
   const [imageUrlDraft, setImageUrlDraft] = useState("");
   const [imageGenerationPromptDraft, setImageGenerationPromptDraft] = useState("");
   const [pollQuestion, setPollQuestion] = useState("");
@@ -994,10 +1010,12 @@ export function NoodleView() {
   const isGlobalPersonaSelected = selectedPersonaId === NOODLE_GLOBAL_PERSONA_ID && allowGlobalPersona;
   const personaAccount = useMemo(() => {
     if (isGlobalPersonaSelected) return null;
-    return personaAccounts.find((account) => account.entityId === selectedPersonaId) ?? sortedPersonaAccounts[0] ?? null;
+    return (
+      personaAccounts.find((account) => account.entityId === selectedPersonaId) ?? sortedPersonaAccounts[0] ?? null
+    );
   }, [isGlobalPersonaSelected, personaAccounts, selectedPersonaId, sortedPersonaAccounts]);
   const viewedProfileAccount = useMemo(
-    () => (viewedProfileAccountId ? (accountById.get(viewedProfileAccountId) ?? personaAccount) : personaAccount),
+    () => (viewedProfileAccountId ? (accountById.get(viewedProfileAccountId) ?? null) : personaAccount),
     [accountById, personaAccount, viewedProfileAccountId],
   );
   const privateGuideAccount = privateGuideAccountId ? (accountById.get(privateGuideAccountId) ?? null) : null;
@@ -1005,24 +1023,28 @@ export function NoodleView() {
   const viewingOwnProfile = Boolean(personaAccount && viewedProfileAccount?.id === personaAccount.id);
   const viewingOwnPersonaPrivateAccount = Boolean(
     personaAccount &&
-      viewedProfileAccount?.visibility === "private" &&
-      viewedProfileAccount.kind === "persona" &&
-      personaAccount.linkedAccountId === viewedProfileAccount.id,
+    viewedProfileAccount?.visibility === "private" &&
+    viewedProfileAccount.kind === "persona" &&
+    personaAccount.linkedAccountId === viewedProfileAccount.id,
   );
   const viewingOwnCharacterPrivateAccount = Boolean(
     viewedProfileAccount?.visibility === "private" && viewedProfileAccount.kind === "character",
   );
-  const viewingOwnPrivateAccount = Boolean(
-    viewingOwnPersonaPrivateAccount || viewingOwnCharacterPrivateAccount,
-  );
+  const viewingOwnPrivateAccount = Boolean(viewingOwnPersonaPrivateAccount || viewingOwnCharacterPrivateAccount);
   const canEditViewedProfile = Boolean(
     viewingOwnProfile ||
-      viewingOwnPrivateAccount ||
-      (viewedProfileAccount?.kind === "character" && viewedProfileAccount.invited),
+    viewingOwnPrivateAccount ||
+    (viewedProfileAccount?.kind === "character" && viewedProfileAccount.invited),
   );
   const personaLinkedNoodlerAccount = personaAccount?.linkedAccountId
     ? (accountById.get(personaAccount.linkedAccountId) ?? null)
     : null;
+  const postingTargetAccount =
+    activeNoodleView === "profile"
+      ? viewedProfileAccount
+      : activeNoodleMode === "noodler"
+        ? personaLinkedNoodlerAccount
+        : personaAccount;
   const subscribedCreatorIds = useMemo(() => {
     if (!personaAccount) return new Set<string>();
     return new Set(
@@ -1044,10 +1066,7 @@ export function NoodleView() {
     activeNoodleView === "noodler" && isNoodlerEnabled && Boolean(personaAccount),
   );
   const noodlerHub = noodlerHubQuery.data;
-  const privateAccounts = useMemo(
-    () => accounts.filter((account) => account.visibility === "private"),
-    [accounts],
-  );
+  const privateAccounts = useMemo(() => accounts.filter((account) => account.visibility === "private"), [accounts]);
   const privateAccountIds = useMemo(() => new Set(privateAccounts.map((account) => account.id)), [privateAccounts]);
   const privatePosts = useMemo(
     () => posts.filter((post) => privateAccountIds.has(post.authorAccountId)),
@@ -1119,7 +1138,9 @@ export function NoodleView() {
     }
 
     return items
-      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt) || right.id.localeCompare(left.id))
+      .sort(
+        (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt) || right.id.localeCompare(left.id),
+      )
       .slice(0, 160);
   }, [accountById, interactions, postUnlocks, privateAccountIds, privatePostById, privatePosts, subscriptions]);
   const noodlerUnseenCountByAccountId = useMemo(() => {
@@ -1266,7 +1287,16 @@ export function NoodleView() {
     const activeAccount = personaAccounts.find((account) => account.entityId === activeId);
     const nextPersonaId = activeAccount?.entityId ?? sortedPersonaAccounts[0]?.entityId ?? "";
     if (selectedPersonaId !== nextPersonaId) setSelectedPersonaId(nextPersonaId);
-  }, [activePersona, data, isGlobalPersonaSelected, personaAccounts, personas, selectedPersonaId, setSelectedPersonaId, sortedPersonaAccounts]);
+  }, [
+    activePersona,
+    data,
+    isGlobalPersonaSelected,
+    personaAccounts,
+    personas,
+    selectedPersonaId,
+    setSelectedPersonaId,
+    sortedPersonaAccounts,
+  ]);
 
   useEffect(() => {
     if (accountSwitcherOpen) setPersonaAccountLimit(NOODLE_PERSONA_SWITCHER_PAGE_SIZE);
@@ -1298,6 +1328,9 @@ export function NoodleView() {
 
   useEffect(() => {
     if (!viewedProfileAccount) return;
+    const targetChanged = profileDraftAccountIdRef.current !== viewedProfileAccount.id;
+    if (!targetChanged && profileEditing) return;
+    profileDraftAccountIdRef.current = viewedProfileAccount.id;
     setProfileHandle(viewedProfileAccount.handle);
     setProfileName(viewedProfileAccount.displayName);
     setProfileBio(viewedProfileAccount.bio);
@@ -1305,7 +1338,35 @@ export function NoodleView() {
     setProfileBannerUrl(readAccountSetting(viewedProfileAccount, "bannerUrl"));
     setProfileLocation(readAccountSetting(viewedProfileAccount, "location"));
     setProfileEditing(false);
-  }, [viewedProfileAccount]);
+    setNoodlerEditDraft(
+      viewedProfileAccount.visibility === "private"
+        ? noodlerEditProfileDraftFromAccounts(viewedProfileAccount, accounts)
+        : null,
+    );
+  }, [accounts, profileEditing, viewedProfileAccount]);
+
+  const clearPostDraft = useCallback(() => {
+    composerValueRef.current = "";
+    composerHasTextRef.current = false;
+    if (inlineComposerRef.current) inlineComposerRef.current.value = "";
+    if (modalComposerRef.current) modalComposerRef.current.value = "";
+    setComposer("");
+    setComposerHasText(false);
+    setActiveMention(null);
+    setAttachedImageUrl("");
+    setComposerAccess("public");
+    setComposerPpvPrice("");
+    setDraftPoll(null);
+    setPollQuestion("");
+    setPollOptions(["", ""]);
+    setActiveComposerTool(null);
+    setComposeOpen(false);
+  }, []);
+
+  useEffect(() => {
+    clearPostDraft();
+    setComposerTargetAccountId(postingTargetAccount?.id ?? null);
+  }, [clearPostDraft, postingTargetAccount?.id]);
 
   useEffect(() => {
     setInviteCharacterLimit(NOODLE_INVITE_PAGE_SIZE);
@@ -1453,32 +1514,93 @@ export function NoodleView() {
     );
   };
 
-  const saveProfile = () => {
-    if (!viewedProfileAccount || !canEditViewedProfile) return;
+  const saveProfile = async () => {
+    if (!viewedProfileAccount || !canEditViewedProfile || profileSavePending) return;
     const normalizedHandle = profileHandle.trim().replace(/^@+/, "");
     const nextAvatarUrl = profileAvatarUrl.trim() || null;
-    const nextSettings = {
+    let nextSettings: Record<string, unknown> = {
       ...viewedProfileAccount.settings,
       bannerUrl: profileBannerUrl.trim(),
       location: profileLocation.trim(),
     };
-    updateAccount.mutate(
-      {
+    let linkedPublicAccount: NoodleAccount | undefined;
+    if (viewedProfileAccount.visibility === "private" && noodlerEditDraft) {
+      linkedPublicAccount = accounts.find((candidate) => candidate.linkedAccountId === viewedProfileAccount.id);
+      const currentAutoPost = parseRecord(viewedProfileAccount.settings?.autoPost);
+      const autoPostChanged =
+        readAutoPostEnabled(viewedProfileAccount) !== noodlerEditDraft.autoPostEnabled ||
+        readAutoPostIntensity(viewedProfileAccount) !== noodlerEditDraft.autoPostIntensity;
+      const subscriptionPrice = Number.parseFloat(noodlerEditDraft.subscriptionPrice);
+      nextSettings = {
+        ...nextSettings,
+        stageProfile: {
+          ...parseRecord(viewedProfileAccount.settings?.stageProfile),
+          identityDisclosure: noodlerEditDraft.identityDisclosure,
+          stageName: profileName.trim(),
+          stageBio: profileBio,
+          stagePersonality: noodlerEditDraft.privatePersona.trim(),
+          stageDynamic: noodlerEditDraft.dynamic.trim(),
+          stageAppearanceOverride: noodlerEditDraft.appearanceOverride.trim(),
+          preserveLinkedAppearance: true,
+          postingMode: noodlerEditDraft.postingMode,
+        },
+        privateStageProfileVersion: 1,
+        subscriptionIncludesPpv: noodlerEditDraft.subscriptionIncludesPpv,
+        subscriptionPrice: Number.isFinite(subscriptionPrice) && subscriptionPrice >= 0 ? subscriptionPrice : null,
+        hiddenFrom: {
+          ...parseRecord(viewedProfileAccount.settings?.hiddenFrom),
+          hiddenFromAccountIds: noodlerEditDraft.hiddenAccountIds,
+        },
+        fanActivity: {
+          ...parseRecord(viewedProfileAccount.settings?.fanActivity),
+          enabled: noodlerEditDraft.fanActivityEnabled,
+          intensity: noodlerEditDraft.fanActivityIntensity,
+          autoSchedule: noodlerEditDraft.fanActivityAutoSchedule,
+        },
+        autoPost: {
+          ...currentAutoPost,
+          enabled: noodlerEditDraft.autoPostEnabled,
+          intensity: noodlerEditDraft.autoPostIntensity,
+          ...(autoPostChanged ? { nextRunAt: null } : {}),
+        },
+      };
+    }
+    let privateProfileSaved = false;
+    setProfileSavePending(true);
+    try {
+      await updateAccount.mutateAsync({
         id: viewedProfileAccount.id,
         handle: normalizedHandle,
         displayName: profileName.trim(),
         bio: profileBio,
         ...(nextAvatarUrl !== viewedProfileAccount.avatarUrl ? { avatarUrl: nextAvatarUrl } : {}),
         settings: nextSettings,
-      },
-      {
-        onSuccess: () => {
-          setProfileEditing(false);
-          toast.success("Noodle profile updated.");
-        },
-        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not update Noodle profile."),
-      },
-    );
+      });
+      privateProfileSaved = true;
+      if (linkedPublicAccount && noodlerEditDraft) {
+        await updateAccount.mutateAsync({
+          id: linkedPublicAccount.id,
+          settings: {
+            ...linkedPublicAccount.settings,
+            social: {
+              ...parseRecord(linkedPublicAccount.settings?.social),
+              knownAccountIds: noodlerEditDraft.knownAccountIds,
+            },
+          },
+        });
+      }
+      setProfileEditing(false);
+      toast.success("Noodle profile updated.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error";
+      toast.error(
+        privateProfileSaved && linkedPublicAccount
+          ? `Profile fields saved, but known accounts were not saved. Keep editing and retry: ${detail}`
+          : `Could not update Noodle profile: ${detail}`,
+      );
+    } finally {
+      setProfileSavePending(false);
+    }
   };
 
   const openPrivateStageSetup = (account: NoodleAccount) => {
@@ -1774,9 +1896,9 @@ export function NoodleView() {
     ) : null;
 
   const canSubmitPost = Boolean(
-    personaAccount &&
-      (activeNoodleMode !== "noodler" || personaLinkedNoodlerAccount) &&
-      (composerHasText || attachedImageUrl.trim() || draftPoll),
+    postingTargetAccount &&
+    composerTargetAccountId === postingTargetAccount.id &&
+    (composerHasText || attachedImageUrl.trim() || draftPoll),
   );
   const confirmActionPending =
     confirmAction?.kind === "delete-post"
@@ -1940,7 +2062,13 @@ export function NoodleView() {
       );
       return rightActivityAt - leftActivityAt;
     });
-  }, [feedVisiblePosts, followedCharacterAccountIds, isGlobalPersonaSelected, latestExternalReplyToPersonaCommentAtByPostId, timelineTab]);
+  }, [
+    feedVisiblePosts,
+    followedCharacterAccountIds,
+    isGlobalPersonaSelected,
+    latestExternalReplyToPersonaCommentAtByPostId,
+    timelineTab,
+  ]);
   const timelinePosts = useMemo(() => {
     if (!normalizedPostSearch || isAccountSearch) return baseTimelinePosts;
     return baseTimelinePosts.filter((post) => {
@@ -2385,6 +2513,7 @@ export function NoodleView() {
   const handleComposerChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
     const value = event.target.value;
     composerValueRef.current = value;
+    setComposer(value);
     const hasText = Boolean(value.trim());
     if (hasText !== composerHasTextRef.current) {
       composerHasTextRef.current = hasText;
@@ -2449,6 +2578,58 @@ export function NoodleView() {
     );
   };
 
+  const renderPostingTools = (account: NoodleAccount, mode: "noodle" | "noodler", expanded: boolean, id: string) => (
+    <PostingTools
+      key={`${id}-${account.id}`}
+      account={account}
+      mode={mode}
+      defaultExpanded={expanded}
+      access={mode === "noodler" ? composerAccess : "public"}
+      onAccessChange={mode === "noodler" ? setComposerAccess : () => setComposerAccess("public")}
+      ppvPrice={composerPpvPrice}
+      onPpvPriceChange={setComposerPpvPrice}
+      onOpenGuidedPost={mode === "noodler" ? openGuidedPrivatePost : undefined}
+      guidedPostPending={refreshNoodle.isPending}
+      personaAccount={account}
+      composeOpen={composeOpen}
+      inlineComposerRef={inlineComposerRef}
+      composer={composer}
+      onComposerChange={handleComposerChange}
+      onComposerBlur={() => setComposer(composerValueRef.current)}
+      onComposerKeyDown={handleComposerKeyDown}
+      activeMention={activeMention}
+      mentionSuggestionsCount={mentionSuggestions.length}
+      activeMentionIndex={activeMentionIndex}
+      composePlaceholder={
+        id === "noodle-timeline"
+          ? "What's simmering?"
+          : id === "noodler-hub"
+            ? "Post to NoodleR..."
+            : mode === "noodler"
+              ? `Post as @${account.handle} to NoodleR...`
+              : `Post as @${account.handle}...`
+      }
+      composeActionLabel={mode === "noodler" ? "NoodleR Post" : "Post"}
+      renderComposerMentionSuggestions={renderComposerMentionSuggestions}
+      renderDraftPoll={renderDraftPoll}
+      attachedImageUrl={attachedImageUrl}
+      onAttachedImageUrlChange={setAttachedImageUrl}
+      imageToolRef={imageToolRef}
+      pollToolRef={pollToolRef}
+      mediaToolRef={mediaToolRef}
+      activeComposerTool={activeComposerTool}
+      onActiveComposerToolChange={setActiveComposerTool}
+      draftPollActive={Boolean(draftPoll)}
+      onTogglePollComposer={togglePollComposer}
+      onSubmitPost={submitPost}
+      canSubmitPost={canSubmitPost}
+      createPostPending={createPost.isPending}
+      renderComposerToolPopovers={renderComposerToolPopovers}
+      mentionListboxId={`${id}-mention-list`}
+      dataComponent={`PostingTools.${id}`}
+    />
+  );
+
   const handleReplyChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
     const value = event.target.value;
     replyValueRef.current = value;
@@ -2466,7 +2647,8 @@ export function NoodleView() {
     if (!activeReplyMention) return;
     const insertedMention = `@${account.handle} `;
     const source = replyValueRef.current;
-    const nextReply = source.slice(0, activeReplyMention.start) + insertedMention + source.slice(activeReplyMention.end);
+    const nextReply =
+      source.slice(0, activeReplyMention.start) + insertedMention + source.slice(activeReplyMention.end);
     const nextCaret = activeReplyMention.start + insertedMention.length;
     replyValueRef.current = nextReply;
     replyHasTextRef.current = Boolean(nextReply.trim());
@@ -2532,64 +2714,24 @@ export function NoodleView() {
   };
 
   const submitPost = () => {
-    if (!personaAccount || !canSubmitPost) return;
+    if (!postingTargetAccount || !canSubmitPost) return;
     const content = composerValueRef.current.trim() || draftPoll?.question || "Shared an image.";
-    const postingToNoodler = activeNoodleMode === "noodler" && Boolean(personaLinkedNoodlerAccount);
+    const postingToNoodler = postingTargetAccount.visibility === "private";
+    const ppvPrice = postingToNoodler && composerAccess === "ppv" ? Number.parseFloat(composerPpvPrice) : NaN;
     createPost.mutate(
       {
-        authorKind: "persona",
-        authorEntityId: personaAccount.entityId,
-        ...(postingToNoodler ? { authorAccountId: personaLinkedNoodlerAccount!.id } : {}),
+        authorKind: postingTargetAccount.kind,
+        authorEntityId: postingTargetAccount.entityId,
+        authorAccountId: postingTargetAccount.id,
         content,
         imageUrl: attachedImageUrl.trim() || null,
         poll: draftPoll,
         access: postingToNoodler ? composerAccess : "public",
-      },
-      {
-        onSuccess: () => {
-          composerValueRef.current = "";
-          composerHasTextRef.current = false;
-          if (inlineComposerRef.current) inlineComposerRef.current.value = "";
-          if (modalComposerRef.current) modalComposerRef.current.value = "";
-          setComposer("");
-          setComposerHasText(false);
-          setActiveMention(null);
-          setAttachedImageUrl("");
-          setComposerAccess("public");
-          setDraftPoll(null);
-          setPollQuestion("");
-          setPollOptions(["", ""]);
-          setActiveComposerTool(null);
-          setComposeOpen(false);
-        },
-        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not post to Noodle."),
-      },
-    );
-  };
-
-  const submitPrivatePost = () => {
-    if (!viewedProfileAccount || !viewingOwnPrivateAccount) return;
-    const content = privateComposerText.trim() || "Shared an image.";
-    if (!content && !privateComposerImageUrl.trim()) return;
-    const ppvPrice = privateComposerAccess === "ppv" ? Number.parseFloat(privateComposerPpvPrice) : NaN;
-    createPost.mutate(
-      {
-        authorKind: viewedProfileAccount.kind,
-        authorEntityId: viewedProfileAccount.entityId,
-        authorAccountId: viewedProfileAccount.id,
-        content,
-        imageUrl: privateComposerImageUrl.trim() || null,
-        access: privateComposerAccess,
         ...(Number.isFinite(ppvPrice) && ppvPrice >= 0 ? { ppvPrice } : {}),
       },
       {
-        onSuccess: () => {
-          setPrivateComposerText("");
-          setPrivateComposerImageUrl("");
-          setPrivateComposerAccess("public");
-          setPrivateComposerPpvPrice("");
-        },
-        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not post to NoodleR."),
+        onSuccess: clearPostDraft,
+        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not post to Noodle."),
       },
     );
   };
@@ -2938,6 +3080,10 @@ export function NoodleView() {
   };
 
   const generateGuidedPrivatePost = (account: NoodleAccount) => {
+    if (readPrivatePostingMode(account) === "passive") {
+      toast.error("Passive NoodleR profiles cannot generate guided posts. Manual posting is still available.");
+      return;
+    }
     if (!privateGuideIncludeText && !privateGuideIncludeImage) {
       toast.error("Enable text, image, or both for the NoodleR post.");
       return;
@@ -2957,6 +3103,9 @@ export function NoodleView() {
         connectionId: settings.generationConnectionId,
         privatePostGuide: {
           access: privateGuideAccess,
+          ...(privateGuideAccess === "ppv" && Number.isFinite(Number.parseFloat(privateGuidePpvPrice))
+            ? { ppvPrice: Number.parseFloat(privateGuidePpvPrice) }
+            : {}),
           includeText: privateGuideIncludeText,
           includeImage: privateGuideIncludeImage,
           theme: privateGuideTheme.trim() || undefined,
@@ -2972,9 +3121,7 @@ export function NoodleView() {
             toast.success("NoodleR post created. Review its image prompt to finish the image.");
             return;
           }
-          toast.success(
-            result.createdPostIds?.length ? "NoodleR post created." : "NoodleR post generation finished.",
-          );
+          toast.success(result.createdPostIds?.length ? "NoodleR post created." : "NoodleR post generation finished.");
         },
         onError: (error) => toast.error(error instanceof Error ? error.message : "Could not generate a NoodleR post."),
       },
@@ -2983,6 +3130,7 @@ export function NoodleView() {
 
   const openGuidedPrivatePost = (account: NoodleAccount) => {
     setPrivateGuideAccess("subscriber");
+    setPrivateGuidePpvPrice("");
     setPrivateGuideIncludeText(true);
     setPrivateGuideIncludeImage(true);
     setPrivateGuideTheme("");
@@ -3264,7 +3412,8 @@ export function NoodleView() {
     setConfirmAction({
       kind: "uninvite-everybody",
       title: "Uninvite Everybody",
-      message: "This removes all direct Noodle character invites, clears selected invite folders, and turns off random users.",
+      message:
+        "This removes all direct Noodle character invites, clears selected invite folders, and turns off random users.",
       confirmLabel: "Uninvite everybody",
     });
   };
@@ -3310,792 +3459,489 @@ export function NoodleView() {
 
   const settingsContent = (
     <>
-      <div id={getNoodleSettingsGroupAnchorId("invites")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
-      <NoodleSettingsGroupHeading groupId="invites" />
-      <Section
-        id={getNoodleSettingsSectionAnchorId("invites")}
-        title="Invites"
-        help="Choose who can participate in Noodle refreshes. Direct character invites, selected character folders, and optional random users form the pool the generator can draw from."
+      <div
+        id={getNoodleSettingsGroupAnchorId("invites")}
+        className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0"
       >
-        <div className="space-y-4">
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] p-2 text-left transition-colors hover:bg-foreground/5"
-            disabled={!settings || updateSettings.isPending}
-            onClick={() => saveSettings({ allowRandomUsers: !(settings?.allowRandomUsers ?? false) })}
-          >
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
-              <Dices size={16} />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-xs font-semibold">Random users</span>
-              <span className="block truncate text-[0.68rem] text-[var(--muted-foreground)]">
-                {(settings?.allowRandomUsers ?? false) ? "Enabled" : "Ambient fake profiles"}
+        <NoodleSettingsGroupHeading groupId="invites" />
+        <Section
+          id={getNoodleSettingsSectionAnchorId("invites")}
+          title="Invites"
+          help="Choose who can participate in Noodle refreshes. Direct character invites, selected character folders, and optional random users form the pool the generator can draw from."
+        >
+          <div className="space-y-4">
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] p-2 text-left transition-colors hover:bg-foreground/5"
+              disabled={!settings || updateSettings.isPending}
+              onClick={() => saveSettings({ allowRandomUsers: !(settings?.allowRandomUsers ?? false) })}
+            >
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
+                <Dices size={16} />
               </span>
-            </span>
-            <span className={iconButtonClass}>
-              {(settings?.allowRandomUsers ?? false) ? <UserMinus size={15} /> : <UserPlus size={15} />}
-            </span>
-          </button>
-
-          <ToggleSetting
-            label="Professor Mari participates"
-            help="When off, Professor Mari is hidden from Noodle account discovery and excluded from future generated posts, replies, reactions, mentions, profiles, and chat carryover. Existing timeline history is preserved."
-            checked={settings?.allowProfessorMari ?? true}
-            disabled={!settings || updateSettings.isPending}
-            onChange={(checked) => saveSettings({ allowProfessorMari: checked })}
-          />
-
-          <label className="block space-y-1.5">
-            <FieldLabel help="Filters both character folders and individual characters in this invite section.">
-              Characters to Invite
-            </FieldLabel>
-            <input
-              value={inviteSearch}
-              onChange={(event) => setInviteSearch(event.target.value)}
-              className={fieldClass}
-              placeholder="Search characters or folders"
-            />
-          </label>
-
-          {characterGroups.length > 0 && (
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={() => setInviteFoldersOpen((open) => !open)}
-                className="flex w-full items-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-left text-xs transition-colors hover:border-[var(--noodle-blue)]/60"
-                aria-expanded={inviteFoldersOpen}
-              >
-                <FolderOpen size={15} className="shrink-0 text-[var(--noodle-blue)]" />
-                <span className="min-w-0 flex-1">
-                  <span className="block font-semibold">Add from Folder</span>
-                  <span className="block truncate text-[0.68rem] text-[var(--muted-foreground)]">
-                    Invite every character in selected folders.
-                  </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-semibold">Random users</span>
+                <span className="block truncate text-[0.68rem] text-[var(--muted-foreground)]">
+                  {(settings?.allowRandomUsers ?? false) ? "Enabled" : "Ambient fake profiles"}
                 </span>
-                <ChevronRight
-                  size={15}
-                  className={cn(
-                    "shrink-0 text-[var(--muted-foreground)] transition-transform",
-                    inviteFoldersOpen && "rotate-90",
-                  )}
-                />
-              </button>
-              {inviteFoldersOpen && (
-                <div className="overflow-hidden rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)]">
-                  <div className="max-h-44 space-y-2 overflow-y-auto p-2 [scrollbar-gutter:stable]">
-                    {filteredCharacterGroups.length > 0 ? (
-                      filteredCharacterGroups.map((group) => {
-                        const id = readString(group.id);
-                        const name = characterGroupName(group);
-                        const memberCount = readStringArray(group.characterIds).length;
-                        const selected = selectedCharacterGroupIds.has(id);
-                        const description = readString(group.description).trim();
-                        return (
-                          <label
-                            key={id}
-                            className="flex items-center gap-3 rounded-md p-2 text-xs hover:bg-foreground/5"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={selected}
-                              disabled={!settings || updateSettings.isPending}
-                              onChange={() => toggleCharacterGroupInvite(id)}
-                            />
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate font-semibold">{name}</span>
-                              <span className="block truncate text-[0.68rem] text-[var(--muted-foreground)]">
-                                {memberCount} {memberCount === 1 ? "character" : "characters"}
-                                {description ? `, ${description}` : ""}
-                              </span>
-                            </span>
-                          </label>
-                        );
-                      })
-                    ) : (
-                      <p className="px-3 py-2 text-xs text-[var(--muted-foreground)]">No matching folders.</p>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={inviteSelectedFolderCharacters}
-                    disabled={
-                      !settings ||
-                      updateSettings.isPending ||
-                      inviteCharacters.isPending ||
-                      uninvitedSelectedFolderCharacterIds.length === 0
-                    }
-                    className="flex min-h-10 w-full items-center justify-center gap-2 border-t border-[var(--marinara-chat-chrome-panel-border)] px-3 py-2 text-xs font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {inviteCharacters.isPending ? (
-                      <Loader2 size={14} className="animate-spin" />
-                    ) : (
-                      <UserPlus size={14} />
-                    )}
-                    {folderInviteButtonLabel}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
+              </span>
+              <span className={iconButtonClass}>
+                {(settings?.allowRandomUsers ?? false) ? <UserMinus size={15} /> : <UserPlus size={15} />}
+              </span>
+            </button>
 
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-3">
-              <FieldLabel help="Directly invited characters are eligible regardless of folder selection and get priority in Noodle suggestions and generated activity.">
-                Characters
+            <ToggleSetting
+              label="Professor Mari participates"
+              help="When off, Professor Mari is hidden from Noodle account discovery and excluded from future generated posts, replies, reactions, mentions, profiles, and chat carryover. Existing timeline history is preserved."
+              checked={settings?.allowProfessorMari ?? true}
+              disabled={!settings || updateSettings.isPending}
+              onChange={(checked) => saveSettings({ allowProfessorMari: checked })}
+            />
+
+            <label className="block space-y-1.5">
+              <FieldLabel help="Filters both character folders and individual characters in this invite section.">
+                Characters to Invite
               </FieldLabel>
-              <button
-                type="button"
-                onClick={uninviteEverybody}
-                disabled={
-                  !settings ||
-                  updateSettings.isPending ||
-                  inviteCharacter.isPending ||
-                  inviteCharacters.isPending ||
-                  removeCharacter.isPending ||
-                  clearInvites.isPending ||
-                  !hasActiveInvites
-                }
-                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--noodle-blue)]/35 px-3 text-[0.68rem] font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {clearInvites.isPending ? <Loader2 size={13} className="animate-spin" /> : <UserMinus size={13} />}
-                Uninvite everybody
-              </button>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="inline-flex min-w-0 flex-1 items-center gap-1.5">
-                <ArrowUpDown size={12} className="shrink-0 text-[var(--muted-foreground)]" />
-                <select
-                  value={noodleInviteSort}
-                  onChange={(event) => setNoodleInviteSort(normalizeBasicPanelSort(event.target.value))}
-                  className={cn(fieldClass, "h-7 text-[0.68rem]")}
-                  aria-label="Sort characters"
+              <input
+                value={inviteSearch}
+                onChange={(event) => setInviteSearch(event.target.value)}
+                className={fieldClass}
+                placeholder="Search characters or folders"
+              />
+            </label>
+
+            {characterGroups.length > 0 && (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setInviteFoldersOpen((open) => !open)}
+                  className="flex w-full items-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-left text-xs transition-colors hover:border-[var(--noodle-blue)]/60"
+                  aria-expanded={inviteFoldersOpen}
                 >
-                  {BASIC_PANEL_SORT_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option === "name-asc"
-                        ? "Name A–Z"
-                        : option === "name-desc"
-                          ? "Name Z–A"
-                          : option === "newest"
-                            ? "Newest"
-                            : "Oldest"}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="button"
-                onClick={() => setNoodleInviteGroupByStatus((open) => !open)}
-                aria-pressed={noodleInviteGroupByStatus}
-                className={cn(
-                  "inline-flex h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-[0.68rem] font-semibold transition-colors",
-                  noodleInviteGroupByStatus
-                    ? "border-[var(--noodle-blue)]/40 bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]"
-                    : "border-[var(--marinara-chat-chrome-panel-border)] text-[var(--muted-foreground)] hover:bg-[var(--accent)]",
+                  <FolderOpen size={15} className="shrink-0 text-[var(--noodle-blue)]" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-semibold">Add from Folder</span>
+                    <span className="block truncate text-[0.68rem] text-[var(--muted-foreground)]">
+                      Invite every character in selected folders.
+                    </span>
+                  </span>
+                  <ChevronRight
+                    size={15}
+                    className={cn(
+                      "shrink-0 text-[var(--muted-foreground)] transition-transform",
+                      inviteFoldersOpen && "rotate-90",
+                    )}
+                  />
+                </button>
+                {inviteFoldersOpen && (
+                  <div className="overflow-hidden rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)]">
+                    <div className="max-h-44 space-y-2 overflow-y-auto p-2 [scrollbar-gutter:stable]">
+                      {filteredCharacterGroups.length > 0 ? (
+                        filteredCharacterGroups.map((group) => {
+                          const id = readString(group.id);
+                          const name = characterGroupName(group);
+                          const memberCount = readStringArray(group.characterIds).length;
+                          const selected = selectedCharacterGroupIds.has(id);
+                          const description = readString(group.description).trim();
+                          return (
+                            <label
+                              key={id}
+                              className="flex items-center gap-3 rounded-md p-2 text-xs hover:bg-foreground/5"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                disabled={!settings || updateSettings.isPending}
+                                onChange={() => toggleCharacterGroupInvite(id)}
+                              />
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate font-semibold">{name}</span>
+                                <span className="block truncate text-[0.68rem] text-[var(--muted-foreground)]">
+                                  {memberCount} {memberCount === 1 ? "character" : "characters"}
+                                  {description ? `, ${description}` : ""}
+                                </span>
+                              </span>
+                            </label>
+                          );
+                        })
+                      ) : (
+                        <p className="px-3 py-2 text-xs text-[var(--muted-foreground)]">No matching folders.</p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={inviteSelectedFolderCharacters}
+                      disabled={
+                        !settings ||
+                        updateSettings.isPending ||
+                        inviteCharacters.isPending ||
+                        uninvitedSelectedFolderCharacterIds.length === 0
+                      }
+                      className="flex min-h-10 w-full items-center justify-center gap-2 border-t border-[var(--marinara-chat-chrome-panel-border)] px-3 py-2 text-xs font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {inviteCharacters.isPending ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <UserPlus size={14} />
+                      )}
+                      {folderInviteButtonLabel}
+                    </button>
+                  </div>
                 )}
-              >
-                <Layers size={12} />
-                Group by status
-              </button>
-            </div>
-            <div className="max-h-96 overflow-y-auto rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] [scrollbar-gutter:stable]">
-              <button
-                type="button"
-                className="flex w-full items-center justify-between border-b border-[var(--marinara-chat-chrome-panel-border)] px-2 py-1.5 text-left text-[0.68rem] font-semibold text-[var(--muted-foreground)] transition-colors hover:bg-foreground/5"
-                onClick={() => setFillerAccountsExpanded((expanded) => !expanded)}
-              >
-                <span>Manage random user roster</span>
-                <span>{fillerAccountsExpanded ? "Hide" : "Show"}</span>
-              </button>
-              {fillerAccountsExpanded && (
-                <div className="space-y-1.5 border-b border-[var(--marinara-chat-chrome-panel-border)] p-2">
-                  {fillerProfilesQuery.isLoading && (
-                    <p className="text-[0.68rem] text-[var(--muted-foreground)]">Loading…</p>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <FieldLabel help="Directly invited characters are eligible regardless of folder selection and get priority in Noodle suggestions and generated activity.">
+                  Characters
+                </FieldLabel>
+                <button
+                  type="button"
+                  onClick={uninviteEverybody}
+                  disabled={
+                    !settings ||
+                    updateSettings.isPending ||
+                    inviteCharacter.isPending ||
+                    inviteCharacters.isPending ||
+                    removeCharacter.isPending ||
+                    clearInvites.isPending ||
+                    !hasActiveInvites
+                  }
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--noodle-blue)]/35 px-3 text-[0.68rem] font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {clearInvites.isPending ? <Loader2 size={13} className="animate-spin" /> : <UserMinus size={13} />}
+                  Uninvite everybody
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex min-w-0 flex-1 items-center gap-1.5">
+                  <ArrowUpDown size={12} className="shrink-0 text-[var(--muted-foreground)]" />
+                  <select
+                    value={noodleInviteSort}
+                    onChange={(event) => setNoodleInviteSort(normalizeBasicPanelSort(event.target.value))}
+                    className={cn(fieldClass, "h-7 text-[0.68rem]")}
+                    aria-label="Sort characters"
+                  >
+                    {BASIC_PANEL_SORT_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option === "name-asc"
+                          ? "Name A–Z"
+                          : option === "name-desc"
+                            ? "Name Z–A"
+                            : option === "newest"
+                              ? "Newest"
+                              : "Oldest"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setNoodleInviteGroupByStatus((open) => !open)}
+                  aria-pressed={noodleInviteGroupByStatus}
+                  className={cn(
+                    "inline-flex h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-[0.68rem] font-semibold transition-colors",
+                    noodleInviteGroupByStatus
+                      ? "border-[var(--noodle-blue)]/40 bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]"
+                      : "border-[var(--marinara-chat-chrome-panel-border)] text-[var(--muted-foreground)] hover:bg-[var(--accent)]",
                   )}
-                  {fillerProfiles.length > 1 && (
-                    <label className="flex items-center gap-1.5 pb-0.5">
-                      <ArrowUpDown size={11} className="shrink-0 text-[var(--muted-foreground)]" />
-                      <select
-                        value={noodleFillerSort}
-                        onChange={(event) => setNoodleFillerSort(event.target.value as BasicPanelSort | "enabled-first")}
-                        className={cn(fieldClass, "h-6 text-[0.625rem]")}
-                        aria-label="Sort random user roster"
+                >
+                  <Layers size={12} />
+                  Group by status
+                </button>
+              </div>
+              <div className="max-h-96 overflow-y-auto rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] [scrollbar-gutter:stable]">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between border-b border-[var(--marinara-chat-chrome-panel-border)] px-2 py-1.5 text-left text-[0.68rem] font-semibold text-[var(--muted-foreground)] transition-colors hover:bg-foreground/5"
+                  onClick={() => setFillerAccountsExpanded((expanded) => !expanded)}
+                >
+                  <span>Manage random user roster</span>
+                  <span>{fillerAccountsExpanded ? "Hide" : "Show"}</span>
+                </button>
+                {fillerAccountsExpanded && (
+                  <div className="space-y-1.5 border-b border-[var(--marinara-chat-chrome-panel-border)] p-2">
+                    {fillerProfilesQuery.isLoading && (
+                      <p className="text-[0.68rem] text-[var(--muted-foreground)]">Loading…</p>
+                    )}
+                    {fillerProfiles.length > 1 && (
+                      <label className="flex items-center gap-1.5 pb-0.5">
+                        <ArrowUpDown size={11} className="shrink-0 text-[var(--muted-foreground)]" />
+                        <select
+                          value={noodleFillerSort}
+                          onChange={(event) =>
+                            setNoodleFillerSort(event.target.value as BasicPanelSort | "enabled-first")
+                          }
+                          className={cn(fieldClass, "h-6 text-[0.625rem]")}
+                          aria-label="Sort random user roster"
+                        >
+                          <option value="name-asc">Name A–Z</option>
+                          <option value="name-desc">Name Z–A</option>
+                          <option value="newest">Newest</option>
+                          <option value="oldest">Oldest</option>
+                          <option value="enabled-first">Enabled first</option>
+                        </select>
+                      </label>
+                    )}
+                    {sortedFillerProfiles.map((profile) => (
+                      <div
+                        key={profile.id}
+                        className="flex items-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] p-1.5"
                       >
-                        <option value="name-asc">Name A–Z</option>
-                        <option value="name-desc">Name Z–A</option>
-                        <option value="newest">Newest</option>
-                        <option value="oldest">Oldest</option>
-                        <option value="enabled-first">Enabled first</option>
-                      </select>
-                    </label>
-                  )}
-                  {sortedFillerProfiles.map((profile) => (
-                    <div key={profile.id} className="flex items-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] p-1.5">
+                        <input
+                          type="checkbox"
+                          checked={profile.enabled}
+                          onChange={(event) =>
+                            updateFillerProfile.mutate({ id: profile.id, enabled: event.target.checked })
+                          }
+                          disabled={updateFillerProfile.isPending}
+                        />
+                        <input
+                          value={profile.displayName}
+                          onChange={(event) =>
+                            updateFillerProfile.mutate({ id: profile.id, displayName: event.target.value })
+                          }
+                          className="min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 text-xs font-semibold focus:border-[var(--noodle-divider)] focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => deleteFillerProfile.mutate(profile.id)}
+                          disabled={deleteFillerProfile.isPending}
+                          className="shrink-0 rounded-full p-1 text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+                          aria-label={`Delete ${profile.displayName}`}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
+                    <div className="flex items-center gap-2 pt-1">
                       <input
-                        type="checkbox"
-                        checked={profile.enabled}
-                        onChange={(event) =>
-                          updateFillerProfile.mutate({ id: profile.id, enabled: event.target.checked })
-                        }
-                        disabled={updateFillerProfile.isPending}
-                      />
-                      <input
-                        value={profile.displayName}
-                        onChange={(event) =>
-                          updateFillerProfile.mutate({ id: profile.id, displayName: event.target.value })
-                        }
-                        className="min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 text-xs font-semibold focus:border-[var(--noodle-divider)] focus:outline-none"
+                        value={newFillerAccountName}
+                        onChange={(event) => setNewFillerAccountName(event.target.value)}
+                        placeholder="New filler account name…"
+                        className={cn(fieldClass, "h-7 flex-1 text-xs")}
                       />
                       <button
                         type="button"
-                        onClick={() => deleteFillerProfile.mutate(profile.id)}
-                        disabled={deleteFillerProfile.isPending}
-                        className="shrink-0 rounded-full p-1 text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-                        aria-label={`Delete ${profile.displayName}`}
+                        onClick={() => {
+                          const displayName = newFillerAccountName.trim();
+                          if (!displayName) return;
+                          createFillerProfile.mutate(
+                            { displayName, bio: "", enabled: true },
+                            { onSuccess: () => setNewFillerAccountName("") },
+                          );
+                        }}
+                        disabled={createFillerProfile.isPending || !newFillerAccountName.trim()}
+                        className="h-7 shrink-0 rounded-full bg-[var(--noodle-blue)] px-3 text-[0.68rem] font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        <Trash2 size={13} />
+                        Add
                       </button>
                     </div>
-                  ))}
-                  <div className="flex items-center gap-2 pt-1">
-                    <input
-                      value={newFillerAccountName}
-                      onChange={(event) => setNewFillerAccountName(event.target.value)}
-                      placeholder="New filler account name…"
-                      className={cn(fieldClass, "h-7 flex-1 text-xs")}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const displayName = newFillerAccountName.trim();
-                        if (!displayName) return;
-                        createFillerProfile.mutate(
-                          { displayName, bio: "", enabled: true },
-                          { onSuccess: () => setNewFillerAccountName("") },
-                        );
-                      }}
-                      disabled={createFillerProfile.isPending || !newFillerAccountName.trim()}
-                      className="h-7 shrink-0 rounded-full bg-[var(--noodle-blue)] px-3 text-[0.68rem] font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Add
-                    </button>
                   </div>
-                </div>
-              )}
-              {visibleInviteCharacters.map((character, index) => {
-                const id = readString(character.id);
-                const name = characterName(character);
-                const account = characterAccountByEntity.get(id);
-                const invited = account?.invited === true;
-                const includedByFolder = folderInvitedCharacterIds.has(id);
-                const status = inviteStatusFor(character);
-                const previousStatus = index > 0 ? inviteStatusFor(visibleInviteCharacters[index - 1]) : null;
-                const showGroupHeader = noodleInviteGroupByStatus && status !== previousStatus;
-                return (
-                  <Fragment key={id}>
-                    {showGroupHeader && (
-                      <p className="border-b border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--accent)]/40 px-3 py-1.5 text-[0.68rem] font-semibold text-[var(--muted-foreground)]">
-                        {INVITE_STATUS_LABELS[status]}
-                      </p>
-                    )}
-                    <div className="flex items-center gap-2 border-b border-[var(--marinara-chat-chrome-panel-border)] p-2 last:border-b-0">
-                    <Avatar
-                      account={{
-                        displayName: name,
-                        avatarUrl: readString(character.avatarPath) || null,
-                        avatarCrop: rawCharacterAvatarCrop(character),
-                      }}
-                      size="sm"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-semibold">{name}</p>
-                      <p className="text-[0.68rem] text-[var(--muted-foreground)]">
-                        {invited ? "Invited" : includedByFolder ? "Included by folder" : "Not invited"}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      className={iconButtonClass}
-                      disabled={inviteCharacter.isPending || removeCharacter.isPending}
-                      onClick={() =>
-                        invited
-                          ? removeCharacter.mutate(id, {
-                              onError: (error) =>
-                                toast.error(error instanceof Error ? error.message : "Could not remove invite."),
-                            })
-                          : inviteCharacter.mutate(id, {
-                              onError: (error) =>
-                                toast.error(error instanceof Error ? error.message : "Could not invite character."),
-                            })
-                      }
-                      title={invited ? "Remove direct invite" : "Invite directly"}
-                    >
-                      {invited ? <UserMinus size={15} /> : <UserPlus size={15} />}
-                    </button>
-                    </div>
-                  </Fragment>
-                );
-              })}
-              {orderedInviteCharacters.length === 0 && (
-                <p className="px-3 py-3 text-center text-xs text-[var(--muted-foreground)]">No matching characters.</p>
-              )}
-              {hasMoreInviteCharacters && (
-                <button
-                  type="button"
-                  onClick={() => setInviteCharacterLimit((limit) => limit + NOODLE_INVITE_PAGE_SIZE)}
-                  className="w-full px-3 py-2 text-xs font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10"
-                >
-                  Load more ({visibleInviteCharacters.length} of {orderedInviteCharacters.length})
-                </button>
-              )}
+                )}
+                {visibleInviteCharacters.map((character, index) => {
+                  const id = readString(character.id);
+                  const name = characterName(character);
+                  const account = characterAccountByEntity.get(id);
+                  const invited = account?.invited === true;
+                  const includedByFolder = folderInvitedCharacterIds.has(id);
+                  const status = inviteStatusFor(character);
+                  const previousStatus = index > 0 ? inviteStatusFor(visibleInviteCharacters[index - 1]) : null;
+                  const showGroupHeader = noodleInviteGroupByStatus && status !== previousStatus;
+                  return (
+                    <Fragment key={id}>
+                      {showGroupHeader && (
+                        <p className="border-b border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--accent)]/40 px-3 py-1.5 text-[0.68rem] font-semibold text-[var(--muted-foreground)]">
+                          {INVITE_STATUS_LABELS[status]}
+                        </p>
+                      )}
+                      <div className="flex items-center gap-2 border-b border-[var(--marinara-chat-chrome-panel-border)] p-2 last:border-b-0">
+                        <Avatar
+                          account={{
+                            displayName: name,
+                            avatarUrl: readString(character.avatarPath) || null,
+                            avatarCrop: rawCharacterAvatarCrop(character),
+                          }}
+                          size="sm"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-semibold">{name}</p>
+                          <p className="text-[0.68rem] text-[var(--muted-foreground)]">
+                            {invited ? "Invited" : includedByFolder ? "Included by folder" : "Not invited"}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className={iconButtonClass}
+                          disabled={inviteCharacter.isPending || removeCharacter.isPending}
+                          onClick={() =>
+                            invited
+                              ? removeCharacter.mutate(id, {
+                                  onError: (error) =>
+                                    toast.error(error instanceof Error ? error.message : "Could not remove invite."),
+                                })
+                              : inviteCharacter.mutate(id, {
+                                  onError: (error) =>
+                                    toast.error(error instanceof Error ? error.message : "Could not invite character."),
+                                })
+                          }
+                          title={invited ? "Remove direct invite" : "Invite directly"}
+                        >
+                          {invited ? <UserMinus size={15} /> : <UserPlus size={15} />}
+                        </button>
+                      </div>
+                    </Fragment>
+                  );
+                })}
+                {orderedInviteCharacters.length === 0 && (
+                  <p className="px-3 py-3 text-center text-xs text-[var(--muted-foreground)]">
+                    No matching characters.
+                  </p>
+                )}
+                {hasMoreInviteCharacters && (
+                  <button
+                    type="button"
+                    onClick={() => setInviteCharacterLimit((limit) => limit + NOODLE_INVITE_PAGE_SIZE)}
+                    className="w-full px-3 py-2 text-xs font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10"
+                  >
+                    Load more ({visibleInviteCharacters.length} of {orderedInviteCharacters.length})
+                  </button>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      </Section>
+        </Section>
       </div>
 
       {settings && (
         <>
-          <div id={getNoodleSettingsGroupAnchorId("participants-activity")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
-          <NoodleSettingsGroupHeading groupId="participants-activity" />
-          <Section
-            id={getNoodleSettingsSectionAnchorId("active-accounts")}
-            title="Active Accounts"
-            help="Controls how many eligible characters or random users are active during one generation of the timeline."
+          <div
+            id={getNoodleSettingsGroupAnchorId("participants-activity")}
+            className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0"
           >
-            <div className="space-y-3">
-              <label className="block space-y-1.5">
-                <FieldLabel help="Selects how many invited characters or random users are active during one timeline generation. All uses every eligible account, Random range chooses between Min active and Max active, and Exact count uses one fixed count.">
-                  Active selection
-                </FieldLabel>
-                <select
-                  value={settings.participantSelectionMode}
-                  onChange={(event) =>
-                    saveSettings({
-                      participantSelectionMode: event.target
-                        .value as NoodleSettingsUpdateInput["participantSelectionMode"],
-                    })
-                  }
-                  className={fieldClass}
-                >
-                  <option value="random_range">Random range</option>
-                  <option value="exact">Exact count</option>
-                  <option value="all">All invited</option>
-                </select>
-              </label>
-              {settings.participantSelectionMode === "random_range" && (
-                <div className="grid grid-cols-2 gap-2">
+            <NoodleSettingsGroupHeading groupId="participants-activity" />
+            <Section
+              id={getNoodleSettingsSectionAnchorId("active-accounts")}
+              title="Active Accounts"
+              help="Controls how many eligible characters or random users are active during one generation of the timeline."
+            >
+              <div className="space-y-3">
+                <label className="block space-y-1.5">
+                  <FieldLabel help="Selects how many invited characters or random users are active during one timeline generation. All uses every eligible account, Random range chooses between Min active and Max active, and Exact count uses one fixed count.">
+                    Active selection
+                  </FieldLabel>
+                  <select
+                    value={settings.participantSelectionMode}
+                    onChange={(event) =>
+                      saveSettings({
+                        participantSelectionMode: event.target
+                          .value as NoodleSettingsUpdateInput["participantSelectionMode"],
+                      })
+                    }
+                    className={fieldClass}
+                  >
+                    <option value="random_range">Random range</option>
+                    <option value="exact">Exact count</option>
+                    <option value="all">All invited</option>
+                  </select>
+                </label>
+                {settings.participantSelectionMode === "random_range" && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumberSetting
+                      label="Min active"
+                      help="Lowest number of eligible character or random-user accounts that can participate in one timeline generation."
+                      value={settings.participantMin}
+                      min={1}
+                      max={100}
+                      onCommit={(value) => saveSettings({ participantMin: value })}
+                    />
+                    <NumberSetting
+                      label="Max active"
+                      help="Highest number of eligible character or random-user accounts that can participate in one timeline generation."
+                      value={settings.participantMax}
+                      min={1}
+                      max={100}
+                      onCommit={(value) => saveSettings({ participantMax: value })}
+                    />
+                  </div>
+                )}
+                {settings.participantSelectionMode === "exact" && (
                   <NumberSetting
-                    label="Min active"
-                    help="Lowest number of eligible character or random-user accounts that can participate in one timeline generation."
-                    value={settings.participantMin}
-                    min={1}
-                    max={100}
-                    onCommit={(value) => saveSettings({ participantMin: value })}
-                  />
-                  <NumberSetting
-                    label="Max active"
-                    help="Highest number of eligible character or random-user accounts that can participate in one timeline generation."
+                    label="Active count"
+                    help="Exact number of eligible character or random-user accounts that participate in one timeline generation."
                     value={settings.participantMax}
                     min={1}
                     max={100}
-                    onCommit={(value) => saveSettings({ participantMax: value })}
+                    onCommit={(value) => saveSettings({ participantMin: value, participantMax: value })}
                   />
-                </div>
-              )}
-              {settings.participantSelectionMode === "exact" && (
+                )}
+              </div>
+            </Section>
+
+            <Section
+              id={getNoodleSettingsSectionAnchorId("activity")}
+              title="Activity"
+              help="Limits how much generated Noodle activity one refresh may create."
+            >
+              <div className="grid grid-cols-2 gap-2">
                 <NumberSetting
-                  label="Active count"
-                  help="Exact number of eligible character or random-user accounts that participate in one timeline generation."
-                  value={settings.participantMax}
-                  min={1}
+                  label="Posts"
+                  help="Maximum new top-level posts the model may create in one refresh."
+                  value={settings.maxGeneratedPostsPerRefresh}
+                  min={0}
                   max={100}
-                  onCommit={(value) => saveSettings({ participantMin: value, participantMax: value })}
+                  onCommit={(value) => saveSettings({ maxGeneratedPostsPerRefresh: value })}
                 />
-              )}
-            </div>
-          </Section>
-
-          <Section
-            id={getNoodleSettingsSectionAnchorId("activity")}
-            title="Activity"
-            help="Limits how much generated Noodle activity one refresh may create."
-          >
-            <div className="grid grid-cols-2 gap-2">
-              <NumberSetting
-                label="Posts"
-                help="Maximum new top-level posts the model may create in one refresh."
-                value={settings.maxGeneratedPostsPerRefresh}
-                min={0}
-                max={100}
-                onCommit={(value) => saveSettings({ maxGeneratedPostsPerRefresh: value })}
-              />
-              <NumberSetting
-                label="Replies"
-                help="Maximum reply interactions the model may add in one refresh."
-                value={settings.maxRepliesPerRefresh}
-                min={0}
-                max={200}
-                onCommit={(value) => saveSettings({ maxRepliesPerRefresh: value })}
-              />
-              <NumberSetting
-                label="Reposts"
-                help="Maximum repost interactions the model may add in one refresh."
-                value={settings.maxRepostsPerRefresh}
-                min={0}
-                max={100}
-                onCommit={(value) => saveSettings({ maxRepostsPerRefresh: value })}
-              />
-              <NumberSetting
-                label="Likes"
-                help="Maximum like interactions the model may add in one refresh."
-                value={settings.maxLikesPerRefresh}
-                min={0}
-                max={500}
-                onCommit={(value) => saveSettings({ maxLikesPerRefresh: value })}
-              />
-            </div>
-          </Section>
+                <NumberSetting
+                  label="Replies"
+                  help="Maximum reply interactions the model may add in one refresh."
+                  value={settings.maxRepliesPerRefresh}
+                  min={0}
+                  max={200}
+                  onCommit={(value) => saveSettings({ maxRepliesPerRefresh: value })}
+                />
+                <NumberSetting
+                  label="Reposts"
+                  help="Maximum repost interactions the model may add in one refresh."
+                  value={settings.maxRepostsPerRefresh}
+                  min={0}
+                  max={100}
+                  onCommit={(value) => saveSettings({ maxRepostsPerRefresh: value })}
+                />
+                <NumberSetting
+                  label="Likes"
+                  help="Maximum like interactions the model may add in one refresh."
+                  value={settings.maxLikesPerRefresh}
+                  min={0}
+                  max={500}
+                  onCommit={(value) => saveSettings({ maxLikesPerRefresh: value })}
+                />
+              </div>
+            </Section>
           </div>
 
-          <div id={getNoodleSettingsGroupAnchorId("refresh")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
-          <NoodleSettingsGroupHeading groupId="refresh" />
-          <Section
-            id={getNoodleSettingsSectionAnchorId("refresh")}
-            title="Refresh"
-            help="Controls the model connection and how often Noodle can create a fresh timeline update."
+          <div
+            id={getNoodleSettingsGroupAnchorId("refresh")}
+            className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0"
           >
-            <div className="space-y-3">
-              <label className="block space-y-1.5">
-                <FieldLabel help="The text-generation connection used to write new Noodle posts, replies, reposts, likes, and activity digests. Leave blank to use the workspace's default-for-agents connection, if one is set.">
-                  Generation connection
-                </FieldLabel>
-                <select
-                  value={settings.generationConnectionId ?? ""}
-                  onChange={(event) => saveSettings({ generationConnectionId: event.target.value || null })}
-                  className={fieldClass}
-                >
-                  <option value="">Use default-for-agents connection</option>
-                  {connections.map((connection) => (
-                    <option key={String(connection.id)} value={String(connection.id)}>
-                      {String(connection.name ?? connection.model ?? "Connection")}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <NumberSetting
-                label="Refreshes/day"
-                help="How many automatic timeline refreshes Noodle schedules per local day. Refreshes are spread across the day with one randomized time in each window. Set 0 to turn them off."
-                value={settings.refreshesPerDay}
-                min={0}
-                max={24}
-                onCommit={(value) => saveSettings({ refreshesPerDay: value })}
-              />
-              {scheduler && (
-                <div
-                  className="rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--noodle-blue)]/5 px-3 py-2.5 text-xs"
-                  data-component="NoodleView.RefreshSchedule"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="inline-flex items-center gap-2 font-semibold text-[var(--foreground)]">
-                      <RefreshCw size={14} />
-                      Automatic schedule
-                    </span>
-                    {scheduler.refreshesPerDay > 0 && (
-                      <span className="shrink-0 text-[var(--muted-foreground)]">
-                        {scheduler.completedSlots}/{scheduler.refreshesPerDay} slots
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-1.5 leading-5 text-[var(--muted-foreground)]">{noodleSchedulerSummary(scheduler)}</p>
-                  {(scheduler.timezone === "Etc/Unknown" || scheduler.timezone === "local") && (
-                    <div
-                      className="mt-2 flex gap-2 rounded-md bg-[var(--destructive)]/10 px-2.5 py-2 leading-5 text-[var(--foreground)]"
-                      role="alert"
-                    >
-                      <AlertTriangle className="mt-0.5 shrink-0 text-[var(--destructive)]" size={14} />
-                      <p>
-                        The server timezone could not be detected. Remove a blank <code>TZ=</code> from your{" "}
-                        <code>.env</code>, or set an IANA timezone such as <code>TZ=Europe/Warsaw</code>, then restart
-                        Marinara.
-                      </p>
-                    </div>
-                  )}
-                  {scheduler.scheduledTimes.length > 0 && (
-                    <div className="mt-2">
-                      <p className="text-[0.68rem] font-semibold text-[var(--muted-foreground)]">
-                        Planned times ({scheduler.timezone})
-                      </p>
-                      <div className="mt-1 max-h-52 divide-y divide-[var(--noodle-divider)] overflow-y-auto border-y border-[var(--noodle-divider)]">
-                        {scheduler.scheduledTimes.map((time, index) => {
-                          const completed = (scheduler.completedTimes ?? []).includes(time);
-                          const editing = editingRefreshTime === time;
-                          const originalClockTime = formatNoodleRefreshTimeInput(time, scheduler.timezone);
-                          return (
-                            <div
-                              key={time}
-                              className="flex min-h-10 items-center gap-2 py-1.5"
-                              data-noodle-schedule-slot={time}
-                            >
-                              <span className="min-w-0 flex-1">
-                                <span className="mr-2 text-[var(--muted-foreground)]">{index + 1}.</span>
-                                <span className="font-semibold text-[var(--foreground)]">
-                                  {formatNoodleRefreshTime(time, scheduler.timezone)}
-                                </span>
-                              </span>
-                              {completed ? (
-                                <span className="shrink-0 text-[0.65rem] font-semibold text-[var(--muted-foreground)]">
-                                  Completed
-                                </span>
-                              ) : editing ? (
-                                <div className="flex shrink-0 items-center gap-1">
-                                  <input
-                                    type="time"
-                                    value={refreshTimeDraft}
-                                    onChange={(event) => setRefreshTimeDraft(event.target.value)}
-                                    aria-label={`New time for refresh ${index + 1}`}
-                                    className="mari-chrome-field h-8 w-[6.5rem] rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-2 text-xs text-[var(--foreground)] outline-none focus:border-[var(--noodle-blue)]"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={cancelRefreshTimeEdit}
-                                    disabled={rescheduleRefresh.isPending}
-                                    className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:opacity-50"
-                                    title="Cancel"
-                                    aria-label="Cancel reschedule"
-                                  >
-                                    <X size={14} />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={saveRefreshTimeEdit}
-                                    disabled={
-                                      rescheduleRefresh.isPending ||
-                                      !refreshTimeDraft ||
-                                      refreshTimeDraft === originalClockTime
-                                    }
-                                    className="h-8 rounded-full bg-[var(--noodle-blue)] px-3 text-[0.68rem] font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                                  >
-                                    {rescheduleRefresh.isPending ? "Saving" : "Save"}
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => beginRefreshTimeEdit(time)}
-                                  disabled={rescheduleRefresh.isPending}
-                                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:opacity-50"
-                                  title={`Reschedule ${formatNoodleRefreshTime(time, scheduler.timezone)}`}
-                                  aria-label={`Reschedule refresh ${index + 1}`}
-                                >
-                                  <Pencil size={14} />
-                                </button>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                  {scheduler.lastError && (
-                    <p className="mt-1 line-clamp-2 leading-5 text-[var(--noodle-blue)]" title={scheduler.lastError}>
-                      Waiting: {scheduler.lastError}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          </Section>
-          </div>
-
-          <div id={getNoodleSettingsGroupAnchorId("content")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
-          <NoodleSettingsGroupHeading groupId="content" />
-          <Section
-            title="Noodle Prompt"
-            help="Controls the editable base instructions used to write Noodle timeline refreshes. Timeline voice and tone instructions are appended after this prompt."
-          >
-            <div data-component="NoodleView.PromptSetting" className="space-y-3">
-              <div className="flex items-start gap-3">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
-                  {noodlePromptLoading ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-xs font-semibold text-[var(--foreground)]">Timeline base prompt</p>
-                    <span className="rounded-full border border-[var(--noodle-blue)]/30 bg-[var(--noodle-blue)]/10 px-2 py-0.5 text-[0.625rem] font-semibold text-[var(--noodle-blue)]">
-                      {noodlePromptOverride?.enabled === true ? "Custom" : "Default"}
-                    </span>
-                  </div>
-                  <p className="mt-1 line-clamp-3 whitespace-pre-line text-[0.68rem] leading-5 text-[var(--muted-foreground)]">
-                    {noodlePromptDetail.isError || noodlePromptDefault.isError
-                      ? "The Noodle prompt could not be loaded."
-                      : noodlePromptText || "Loading the default Noodle prompt…"}
-                  </p>
-                </div>
-              </div>
-              <div className="flex flex-wrap justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => void restoreDefaultNoodlePrompt()}
-                  disabled={!noodlePromptHasOverride || resetNoodlePrompt.isPending}
-                  className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-md border border-[var(--noodle-blue)]/35 px-3 text-xs font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-45"
-                >
-                  {resetNoodlePrompt.isPending ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
-                  Restore default
-                </button>
-                <button
-                  type="button"
-                  onClick={openNoodlePromptEditor}
-                  disabled={
-                    noodlePromptLoading || noodlePromptDetail.isError || noodlePromptDefault.isError || !noodlePromptText
-                  }
-                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:bg-[var(--noodle-blue)]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--noodle-blue)]/70 disabled:cursor-not-allowed disabled:opacity-45"
-                >
-                  <Pencil size={14} aria-hidden="true" className="shrink-0 text-[var(--noodle-blue)]" />
-                  <span>Edit prompt</span>
-                </button>
-              </div>
-            </div>
-          </Section>
-
-          <Section
-            id={getNoodleSettingsSectionAnchorId("world-lore")}
-            title="World / Lore"
-            help="Lets Noodle refreshes pull matching lorebook entries into the timeline prompt, the same lorebook system used by chat generation."
-          >
-            <div className="space-y-3">
-              <ToggleSetting
-                label="Lorebook context"
-                help="Scans recent Noodle activity and character profiles for lorebook keyword matches and includes them as world/lore context. Off by default; existing timelines are unaffected until you turn this on."
-                checked={settings.enableLorebookContext}
-                disabled={updateSettings.isPending}
-                onChange={(checked) => saveSettings({ enableLorebookContext: checked })}
-              />
-            </div>
-          </Section>
-
-          <Section
-            id={getNoodleSettingsSectionAnchorId("timeline-writing")}
-            title="Timeline Writing"
-            help="Tunes how the refresh writer approaches tone and long-term memory. Off by default; existing timelines keep their current behavior until you turn this on."
-          >
-            <div className="space-y-3">
-              <ToggleSetting
-                label="Enhanced tone & continuity"
-                help="When on: each account's voice is grounded more strongly in its own personality instead of a default upbeat tone, accounts are encouraged to react to each other's posts in the same refresh, and older-post recall happens more often and favors posts relevant to currently active accounts. When off, refreshes use the original tone and recall behavior. The Noodle Timeline Voice & Tone prompt override (Settings -> Generations -> Image Generation Prompt Overrides) still lets you rewrite the tone text directly regardless of this toggle."
-                checked={settings.enableEnhancedTimelineWriting}
-                disabled={updateSettings.isPending}
-                onChange={(checked) => saveSettings({ enableEnhancedTimelineWriting: checked })}
-              />
-            </div>
-          </Section>
-
-          <Section
-            id={getNoodleSettingsSectionAnchorId("image-generation")}
-            title="Image Generation"
-            help="Controls generated post images and whether characters can reuse existing gallery images."
-          >
-            <div className="space-y-3">
-              <ToggleSetting
-                label="Image generation"
-                help="Generates actual post images from Noodle visual requests, using image connection defaults and the global image style profile system."
-                checked={settings.enableImagePrompts}
-                disabled={updateSettings.isPending}
-                onChange={(checked) => saveSettings({ enableImagePrompts: checked })}
-              />
-              {settings.enableImagePrompts && (
-                <>
-                  <label className="block space-y-1.5">
-                    <FieldLabel help="The image-generation connection used to create Noodle post images. Leaving it as Default uses the connection marked default for image generation.">
-                      Image generation connection
-                    </FieldLabel>
-                    <select
-                      value={settings.imageGenerationConnectionId ?? ""}
-                      onChange={(event) => saveSettings({ imageGenerationConnectionId: event.target.value || null })}
-                      className={fieldClass}
-                    >
-                      <option value="">Default image generation connection</option>
-                      {imageConnections.map((connection) => (
-                        <option key={String(connection.id)} value={String(connection.id)}>
-                          {String(connection.name ?? connection.model ?? "Image connection")}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block space-y-1.5">
-                    <FieldLabel help="Extra instructions passed into the Noodle Post Image prompt override. The full template is also available in Settings, Generations, Image Generation Prompt Overrides.">
-                      Prompt instructions
-                    </FieldLabel>
-                    <textarea
-                      value={imageGenerationPromptDraft}
-                      onChange={(event) => setImageGenerationPromptDraft(event.target.value)}
-                      onBlur={() => {
-                        if (imageGenerationPromptDraft !== settings.imageGenerationPrompt) {
-                          saveSettings({ imageGenerationPrompt: imageGenerationPromptDraft });
-                        }
-                      }}
-                      className={textareaClass}
-                    />
-                  </label>
-                  <ToggleSetting
-                    label="Use avatar references"
-                    help="Sends character avatars or preferred full-body references to the image provider when a character's post image is generated."
-                    checked={settings.imageGenerationUseAvatarReferences}
-                    disabled={updateSettings.isPending}
-                    onChange={(checked) => saveSettings({ imageGenerationUseAvatarReferences: checked })}
-                  />
-                  <ToggleSetting
-                    label="Include descriptions"
-                    help="Adds character appearance and description notes to the final image prompt before style-profile compilation."
-                    checked={settings.imageGenerationIncludeDescriptions}
-                    disabled={updateSettings.isPending}
-                    onChange={(checked) => saveSettings({ imageGenerationIncludeDescriptions: checked })}
-                  />
-                  <NumberSetting
-                    label="Images/refresh"
-                    help="Maximum number of generated post images Noodle may create during each manual or automatic timeline refresh."
-                    value={settings.maxImagesPerRefresh}
-                    min={0}
-                    max={50}
-                    onCommit={(value) => saveSettings({ maxImagesPerRefresh: value })}
-                  />
-                </>
-              )}
-              <ToggleSetting
-                label="Attach gallery images"
-                help="Lets characters attach existing images from their own galleries or chats they are in when the timeline writer asks for a gallery attachment."
-                checked={settings.allowGalleryImageAttachments}
-                disabled={updateSettings.isPending}
-                onChange={(checked) => saveSettings({ allowGalleryImageAttachments: checked })}
-              />
-            </div>
-          </Section>
-
-          <Section
-            id={getNoodleSettingsSectionAnchorId("image-understanding")}
-            title="Image Understanding"
-            help="Lets a vision-capable connection describe timeline images for the Noodle writer, including text-only models."
-          >
-            <div className="space-y-3">
-              <ToggleSetting
-                label="Image captioning"
-                help="Converts timeline images into concise descriptions before refresh generation, so text-only models can understand what was posted."
-                checked={settings.imageCaptioningEnabled}
-                disabled={updateSettings.isPending || connections.length === 0}
-                onChange={(checked) => saveSettings({ imageCaptioningEnabled: checked })}
-              />
-              {settings.imageCaptioningEnabled && (
+            <NoodleSettingsGroupHeading groupId="refresh" />
+            <Section
+              id={getNoodleSettingsSectionAnchorId("refresh")}
+              title="Refresh"
+              help="Controls the model connection and how often Noodle can create a fresh timeline update."
+            >
+              <div className="space-y-3">
                 <label className="block space-y-1.5">
-                  <FieldLabel help="Choose a vision-capable text connection. Default uses the Noodle generation connection; select another connection when that model cannot see images.">
-                    Captioning connection
+                  <FieldLabel help="The text-generation connection used to write new Noodle posts, replies, reposts, likes, and activity digests. Leave blank to use the workspace's default-for-agents connection, if one is set.">
+                    Generation connection
                   </FieldLabel>
                   <select
-                    value={settings.imageCaptioningConnectionId ?? ""}
-                    onChange={(event) => saveSettings({ imageCaptioningConnectionId: event.target.value || null })}
+                    value={settings.generationConnectionId ?? ""}
+                    onChange={(event) => saveSettings({ generationConnectionId: event.target.value || null })}
                     className={fieldClass}
                   >
-                    <option value="">Use Noodle generation connection</option>
+                    <option value="">Use default-for-agents connection</option>
                     {connections.map((connection) => (
                       <option key={String(connection.id)} value={String(connection.id)}>
                         {String(connection.name ?? connection.model ?? "Connection")}
@@ -4103,178 +3949,183 @@ export function NoodleView() {
                     ))}
                   </select>
                 </label>
-              )}
-            </div>
-          </Section>
-          </div>
-
-          <div id={getNoodleSettingsGroupAnchorId("appearance")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
-          <NoodleSettingsGroupHeading groupId="appearance" />
-          <Section
-            id={getNoodleSettingsSectionAnchorId("appearance")}
-            title="Appearance"
-            help="Controls how the timeline and profiles render posts."
-          >
-            <div className="space-y-3">
-              <label className="block space-y-1.5">
-                <FieldLabel help="Timeline shows posts as Twitter-style cards. Grid shows an image-first, Instagram-style grid on the main feed and on profile tabs (posts without an image are skipped in Grid).">
-                  Feed layout
-                </FieldLabel>
-                <select
-                  value={settings.layout}
-                  onChange={(event) => saveSettings({ layout: event.target.value as NoodleSettingsUpdateInput["layout"] })}
-                  className={fieldClass}
-                >
-                  <option value="timeline">Timeline</option>
-                  <option value="grid">Grid</option>
-                </select>
-              </label>
-              <ToggleSetting
-                label="Allow global feed persona"
-                help="Adds a 'Global' entry to the account switcher that shows every post across all personas, in both Noodle and NoodleR."
-                checked={settings.allowGlobalPersona === true}
-                disabled={updateSettings.isPending}
-                onChange={(enabled) => saveSettings({ allowGlobalPersona: enabled })}
-              />
-            </div>
-          </Section>
-          </div>
-
-          <div id={getNoodleSettingsGroupAnchorId("chat")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
-          <NoodleSettingsGroupHeading groupId="chat" />
-          <Section
-            id={getNoodleSettingsSectionAnchorId("carryover")}
-            title="Carryover"
-            help="Controls whether recent Noodle activity is appended to chat, roleplay, or game context."
-          >
-            <div className="space-y-3">
-              <div className="space-y-2">
-                <FieldLabel help="Toggle each mode that should receive recent Noodle activity involving the current persona or chat characters. When all three are off, nothing is carried into chat context.">
-                  Carryover to chats
-                </FieldLabel>
-                <div className="grid gap-2 sm:grid-cols-3">
-                  <ToggleSetting
-                    label="Conversations"
-                    checked={carryoverTargets.has("conversation")}
-                    disabled={updateSettings.isPending}
-                    onChange={(checked) => toggleCarryoverTarget("conversation", checked)}
-                  />
-                  <ToggleSetting
-                    label="Roleplays"
-                    checked={carryoverTargets.has("roleplay")}
-                    disabled={updateSettings.isPending}
-                    onChange={(checked) => toggleCarryoverTarget("roleplay", checked)}
-                  />
-                  <ToggleSetting
-                    label="Games"
-                    checked={carryoverTargets.has("game")}
-                    disabled={updateSettings.isPending}
-                    onChange={(checked) => toggleCarryoverTarget("game", checked)}
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
                 <NumberSetting
-                  label="Carry hours"
-                  help="How far back Noodle looks for activity digests when adding recent social media context to chats."
-                  value={settings.carryoverHours}
-                  min={1}
-                  max={720}
-                  onCommit={(value) => saveSettings({ carryoverHours: value })}
+                  label="Refreshes/day"
+                  help="How many automatic timeline refreshes Noodle schedules per local day. Refreshes are spread across the day with one randomized time in each window. Set 0 to turn them off."
+                  value={settings.refreshesPerDay}
+                  min={0}
+                  max={24}
+                  onCommit={(value) => saveSettings({ refreshesPerDay: value })}
                 />
-                <NumberSetting
-                  label="Carry items"
-                  help="Maximum number of recent Noodle activity summaries appended to a chat context."
-                  value={settings.carryoverMaxItems}
-                  min={1}
-                  max={50}
-                  onCommit={(value) => saveSettings({ carryoverMaxItems: value })}
-                />
+                {scheduler && (
+                  <div
+                    className="rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--noodle-blue)]/5 px-3 py-2.5 text-xs"
+                    data-component="NoodleView.RefreshSchedule"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="inline-flex items-center gap-2 font-semibold text-[var(--foreground)]">
+                        <RefreshCw size={14} />
+                        Automatic schedule
+                      </span>
+                      {scheduler.refreshesPerDay > 0 && (
+                        <span className="shrink-0 text-[var(--muted-foreground)]">
+                          {scheduler.completedSlots}/{scheduler.refreshesPerDay} slots
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1.5 leading-5 text-[var(--muted-foreground)]">
+                      {noodleSchedulerSummary(scheduler)}
+                    </p>
+                    {(scheduler.timezone === "Etc/Unknown" || scheduler.timezone === "local") && (
+                      <div
+                        className="mt-2 flex gap-2 rounded-md bg-[var(--destructive)]/10 px-2.5 py-2 leading-5 text-[var(--foreground)]"
+                        role="alert"
+                      >
+                        <AlertTriangle className="mt-0.5 shrink-0 text-[var(--destructive)]" size={14} />
+                        <p>
+                          The server timezone could not be detected. Remove a blank <code>TZ=</code> from your{" "}
+                          <code>.env</code>, or set an IANA timezone such as <code>TZ=Europe/Warsaw</code>, then restart
+                          Marinara.
+                        </p>
+                      </div>
+                    )}
+                    {scheduler.scheduledTimes.length > 0 && (
+                      <div className="mt-2">
+                        <p className="text-[0.68rem] font-semibold text-[var(--muted-foreground)]">
+                          Planned times ({scheduler.timezone})
+                        </p>
+                        <div className="mt-1 max-h-52 divide-y divide-[var(--noodle-divider)] overflow-y-auto border-y border-[var(--noodle-divider)]">
+                          {scheduler.scheduledTimes.map((time, index) => {
+                            const completed = (scheduler.completedTimes ?? []).includes(time);
+                            const editing = editingRefreshTime === time;
+                            const originalClockTime = formatNoodleRefreshTimeInput(time, scheduler.timezone);
+                            return (
+                              <div
+                                key={time}
+                                className="flex min-h-10 items-center gap-2 py-1.5"
+                                data-noodle-schedule-slot={time}
+                              >
+                                <span className="min-w-0 flex-1">
+                                  <span className="mr-2 text-[var(--muted-foreground)]">{index + 1}.</span>
+                                  <span className="font-semibold text-[var(--foreground)]">
+                                    {formatNoodleRefreshTime(time, scheduler.timezone)}
+                                  </span>
+                                </span>
+                                {completed ? (
+                                  <span className="shrink-0 text-[0.65rem] font-semibold text-[var(--muted-foreground)]">
+                                    Completed
+                                  </span>
+                                ) : editing ? (
+                                  <div className="flex shrink-0 items-center gap-1">
+                                    <input
+                                      type="time"
+                                      value={refreshTimeDraft}
+                                      onChange={(event) => setRefreshTimeDraft(event.target.value)}
+                                      aria-label={`New time for refresh ${index + 1}`}
+                                      className="mari-chrome-field h-8 w-[6.5rem] rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-2 text-xs text-[var(--foreground)] outline-none focus:border-[var(--noodle-blue)]"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={cancelRefreshTimeEdit}
+                                      disabled={rescheduleRefresh.isPending}
+                                      className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:opacity-50"
+                                      title="Cancel"
+                                      aria-label="Cancel reschedule"
+                                    >
+                                      <X size={14} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={saveRefreshTimeEdit}
+                                      disabled={
+                                        rescheduleRefresh.isPending ||
+                                        !refreshTimeDraft ||
+                                        refreshTimeDraft === originalClockTime
+                                      }
+                                      className="h-8 rounded-full bg-[var(--noodle-blue)] px-3 text-[0.68rem] font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                      {rescheduleRefresh.isPending ? "Saving" : "Save"}
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => beginRefreshTimeEdit(time)}
+                                    disabled={rescheduleRefresh.isPending}
+                                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:opacity-50"
+                                    title={`Reschedule ${formatNoodleRefreshTime(time, scheduler.timezone)}`}
+                                    aria-label={`Reschedule refresh ${index + 1}`}
+                                  >
+                                    <Pencil size={14} />
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {scheduler.lastError && (
+                      <p className="mt-1 line-clamp-2 leading-5 text-[var(--noodle-blue)]" title={scheduler.lastError}>
+                        Waiting: {scheduler.lastError}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
-          </Section>
+            </Section>
           </div>
 
-          <div id={getNoodleSettingsGroupAnchorId("noodler")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
-          <NoodleSettingsGroupHeading groupId="noodler" />
-          <Section
-            id={getNoodleSettingsSectionAnchorId("noodler-access")}
-            title="NoodleR Access"
-            help="Controls whether the private NoodleR side of Noodle is available from the mode switcher and mobile navigation."
+          <div
+            id={getNoodleSettingsGroupAnchorId("content")}
+            className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0"
           >
-            <div className="space-y-3">
-              <ToggleSetting
-                label="Enable NoodleR"
-                help="Unlocks the private creator network mode. The first activation runs a completely serious verification screen."
-                checked={isNoodlerEnabled}
-                disabled={updateSettings.isPending}
-                onChange={setNoodlerEnabled}
-              />
-              {!isNoodlerEnabled && (
-                <p className="rounded-md border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/5 px-3 py-2 text-xs leading-5 text-[var(--muted-foreground)]">
-                  NoodleR stays tucked away until this is enabled. Attempts to enter NoodleR will open verification first.
-                </p>
-              )}
-              <button
-                type="button"
-                onClick={enterNoodlerVerification}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-[var(--noodle-divider)] px-3 text-xs font-bold transition-colors hover:bg-[var(--accent)]"
-              >
-                <Lock size={14} />
-                Test verification screen
-              </button>
-              {isNoodlerEnabled && (
-                <p className="rounded-md border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/5 px-3 py-2 text-xs leading-5 text-[var(--muted-foreground)]">
-                  Page-specific creator tools live on each NoodleR profile. Open a page to edit its stage identity,
-                  subscription pricing, and fan activity.
-                </p>
-              )}
-            </div>
-          </Section>
-
-          {isNoodlerEnabled && (
+            <NoodleSettingsGroupHeading groupId="content" />
             <Section
-              id={getNoodleSettingsSectionAnchorId("noodler-prompt")}
-              title="NoodleR Prompt"
-              help="Controls the editable base instructions used to write NoodleR (private page) activity. Separate from the public Noodle prompt. Timeline voice and tone instructions are appended after this prompt."
+              title="Noodle Prompt"
+              help="Controls the editable base instructions used to write Noodle timeline refreshes. Timeline voice and tone instructions are appended after this prompt."
             >
               <div data-component="NoodleView.PromptSetting" className="space-y-3">
                 <div className="flex items-start gap-3">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
-                    {noodlerPromptLoading ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
+                    {noodlePromptLoading ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-xs font-semibold text-[var(--foreground)]">NoodleR base prompt</p>
+                      <p className="text-xs font-semibold text-[var(--foreground)]">Timeline base prompt</p>
                       <span className="rounded-full border border-[var(--noodle-blue)]/30 bg-[var(--noodle-blue)]/10 px-2 py-0.5 text-[0.625rem] font-semibold text-[var(--noodle-blue)]">
-                        {noodlerPromptOverride?.enabled === true ? "Custom" : "Default"}
+                        {noodlePromptOverride?.enabled === true ? "Custom" : "Default"}
                       </span>
                     </div>
                     <p className="mt-1 line-clamp-3 whitespace-pre-line text-[0.68rem] leading-5 text-[var(--muted-foreground)]">
-                      {noodlerPromptDetail.isError || noodlerPromptDefault.isError
-                        ? "The NoodleR prompt could not be loaded."
-                        : noodlerPromptText || "Loading the default NoodleR prompt…"}
+                      {noodlePromptDetail.isError || noodlePromptDefault.isError
+                        ? "The Noodle prompt could not be loaded."
+                        : noodlePromptText || "Loading the default Noodle prompt…"}
                     </p>
                   </div>
                 </div>
                 <div className="flex flex-wrap justify-end gap-2">
                   <button
                     type="button"
-                    onClick={() => void restoreDefaultNoodlerPrompt()}
-                    disabled={!noodlerPromptHasOverride || resetNoodlerPrompt.isPending}
+                    onClick={() => void restoreDefaultNoodlePrompt()}
+                    disabled={!noodlePromptHasOverride || resetNoodlePrompt.isPending}
                     className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-md border border-[var(--noodle-blue)]/35 px-3 text-xs font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-45"
                   >
-                    {resetNoodlerPrompt.isPending ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+                    {resetNoodlePrompt.isPending ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <RotateCcw size={13} />
+                    )}
                     Restore default
                   </button>
                   <button
                     type="button"
-                    onClick={openNoodlerPromptEditor}
+                    onClick={openNoodlePromptEditor}
                     disabled={
-                      noodlerPromptLoading ||
-                      noodlerPromptDetail.isError ||
-                      noodlerPromptDefault.isError ||
-                      !noodlerPromptText
+                      noodlePromptLoading ||
+                      noodlePromptDetail.isError ||
+                      noodlePromptDefault.isError ||
+                      !noodlePromptText
                     }
                     className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:bg-[var(--noodle-blue)]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--noodle-blue)]/70 disabled:cursor-not-allowed disabled:opacity-45"
                   >
@@ -4284,48 +4135,393 @@ export function NoodleView() {
                 </div>
               </div>
             </Section>
-          )}
 
-          {isNoodlerEnabled && (
             <Section
-              id={getNoodleSettingsSectionAnchorId("noodler-fan-activity-global")}
-              title="NoodleR Fan Activity"
-              help="Global kill switch for unattended fan activity across every NoodleR (private) page. Off by default. Even a page with its own auto-schedule toggle on stays dormant until this is also on; turning this off freezes every page's scheduled activity at once."
+              id={getNoodleSettingsSectionAnchorId("world-lore")}
+              title="World / Lore"
+              help="Lets Noodle refreshes pull matching lorebook entries into the timeline prompt, the same lorebook system used by chat generation."
             >
               <div className="space-y-3">
                 <ToggleSetting
-                  label="Enable NoodleR fan activity"
-                  help="Lets the fan-activity scheduler run unattended for any NoodleR page that has both fan activity and its own auto-schedule toggle turned on. Manual 'Simulate fan activity now' is unaffected by this switch either way."
-                  checked={settings?.noodler.enableFanActivityScheduler ?? false}
-                  disabled={!settings || updateSettings.isPending}
-                  onChange={(checked) => saveSettings({ noodler: { enableFanActivityScheduler: checked } })}
+                  label="Lorebook context"
+                  help="Scans recent Noodle activity and character profiles for lorebook keyword matches and includes them as world/lore context. Off by default; existing timelines are unaffected until you turn this on."
+                  checked={settings.enableLorebookContext}
+                  disabled={updateSettings.isPending}
+                  onChange={(checked) => saveSettings({ enableLorebookContext: checked })}
                 />
               </div>
             </Section>
-          )}
+
+            <Section
+              id={getNoodleSettingsSectionAnchorId("timeline-writing")}
+              title="Timeline Writing"
+              help="Tunes how the refresh writer approaches tone and long-term memory. Off by default; existing timelines keep their current behavior until you turn this on."
+            >
+              <div className="space-y-3">
+                <ToggleSetting
+                  label="Enhanced tone & continuity"
+                  help="When on: each account's voice is grounded more strongly in its own personality instead of a default upbeat tone, accounts are encouraged to react to each other's posts in the same refresh, and older-post recall happens more often and favors posts relevant to currently active accounts. When off, refreshes use the original tone and recall behavior. The Noodle Timeline Voice & Tone prompt override (Settings -> Generations -> Image Generation Prompt Overrides) still lets you rewrite the tone text directly regardless of this toggle."
+                  checked={settings.enableEnhancedTimelineWriting}
+                  disabled={updateSettings.isPending}
+                  onChange={(checked) => saveSettings({ enableEnhancedTimelineWriting: checked })}
+                />
+              </div>
+            </Section>
+
+            <Section
+              id={getNoodleSettingsSectionAnchorId("image-generation")}
+              title="Image Generation"
+              help="Controls generated post images and whether characters can reuse existing gallery images."
+            >
+              <div className="space-y-3">
+                <ToggleSetting
+                  label="Image generation"
+                  help="Generates actual post images from Noodle visual requests, using image connection defaults and the global image style profile system."
+                  checked={settings.enableImagePrompts}
+                  disabled={updateSettings.isPending}
+                  onChange={(checked) => saveSettings({ enableImagePrompts: checked })}
+                />
+                {settings.enableImagePrompts && (
+                  <>
+                    <label className="block space-y-1.5">
+                      <FieldLabel help="The image-generation connection used to create Noodle post images. Leaving it as Default uses the connection marked default for image generation.">
+                        Image generation connection
+                      </FieldLabel>
+                      <select
+                        value={settings.imageGenerationConnectionId ?? ""}
+                        onChange={(event) => saveSettings({ imageGenerationConnectionId: event.target.value || null })}
+                        className={fieldClass}
+                      >
+                        <option value="">Default image generation connection</option>
+                        {imageConnections.map((connection) => (
+                          <option key={String(connection.id)} value={String(connection.id)}>
+                            {String(connection.name ?? connection.model ?? "Image connection")}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block space-y-1.5">
+                      <FieldLabel help="Extra instructions passed into the Noodle Post Image prompt override. The full template is also available in Settings, Generations, Image Generation Prompt Overrides.">
+                        Prompt instructions
+                      </FieldLabel>
+                      <textarea
+                        value={imageGenerationPromptDraft}
+                        onChange={(event) => setImageGenerationPromptDraft(event.target.value)}
+                        onBlur={() => {
+                          if (imageGenerationPromptDraft !== settings.imageGenerationPrompt) {
+                            saveSettings({ imageGenerationPrompt: imageGenerationPromptDraft });
+                          }
+                        }}
+                        className={textareaClass}
+                      />
+                    </label>
+                    <ToggleSetting
+                      label="Use avatar references"
+                      help="Sends character avatars or preferred full-body references to the image provider when a character's post image is generated."
+                      checked={settings.imageGenerationUseAvatarReferences}
+                      disabled={updateSettings.isPending}
+                      onChange={(checked) => saveSettings({ imageGenerationUseAvatarReferences: checked })}
+                    />
+                    <ToggleSetting
+                      label="Include descriptions"
+                      help="Adds character appearance and description notes to the final image prompt before style-profile compilation."
+                      checked={settings.imageGenerationIncludeDescriptions}
+                      disabled={updateSettings.isPending}
+                      onChange={(checked) => saveSettings({ imageGenerationIncludeDescriptions: checked })}
+                    />
+                    <NumberSetting
+                      label="Images/refresh"
+                      help="Maximum number of generated post images Noodle may create during each manual or automatic timeline refresh."
+                      value={settings.maxImagesPerRefresh}
+                      min={0}
+                      max={50}
+                      onCommit={(value) => saveSettings({ maxImagesPerRefresh: value })}
+                    />
+                  </>
+                )}
+                <ToggleSetting
+                  label="Attach gallery images"
+                  help="Lets characters attach existing images from their own galleries or chats they are in when the timeline writer asks for a gallery attachment."
+                  checked={settings.allowGalleryImageAttachments}
+                  disabled={updateSettings.isPending}
+                  onChange={(checked) => saveSettings({ allowGalleryImageAttachments: checked })}
+                />
+              </div>
+            </Section>
+
+            <Section
+              id={getNoodleSettingsSectionAnchorId("image-understanding")}
+              title="Image Understanding"
+              help="Lets a vision-capable connection describe timeline images for the Noodle writer, including text-only models."
+            >
+              <div className="space-y-3">
+                <ToggleSetting
+                  label="Image captioning"
+                  help="Converts timeline images into concise descriptions before refresh generation, so text-only models can understand what was posted."
+                  checked={settings.imageCaptioningEnabled}
+                  disabled={updateSettings.isPending || connections.length === 0}
+                  onChange={(checked) => saveSettings({ imageCaptioningEnabled: checked })}
+                />
+                {settings.imageCaptioningEnabled && (
+                  <label className="block space-y-1.5">
+                    <FieldLabel help="Choose a vision-capable text connection. Default uses the Noodle generation connection; select another connection when that model cannot see images.">
+                      Captioning connection
+                    </FieldLabel>
+                    <select
+                      value={settings.imageCaptioningConnectionId ?? ""}
+                      onChange={(event) => saveSettings({ imageCaptioningConnectionId: event.target.value || null })}
+                      className={fieldClass}
+                    >
+                      <option value="">Use Noodle generation connection</option>
+                      {connections.map((connection) => (
+                        <option key={String(connection.id)} value={String(connection.id)}>
+                          {String(connection.name ?? connection.model ?? "Connection")}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
+            </Section>
           </div>
 
-          <div id={getNoodleSettingsGroupAnchorId("danger")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
-          <NoodleSettingsGroupHeading groupId="danger" />
-          <Section
-            id={getNoodleSettingsSectionAnchorId("reset-noodle")}
-            title="Reset Noodle"
-            help="Clears timeline content while keeping profiles, follows, invites, and Noodle settings."
+          <div
+            id={getNoodleSettingsGroupAnchorId("appearance")}
+            className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0"
           >
-            <button
-              type="button"
-              onClick={resetTimeline}
-              disabled={resetNoodleTimeline.isPending}
-              className="flex min-h-10 w-full items-center justify-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+            <NoodleSettingsGroupHeading groupId="appearance" />
+            <Section
+              id={getNoodleSettingsSectionAnchorId("appearance")}
+              title="Appearance"
+              help="Controls how the timeline and profiles render posts."
             >
-              {resetNoodleTimeline.isPending ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <Trash2 size={14} className="text-[var(--noodle-blue)]" />
-              )}
-              {resetNoodleTimeline.isPending ? "Resetting Noodle" : "Reset Noodle Timeline"}
-            </button>
-          </Section>
+              <div className="space-y-3">
+                <label className="block space-y-1.5">
+                  <FieldLabel help="Timeline shows posts as Twitter-style cards. Grid shows an image-first, Instagram-style grid on the main feed and on profile tabs (posts without an image are skipped in Grid).">
+                    Feed layout
+                  </FieldLabel>
+                  <select
+                    value={settings.layout}
+                    onChange={(event) =>
+                      saveSettings({ layout: event.target.value as NoodleSettingsUpdateInput["layout"] })
+                    }
+                    className={fieldClass}
+                  >
+                    <option value="timeline">Timeline</option>
+                    <option value="grid">Grid</option>
+                  </select>
+                </label>
+                <ToggleSetting
+                  label="Allow global feed persona"
+                  help="Adds a 'Global' entry to the account switcher that shows every post across all personas, in both Noodle and NoodleR."
+                  checked={settings.allowGlobalPersona === true}
+                  disabled={updateSettings.isPending}
+                  onChange={(enabled) => saveSettings({ allowGlobalPersona: enabled })}
+                />
+              </div>
+            </Section>
+          </div>
+
+          <div
+            id={getNoodleSettingsGroupAnchorId("chat")}
+            className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0"
+          >
+            <NoodleSettingsGroupHeading groupId="chat" />
+            <Section
+              id={getNoodleSettingsSectionAnchorId("carryover")}
+              title="Carryover"
+              help="Controls whether recent Noodle activity is appended to chat, roleplay, or game context."
+            >
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <FieldLabel help="Toggle each mode that should receive recent Noodle activity involving the current persona or chat characters. When all three are off, nothing is carried into chat context.">
+                    Carryover to chats
+                  </FieldLabel>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <ToggleSetting
+                      label="Conversations"
+                      checked={carryoverTargets.has("conversation")}
+                      disabled={updateSettings.isPending}
+                      onChange={(checked) => toggleCarryoverTarget("conversation", checked)}
+                    />
+                    <ToggleSetting
+                      label="Roleplays"
+                      checked={carryoverTargets.has("roleplay")}
+                      disabled={updateSettings.isPending}
+                      onChange={(checked) => toggleCarryoverTarget("roleplay", checked)}
+                    />
+                    <ToggleSetting
+                      label="Games"
+                      checked={carryoverTargets.has("game")}
+                      disabled={updateSettings.isPending}
+                      onChange={(checked) => toggleCarryoverTarget("game", checked)}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumberSetting
+                    label="Carry hours"
+                    help="How far back Noodle looks for activity digests when adding recent social media context to chats."
+                    value={settings.carryoverHours}
+                    min={1}
+                    max={720}
+                    onCommit={(value) => saveSettings({ carryoverHours: value })}
+                  />
+                  <NumberSetting
+                    label="Carry items"
+                    help="Maximum number of recent Noodle activity summaries appended to a chat context."
+                    value={settings.carryoverMaxItems}
+                    min={1}
+                    max={50}
+                    onCommit={(value) => saveSettings({ carryoverMaxItems: value })}
+                  />
+                </div>
+              </div>
+            </Section>
+          </div>
+
+          <div
+            id={getNoodleSettingsGroupAnchorId("noodler")}
+            className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0"
+          >
+            <NoodleSettingsGroupHeading groupId="noodler" />
+            <Section
+              id={getNoodleSettingsSectionAnchorId("noodler-access")}
+              title="NoodleR Access"
+              help="Controls whether the private NoodleR side of Noodle is available from the mode switcher and mobile navigation."
+            >
+              <div className="space-y-3">
+                <ToggleSetting
+                  label="Enable NoodleR"
+                  help="Unlocks the private creator network mode. The first activation runs a completely serious verification screen."
+                  checked={isNoodlerEnabled}
+                  disabled={updateSettings.isPending}
+                  onChange={setNoodlerEnabled}
+                />
+                {!isNoodlerEnabled && (
+                  <p className="rounded-md border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/5 px-3 py-2 text-xs leading-5 text-[var(--muted-foreground)]">
+                    NoodleR stays tucked away until this is enabled. Attempts to enter NoodleR will open verification
+                    first.
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={enterNoodlerVerification}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-[var(--noodle-divider)] px-3 text-xs font-bold transition-colors hover:bg-[var(--accent)]"
+                >
+                  <Lock size={14} />
+                  Test verification screen
+                </button>
+                {isNoodlerEnabled && (
+                  <p className="rounded-md border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/5 px-3 py-2 text-xs leading-5 text-[var(--muted-foreground)]">
+                    Page-specific creator tools live on each NoodleR profile. Open a page to edit its stage identity,
+                    subscription pricing, and fan activity.
+                  </p>
+                )}
+              </div>
+            </Section>
+
+            {isNoodlerEnabled && (
+              <Section
+                id={getNoodleSettingsSectionAnchorId("noodler-prompt")}
+                title="NoodleR Prompt"
+                help="Controls the editable base instructions used to write NoodleR (private page) activity. Separate from the public Noodle prompt. Timeline voice and tone instructions are appended after this prompt."
+              >
+                <div data-component="NoodleView.PromptSetting" className="space-y-3">
+                  <div className="flex items-start gap-3">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
+                      {noodlerPromptLoading ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-xs font-semibold text-[var(--foreground)]">NoodleR base prompt</p>
+                        <span className="rounded-full border border-[var(--noodle-blue)]/30 bg-[var(--noodle-blue)]/10 px-2 py-0.5 text-[0.625rem] font-semibold text-[var(--noodle-blue)]">
+                          {noodlerPromptOverride?.enabled === true ? "Custom" : "Default"}
+                        </span>
+                      </div>
+                      <p className="mt-1 line-clamp-3 whitespace-pre-line text-[0.68rem] leading-5 text-[var(--muted-foreground)]">
+                        {noodlerPromptDetail.isError || noodlerPromptDefault.isError
+                          ? "The NoodleR prompt could not be loaded."
+                          : noodlerPromptText || "Loading the default NoodleR prompt…"}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void restoreDefaultNoodlerPrompt()}
+                      disabled={!noodlerPromptHasOverride || resetNoodlerPrompt.isPending}
+                      className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-md border border-[var(--noodle-blue)]/35 px-3 text-xs font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      {resetNoodlerPrompt.isPending ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : (
+                        <RotateCcw size={13} />
+                      )}
+                      Restore default
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openNoodlerPromptEditor}
+                      disabled={
+                        noodlerPromptLoading ||
+                        noodlerPromptDetail.isError ||
+                        noodlerPromptDefault.isError ||
+                        !noodlerPromptText
+                      }
+                      className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:bg-[var(--noodle-blue)]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--noodle-blue)]/70 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      <Pencil size={14} aria-hidden="true" className="shrink-0 text-[var(--noodle-blue)]" />
+                      <span>Edit prompt</span>
+                    </button>
+                  </div>
+                </div>
+              </Section>
+            )}
+
+            {isNoodlerEnabled && (
+              <Section
+                id={getNoodleSettingsSectionAnchorId("noodler-fan-activity-global")}
+                title="NoodleR Fan Activity"
+                help="Global kill switch for unattended fan activity across every NoodleR (private) page. Off by default. Even a page with its own auto-schedule toggle on stays dormant until this is also on; turning this off freezes every page's scheduled activity at once."
+              >
+                <div className="space-y-3">
+                  <ToggleSetting
+                    label="Enable NoodleR fan activity"
+                    help="Lets the fan-activity scheduler run unattended for any NoodleR page that has both fan activity and its own auto-schedule toggle turned on. Manual 'Simulate fan activity now' is unaffected by this switch either way."
+                    checked={settings?.noodler.enableFanActivityScheduler ?? false}
+                    disabled={!settings || updateSettings.isPending}
+                    onChange={(checked) => saveSettings({ noodler: { enableFanActivityScheduler: checked } })}
+                  />
+                </div>
+              </Section>
+            )}
+          </div>
+
+          <div
+            id={getNoodleSettingsGroupAnchorId("danger")}
+            className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0"
+          >
+            <NoodleSettingsGroupHeading groupId="danger" />
+            <Section
+              id={getNoodleSettingsSectionAnchorId("reset-noodle")}
+              title="Reset Noodle"
+              help="Clears timeline content while keeping profiles, follows, invites, and Noodle settings."
+            >
+              <button
+                type="button"
+                onClick={resetTimeline}
+                disabled={resetNoodleTimeline.isPending}
+                className="flex min-h-10 w-full items-center justify-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {resetNoodleTimeline.isPending ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Trash2 size={14} className="text-[var(--noodle-blue)]" />
+                )}
+                {resetNoodleTimeline.isPending ? "Resetting Noodle" : "Reset Noodle Timeline"}
+              </button>
+            </Section>
           </div>
         </>
       )}
@@ -4953,7 +5149,7 @@ export function NoodleView() {
             ? setImageLightbox(createNoodleLightboxImage(post.id, post.imageUrl!, post.imagePrompt ?? ""))
             : post.access === "ppv"
               ? unlockAccessPost(post)
-            : toggleSubscription(post.authorAccountId)
+              : toggleSubscription(post.authorAccountId)
         }
         className="group relative aspect-square overflow-hidden bg-[var(--accent)]"
         title={revealed ? post.content || author?.displayName || "Noodle post" : unlockLabel(post)}
@@ -5092,17 +5288,15 @@ export function NoodleView() {
     );
   };
 
-  const renderNoodlerActivityRow = (item: Extract<NoodlerTimelineItem, { kind: "subscription" | "unlock" | "reply" }>) => {
+  const renderNoodlerActivityRow = (
+    item: Extract<NoodlerTimelineItem, { kind: "subscription" | "unlock" | "reply" }>,
+  ) => {
     const actor = item.actorAccount ?? item.interaction?.actorSnapshot ?? null;
     const creator = item.creatorAccount;
     const icon = item.kind === "subscription" ? UserPlus : item.kind === "unlock" ? Lock : MessageCircle;
     const Icon = icon;
     const actionText =
-      item.kind === "subscription"
-        ? "subscribed to"
-        : item.kind === "unlock"
-          ? "unlocked a post from"
-          : "commented on";
+      item.kind === "subscription" ? "subscribed to" : item.kind === "unlock" ? "unlocked a post from" : "commented on";
     return (
       <div key={item.id} className="flex items-start gap-3 border-b border-[var(--noodle-divider)] px-4 py-4">
         {actor ? (
@@ -5236,7 +5430,9 @@ export function NoodleView() {
               </button>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
-              <span>{subscriberCount} subscriber{subscriberCount === 1 ? "" : "s"}</span>
+              <span>
+                {subscriberCount} subscriber{subscriberCount === 1 ? "" : "s"}
+              </span>
               {unseenCount > 0 && (
                 <span className="rounded-full bg-[var(--noodle-blue)] px-2 py-0.5 font-black text-zinc-950">
                   {unseenCount > 9 ? "9+" : unseenCount} new
@@ -5399,9 +5595,7 @@ export function NoodleView() {
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="truncate font-bold">{item.subscriberAccount?.displayName ?? "A fan"}</span>
-          <span className="text-xs text-[var(--muted-foreground)]">
-            @{item.subscriberAccount?.handle ?? "noodle"}
-          </span>
+          <span className="text-xs text-[var(--muted-foreground)]">@{item.subscriberAccount?.handle ?? "noodle"}</span>
           <span className="text-xs text-[var(--muted-foreground)]">{formatTime(item.subscription.createdAt)}</span>
         </div>
         <p className="mt-1 text-sm">subscribed to your page</p>
@@ -5448,11 +5642,7 @@ export function NoodleView() {
           key={`like:${item.interaction.id}`}
           className="flex items-start gap-3 border-b border-[var(--noodle-divider)] px-4 py-4"
         >
-          {actor ? (
-            <Avatar account={actor} />
-          ) : (
-            <Heart size={28} className="text-[var(--noodle-blue)]" />
-          )}
+          {actor ? <Avatar account={actor} /> : <Heart size={28} className="text-[var(--noodle-blue)]" />}
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span className="truncate font-bold">{actor?.displayName ?? "Noodle User"}</span>
@@ -5468,11 +5658,7 @@ export function NoodleView() {
     const actor = item.actorAccount ?? item.actorSnapshot;
     return (
       <div key={item.id} className="flex items-start gap-3 border-b border-[var(--noodle-divider)] px-4 py-4">
-        {actor ? (
-          <Avatar account={actor} />
-        ) : (
-          <MessageCircle size={28} className="text-[var(--noodle-blue)]" />
-        )}
+        {actor ? <Avatar account={actor} /> : <MessageCircle size={28} className="text-[var(--noodle-blue)]" />}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="truncate font-bold">{actor?.displayName ?? "Noodle User"}</span>
@@ -5736,7 +5922,9 @@ export function NoodleView() {
                       <Avatar account={character.account} size="sm" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-semibold">{character.name}</span>
-                        <span className="block truncate text-xs text-[var(--muted-foreground)]">@{character.handle}</span>
+                        <span className="block truncate text-xs text-[var(--muted-foreground)]">
+                          @{character.handle}
+                        </span>
                       </span>
                     </button>
                     <button
@@ -5788,34 +5976,9 @@ export function NoodleView() {
     suggestedCharacters,
     followableCharacterAccountsCount: followableCharacterAccounts.length,
     onUpdateFollowedAccount: updateFollowedAccount,
-    updateAccountPending: updateAccount.isPending,
-    composeOpen,
-    inlineComposerRef,
-    composer,
-    onComposerChange: handleComposerChange,
-    onComposerBlur: () => setComposer(composerValueRef.current),
-    onComposerKeyDown: handleComposerKeyDown,
-    activeMention,
-    mentionSuggestionsCount: mentionSuggestions.length,
-    activeMentionIndex,
-    composePlaceholder,
-    composeActionLabel,
-    renderComposerMentionSuggestions,
-    renderDraftPoll,
-    attachedImageUrl,
-    onAttachedImageUrlChange: setAttachedImageUrl,
-    imageToolRef,
-    pollToolRef,
-    mediaToolRef,
-    activeComposerTool,
-    onActiveComposerToolChange: setActiveComposerTool,
-    draftPollActive: Boolean(draftPoll),
-    onTogglePollComposer: togglePollComposer,
-    onSubmitPost: submitPost,
-    canSubmitPost,
-    createPostPending: createPost.isPending,
-    renderComposerToolPopovers,
-    onTriggerRefresh: triggerNoodlerRefresh,
+    updateAccountPending: updateAccount.isPending || profileSavePending,
+    renderPostingTools,
+    onTriggerRefresh: triggerRefresh,
     refreshNoodlePending: refreshNoodle.isPending,
     imagePromptReviewItemsCount: imagePromptReviewItems.length,
     notificationTab,
@@ -5861,7 +6024,7 @@ export function NoodleView() {
       else setProfileEditing(true);
     },
     canSaveProfile,
-    updateAccountPending: updateAccount.isPending,
+    updateAccountPending: updateAccount.isPending || profileSavePending,
     profileName,
     onProfileNameChange: setProfileName,
     profileHandle,
@@ -5892,12 +6055,14 @@ export function NoodleView() {
     isGridLayout,
     renderPostGrid,
     renderPostArticle,
+    postingTools: viewedProfileAccount
+      ? renderPostingTools(viewedProfileAccount, "noodle", viewingOwnProfile, "noodle-profile")
+      : null,
   };
 
   const profileViewProps: PrivateProfileViewProps = {
     onBackToHome: openMobileHomeTimeline,
     viewedProfileAccount,
-    accounts,
     profileDisplayHandle,
     canEditViewedProfile,
     profileUploadTarget,
@@ -5935,20 +6100,38 @@ export function NoodleView() {
     viewingOwnPrivateAccount,
     onDeleteNoodlerProfile: deleteNoodlerProfile,
     deletePrivateAccountPending: deletePrivateAccount.isPending,
-    onOpenGuidedPrivatePost: openGuidedPrivatePost,
-    refreshNoodlePending: refreshNoodle.isPending,
-    onRetryPrivateIdentity: (accountId: string) => retryPrivateIdentity.mutate(accountId),
-    retryPrivateIdentityPending: retryPrivateIdentity.isPending,
-    privateComposerText,
-    onPrivateComposerTextChange: setPrivateComposerText,
-    privateComposerAccess,
-    onPrivateComposerAccessChange: setPrivateComposerAccess,
-    privateComposerPpvPrice,
-    onPrivateComposerPpvPriceChange: setPrivateComposerPpvPrice,
-    privateComposerImageUrl,
-    onPrivateComposerImageUrlChange: setPrivateComposerImageUrl,
-    onSubmitPrivatePost: submitPrivatePost,
-    createPostPending: createPost.isPending,
+    editExtraContent:
+      viewedProfileAccount?.visibility === "private" && noodlerEditDraft ? (
+        <NoodlerEditProfileFields
+          account={viewedProfileAccount}
+          accounts={accounts}
+          draft={noodlerEditDraft}
+          onChange={(patch) => setNoodlerEditDraft((current) => (current ? { ...current, ...patch } : current))}
+          savePending={updateAccount.isPending || profileSavePending}
+          onSimulateFanActivity={(accountId) =>
+            simulateNoodlerFanActivity.mutate(accountId, {
+              onSuccess: (result) =>
+                toast.success(
+                  `Fan activity simulated: ${result.interactionsCreated} interactions, ${result.newSubscribers} subscribers.`,
+                ),
+              onError: (error) =>
+                toast.error(error instanceof Error ? error.message : "Could not simulate NoodleR fan activity."),
+            })
+          }
+          simulateFanActivityPending={simulateNoodlerFanActivity.isPending}
+          onRetryIdentity={(accountId) =>
+            retryPrivateIdentity.mutate(accountId, {
+              onSuccess: () => toast.success("NoodleR identity generation retried."),
+              onError: (error) =>
+                toast.error(error instanceof Error ? error.message : "Could not retry NoodleR identity generation."),
+            })
+          }
+          retryIdentityPending={retryPrivateIdentity.isPending}
+        />
+      ) : null,
+    postingTools: viewedProfileAccount
+      ? renderPostingTools(viewedProfileAccount, "noodler", viewingOwnPersonaPrivateAccount, "noodler-profile")
+      : null,
     profileTab,
     onProfileTabChange: setProfileTab,
     profileVisiblePosts,
@@ -5959,11 +6142,7 @@ export function NoodleView() {
 
   const noodlerHomeProps: NoodlerHomeProps = {
     activeNoodleView:
-      activeNoodleView === "noodler"
-        ? "noodler"
-        : activeNoodleView === "profile"
-          ? "profile"
-          : "noodler-verification",
+      activeNoodleView === "noodler" ? "noodler" : activeNoodleView === "profile" ? "profile" : "noodler-verification",
     personaAccount,
     isGlobalPersonaSelected,
     onBackToHome: openMobileHomeTimeline,
@@ -5981,36 +6160,11 @@ export function NoodleView() {
     renderNoodlerAccountRow,
     sortedNoodlerDiscoverAccounts,
     renderNoodlerDiscoverCard,
-    composeOpen,
-    inlineComposerRef,
-    composer,
-    onComposerChange: handleComposerChange,
-    onComposerBlur: () => setComposer(composerValueRef.current),
-    onComposerKeyDown: handleComposerKeyDown,
-    activeMention,
-    mentionSuggestionsCount: mentionSuggestions.length,
-    activeMentionIndex,
-    composePlaceholder,
-    composeActionLabel,
-    renderComposerMentionSuggestions,
-    renderDraftPoll,
-    attachedImageUrl,
-    onAttachedImageUrlChange: setAttachedImageUrl,
-    imageToolRef,
-    pollToolRef,
-    mediaToolRef,
-    activeComposerTool,
-    onActiveComposerToolChange: setActiveComposerTool,
-    draftPollActive: Boolean(draftPoll),
-    onTogglePollComposer: togglePollComposer,
-    onSubmitPost: submitPost,
-    canSubmitPost,
-    createPostPending: createPost.isPending,
-    renderComposerToolPopovers,
-    onTriggerRefresh: triggerRefresh,
+    renderPostingTools,
+    onTriggerRefresh: triggerNoodlerRefresh,
     refreshNoodlePending: refreshNoodle.isPending,
     hasNoodlerAccount: Boolean(personaLinkedNoodlerAccount),
-    noodlerPostingMode: readPrivatePostingMode(personaLinkedNoodlerAccount),
+    personaLinkedNoodlerAccount,
     onOpenOwnProfile: openOwnProfile,
     showNoodlerSignup: activeNoodleMode === "noodler" && !viewedProfileAccountId && !personaLinkedNoodlerAccount,
     stageDraft: privateStageDraft,
@@ -6035,7 +6189,8 @@ export function NoodleView() {
       data-component="NoodleView"
       style={
         {
-          "--noodle-blue": activeNoodleView === "settings" ? NOODLE_BLUE : activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
+          "--noodle-blue":
+            activeNoodleView === "settings" ? NOODLE_BLUE : activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
           "--noodle-settings-accent": activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
           "--noodle-divider": "var(--marinara-chat-chrome-panel-divider)",
         } as CSSProperties
@@ -6073,7 +6228,12 @@ export function NoodleView() {
               )}
               style={
                 {
-                  "--noodle-blue": activeNoodleView === "settings" ? NOODLE_BLUE : activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
+                  "--noodle-blue":
+                    activeNoodleView === "settings"
+                      ? NOODLE_BLUE
+                      : activeNoodleMode === "noodler"
+                        ? NOODLER_BLUE
+                        : NOODLE_BLUE,
                   "--noodle-settings-accent": activeNoodleMode === "noodler" ? NOODLER_BLUE : NOODLE_BLUE,
                   "--noodle-divider": "var(--marinara-chat-chrome-panel-divider)",
                 } as CSSProperties
@@ -6204,7 +6364,9 @@ export function NoodleView() {
                                 See every persona's posts
                               </span>
                             </span>
-                            {isGlobalPersonaSelected && <span className="h-2 w-2 rounded-full bg-[var(--noodle-blue)]" />}
+                            {isGlobalPersonaSelected && (
+                              <span className="h-2 w-2 rounded-full bg-[var(--noodle-blue)]" />
+                            )}
                           </button>
                         )}
                         {sortedPersonaAccounts.map((account) => {
@@ -6269,7 +6431,11 @@ export function NoodleView() {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-semibold">Switch account</span>
                     <span className="block truncate text-xs text-[var(--muted-foreground)]">
-                      {isGlobalPersonaSelected ? "Global" : personaAccount ? `@${personaAccount.handle}` : "Choose a persona"}
+                      {isGlobalPersonaSelected
+                        ? "Global"
+                        : personaAccount
+                          ? `@${personaAccount.handle}`
+                          : "Choose a persona"}
                     </span>
                   </span>
                   <MoreHorizontal size={19} />
@@ -6305,9 +6471,8 @@ export function NoodleView() {
                   onClick={openHomeTimeline}
                   className={cn(
                     "flex min-h-11 w-full items-center gap-4 rounded-full px-3 text-left text-[0.95rem] font-semibold hover:bg-[var(--accent)]",
-                    (activeNoodleMode === "noodler"
-                      ? activeNoodleView === "noodler"
-                      : activeNoodleView === "home") && "bg-[var(--noodle-blue)]/10",
+                    (activeNoodleMode === "noodler" ? activeNoodleView === "noodler" : activeNoodleView === "home") &&
+                      "bg-[var(--noodle-blue)]/10",
                   )}
                 >
                   {activeNoodleMode === "noodler" ? (
@@ -6330,13 +6495,13 @@ export function NoodleView() {
                     <Bell size={22} className="!text-[var(--noodle-blue)]" />
                     {!isGlobalPersonaSelected &&
                       (activeNoodleMode === "noodler" ? noodlerNotificationCount : notificationCount) > 0 && (
-                      <span
-                        data-component="NoodleView.NotificationBadge"
-                        className="absolute -right-2 -top-2 min-w-4 rounded-full bg-[var(--noodle-blue)] px-1 text-center text-[0.58rem] font-black leading-4 text-zinc-950 ring-2 ring-[var(--background)]"
-                      >
-                        {activeNoodleMode === "noodler" ? noodlerNotificationBadgeLabel : notificationBadgeLabel}
-                      </span>
-                    )}
+                        <span
+                          data-component="NoodleView.NotificationBadge"
+                          className="absolute -right-2 -top-2 min-w-4 rounded-full bg-[var(--noodle-blue)] px-1 text-center text-[0.58rem] font-black leading-4 text-zinc-950 ring-2 ring-[var(--background)]"
+                        >
+                          {activeNoodleMode === "noodler" ? noodlerNotificationBadgeLabel : notificationBadgeLabel}
+                        </span>
+                      )}
                   </span>
                   Notifications
                 </button>
@@ -6413,7 +6578,9 @@ export function NoodleView() {
                                 See every persona's posts
                               </span>
                             </span>
-                            {isGlobalPersonaSelected && <span className="h-2 w-2 rounded-full bg-[var(--noodle-blue)]" />}
+                            {isGlobalPersonaSelected && (
+                              <span className="h-2 w-2 rounded-full bg-[var(--noodle-blue)]" />
+                            )}
                           </button>
                         )}
                         {visiblePersonaAccounts.map((account) => {
@@ -6489,7 +6656,11 @@ export function NoodleView() {
                       {isNoodlerEnabled && Boolean(personaAccount?.linkedAccountId) && <NoodlerBadge />}
                     </p>
                     <p className="truncate text-xs text-[var(--muted-foreground)]">
-                      {isGlobalPersonaSelected ? "Every persona" : personaAccount ? `@${personaAccount.handle}` : "Pick a persona"}
+                      {isGlobalPersonaSelected
+                        ? "Every persona"
+                        : personaAccount
+                          ? `@${personaAccount.handle}`
+                          : "Pick a persona"}
                     </p>
                   </div>
                   <MoreHorizontal size={18} className="!text-[var(--noodle-blue)] opacity-70" />
@@ -6672,13 +6843,13 @@ export function NoodleView() {
               <Bell size={22} strokeWidth={activeNoodleView === "notifications" ? 2.8 : 2} />
               {!isGlobalPersonaSelected &&
                 (activeNoodleMode === "noodler" ? noodlerNotificationCount : notificationCount) > 0 && (
-                <span
-                  data-component="NoodleView.NotificationBadge"
-                  className="absolute -right-2 -top-2 min-w-4 rounded-full bg-[var(--noodle-blue)] px-1 text-center text-[0.58rem] font-black leading-4 text-zinc-950 ring-2 ring-[var(--background)]"
-                >
-                  {activeNoodleMode === "noodler" ? noodlerNotificationBadgeLabel : notificationBadgeLabel}
-                </span>
-              )}
+                  <span
+                    data-component="NoodleView.NotificationBadge"
+                    className="absolute -right-2 -top-2 min-w-4 rounded-full bg-[var(--noodle-blue)] px-1 text-center text-[0.58rem] font-black leading-4 text-zinc-950 ring-2 ring-[var(--background)]"
+                  >
+                    {activeNoodleMode === "noodler" ? noodlerNotificationBadgeLabel : notificationBadgeLabel}
+                  </span>
+                )}
             </span>
             {activeNoodleView === "notifications" && (
               <span className="absolute top-1 h-1 w-1 rounded-full bg-[var(--noodle-blue)]" />
@@ -6688,7 +6859,9 @@ export function NoodleView() {
             type="button"
             onClick={openNoodlerHub}
             aria-label="NoodleR"
-            aria-current={activeNoodleView === "noodler" || activeNoodleView === "noodler-verification" ? "page" : undefined}
+            aria-current={
+              activeNoodleView === "noodler" || activeNoodleView === "noodler-verification" ? "page" : undefined
+            }
             className="relative flex items-center justify-center transition-colors hover:bg-[var(--accent)]"
           >
             <NoodlerLogo size={24} />
@@ -6725,8 +6898,8 @@ export function NoodleView() {
             </div>
             <div className="p-4">
               <div className="grid grid-cols-[2.75rem_minmax(0,1fr)] gap-3">
-                {personaAccount ? (
-                  <Avatar account={personaAccount} />
+                {postingTargetAccount ? (
+                  <Avatar account={postingTargetAccount} />
                 ) : (
                   <AtSign size={28} className="text-[var(--noodle-blue)]" />
                 )}
@@ -6734,11 +6907,11 @@ export function NoodleView() {
                   <textarea
                     ref={modalComposerRef}
                     autoFocus
-                    defaultValue={composer}
+                    value={composer}
                     onChange={handleComposerChange}
                     onBlur={() => setComposer(composerValueRef.current)}
                     onKeyDown={handleComposerKeyDown}
-                    disabled={!personaAccount}
+                    disabled={!postingTargetAccount}
                     placeholder={composePlaceholder}
                     aria-autocomplete="list"
                     aria-controls={activeMention ? "noodle-modal-mention-list" : undefined}
@@ -6771,7 +6944,7 @@ export function NoodleView() {
                       </div>
                     </div>
                   )}
-                  {activeNoodleMode === "noodler" && personaLinkedNoodlerAccount && (
+                  {postingTargetAccount?.visibility === "private" && (
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       {(
                         [
@@ -6779,8 +6952,8 @@ export function NoodleView() {
                           {
                             value: "subscriber",
                             label:
-                              typeof personaLinkedNoodlerAccount.settings?.subscriptionPrice === "number"
-                                ? `Subscribers · $${(personaLinkedNoodlerAccount.settings.subscriptionPrice as number).toFixed(2)}/mo`
+                              typeof postingTargetAccount.settings?.subscriptionPrice === "number"
+                                ? `Subscribers · $${(postingTargetAccount.settings.subscriptionPrice as number).toFixed(2)}/mo`
                                 : "Subscribers only",
                           },
                           { value: "ppv", label: "Pay-per-view" },
@@ -6790,6 +6963,7 @@ export function NoodleView() {
                           key={option.value}
                           type="button"
                           onClick={() => setComposerAccess(option.value)}
+                          aria-pressed={composerAccess === option.value}
                           style={{ "--chip-tint": "var(--noodle-blue)" } as CSSProperties}
                           className={cn(
                             "mari-suggestion-chip",
@@ -6857,6 +7031,8 @@ export function NoodleView() {
           account={privateGuideAccount}
           access={privateGuideAccess}
           onAccessChange={setPrivateGuideAccess}
+          ppvPrice={privateGuidePpvPrice}
+          onPpvPriceChange={setPrivateGuidePpvPrice}
           theme={privateGuideTheme}
           onThemeChange={setPrivateGuideTheme}
           includeText={privateGuideIncludeText}
@@ -6999,8 +7175,8 @@ export function NoodleView() {
                 className={cn(
                   "flex h-9 items-center justify-center gap-2 rounded-md px-4 text-xs font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50",
                   confirmAction.kind === "delete-post" ||
-                  confirmAction.kind === "delete-reply" ||
-                  confirmAction.kind === "reset-timeline"
+                    confirmAction.kind === "delete-reply" ||
+                    confirmAction.kind === "reset-timeline"
                     ? "bg-[var(--destructive)] text-[var(--destructive-foreground)] hover:opacity-90"
                     : "border border-[var(--noodle-blue)]/45 bg-[var(--noodle-blue)] text-[var(--background)] hover:bg-[var(--noodle-blue)]/85",
                 )}

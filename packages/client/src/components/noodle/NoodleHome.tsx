@@ -12,15 +12,12 @@ import { cn } from "../../lib/utils";
 import type { AvatarCropValue } from "../../lib/utils";
 import {
   Avatar,
-  InlineComposer,
   MobileTimelineBackButton,
   NoodleLogo,
   NoodlerBadge,
   ProfileHeaderChrome,
   ProfileTabsAndGrid,
   RefreshTimelineButton,
-  type ActiveComposerMention,
-  type ComposerTool,
   type NotificationTab,
   type ProfileTab,
   type TimelineTab,
@@ -82,37 +79,8 @@ export interface NoodleHomeProps {
   onUpdateFollowedAccount: (account: NoodleAccount, followed: boolean) => void;
   updateAccountPending: boolean;
 
-  // Inline composer
-  composeOpen: boolean;
-  inlineComposerRef: RefObject<HTMLTextAreaElement | null>;
-  composer: string;
-  onComposerChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
-  onComposerBlur: () => void;
-  onComposerKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  activeMention: ActiveComposerMention | null;
-  mentionSuggestionsCount: number;
-  activeMentionIndex: number;
-  composePlaceholder: string;
-  composeActionLabel: string;
-  renderComposerMentionSuggestions: (listboxId: string) => React.ReactNode;
-  renderDraftPoll: () => React.ReactNode;
-  attachedImageUrl: string;
-  onAttachedImageUrlChange: (url: string) => void;
-  imageToolRef: RefObject<HTMLDivElement | null>;
-  pollToolRef: RefObject<HTMLDivElement | null>;
-  mediaToolRef: RefObject<HTMLDivElement | null>;
-  activeComposerTool: ComposerTool | null;
-  onActiveComposerToolChange: (tool: ComposerTool | null) => void;
-  draftPollActive: boolean;
-  onTogglePollComposer: () => void;
-  onSubmitPost: () => void;
-  canSubmitPost: boolean;
-  createPostPending: boolean;
-  renderComposerToolPopovers: (refs: {
-    imageRef: RefObject<HTMLDivElement | null>;
-    pollRef: RefObject<HTMLDivElement | null>;
-    mediaRef: RefObject<HTMLDivElement | null>;
-  }) => React.ReactNode;
+  // Shared rich posting surface
+  renderPostingTools: (account: NoodleAccount, mode: "noodle" | "noodler", expanded: boolean, id: string) => ReactNode;
 
   // Refresh
   onTriggerRefresh: () => void;
@@ -168,32 +136,7 @@ export function NoodleHome(props: NoodleHomeProps) {
     followableCharacterAccountsCount,
     onUpdateFollowedAccount,
     updateAccountPending,
-    composeOpen,
-    inlineComposerRef,
-    composer,
-    onComposerChange,
-    onComposerBlur,
-    onComposerKeyDown,
-    activeMention,
-    mentionSuggestionsCount,
-    activeMentionIndex,
-    composePlaceholder,
-    composeActionLabel,
-    renderComposerMentionSuggestions,
-    renderDraftPoll,
-    attachedImageUrl,
-    onAttachedImageUrlChange,
-    imageToolRef,
-    pollToolRef,
-    mediaToolRef,
-    activeComposerTool,
-    onActiveComposerToolChange,
-    draftPollActive,
-    onTogglePollComposer,
-    onSubmitPost,
-    canSubmitPost,
-    createPostPending,
-    renderComposerToolPopovers,
+    renderPostingTools,
     onTriggerRefresh,
     refreshNoodlePending,
     imagePromptReviewItemsCount,
@@ -436,39 +379,7 @@ export function NoodleHome(props: NoodleHomeProps) {
         </div>
       )}
 
-      {!isAccountSearch && (
-        <InlineComposer
-          personaAccount={personaAccount}
-          composeOpen={composeOpen}
-          inlineComposerRef={inlineComposerRef}
-          composer={composer}
-          onComposerChange={onComposerChange}
-          onComposerBlur={onComposerBlur}
-          onComposerKeyDown={onComposerKeyDown}
-          activeMention={activeMention}
-          mentionSuggestionsCount={mentionSuggestionsCount}
-          activeMentionIndex={activeMentionIndex}
-          composePlaceholder={composePlaceholder}
-          composeActionLabel={composeActionLabel}
-          renderComposerMentionSuggestions={renderComposerMentionSuggestions}
-          renderDraftPoll={renderDraftPoll}
-          attachedImageUrl={attachedImageUrl}
-          onAttachedImageUrlChange={onAttachedImageUrlChange}
-          imageToolRef={imageToolRef}
-          pollToolRef={pollToolRef}
-          mediaToolRef={mediaToolRef}
-          activeComposerTool={activeComposerTool}
-          onActiveComposerToolChange={onActiveComposerToolChange}
-          draftPollActive={draftPollActive}
-          onTogglePollComposer={onTogglePollComposer}
-          onSubmitPost={onSubmitPost}
-          canSubmitPost={canSubmitPost}
-          createPostPending={createPostPending}
-          renderComposerToolPopovers={renderComposerToolPopovers}
-          mentionListboxId="noodle-inline-mention-list"
-          dataComponent="NoodleHome.InlineComposer"
-        />
-      )}
+      {!isAccountSearch && personaAccount && renderPostingTools(personaAccount, "noodle", true, "noodle-timeline")}
 
       {!isAccountSearch && (
         <RefreshTimelineButton
@@ -506,7 +417,9 @@ export function NoodleHome(props: NoodleHomeProps) {
       ) : normalizedPostSearch && timelinePosts.length === 0 ? (
         <div className="px-8 py-14 text-center">
           <p className="text-base font-bold">No posts found.</p>
-          <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">Try a different search.</p>
+          <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
+            Try a different search.
+          </p>
         </div>
       ) : timelineTab === "following" && baseTimelinePostsCount === 0 ? (
         <div className="px-8 py-14 text-center">
@@ -606,6 +519,7 @@ export interface PublicProfileViewProps {
   isGridLayout: boolean;
   renderPostGrid: (posts: NoodlePost[]) => ReactNode;
   renderPostArticle: (post: NoodlePost) => ReactNode;
+  postingTools: ReactNode;
 }
 
 export function PublicProfileView(props: PublicProfileViewProps) {
@@ -654,6 +568,7 @@ export function PublicProfileView(props: PublicProfileViewProps) {
     isGridLayout,
     renderPostGrid,
     renderPostArticle,
+    postingTools,
   } = props;
 
   const canShowNoodlerCta =
@@ -743,6 +658,7 @@ export function PublicProfileView(props: PublicProfileViewProps) {
         onOpenFollowing={onOpenFollowing}
         onOpenFollowers={onOpenFollowers}
       />
+      {postingTools}
       <ProfileTabsAndGrid
         activeTab={profileTab}
         onTabChange={onProfileTabChange}

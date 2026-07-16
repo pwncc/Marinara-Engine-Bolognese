@@ -348,6 +348,7 @@ export const noodleRefreshSchema = z.object({
   privatePostGuide: z
     .object({
       access: noodlePostAccessSchema.optional(),
+      ppvPrice: z.number().min(0).max(999_999).optional(),
       includeText: z.boolean().optional(),
       includeImage: z.boolean().optional(),
       theme: z.string().trim().max(120).optional(),

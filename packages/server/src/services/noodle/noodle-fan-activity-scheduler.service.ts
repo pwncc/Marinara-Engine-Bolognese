@@ -19,6 +19,7 @@ import { createConnectionsStorage } from "../storage/connections.storage.js";
 import { createCharactersStorage } from "../storage/characters.storage.js";
 import { parseAutoPostSettings, parseFanActivitySettings, simulateNoodlerFanActivity } from "../../routes/noodle.routes.js";
 import { isNoodleRefreshLocked, withNoodleRefreshLock } from "./noodle-refresh-lock.js";
+import { isNoodlePrivatePostingActive } from "./noodle-manual-post.js";
 import type { NoodleAccount, NoodleAccountSubscription, NoodleFanActivityIntensity } from "@marinara-engine/shared";
 
 const NOODLE_FAN_ACTIVITY_SCHEDULER_POLL_MS = 60_000;
@@ -39,12 +40,6 @@ function jitteredIntervalMs(intensity: NoodleFanActivityIntensity): number {
   const baseMs = (24 * 60 * 60 * 1000) / runsPerDay;
   const jitter = baseMs * NOODLE_FAN_ACTIVITY_JITTER_RATIO * (Math.random() * 2 - 1);
   return Math.max(60_000, baseMs + jitter);
-}
-
-function readPrivatePostingMode(account: NoodleAccount): "active" | "passive" {
-  const stageProfile = account.settings.stageProfile;
-  if (!stageProfile || typeof stageProfile !== "object" || Array.isArray(stageProfile)) return "active";
-  return (stageProfile as Record<string, unknown>).postingMode === "passive" ? "passive" : "active";
 }
 
 export function startNoodleFanActivityScheduler(app: FastifyInstance) {
@@ -179,7 +174,7 @@ export function startNoodleFanActivityScheduler(app: FastifyInstance) {
         }
 
         const autoPostSettings = parseAutoPostSettings(account);
-        if (autoPostSettings.enabled && readPrivatePostingMode(account) === "active") {
+        if (autoPostSettings.enabled && isNoodlePrivatePostingActive(account)) {
           if (!autoPostSettings.nextRunAt) {
             // Same burst-avoidance as fan activity: don't run immediately
             // the moment auto-post is switched on.

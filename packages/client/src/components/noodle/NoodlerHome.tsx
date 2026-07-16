@@ -8,11 +8,9 @@
 // ──────────────────────────────────────────────
 import { AtSign, Check, ImageIcon, Loader2, Menu, Trash2, User } from "lucide-react";
 import type { ChangeEvent, ReactNode, RefObject } from "react";
-import type { NoodleAccount, NoodlePost, NoodlePostAccess, NoodlePostingMode } from "@marinara-engine/shared";
+import type { NoodleAccount, NoodlePost } from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
 import type { AvatarCropValue } from "../../lib/utils";
-import { CreatorToolsPanel } from "./CreatorToolsPanel";
-import { NoodlerPageSettingsPanel } from "./NoodlerPageSettingsPanel";
 import {
   fieldClass,
   textareaClass,
@@ -20,15 +18,12 @@ import {
   readPrivateIdentityDisclosure,
   readPrivateStageSetting,
   Avatar,
-  InlineComposer,
   MobileTimelineBackButton,
   NoodlerLogo,
   NoodlerPrivateBadge,
   ProfileHeaderChrome,
   ProfileTabsAndGrid,
   RefreshTimelineButton,
-  type ActiveComposerMention,
-  type ComposerTool,
   type NoodlerHubTab,
   type NoodlerTimelineItem,
   type PrivateStageDraft,
@@ -71,46 +66,14 @@ export interface NoodlerHomeProps {
   sortedNoodlerDiscoverAccounts: NoodleAccount[];
   renderNoodlerDiscoverCard: (account: NoodleAccount) => React.ReactNode;
 
-  // Hub inline composer + refresh (same composer/refresh state as NoodleHome's
-  // "home" timeline — NoodleHome and NoodlerHome are never mounted at once)
-  composeOpen: boolean;
-  inlineComposerRef: RefObject<HTMLTextAreaElement | null>;
-  composer: string;
-  onComposerChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
-  onComposerBlur: () => void;
-  onComposerKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  activeMention: ActiveComposerMention | null;
-  mentionSuggestionsCount: number;
-  activeMentionIndex: number;
-  composePlaceholder: string;
-  composeActionLabel: string;
-  renderComposerMentionSuggestions: (listboxId: string) => React.ReactNode;
-  renderDraftPoll: () => React.ReactNode;
-  attachedImageUrl: string;
-  onAttachedImageUrlChange: (url: string) => void;
-  imageToolRef: RefObject<HTMLDivElement | null>;
-  pollToolRef: RefObject<HTMLDivElement | null>;
-  mediaToolRef: RefObject<HTMLDivElement | null>;
-  activeComposerTool: ComposerTool | null;
-  onActiveComposerToolChange: (tool: ComposerTool | null) => void;
-  draftPollActive: boolean;
-  onTogglePollComposer: () => void;
-  onSubmitPost: () => void;
-  canSubmitPost: boolean;
-  createPostPending: boolean;
-  renderComposerToolPopovers: (refs: {
-    imageRef: RefObject<HTMLDivElement | null>;
-    pollRef: RefObject<HTMLDivElement | null>;
-    mediaRef: RefObject<HTMLDivElement | null>;
-  }) => React.ReactNode;
+  // Shared rich posting surface
+  renderPostingTools: (account: NoodleAccount, mode: "noodle" | "noodler", expanded: boolean, id: string) => ReactNode;
   onTriggerRefresh: () => void;
   refreshNoodlePending: boolean;
   // Whether the current persona already has a linked NoodleR account.
   // Gates the Hub timeline composer and the Profile tab sign-up.
   hasNoodlerAccount: boolean;
-  // Active accounts post themselves; passive accounts are lurk-only.
-  // Gates the Hub timeline composer alongside hasNoodlerAccount.
-  noodlerPostingMode: NoodlePostingMode;
+  personaLinkedNoodlerAccount: NoodleAccount | null;
 
   // Private profile (activeNoodleView === "profile" && activeNoodleMode === "noodler")
   // When true, the persona has no NoodleR account yet — show the sign-up
@@ -146,36 +109,11 @@ export function NoodlerHome(props: NoodlerHomeProps) {
     renderNoodlerAccountRow,
     sortedNoodlerDiscoverAccounts,
     renderNoodlerDiscoverCard,
-    composeOpen,
-    inlineComposerRef,
-    composer,
-    onComposerChange,
-    onComposerBlur,
-    onComposerKeyDown,
-    activeMention,
-    mentionSuggestionsCount,
-    activeMentionIndex,
-    composePlaceholder,
-    composeActionLabel,
-    renderComposerMentionSuggestions,
-    renderDraftPoll,
-    attachedImageUrl,
-    onAttachedImageUrlChange,
-    imageToolRef,
-    pollToolRef,
-    mediaToolRef,
-    activeComposerTool,
-    onActiveComposerToolChange,
-    draftPollActive,
-    onTogglePollComposer,
-    onSubmitPost,
-    canSubmitPost,
-    createPostPending,
-    renderComposerToolPopovers,
+    renderPostingTools,
     onTriggerRefresh,
     refreshNoodlePending,
     hasNoodlerAccount,
-    noodlerPostingMode,
+    personaLinkedNoodlerAccount,
     showNoodlerSignup,
     stageDraft,
     onStartStageDraft,
@@ -211,8 +149,8 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               </span>
               <h3 className="mt-4 text-xl font-black">Create your NoodleR profile</h3>
               <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[var(--muted-foreground)]">
-                This is where you post as your NoodleR persona — subscriptions, pay-per-view unlocks, and all.
-                Set it up once to start posting to the Hub.
+                This is where you post as your NoodleR persona — subscriptions, pay-per-view unlocks, and all. Set it up
+                once to start posting to the Hub.
               </p>
               <button
                 type="button"
@@ -263,12 +201,14 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                 <NoodlerLogo size={30} />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-black uppercase tracking-normal text-[var(--noodle-blue)]">What is NoodleR?</p>
+                <p className="text-xs font-black uppercase tracking-normal text-[var(--noodle-blue)]">
+                  What is NoodleR?
+                </p>
                 <h3 className="mt-1 text-2xl font-black leading-tight">Noodle's private, 18+ corner.</h3>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--muted-foreground)]">
-                  NoodleR is a separate, opt-in space for adult creator content — subscriptions and per-post
-                  unlocks, kept entirely out of the main Noodle timeline. It's off by default; turning it on for
-                  this install is the only step required to see it.
+                  NoodleR is a separate, opt-in space for adult creator content — subscriptions and per-post unlocks,
+                  kept entirely out of the main Noodle timeline. It's off by default; turning it on for this install is
+                  the only step required to see it.
                 </p>
               </div>
             </div>
@@ -289,7 +229,8 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               {
                 icon: AtSign,
                 title: "Its own profile",
-                detail: "Posting here requires setting up a dedicated NoodleR profile, separate from your Noodle handle.",
+                detail:
+                  "Posting here requires setting up a dedicated NoodleR profile, separate from your Noodle handle.",
               },
               {
                 icon: Check,
@@ -299,7 +240,10 @@ export function NoodlerHome(props: NoodlerHomeProps) {
             ].map((item, index) => {
               const Icon = item.icon;
               return (
-                <article key={item.title} className="rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] p-3">
+                <article
+                  key={item.title}
+                  className="rounded-lg border border-[var(--noodle-divider)] bg-[var(--card)] p-3"
+                >
                   <div className="flex items-start gap-3">
                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
                       <Icon size={17} />
@@ -415,55 +359,14 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                   </button>{" "}
                   to post yourself.
                 </div>
-              ) : noodlerPostingMode === "passive" ? (
-                <div
-                  className="border-b border-[var(--noodle-divider)] px-4 py-3 text-sm text-[var(--muted-foreground)]"
-                  data-component="NoodlerHome.PassiveComposerNotice"
-                >
-                  This account is passive — lurk only.{" "}
-                  <button
-                    type="button"
-                    onClick={onOpenOwnProfile}
-                    className="font-bold text-[var(--noodle-blue)] hover:underline"
-                  >
-                    Switch to active
-                  </button>{" "}
-                  in your NoodleR settings to post.
-                </div>
               ) : (
                 <>
-                  <InlineComposer
-                    personaAccount={personaAccount}
-                    composeOpen={composeOpen}
-                    inlineComposerRef={inlineComposerRef}
-                    composer={composer}
-                    onComposerChange={onComposerChange}
-                    onComposerBlur={onComposerBlur}
-                    onComposerKeyDown={onComposerKeyDown}
-                    activeMention={activeMention}
-                    mentionSuggestionsCount={mentionSuggestionsCount}
-                    activeMentionIndex={activeMentionIndex}
-                    composePlaceholder={composePlaceholder}
-                    composeActionLabel={composeActionLabel}
-                    renderComposerMentionSuggestions={renderComposerMentionSuggestions}
-                    renderDraftPoll={renderDraftPoll}
-                    attachedImageUrl={attachedImageUrl}
-                    onAttachedImageUrlChange={onAttachedImageUrlChange}
-                    imageToolRef={imageToolRef}
-                    pollToolRef={pollToolRef}
-                    mediaToolRef={mediaToolRef}
-                    activeComposerTool={activeComposerTool}
-                    onActiveComposerToolChange={onActiveComposerToolChange}
-                    draftPollActive={draftPollActive}
-                    onTogglePollComposer={onTogglePollComposer}
-                    onSubmitPost={onSubmitPost}
-                    canSubmitPost={canSubmitPost}
-                    createPostPending={createPostPending}
-                    renderComposerToolPopovers={renderComposerToolPopovers}
-                    mentionListboxId="noodler-inline-mention-list"
-                    dataComponent="NoodlerHome.InlineComposer"
+                  {personaLinkedNoodlerAccount &&
+                    renderPostingTools(personaLinkedNoodlerAccount, "noodler", true, "noodler-hub")}
+                  <RefreshTimelineButton
+                    onTriggerRefresh={onTriggerRefresh}
+                    refreshNoodlePending={refreshNoodlePending}
                   />
-                  <RefreshTimelineButton onTriggerRefresh={onTriggerRefresh} refreshNoodlePending={refreshNoodlePending} />
                 </>
               )}
               {noodlerTimelineItems.length > 0 ? (
@@ -663,7 +566,9 @@ function NoodlerIdBuilder({
             </span>
             <select
               value={draft.identityDisclosure}
-              onChange={(event) => onChange({ identityDisclosure: event.target.value as PrivateStageDraft["identityDisclosure"] })}
+              onChange={(event) =>
+                onChange({ identityDisclosure: event.target.value as PrivateStageDraft["identityDisclosure"] })
+              }
               className={fieldClass}
             >
               <option value="open">Open</option>
@@ -671,10 +576,9 @@ function NoodlerIdBuilder({
               <option value="secret">Secret</option>
             </select>
             <p className="text-[11px] leading-4 text-[var(--muted-foreground)]">
-              "Open" lets generated posts reuse the linked name/handle directly. "Hinted" keeps the linked name
-              out of generated text but still allows subtle allusions and in-jokes. "Secret" also filters out
-              the linked handle and first name — it's AI-generated content moderation, not a hard guarantee it
-              can never slip through.
+              "Open" lets generated posts reuse the linked name/handle directly. "Hinted" keeps the linked name out of
+              generated text but still allows subtle allusions and in-jokes. "Secret" also filters out the linked handle
+              and first name — it's AI-generated content moderation, not a hard guarantee it can never slip through.
             </p>
           </label>
 
@@ -683,12 +587,18 @@ function NoodlerIdBuilder({
               How will this account participate?
             </span>
             <div className="grid gap-2 sm:grid-cols-2">
-              {(
-                [
-                  { value: "active" as const, title: "Active", detail: "This account posts too — you'll be able to publish from it." },
-                  { value: "passive" as const, title: "Passive", detail: "Lurk only — this account never posts, just browses and subscribes." },
-                ]
-              ).map((option) => (
+              {[
+                {
+                  value: "active" as const,
+                  title: "Active",
+                  detail: "This account posts too — you'll be able to publish from it.",
+                },
+                {
+                  value: "passive" as const,
+                  title: "Passive",
+                  detail: "Lurk only — this account never posts, just browses and subscribes.",
+                },
+              ].map((option) => (
                 <button
                   key={option.value}
                   type="button"
@@ -756,7 +666,6 @@ function NoodlerIdBuilder({
 export interface PrivateProfileViewProps {
   onBackToHome: () => void;
   viewedProfileAccount: NoodleAccount | null;
-  accounts: NoodleAccount[];
   profileDisplayHandle: string;
   canEditViewedProfile: boolean;
   profileUploadTarget: "avatar" | "banner" | null;
@@ -796,23 +705,9 @@ export interface PrivateProfileViewProps {
   onDeleteNoodlerProfile: (account: NoodleAccount) => void;
   deletePrivateAccountPending: boolean;
 
-  // AI-guided post generation (own page only)
-  onOpenGuidedPrivatePost: (account: NoodleAccount) => void;
-  refreshNoodlePending: boolean;
-
-  // Creator-tools composer (own page only)
-  onRetryPrivateIdentity: (accountId: string) => void;
-  retryPrivateIdentityPending: boolean;
-  privateComposerText: string;
-  onPrivateComposerTextChange: (value: string) => void;
-  privateComposerAccess: NoodlePostAccess;
-  onPrivateComposerAccessChange: (access: NoodlePostAccess) => void;
-  privateComposerPpvPrice: string;
-  onPrivateComposerPpvPriceChange: (value: string) => void;
-  privateComposerImageUrl: string;
-  onPrivateComposerImageUrlChange: (value: string) => void;
-  onSubmitPrivatePost: () => void;
-  createPostPending: boolean;
+  // Edit-profile settings and shared posting tools
+  editExtraContent: ReactNode;
+  postingTools: ReactNode;
 
   // Tabs and grid
   profileTab: ProfileTab;
@@ -827,7 +722,6 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
   const {
     onBackToHome,
     viewedProfileAccount,
-    accounts,
     profileDisplayHandle,
     canEditViewedProfile,
     profileUploadTarget,
@@ -862,20 +756,8 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
     viewingOwnPrivateAccount,
     onDeleteNoodlerProfile,
     deletePrivateAccountPending,
-    onOpenGuidedPrivatePost,
-    refreshNoodlePending,
-    onRetryPrivateIdentity,
-    retryPrivateIdentityPending,
-    privateComposerText,
-    onPrivateComposerTextChange,
-    privateComposerAccess,
-    onPrivateComposerAccessChange,
-    privateComposerPpvPrice,
-    onPrivateComposerPpvPriceChange,
-    privateComposerImageUrl,
-    onPrivateComposerImageUrlChange,
-    onSubmitPrivatePost,
-    createPostPending,
+    editExtraContent,
+    postingTools,
     profileTab,
     onProfileTabChange,
     profileVisiblePosts,
@@ -965,36 +847,13 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
             </div>
           ) : null
         }
+        editExtraContent={editExtraContent}
         profileFollowingCount={profileFollowingCount}
         profileFollowerCount={profileFollowerCount}
         onOpenFollowing={onOpenFollowing}
         onOpenFollowers={onOpenFollowers}
       />
-
-      {viewingOwnPrivateAccount && viewedProfileAccount && (
-        <div className="space-y-3 border-t border-[var(--noodle-divider)] px-4 py-3">
-          <CreatorToolsPanel
-            mode="noodler"
-            account={viewedProfileAccount}
-            onOpenGuidedPost={onOpenGuidedPrivatePost}
-            guidedPostPending={refreshNoodlePending}
-            onRetryIdentity={onRetryPrivateIdentity}
-            retryIdentityPending={retryPrivateIdentityPending}
-            composerText={privateComposerText}
-            onComposerTextChange={onPrivateComposerTextChange}
-            composerAccess={privateComposerAccess}
-            onComposerAccessChange={onPrivateComposerAccessChange}
-            composerPpvPrice={privateComposerPpvPrice}
-            onComposerPpvPriceChange={onPrivateComposerPpvPriceChange}
-            composerImageUrl={privateComposerImageUrl}
-            onComposerImageUrlChange={onPrivateComposerImageUrlChange}
-            onSubmitPost={onSubmitPrivatePost}
-            createPostPending={createPostPending}
-          />
-          <NoodlerPageSettingsPanel account={viewedProfileAccount} accounts={accounts} />
-        </div>
-      )}
-
+      {postingTools}
       <ProfileTabsAndGrid
         activeTab={profileTab}
         onTabChange={onProfileTabChange}

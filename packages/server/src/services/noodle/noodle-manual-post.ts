@@ -64,12 +64,16 @@ function parseRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function readPrivatePostingMode(account: NoodleAccount): "active" | "passive" {
-  return parseRecord(account.settings.stageProfile).postingMode === "passive" ? "passive" : "active";
+export function isNoodlePrivatePostingActive(account: NoodleAccount): boolean {
+  return parseRecord(account.settings.stageProfile).postingMode !== "passive";
 }
 
-function readAutoPostEnabled(account: NoodleAccount): boolean {
+export function readAutoPostEnabled(account: NoodleAccount): boolean {
   return parseRecord(account.settings.autoPost).enabled === true;
+}
+
+export function noodlePpvPriceMetadata(access: NoodlePost["access"], ppvPrice?: number) {
+  return access === "ppv" && ppvPrice != null ? { ppvPrice } : {};
 }
 
 function readCharacterName(data: unknown): string {
@@ -141,7 +145,12 @@ export async function createManualNoodlePost(
   if (params.authorAccountId) {
     account = await noodle.getAccountById(params.authorAccountId);
   } else if (params.target) {
-    const accountId = await resolveNoodleTargetAccountId(noodle, params.authorKind, params.authorEntityId, params.target);
+    const accountId = await resolveNoodleTargetAccountId(
+      noodle,
+      params.authorKind,
+      params.authorEntityId,
+      params.target,
+    );
     account = accountId ? await noodle.getAccountById(accountId) : null;
   } else {
     account = await noodle.getAccountByEntity(params.authorKind, params.authorEntityId);
@@ -152,7 +161,7 @@ export async function createManualNoodlePost(
   if (!account) return { error: "account_not_found" };
 
   if (params.target === "noodler" && account.visibility === "private") {
-    if (readPrivatePostingMode(account) === "passive" || !readAutoPostEnabled(account)) {
+    if (!isNoodlePrivatePostingActive(account) || !readAutoPostEnabled(account)) {
       return { error: "posting_disabled" };
     }
   }
@@ -181,7 +190,7 @@ export async function createManualNoodlePost(
     metadata: {
       ...mentionedAccountMetadata(mentionedAccounts),
       ...(poll ? { poll } : {}),
-      ...(params.access === "ppv" && params.ppvPrice != null ? { ppvPrice: params.ppvPrice } : {}),
+      ...noodlePpvPriceMetadata(params.access ?? defaultAccess, params.ppvPrice),
     },
   });
   if (!post) return { error: "account_not_found" };

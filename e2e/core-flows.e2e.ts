@@ -2979,7 +2979,7 @@ test("Noodle posts tag invited characters with @handle mentions", async ({ page 
     await page.locator('[data-tour="noodle-tab"]').click();
 
     const noodle = page.locator('[data-component="NoodleView"]');
-    const composer = noodle.locator('[data-component="NoodleView.InlineComposer"]');
+    const composer = noodle.locator('[data-component="PostingTools.noodle-timeline"]');
     const textarea = composer.getByPlaceholder("What's simmering?");
     await textarea.fill("Dinner with @prof");
 
@@ -3016,6 +3016,10 @@ test("Noodle posts tag invited characters with @handle mentions", async ({ page 
 
     await mention.click();
     await expect(noodle.getByRole("heading", { name: "Professor Mari", exact: true })).toBeVisible();
+    const profilePostingTools = noodle.locator('[data-component="PostingTools.noodle-profile"]');
+    await expect(profilePostingTools).not.toHaveAttribute("open", "");
+    await profilePostingTools.getByText("Posting tools", { exact: false }).click();
+    await expect(profilePostingTools.getByPlaceholder("Post as @professor_mari...")).toBeVisible();
     expect(errors).toEqual([]);
   } finally {
     if (createdPostId) {
@@ -3113,7 +3117,7 @@ test("Noodle polls support character creation and voting on both sides", async (
     expect(personaVotes).toHaveLength(1);
     expect(personaVotes[0]?.content).toBe("option-2");
 
-    const composer = noodle.locator('[data-component="NoodleView.InlineComposer"]');
+    const composer = noodle.locator('[data-component="PostingTools.noodle-timeline"]');
     await composer.getByTitle("Create poll").click();
     await page.getByPlaceholder("Ask a question").fill("Which experiment comes next?");
     await page.getByPlaceholder("Option 1").fill("Robotics");
@@ -3461,7 +3465,7 @@ test("Noodle post and reply composers autocomplete character handles", async ({ 
 
     const noodle = page.locator('[data-component="NoodleView"]');
     const mentionPrefix = mentionAccount!.handle.slice(0, Math.min(2, mentionAccount!.handle.length));
-    const inlineComposer = noodle.locator('[data-component="NoodleView.InlineComposer"]');
+    const inlineComposer = noodle.locator('[data-component="PostingTools.noodle-timeline"]');
     const postTextarea = inlineComposer.getByPlaceholder("What's simmering?");
     await postTextarea.fill(`Hello @${mentionPrefix}`);
 
@@ -3547,7 +3551,7 @@ test("Noodle desktop composers insert emojis at the active cursor", async ({ pag
     await page.locator('[data-tour="noodle-tab"]').click();
 
     const noodle = page.locator('[data-component="NoodleView"]');
-    const inlineComposer = noodle.locator('[data-component="NoodleView.InlineComposer"]');
+    const inlineComposer = noodle.locator('[data-component="PostingTools.noodle-timeline"]');
     const postTextarea = inlineComposer.getByPlaceholder("What's simmering?");
     await postTextarea.fill("Alpha Omega");
     await postTextarea.evaluate((element: HTMLTextAreaElement) => {

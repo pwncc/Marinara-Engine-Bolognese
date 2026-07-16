@@ -5,7 +5,14 @@ import { join } from "node:path";
 import type { DB } from "../../packages/server/src/db/connection.js";
 import { createFileNativeDB } from "../../packages/server/src/db/file-backed-store.js";
 import { createNoodleStorage } from "../../packages/server/src/services/storage/noodle.storage.js";
+import { createCharactersStorage } from "../../packages/server/src/services/storage/characters.storage.js";
+import {
+  createManualNoodlePost,
+  isNoodlePrivatePostingActive,
+  noodlePpvPriceMetadata,
+} from "../../packages/server/src/services/noodle/noodle-manual-post.js";
 import { resolveNoodleAvatarCropAfterProfileUpdate } from "../../packages/server/src/services/noodle/noodle-profile-avatar.js";
+import { noodleRefreshSchema } from "../../packages/shared/src/schemas/noodle.schema.js";
 
 const sourceCrop = { x: 12, y: 18, width: 62, height: 62, unit: "%" as const };
 assert.equal(
@@ -59,9 +66,11 @@ process.env.FILE_STORAGE_DIR = storageDir;
 try {
   const firstDb = await createFileNativeDB();
   const firstNoodle = createNoodleStorage(firstDb as unknown as DB);
+  const firstCharacters = createCharactersStorage(firstDb as unknown as DB);
   const updated = await firstNoodle.updateSettings({
     maxImagesPerRefresh: 9,
     allowRandomUsers: true,
+    enableNoodler: true,
     maxGeneratedPostsPerRefresh: 11,
     noodler: { enableFanActivityScheduler: true },
   });
@@ -127,6 +136,54 @@ try {
   assert.equal(renamedCharacterAccount.handle, "custom_handle");
   assert.equal(renamedCharacterAccount.bio, "Keep this generated biography");
   assert.deepEqual(renamedCharacterAccount.settings, { profileGenerated: true, location: "Snezhnaya" });
+
+  const privateAccount = await firstNoodle.createPrivateAccount(renamedCharacterAccount.id);
+  assert.ok(privateAccount);
+  const passivePrivateAccount = await firstNoodle.updateAccount(privateAccount.id, {
+    settings: {
+      ...privateAccount.settings,
+      stageProfile: { postingMode: "passive" },
+      autoPost: { enabled: false },
+    },
+  });
+  assert.ok(passivePrivateAccount);
+  assert.equal(isNoodlePrivatePostingActive(passivePrivateAccount), false);
+
+  const explicitManualPost = await createManualNoodlePost(firstNoodle, firstCharacters, {
+    authorKind: passivePrivateAccount.kind,
+    authorEntityId: passivePrivateAccount.entityId,
+    authorAccountId: passivePrivateAccount.id,
+    content: "Manual post from a passive page.",
+    access: "ppv",
+    ppvPrice: 12.5,
+  });
+  assert.ok("post" in explicitManualPost);
+  assert.equal(explicitManualPost.post.authorAccountId, passivePrivateAccount.id);
+  assert.equal(explicitManualPost.post.metadata.ppvPrice, 12.5);
+
+  const implicitAutomaticPost = await createManualNoodlePost(firstNoodle, firstCharacters, {
+    authorKind: passivePrivateAccount.kind,
+    authorEntityId: passivePrivateAccount.entityId,
+    target: "noodler",
+    content: "Automatic post from a passive page.",
+  });
+  assert.deepEqual(implicitAutomaticPost, { error: "posting_disabled" });
+
+  assert.deepEqual(noodlePpvPriceMetadata("ppv", 19.99), { ppvPrice: 19.99 });
+  assert.deepEqual(noodlePpvPriceMetadata("subscriber", 19.99), {});
+  assert.equal(
+    noodleRefreshSchema.parse({ privatePostGuide: { access: "ppv", ppvPrice: 999_999 } }).privatePostGuide
+      ?.ppvPrice,
+    999_999,
+  );
+  assert.equal(
+    noodleRefreshSchema.safeParse({ privatePostGuide: { access: "ppv", ppvPrice: -0.01 } }).success,
+    false,
+  );
+  assert.equal(
+    noodleRefreshSchema.safeParse({ privatePostGuide: { access: "ppv", ppvPrice: 1_000_000 } }).success,
+    false,
+  );
   await firstDb._fileStore.close();
 
   const refreshRunsPath = join(storageDir, "tables", "noodle_refresh_runs.json");
