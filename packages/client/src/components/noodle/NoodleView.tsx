@@ -142,7 +142,7 @@ import { useUIStore } from "../../stores/ui.store";
 import { useTrackAchievement } from "../../hooks/use-achievements";
 import { NoodleHome, type NoodleHomeProps } from "./NoodleHome";
 import type { NoodlerHomeProps } from "./NoodlerHome";
-import { PostingTools } from "./PostingTools";
+import { StandardPostComposer } from "./StandardPostComposer";
 import {
   NoodlerEditProfileFields,
   noodlerEditProfileDraftFromAccounts,
@@ -2578,8 +2578,8 @@ export function NoodleView() {
     );
   };
 
-  const renderPostingTools = (account: NoodleAccount, mode: "noodle" | "noodler", expanded: boolean, id: string) => (
-    <PostingTools
+  const renderPostComposer = (account: NoodleAccount, mode: "noodle" | "noodler", expanded: boolean, id: string) => (
+    <StandardPostComposer
       key={`${id}-${account.id}`}
       account={account}
       mode={mode}
@@ -2626,7 +2626,7 @@ export function NoodleView() {
       createPostPending={createPost.isPending}
       renderComposerToolPopovers={renderComposerToolPopovers}
       mentionListboxId={`${id}-mention-list`}
-      dataComponent={`PostingTools.${id}`}
+      dataComponent={`InlineComposer.${id}`}
     />
   );
 
@@ -5977,7 +5977,7 @@ export function NoodleView() {
     followableCharacterAccountsCount: followableCharacterAccounts.length,
     onUpdateFollowedAccount: updateFollowedAccount,
     updateAccountPending: updateAccount.isPending || profileSavePending,
-    renderPostingTools,
+    renderPostComposer,
     onTriggerRefresh: triggerRefresh,
     refreshNoodlePending: refreshNoodle.isPending,
     imagePromptReviewItemsCount: imagePromptReviewItems.length,
@@ -6056,7 +6056,7 @@ export function NoodleView() {
     renderPostGrid,
     renderPostArticle,
     postingTools: viewedProfileAccount
-      ? renderPostingTools(viewedProfileAccount, "noodle", viewingOwnProfile, "noodle-profile")
+      ? renderPostComposer(viewedProfileAccount, "noodle", viewingOwnProfile, "noodle-profile")
       : null,
   };
 
@@ -6130,7 +6130,7 @@ export function NoodleView() {
         />
       ) : null,
     postingTools: viewedProfileAccount
-      ? renderPostingTools(viewedProfileAccount, "noodler", viewingOwnPersonaPrivateAccount, "noodler-profile")
+      ? renderPostComposer(viewedProfileAccount, "noodler", viewingOwnPersonaPrivateAccount, "noodler-profile")
       : null,
     profileTab,
     onProfileTabChange: setProfileTab,
@@ -6160,7 +6160,7 @@ export function NoodleView() {
     renderNoodlerAccountRow,
     sortedNoodlerDiscoverAccounts,
     renderNoodlerDiscoverCard,
-    renderPostingTools,
+    renderPostComposer,
     onTriggerRefresh: triggerNoodlerRefresh,
     refreshNoodlePending: refreshNoodle.isPending,
     hasNoodlerAccount: Boolean(personaLinkedNoodlerAccount),

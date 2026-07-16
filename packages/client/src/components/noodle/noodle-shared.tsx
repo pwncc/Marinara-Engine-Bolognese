@@ -41,6 +41,7 @@ import type {
   NoodleInteraction,
   NoodleInteractionType,
   NoodlePost,
+  NoodlePostAccess,
   NoodlePostingMode,
   NoodlePrivateIdentityDisclosure,
   NoodleTextMention,
@@ -599,20 +600,23 @@ export function NoodleToolButton({
   title,
   onClick,
   children,
+  disabled = false,
 }: {
   active: boolean;
   title: string;
   onClick: () => void;
   children: React.ReactNode;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       title={title}
       aria-label={title}
       className={cn(
-        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full p-0 !text-[var(--noodle-blue)] transition-colors active:scale-95 [&_svg]:!text-[var(--noodle-blue)]",
+        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full p-0 !text-[var(--noodle-blue)] transition-colors active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 [&_svg]:!text-[var(--noodle-blue)]",
         active ? "bg-[var(--noodle-blue)]/15 ring-1 ring-[var(--noodle-blue)]/25" : "hover:bg-[var(--noodle-blue)]/10",
       )}
     >
@@ -655,6 +659,14 @@ export interface InlineComposerProps {
   }) => ReactNode;
   mentionListboxId: string;
   dataComponent?: string;
+  postAccess?: NoodlePostAccess;
+  onPostAccessChange?: (access: NoodlePostAccess) => void;
+  ppvPrice?: string;
+  onPpvPriceChange?: (value: string) => void;
+  onOpenGuidedPost?: () => void;
+  guidedPostDisabled?: boolean;
+  guidedPostPending?: boolean;
+  onClose?: () => void;
 }
 
 export function InlineComposer(props: InlineComposerProps) {
@@ -688,6 +700,14 @@ export function InlineComposer(props: InlineComposerProps) {
     renderComposerToolPopovers,
     mentionListboxId,
     dataComponent = "InlineComposer",
+    postAccess,
+    onPostAccessChange,
+    ppvPrice = "",
+    onPpvPriceChange,
+    onOpenGuidedPost,
+    guidedPostDisabled = false,
+    guidedPostPending = false,
+    onClose,
   } = props;
 
   if (composeOpen) return null;
@@ -769,15 +789,60 @@ export function InlineComposer(props: InlineComposerProps) {
               <Smile size={18} />
             </NoodleToolButton>
           </div>
+          {onOpenGuidedPost && (
+            <NoodleToolButton
+              title={guidedPostDisabled ? "Passive profiles cannot generate guided posts" : "Generate with AI"}
+              onClick={() => {
+                if (!guidedPostDisabled && !guidedPostPending) onOpenGuidedPost();
+              }}
+              active={false}
+              disabled={guidedPostDisabled || guidedPostPending}
+            >
+              <Sparkles size={18} />
+            </NoodleToolButton>
+          )}
+          {onClose && (
+            <NoodleToolButton title="Close roleplay composer" onClick={onClose} active={false}>
+              <X size={18} />
+            </NoodleToolButton>
+          )}
         </div>
-        <button
-          type="button"
-          onClick={onSubmitPost}
-          disabled={!canSubmitPost || createPostPending}
-          className="h-8 rounded-full bg-[var(--noodle-blue)] px-5 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {composeActionLabel}
-        </button>
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+          {postAccess && onPostAccessChange && (
+            <select
+              value={postAccess}
+              onChange={(event) => onPostAccessChange(event.target.value as NoodlePostAccess)}
+              aria-label="Post visibility"
+              className="h-8 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs font-semibold text-[var(--foreground)]"
+            >
+              <option value="public">Public</option>
+              <option value="subscriber">Subscribers</option>
+              <option value="ppv">PPV</option>
+            </select>
+          )}
+          {postAccess === "ppv" && onPpvPriceChange && (
+            <input
+              type="number"
+              min={0}
+              max={999999}
+              step="0.01"
+              inputMode="decimal"
+              value={ppvPrice}
+              onChange={(event) => onPpvPriceChange(event.target.value)}
+              placeholder="Price"
+              aria-label="PPV price"
+              className="h-8 w-20 rounded-full border border-[var(--noodle-divider)] bg-[var(--background)] px-2 text-xs text-[var(--foreground)] outline-none focus:border-[var(--noodle-blue)]"
+            />
+          )}
+          <button
+            type="button"
+            onClick={onSubmitPost}
+            disabled={!canSubmitPost || createPostPending}
+            className="h-8 rounded-full bg-[var(--noodle-blue)] px-5 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {composeActionLabel}
+          </button>
+        </div>
         {renderComposerToolPopovers({ imageRef: imageToolRef, pollRef: pollToolRef, mediaRef: mediaToolRef })}
       </div>
     </div>

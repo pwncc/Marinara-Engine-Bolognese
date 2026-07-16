@@ -80,7 +80,7 @@ export interface NoodleHomeProps {
   updateAccountPending: boolean;
 
   // Shared rich posting surface
-  renderPostingTools: (account: NoodleAccount, mode: "noodle" | "noodler", expanded: boolean, id: string) => ReactNode;
+  renderPostComposer: (account: NoodleAccount, mode: "noodle" | "noodler", expanded: boolean, id: string) => ReactNode;
 
   // Refresh
   onTriggerRefresh: () => void;
@@ -136,7 +136,7 @@ export function NoodleHome(props: NoodleHomeProps) {
     followableCharacterAccountsCount,
     onUpdateFollowedAccount,
     updateAccountPending,
-    renderPostingTools,
+    renderPostComposer,
     onTriggerRefresh,
     refreshNoodlePending,
     imagePromptReviewItemsCount,
@@ -379,7 +379,7 @@ export function NoodleHome(props: NoodleHomeProps) {
         </div>
       )}
 
-      {!isAccountSearch && personaAccount && renderPostingTools(personaAccount, "noodle", true, "noodle-timeline")}
+      {!isAccountSearch && personaAccount && renderPostComposer(personaAccount, "noodle", true, "noodle-timeline")}
 
       {!isAccountSearch && (
         <RefreshTimelineButton

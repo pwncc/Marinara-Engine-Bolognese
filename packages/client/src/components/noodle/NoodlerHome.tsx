@@ -67,7 +67,7 @@ export interface NoodlerHomeProps {
   renderNoodlerDiscoverCard: (account: NoodleAccount) => React.ReactNode;
 
   // Shared rich posting surface
-  renderPostingTools: (account: NoodleAccount, mode: "noodle" | "noodler", expanded: boolean, id: string) => ReactNode;
+  renderPostComposer: (account: NoodleAccount, mode: "noodle" | "noodler", expanded: boolean, id: string) => ReactNode;
   onTriggerRefresh: () => void;
   refreshNoodlePending: boolean;
   // Whether the current persona already has a linked NoodleR account.
@@ -109,7 +109,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
     renderNoodlerAccountRow,
     sortedNoodlerDiscoverAccounts,
     renderNoodlerDiscoverCard,
-    renderPostingTools,
+    renderPostComposer,
     onTriggerRefresh,
     refreshNoodlePending,
     hasNoodlerAccount,
@@ -362,7 +362,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               ) : (
                 <>
                   {personaLinkedNoodlerAccount &&
-                    renderPostingTools(personaLinkedNoodlerAccount, "noodler", true, "noodler-hub")}
+                    renderPostComposer(personaLinkedNoodlerAccount, "noodler", true, "noodler-hub")}
                   <RefreshTimelineButton
                     onTriggerRefresh={onTriggerRefresh}
                     refreshNoodlePending={refreshNoodlePending}
