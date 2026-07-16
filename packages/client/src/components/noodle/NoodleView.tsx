@@ -148,6 +148,7 @@ import {
   noodlerEditProfileDraftFromAccounts,
   type NoodlerEditProfileDraft,
 } from "./NoodlerEditProfileFields";
+import { NoodlerProjectsPanel } from "./NoodlerProjectsPanel";
 import {
   Avatar,
   BrowserChrome,
@@ -180,7 +181,6 @@ import {
   readPrivatePostingMode,
   type PrivateStageDraft,
   readAutoPostEnabled,
-  readAutoPostIntensity,
   NOODLE_SETTINGS_GROUPS,
   getNoodleSettingsSectionAnchorId,
   getNoodleSettingsGroupAnchorId,
@@ -717,7 +717,7 @@ export function NoodleView() {
   const deletePrivateAccount = useDeletePrivateNoodleAccount();
   const retryPrivateIdentity = useRetryPrivateIdentityGeneration();
   const simulateNoodlerFanActivity = useSimulateNoodlerFanActivity();
-  const loadOlderPosts = useLoadOlderNoodlePosts();
+  const loadOlderPosts = useLoadOlderNoodlePosts(noodleViewerPersonaId);
   const [fillerAccountsExpanded, setFillerAccountsExpanded] = useState(false);
   const [newFillerAccountName, setNewFillerAccountName] = useState("");
   const fillerProfilesQuery = useNoodleFillerProfiles(fillerAccountsExpanded);
@@ -967,12 +967,14 @@ export function NoodleView() {
   const hasMorePersonaAccounts = visiblePersonaAccounts.length < sortedPersonaAccounts.length;
   const posts = useMemo(() => data?.posts ?? [], [data?.posts]);
   const oldestLoadedPostCreatedAt = useMemo(() => {
+    const publicAccountIds = new Set(accounts.filter((account) => account.visibility === "public").map((account) => account.id));
     let oldest: string | null = null;
     for (const post of posts) {
+      if (!publicAccountIds.has(post.authorAccountId)) continue;
       if (!oldest || post.createdAt < oldest) oldest = post.createdAt;
     }
     return oldest;
-  }, [posts]);
+  }, [accounts, posts]);
   const interactions = useMemo(() => data?.interactions ?? [], [data?.interactions]);
   const subscriptions = useMemo(() => data?.subscriptions ?? [], [data?.subscriptions]);
   const postUnlocks = useMemo(() => data?.postUnlocks ?? [], [data?.postUnlocks]);
@@ -1011,9 +1013,9 @@ export function NoodleView() {
   const personaAccount = useMemo(() => {
     if (isGlobalPersonaSelected) return null;
     return (
-      personaAccounts.find((account) => account.entityId === selectedPersonaId) ?? sortedPersonaAccounts[0] ?? null
+      personaAccounts.find((account) => account.entityId === noodleViewerPersonaId) ?? sortedPersonaAccounts[0] ?? null
     );
-  }, [isGlobalPersonaSelected, personaAccounts, selectedPersonaId, sortedPersonaAccounts]);
+  }, [isGlobalPersonaSelected, noodleViewerPersonaId, personaAccounts, sortedPersonaAccounts]);
   const viewedProfileAccount = useMemo(
     () => (viewedProfileAccountId ? (accountById.get(viewedProfileAccountId) ?? null) : personaAccount),
     [accountById, personaAccount, viewedProfileAccountId],
@@ -1527,9 +1529,6 @@ export function NoodleView() {
     if (viewedProfileAccount.visibility === "private" && noodlerEditDraft) {
       linkedPublicAccount = accounts.find((candidate) => candidate.linkedAccountId === viewedProfileAccount.id);
       const currentAutoPost = parseRecord(viewedProfileAccount.settings?.autoPost);
-      const autoPostChanged =
-        readAutoPostEnabled(viewedProfileAccount) !== noodlerEditDraft.autoPostEnabled ||
-        readAutoPostIntensity(viewedProfileAccount) !== noodlerEditDraft.autoPostIntensity;
       const subscriptionPrice = Number.parseFloat(noodlerEditDraft.subscriptionPrice);
       nextSettings = {
         ...nextSettings,
@@ -1561,7 +1560,6 @@ export function NoodleView() {
           ...currentAutoPost,
           enabled: noodlerEditDraft.autoPostEnabled,
           intensity: noodlerEditDraft.autoPostIntensity,
-          ...(autoPostChanged ? { nextRunAt: null } : {}),
         },
       };
     }
@@ -2111,13 +2109,17 @@ export function NoodleView() {
       }
     }
     return posts
-      .filter((post) => likedAtByPostId.has(post.id))
+      .filter(
+        (post) =>
+          likedAtByPostId.has(post.id) &&
+          accountById.get(post.authorAccountId)?.visibility === viewedProfileAccount.visibility,
+      )
       .sort((a, b) => {
         const aTime = new Date(likedAtByPostId.get(a.id) ?? a.createdAt).getTime();
         const bTime = new Date(likedAtByPostId.get(b.id) ?? b.createdAt).getTime();
         return bTime - aTime;
       });
-  }, [interactions, posts, viewedProfileAccount]);
+  }, [accountById, interactions, posts, viewedProfileAccount]);
   const profileMediaPosts = useMemo(() => profilePosts.filter((post) => Boolean(post.imageUrl)), [profilePosts]);
   const profileVisiblePosts =
     profileTab === "likes" ? profileLikedPosts : profileTab === "media" ? profileMediaPosts : profilePosts;
@@ -2158,7 +2160,13 @@ export function NoodleView() {
       posts.filter((post) => post.authorAccountId === personaAccount.id).map((post) => post.id),
     );
     return interactions
-      .filter((interaction) => interaction.type === "like" && interaction.actorAccountId !== personaAccount.id)
+      .filter(
+        (interaction) =>
+          interaction.type === "like" &&
+          interaction.actorAccountId !== personaAccount.id &&
+          accountById.get(postById.get(interaction.postId)?.authorAccountId ?? "")?.visibility !== "private" &&
+          accountById.get(interaction.actorAccountId)?.visibility !== "private",
+      )
       .map((interaction) => {
         const targetReply = interaction.parentInteractionId
           ? (interactionById.get(interaction.parentInteractionId) ?? null)
@@ -2185,6 +2193,7 @@ export function NoodleView() {
   const notificationFollowAccounts = useMemo(() => {
     if (!personaAccount) return [];
     return accounts
+      .filter((account) => account.visibility !== "private")
       .flatMap((account) => {
         if (account.id === personaAccount.id) return [];
         const followingAccountIds = readStringArray(account.settings?.followingAccountIds);
@@ -2212,6 +2221,8 @@ export function NoodleView() {
       if (interaction.type !== "reply" || interaction.actorAccountId === personaAccount.id) continue;
       const post = postById.get(interaction.postId);
       if (!post) continue;
+      if (accountById.get(post.authorAccountId)?.visibility === "private") continue;
+      if (accountById.get(interaction.actorAccountId)?.visibility === "private") continue;
       const parentReply = interaction.parentInteractionId
         ? (interactionById.get(interaction.parentInteractionId) ?? null)
         : null;
@@ -2234,6 +2245,7 @@ export function NoodleView() {
       });
     }
     for (const post of posts) {
+      if (accountById.get(post.authorAccountId)?.visibility === "private") continue;
       if (post.authorAccountId === personaAccount.id || !textMentionsHandle(post.content, personaAccount.handle)) {
         continue;
       }
@@ -4423,6 +4435,74 @@ export function NoodleView() {
 
             {isNoodlerEnabled && (
               <Section
+                id={getNoodleSettingsSectionAnchorId("noodler-automatic-posting")}
+                title="NoodleR Automatic Creator Posts"
+                help="Schedules creator-owned NoodleR posts independently from fan activity. The daily rate is shared across every eligible Active creator page."
+              >
+                <div className="space-y-3">
+                  <ToggleSetting
+                    label="Enable automatic creator posts"
+                    help="Runs while Marinara is running. Each due slot selects one Active creator page that has its own Automatic posting toggle enabled."
+                    checked={settings.noodler.creatorPosts.enabled}
+                    disabled={updateSettings.isPending}
+                    onChange={(enabled) => saveSettings({ noodler: { creatorPosts: { enabled } } })}
+                  />
+                  <NumberSetting
+                    label="Creator posts/day"
+                    help="Total automatic NoodleR posts across all eligible creator pages, not a per-character quota."
+                    value={settings.noodler.creatorPosts.postsPerDay}
+                    min={0}
+                    max={24}
+                    onCommit={(postsPerDay) => saveSettings({ noodler: { creatorPosts: { postsPerDay } } })}
+                  />
+                  <label className="block space-y-1.5">
+                    <FieldLabel help="Leave blank to use the normal Noodle generation connection.">
+                      Creator generation connection
+                    </FieldLabel>
+                    <select
+                      value={settings.noodler.creatorPosts.generationConnectionId ?? ""}
+                      onChange={(event) =>
+                        saveSettings({
+                          noodler: { creatorPosts: { generationConnectionId: event.target.value || null } },
+                        })
+                      }
+                      className={fieldClass}
+                    >
+                      <option value="">Use Noodle generation connection</option>
+                      {connections.map((connection) => (
+                        <option key={String(connection.id)} value={String(connection.id)}>
+                          {String(connection.name ?? connection.model ?? "Connection")}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="rounded-md border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/5 px-3 py-2.5 text-xs">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="inline-flex items-center gap-2 font-semibold text-[var(--foreground)]">
+                        <RefreshCw size={14} /> Automatic creator schedule
+                      </span>
+                      <span className="text-[var(--muted-foreground)]">
+                        {data?.noodlerScheduler.completedSlots ?? 0}/{data?.noodlerScheduler.refreshesPerDay ?? 0} slots
+                      </span>
+                    </div>
+                    <p className="mt-1.5 leading-5 text-[var(--muted-foreground)]">
+                      {data?.noodlerScheduler
+                        ? noodleSchedulerSummary(data.noodlerScheduler)
+                        : "The creator schedule is loading."}
+                    </p>
+                    {(data?.noodlerScheduler.scheduledTimes.length ?? 0) > 0 && (
+                      <p className="mt-1 text-[0.68rem] text-[var(--muted-foreground)]">
+                        Planned: {data!.noodlerScheduler.scheduledTimes.map((time) => formatNoodleRefreshTime(time)).join(" · ")}. The
+                        creator is selected when each slot becomes due.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </Section>
+            )}
+
+            {isNoodlerEnabled && (
+              <Section
                 id={getNoodleSettingsSectionAnchorId("noodler-prompt")}
                 title="NoodleR Prompt"
                 help="Controls the editable base instructions used to write NoodleR (private page) activity. Separate from the public Noodle prompt. Timeline voice and tone instructions are appended after this prompt."
@@ -6102,6 +6182,7 @@ export function NoodleView() {
     deletePrivateAccountPending: deletePrivateAccount.isPending,
     editExtraContent:
       viewedProfileAccount?.visibility === "private" && noodlerEditDraft ? (
+        <div className="space-y-5">
         <NoodlerEditProfileFields
           account={viewedProfileAccount}
           accounts={accounts}
@@ -6128,6 +6209,8 @@ export function NoodleView() {
           }
           retryIdentityPending={retryPrivateIdentity.isPending}
         />
+        <NoodlerProjectsPanel accountId={viewedProfileAccount.id} />
+        </div>
       ) : null,
     postingTools: viewedProfileAccount
       ? renderPostComposer(viewedProfileAccount, "noodler", viewingOwnPersonaPrivateAccount, "noodler-profile")

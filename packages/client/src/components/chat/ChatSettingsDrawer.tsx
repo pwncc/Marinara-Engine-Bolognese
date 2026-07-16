@@ -76,6 +76,7 @@ import { LorebooksSection } from "../../features/chat-settings/sections/Lorebook
 import { PromptPresetSection } from "../../features/chat-settings/sections/PromptPresetSection";
 import { SceneInstructionsSection } from "../../features/chat-settings/sections/SceneInstructionsSection";
 import { TranslationSection } from "../../features/chat-settings/sections/TranslationSection";
+import { NoodlerProjectsSection } from "../../features/chat-settings/sections/NoodlerProjectsSection";
 import { CapabilityElement } from "../capabilities/CapabilityElement";
 import { cn, getAvatarCropStyle, type AvatarCrop } from "../../lib/utils";
 import { showAlertDialog, showConfirmDialog, showPromptDialog } from "../../lib/app-dialogs";
@@ -5468,6 +5469,10 @@ export function ChatSettingsDrawer({
                 </div>
               </div>
             </Section>
+          )}
+
+          {isConversation && chatCharIds.length > 0 && (
+            <NoodlerProjectsSection characterIds={chatCharIds} characterNames={charNameMap} />
           )}
 
           {/* Conversation feature packages expose commands and settings as soon as they are installed. */}

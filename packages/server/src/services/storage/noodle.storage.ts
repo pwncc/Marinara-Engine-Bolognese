@@ -31,6 +31,7 @@ import {
   type NoodleRemoveInteractionInput,
   type NoodleSettings,
   type NoodleSettingsUpdateInput,
+  type NoodleSurface,
 } from "@marinara-engine/shared";
 import type { DB } from "../../db/connection.js";
 import { isFileUniqueConstraintError } from "../../db/file-schema.js";
@@ -43,6 +44,8 @@ import {
   noodlePosts,
   noodlePostUnlocks,
   noodleRefreshRuns,
+  noodlerCreatorProjects,
+  noodlerProjectMilestones,
 } from "../../db/schema/index.js";
 import { newId, now } from "../../utils/id-generator.js";
 import { createAppSettingsStorage } from "./app-settings.storage.js";
@@ -56,6 +59,7 @@ import {
 
 const NOODLE_SETTINGS_KEY = "noodle.settings";
 const NOODLE_REFRESH_SCHEDULE_KEY = "noodle.refresh-schedule";
+const NOODLER_CREATOR_POST_SCHEDULE_KEY = "noodle.noodler-creator-post-schedule";
 const NOODLE_CARRYOVER_TARGETS: NoodleCarryoverTarget[] = ["conversation", "roleplay", "game"];
 
 // Default Noodle "random user" filler roster, seeded once (lazily, on first
@@ -292,6 +296,7 @@ export function normalizeNoodleSettings(raw: unknown): NoodleSettings {
   const migratedMaxImagesPerRefresh =
     rawRecord.maxImagesPerRefresh ?? rawRecord.maxImagePromptsPerDay ?? DEFAULT_NOODLE_SETTINGS.maxImagesPerRefresh;
   const rawNoodler = parseRecord(rawRecord.noodler);
+  const rawCreatorPosts = parseRecord(rawNoodler.creatorPosts);
   const migratedNoodler = {
     ...DEFAULT_NOODLE_SETTINGS.noodler,
     ...rawNoodler,
@@ -299,6 +304,10 @@ export function normalizeNoodleSettings(raw: unknown): NoodleSettings {
       rawNoodler.enableFanActivityScheduler ??
       rawRecord.enableNoodlerFanActivityScheduler ??
       DEFAULT_NOODLE_SETTINGS.noodler.enableFanActivityScheduler,
+    creatorPosts: {
+      ...DEFAULT_NOODLE_SETTINGS.noodler.creatorPosts,
+      ...rawCreatorPosts,
+    },
   };
   const parsed = noodleSettingsSchema.safeParse({
     ...DEFAULT_NOODLE_SETTINGS,
@@ -467,12 +476,23 @@ export function createNoodleStorage(db: DB) {
       const next = normalizeNoodleSettings({
         ...current,
         ...input,
-        noodler: { ...current.noodler, ...input.noodler },
+        noodler: {
+          ...current.noodler,
+          ...input.noodler,
+          creatorPosts: { ...current.noodler.creatorPosts, ...input.noodler?.creatorPosts },
+        },
       });
       await settingsStore.set(NOODLE_SETTINGS_KEY, JSON.stringify(next));
       const currentSchedule = await this.getRefreshSchedule();
       const reconciled = reconcileNoodleRefreshSchedule(currentSchedule, next.refreshesPerDay, new Date());
       await this.saveRefreshSchedule(clearNoodleRefreshFailure(reconciled));
+      const currentNoodlerSchedule = await this.getNoodlerCreatorPostSchedule();
+      const reconciledNoodler = reconcileNoodleRefreshSchedule(
+        currentNoodlerSchedule,
+        next.noodler.creatorPosts.enabled ? next.noodler.creatorPosts.postsPerDay : 0,
+        new Date(),
+      );
+      await this.saveNoodlerCreatorPostSchedule(clearNoodleRefreshFailure(reconciledNoodler));
       return this.getSettings();
     },
 
@@ -499,6 +519,34 @@ export function createNoodleStorage(db: DB) {
       const reconciled = reconcileNoodleRefreshSchedule(current, settings.refreshesPerDay, at);
       if (!current || JSON.stringify(current) !== JSON.stringify(reconciled)) {
         await this.saveRefreshSchedule(reconciled);
+      }
+      return reconciled;
+    },
+
+    async getNoodlerCreatorPostSchedule(): Promise<PersistedNoodleRefreshSchedule | null> {
+      const raw = await settingsStore.get(NOODLER_CREATOR_POST_SCHEDULE_KEY);
+      if (!raw) return null;
+      try {
+        return parsePersistedNoodleRefreshSchedule(JSON.parse(raw));
+      } catch {
+        return null;
+      }
+    },
+
+    async saveNoodlerCreatorPostSchedule(schedule: PersistedNoodleRefreshSchedule): Promise<void> {
+      await settingsStore.set(NOODLER_CREATOR_POST_SCHEDULE_KEY, JSON.stringify(schedule));
+    },
+
+    async ensureNoodlerCreatorPostSchedule(
+      at = new Date(),
+      settingsOverride?: NoodleSettings,
+    ): Promise<PersistedNoodleRefreshSchedule> {
+      const settings = settingsOverride ?? (await this.getSettings());
+      const current = await this.getNoodlerCreatorPostSchedule();
+      const count = settings.noodler.creatorPosts.enabled ? settings.noodler.creatorPosts.postsPerDay : 0;
+      const reconciled = reconcileNoodleRefreshSchedule(current, count, at);
+      if (!current || JSON.stringify(current) !== JSON.stringify(reconciled)) {
+        await this.saveNoodlerCreatorPostSchedule(reconciled);
       }
       return reconciled;
     },
@@ -688,6 +736,15 @@ export function createNoodleStorage(db: DB) {
       const interactionIds = [...interactionIdSet];
 
       await db.transaction(async (tx) => {
+        const creatorProjects = await tx
+          .select()
+          .from(noodlerCreatorProjects)
+          .where(eq(noodlerCreatorProjects.creatorAccountId, id));
+        const creatorProjectIds = creatorProjects.map((project) => project.id);
+        if (creatorProjectIds.length > 0) {
+          await tx.delete(noodlerProjectMilestones).where(inArray(noodlerProjectMilestones.projectId, creatorProjectIds));
+          await tx.delete(noodlerCreatorProjects).where(inArray(noodlerCreatorProjects.id, creatorProjectIds));
+        }
         if (postIds.length > 0) {
           await tx.delete(noodleActivityDigests).where(inArray(noodleActivityDigests.sourcePostId, postIds));
           await tx.delete(noodlePostUnlocks).where(inArray(noodlePostUnlocks.postId, postIds));
@@ -816,6 +873,35 @@ export function createNoodleStorage(db: DB) {
       return rows.map(mapPost);
     },
 
+    async listSurfacePosts(
+      surface: NoodleSurface,
+      options: { limit?: number; since?: string; authorAccountId?: string } = {},
+    ): Promise<NoodlePost[]> {
+      const accounts = await this.listAccounts({ includePrivate: true });
+      const accountIds = new Set(
+        accounts
+          .filter(
+            (account) =>
+              account.visibility === surface &&
+              (options.authorAccountId === undefined || account.id === options.authorAccountId),
+          )
+          .map((account) => account.id),
+      );
+      if (accountIds.size === 0) return [];
+      const rows = options.since
+        ? await db
+            .select()
+            .from(noodlePosts)
+            .where(gt(noodlePosts.createdAt, options.since))
+            .orderBy(desc(noodlePosts.createdAt))
+        : await db.select().from(noodlePosts).orderBy(desc(noodlePosts.createdAt));
+      const limit = Math.max(1, Math.min(300, Math.floor(options.limit ?? 120)));
+      return rows
+        .filter((row) => accountIds.has(row.authorAccountId))
+        .slice(0, limit)
+        .map(mapPost);
+    },
+
     async getMostRecentPostByAuthor(authorAccountId: string): Promise<NoodlePost | null> {
       const rows = await db
         .select()
@@ -848,6 +934,34 @@ export function createNoodleStorage(db: DB) {
       return rows.map(mapPost);
     },
 
+    async listSurfacePostsBefore(
+      surface: NoodleSurface,
+      before: string,
+      options: { limit?: number; authorAccountId?: string } = {},
+    ): Promise<NoodlePost[]> {
+      const accounts = await this.listAccounts({ includePrivate: true });
+      const accountIds = new Set(
+        accounts
+          .filter(
+            (account) =>
+              account.visibility === surface &&
+              (options.authorAccountId === undefined || account.id === options.authorAccountId),
+          )
+          .map((account) => account.id),
+      );
+      if (accountIds.size === 0) return [];
+      const rows = await db
+        .select()
+        .from(noodlePosts)
+        .where(lt(noodlePosts.createdAt, before))
+        .orderBy(desc(noodlePosts.createdAt));
+      const filtered = rows.filter((row) => accountIds.has(row.authorAccountId));
+      const limited = options.limit
+        ? filtered.slice(0, Math.max(1, Math.min(200, Math.floor(options.limit))))
+        : filtered;
+      return limited.map(mapPost);
+    },
+
     async hasPostsBefore(before: string): Promise<boolean> {
       const rows = await db
         .select({ id: noodlePosts.id })
@@ -855,6 +969,10 @@ export function createNoodleStorage(db: DB) {
         .where(lt(noodlePosts.createdAt, before))
         .limit(1);
       return rows.length > 0;
+    },
+
+    async hasSurfacePostsBefore(surface: NoodleSurface, before: string): Promise<boolean> {
+      return (await this.listSurfacePostsBefore(surface, before, { limit: 1 })).length > 0;
     },
 
     async createPost(
@@ -890,6 +1008,13 @@ export function createNoodleStorage(db: DB) {
     async getPostById(id: string): Promise<NoodlePost | null> {
       const rows = await db.select().from(noodlePosts).where(eq(noodlePosts.id, id));
       return rows[0] ? mapPost(rows[0]) : null;
+    },
+
+    async getPostSurface(id: string): Promise<NoodleSurface | null> {
+      const post = await this.getPostById(id);
+      if (!post) return null;
+      const account = await this.getAccountById(post.authorAccountId);
+      return account?.visibility ?? null;
     },
 
     async updatePostMedia(
@@ -934,6 +1059,16 @@ export function createNoodleStorage(db: DB) {
         await tx.delete(noodleInteractions).where(eq(noodleInteractions.postId, id));
         await tx.delete(noodleActivityDigests).where(eq(noodleActivityDigests.sourcePostId, id));
         await tx.delete(noodlePostUnlocks).where(eq(noodlePostUnlocks.postId, id));
+        await tx
+          .update(noodlerProjectMilestones)
+          .set({
+            status: "ready",
+            generatedPostId: null,
+            completionSummary: "",
+            completedAt: null,
+            updatedAt: now(),
+          })
+          .where(eq(noodlerProjectMilestones.generatedPostId, id));
         await tx.delete(noodlePosts).where(eq(noodlePosts.id, id));
       });
       return existing;
@@ -945,6 +1080,15 @@ export function createNoodleStorage(db: DB) {
         await tx.delete(noodleActivityDigests);
         await tx.delete(noodleRefreshRuns);
         await tx.delete(noodlePostUnlocks);
+        await tx
+          .update(noodlerProjectMilestones)
+          .set({
+            status: "ready",
+            generatedPostId: null,
+            completionSummary: "",
+            completedAt: null,
+            updatedAt: now(),
+          });
         await tx.delete(noodlePosts);
       });
     },
@@ -1159,7 +1303,22 @@ export function createNoodleStorage(db: DB) {
           .select()
           .from(noodleAccounts)
           .where(inArray(noodleAccounts.id, uniqueAccountIds));
-        if (involvedAccounts.some((row) => row.visibility === "private")) return null;
+        if (
+          involvedAccounts.length !== uniqueAccountIds.length ||
+          involvedAccounts.some((row) => row.visibility === "private")
+        )
+          return null;
+      }
+      if (input.sourcePostId && (await this.getPostSurface(input.sourcePostId)) !== "public") return null;
+      if (input.sourceInteractionId) {
+        const sourceInteractions = await db
+          .select()
+          .from(noodleInteractions)
+          .where(eq(noodleInteractions.id, input.sourceInteractionId));
+        const sourceInteraction = sourceInteractions[0];
+        if (!sourceInteraction || (await this.getPostSurface(sourceInteraction.postId)) !== "public") return null;
+        const actor = await this.getAccountById(sourceInteraction.actorAccountId);
+        if (!actor || actor.visibility !== "public") return null;
       }
       await db.transaction(async (tx) => {
         if (input.sourceInteractionId) {
@@ -1186,6 +1345,27 @@ export function createNoodleStorage(db: DB) {
       input: { accountIds: string[]; content: string },
     ): Promise<NoodleDigestEntry | null> {
       const uniqueAccountIds = Array.from(new Set(input.accountIds.filter(Boolean)));
+      const involvedAccounts =
+        uniqueAccountIds.length > 0
+          ? await db.select().from(noodleAccounts).where(inArray(noodleAccounts.id, uniqueAccountIds))
+          : [];
+      if (
+        involvedAccounts.length !== uniqueAccountIds.length ||
+        involvedAccounts.some((row) => row.visibility === "private")
+      )
+        return null;
+      const existingRows = await db.select().from(noodleActivityDigests).where(eq(noodleActivityDigests.id, id));
+      const existing = existingRows[0];
+      if (!existing) return null;
+      if (existing.sourcePostId && (await this.getPostSurface(existing.sourcePostId)) !== "public") return null;
+      if (existing.sourceInteractionId) {
+        const sourceInteractions = await db
+          .select()
+          .from(noodleInteractions)
+          .where(eq(noodleInteractions.id, existing.sourceInteractionId));
+        const sourceInteraction = sourceInteractions[0];
+        if (!sourceInteraction || (await this.getPostSurface(sourceInteraction.postId)) !== "public") return null;
+      }
       await db
         .update(noodleActivityDigests)
         .set({
@@ -1217,27 +1397,41 @@ export function createNoodleStorage(db: DB) {
       const sourceInteractionIds = Array.from(
         new Set(rows.flatMap((row) => (row.sourceInteractionId ? [row.sourceInteractionId] : []))),
       );
-      const [sourcePosts, sourceInteractions] = await Promise.all([
+      const accountIds = Array.from(new Set(rows.flatMap((row) => mapDigest(row).accountIds)));
+      const [sourcePosts, sourceInteractions, involvedAccounts] = await Promise.all([
         sourcePostIds.length > 0
           ? db.select().from(noodlePosts).where(inArray(noodlePosts.id, sourcePostIds))
           : Promise.resolve([]),
         sourceInteractionIds.length > 0
           ? db.select().from(noodleInteractions).where(inArray(noodleInteractions.id, sourceInteractionIds))
           : Promise.resolve([]),
+        accountIds.length > 0
+          ? db.select().from(noodleAccounts).where(inArray(noodleAccounts.id, accountIds))
+          : Promise.resolve([]),
       ]);
       const sourcePostById = new Map(sourcePosts.map((post) => [post.id, post]));
-      const liveInteractionIds = new Set(sourceInteractions.map((interaction) => interaction.id));
+      const sourceInteractionById = new Map(sourceInteractions.map((interaction) => [interaction.id, interaction]));
+      const publicAccountIds = new Set(
+        involvedAccounts.filter((account) => account.visibility === "public").map((account) => account.id),
+      );
 
       return rows
         .filter((row) => {
-          if (row.sourceInteractionId) return liveInteractionIds.has(row.sourceInteractionId);
+          const digest = mapDigest(row);
+          if (!digest.accountIds.every((accountId) => publicAccountIds.has(accountId))) return false;
+          if (row.sourceInteractionId) {
+            const interaction = sourceInteractionById.get(row.sourceInteractionId);
+            if (!interaction || !publicAccountIds.has(interaction.actorAccountId)) return false;
+            const target = sourcePostById.get(interaction.postId);
+            return Boolean(target && publicAccountIds.has(target.authorAccountId));
+          }
           // Older model-authored summaries had only a refresh-run reference,
           // so there is no way to invalidate them when their source post or
           // comment is deleted. Deterministic event digests supersede them.
           if (row.sourceRunId && !row.sourcePostId) return false;
           if (!row.sourcePostId) return true;
           const sourcePost = sourcePostById.get(row.sourcePostId);
-          if (!sourcePost) return false;
+          if (!sourcePost || !publicAccountIds.has(sourcePost.authorAccountId)) return false;
           // Digests created before source_interaction_id existed cannot be tied
           // safely to a still-live comment. Keep only the post's canonical digest;
           // stale legacy comment digests must never re-enter generation context.
@@ -1410,16 +1604,26 @@ export function createNoodleStorage(db: DB) {
       const includePrivate = settings.enableNoodler;
       const accounts = await this.listAccounts({ includePrivate });
       const visibleAccountIds = includePrivate ? null : new Set(accounts.map((account) => account.id));
-      const allPosts = await this.listPosts({ limit: 160 });
-      const posts = visibleAccountIds
-        ? allPosts.filter((post) => visibleAccountIds.has(post.authorAccountId))
-        : allPosts;
+      const [publicPosts, privatePosts] = await Promise.all([
+        this.listSurfacePosts("public", { limit: 160 }),
+        includePrivate ? this.listSurfacePosts("private", { limit: 160 }) : Promise.resolve([]),
+      ]);
+      const allPosts = [...publicPosts, ...privatePosts].sort(
+        (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+      );
+      const posts = visibleAccountIds ? allPosts.filter((post) => visibleAccountIds.has(post.authorAccountId)) : allPosts;
       const scheduler = noodleRefreshSchedulerStatus(
         await this.ensureRefreshSchedule(new Date(), settings),
         new Date(),
       );
-      const oldestLoadedPost = posts[posts.length - 1];
-      const hasOlderHistory = oldestLoadedPost ? await this.hasPostsBefore(oldestLoadedPost.createdAt) : false;
+      const noodlerScheduler = noodleRefreshSchedulerStatus(
+        await this.ensureNoodlerCreatorPostSchedule(new Date(), settings),
+        new Date(),
+      );
+      const oldestLoadedPost = publicPosts[publicPosts.length - 1];
+      const hasOlderHistory = oldestLoadedPost
+        ? await this.hasSurfacePostsBefore("public", oldestLoadedPost.createdAt)
+        : false;
       const allSubscriptions = await this.listSubscriptions();
       const allPostUnlocks = await this.listPostUnlocks();
       const subscriptions = visibleAccountIds
@@ -1433,6 +1637,7 @@ export function createNoodleStorage(db: DB) {
       return {
         settings,
         scheduler,
+        noodlerScheduler,
         accounts,
         posts,
         interactions: await this.listInteractions(posts.map((post) => post.id)),

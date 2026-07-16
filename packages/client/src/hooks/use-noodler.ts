@@ -18,7 +18,94 @@ import type {
   NoodleInteraction,
   NoodlePostUnlock,
   NoodlePrivateAccountCreateInput,
+  NoodlerCreatorProjectDetail,
+  NoodlerProjectMilestone,
+  NoodlerMilestoneCreateInput,
+  NoodlerMilestoneUpdateInput,
+  NoodlerProjectCreateInput,
+  NoodlerProjectUpdateInput,
 } from "@marinara-engine/shared";
+
+const projectKey = (accountId: string) => [...noodleKeys.all, "creator-projects", accountId] as const;
+
+export function useNoodlerProjects(accountId?: string) {
+  return useQuery({
+    queryKey: projectKey(accountId ?? "none"),
+    queryFn: () => api.get<NoodlerCreatorProjectDetail[]>(`/noodle/accounts/${encodeURIComponent(accountId!)}/projects`),
+    enabled: Boolean(accountId),
+  });
+}
+
+export function useNoodlerCreatorPages(characterIds: string[], enabled = true) {
+  const key = characterIds.slice().sort().join(",");
+  return useQuery({
+    queryKey: [...noodleKeys.all, "creator-pages", key] as const,
+    queryFn: () =>
+      api.get<
+        Array<{
+          account: NoodleAccount;
+          activeProject: NoodlerCreatorProjectDetail["project"] | null;
+          nextMilestone: NoodlerProjectMilestone | null;
+        }>
+      >(`/noodle/noodler/creator-pages?characterIds=${encodeURIComponent(key)}`),
+    enabled: enabled && characterIds.length > 0,
+    staleTime: 10_000,
+  });
+}
+
+export function useCreateNoodlerProject(accountId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: NoodlerProjectCreateInput) =>
+      api.post<NoodlerCreatorProjectDetail>(`/noodle/accounts/${encodeURIComponent(accountId!)}/projects`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: projectKey(accountId ?? "none") }),
+  });
+}
+
+export function useUpdateNoodlerProject(accountId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: NoodlerProjectUpdateInput }) =>
+      api.patch<NoodlerCreatorProjectDetail>(`/noodle/projects/${encodeURIComponent(id)}`, patch),
+    onSuccess: () => qc.invalidateQueries({ queryKey: projectKey(accountId ?? "none") }),
+  });
+}
+
+export function useCreateNoodlerMilestone(accountId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ projectId, input }: { projectId: string; input: NoodlerMilestoneCreateInput }) =>
+      api.post<NoodlerProjectMilestone>(`/noodle/projects/${encodeURIComponent(projectId)}/milestones`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: projectKey(accountId ?? "none") }),
+  });
+}
+
+export function useUpdateNoodlerMilestone(accountId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ projectId, id, patch }: { projectId: string; id: string; patch: NoodlerMilestoneUpdateInput }) =>
+      api.patch<NoodlerProjectMilestone>(
+        `/noodle/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(id)}`,
+        patch,
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: projectKey(accountId ?? "none") }),
+  });
+}
+
+export function useGenerateNextNoodlerProjectPost(accountId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (projectId: string) =>
+      api.post<{ project: NoodlerCreatorProjectDetail; post: unknown }>(
+        `/noodle/projects/${encodeURIComponent(projectId)}/generate-next`,
+        {},
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: projectKey(accountId ?? "none") });
+      qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() });
+    },
+  });
+}
 
 export function useNoodlerHub(
   subscriberKind: NoodleAccountKind | undefined,
@@ -50,7 +137,7 @@ export function useDeletePrivateNoodleAccount() {
   return useMutation({
     mutationFn: (id: string) => api.delete<NoodleAccount>(`/noodle/accounts/${encodeURIComponent(id)}/private`),
     onSuccess: (account) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current
           ? (() => {
               const deletedPostIds = new Set(
@@ -87,7 +174,7 @@ export function useRetryPrivateIdentityGeneration() {
   return useMutation({
     mutationFn: (id: string) => api.post<NoodleAccount>(`/noodle/accounts/${encodeURIComponent(id)}/private/retry-identity`, {}),
     onSuccess: (account) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current
           ? { ...current, accounts: current.accounts.map((item) => (item.id === account.id ? account : item)) }
           : current,
@@ -114,7 +201,7 @@ export function useSubscribeNoodleAccount() {
         { subscriberKind, subscriberEntityId },
       ),
     onSuccess: (subscription) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current
           ? {
               ...current,
@@ -148,12 +235,15 @@ export function useUnsubscribeNoodleAccount() {
       return api.delete(`/noodle/accounts/${encodeURIComponent(creatorAccountId)}/subscribe?${params}`);
     },
     onSuccess: (_result, variables) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current
           ? {
               ...current,
               subscriptions: current.subscriptions.filter(
-                (item) => item.creatorAccountId !== variables.creatorAccountId,
+                (item) =>
+                  item.creatorAccountId !== variables.creatorAccountId ||
+                  current.accounts.find((account) => account.id === item.subscriberAccountId)?.entityId !==
+                    variables.subscriberEntityId,
               ),
             }
           : current,
@@ -191,7 +281,7 @@ export function useUnlockNoodlePost() {
         { actorKind, actorEntityId },
       ),
     onSuccess: (unlock) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current
           ? {
               ...current,

@@ -34,7 +34,7 @@ const NOODLER_HUB_TABS: Array<{ id: NoodlerHubTab; label: string }> = [
   { id: "timeline", label: "Timeline" },
   { id: "subscriptions", label: "Subscriptions" },
   { id: "discover", label: "Discover" },
-  { id: "owned", label: "Your Pages" },
+  { id: "owned", label: "Creator Pages" },
 ];
 
 export interface NoodlerHub {
@@ -408,14 +408,14 @@ export function NoodlerHome(props: NoodlerHomeProps) {
           ) : noodlerHub && noodlerHub.owned.length > 0 ? (
             <>
               <p className="border-b border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/8 px-4 py-3 text-xs leading-5 text-[var(--muted-foreground)]">
-                These are all of your own NoodleR profiles — one per persona or character you've given a private page
-                to. Each row shows which main account it belongs to.
+                Creator Pages is your director workspace for the persona and character pages you manage. Viewer
+                subscriptions and unlocks still follow the selected persona.
               </p>
               <div>{noodlerHub.owned.map((account) => renderNoodlerAccountRow(account, true))}</div>
             </>
           ) : (
             <p className="px-4 py-4 text-sm text-[var(--muted-foreground)]">
-              No NoodleR pages of your own yet. Create one from a persona's profile.
+              No creator pages yet. Create one from a persona or character profile.
             </p>
           )}
         </>

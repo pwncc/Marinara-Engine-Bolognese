@@ -358,7 +358,7 @@ export function NoodlerEditProfileFields({
 
       <SubSection
         title="Automatic posting"
-        help="Lets refreshes and the unattended scheduler generate posts for this page. Passive pages still never post."
+        help="Includes this page in bulk NoodleR refreshes and the global automatic creator-post schedule. Passive pages still never generate posts."
       >
         <div className="space-y-3">
           <label className="flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
@@ -369,7 +369,7 @@ export function NoodlerEditProfileFields({
               disabled={savePending}
               className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--noodle-blue)]"
             />
-            <span>Include this page when refreshing NoodleR automatically.</span>
+            <span>Include this Active page in eligible refreshes and automatic creator posting.</span>
           </label>
           {draft.autoPostEnabled && (
             <label className="block space-y-1.5 sm:max-w-xs">
@@ -382,8 +382,7 @@ export function NoodlerEditProfileFields({
               >
                 {intensityOptions.map((option) => (
                   <option key={option.value} value={option.value}>
-                    {option.label} (
-                    {option.value === "low" ? "up to 1" : option.value === "medium" ? "up to 3" : "up to 6"} posts/day)
+                    {option.label} (selection weight {option.value === "low" ? "1" : option.value === "medium" ? "2" : "4"})
                   </option>
                 ))}
               </select>

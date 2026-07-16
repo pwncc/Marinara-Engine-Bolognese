@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Schema: Noodle Fake Social Media
 // ──────────────────────────────────────────────
-import { fileTable, text } from "../file-schema.js";
+import { fileTable, integer, real, text } from "../file-schema.js";
 
 export const noodleAccounts = fileTable(
   "noodle_accounts",
@@ -118,6 +118,41 @@ export const noodleFillerProfiles = fileTable("noodle_filler_profiles", {
   displayName: text("display_name").notNull(),
   bio: text("bio").notNull().default(""),
   enabled: text("enabled").notNull().default("true"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const noodlerCreatorProjects = fileTable("noodler_creator_projects", {
+  id: text("id").primaryKey(),
+  creatorAccountId: text("creator_account_id").notNull(),
+  title: text("title").notNull(),
+  brief: text("brief").notNull().default(""),
+  toneGuidance: text("tone_guidance").notNull().default(""),
+  influence: text("influence").notNull().default("balanced"),
+  status: text("status").notNull().default("draft"),
+  startsAt: text("starts_at"),
+  endsAt: text("ends_at"),
+  minimumSpacingHours: integer("minimum_spacing_hours"),
+  lastGeneratedAt: text("last_generated_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const noodlerProjectMilestones = fileTable("noodler_project_milestones", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id").notNull(),
+  title: text("title").notNull(),
+  notes: text("notes").notNull().default(""),
+  position: integer("position").notNull(),
+  status: text("status").notNull().default("planned"),
+  notBefore: text("not_before"),
+  dueAt: text("due_at"),
+  access: text("access").notNull().default("subscriber"),
+  ppvPrice: real("ppv_price"),
+  mediaPreference: text("media_preference").notNull().default("model_choice"),
+  generatedPostId: text("generated_post_id"),
+  completionSummary: text("completion_summary").notNull().default(""),
+  completedAt: text("completed_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

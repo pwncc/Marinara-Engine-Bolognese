@@ -1,7 +1,6 @@
 // ──────────────────────────────────────────────
 // React Query: Noodle hooks
 // ──────────────────────────────────────────────
-import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api-client";
 import { useUIStore } from "../stores/ui.store";
@@ -36,7 +35,10 @@ export type NoodleRefreshResult = {
 
 export const noodleKeys = {
   all: ["noodle"] as const,
-  bootstrap: () => [...noodleKeys.all, "bootstrap"] as const,
+  bootstrap: (viewerPersonaId?: string) =>
+    viewerPersonaId
+      ? ([...noodleKeys.all, "bootstrap", viewerPersonaId] as const)
+      : ([...noodleKeys.all, "bootstrap"] as const),
   hub: (subscriberKind: NoodleAccountKind, subscriberEntityId: string) =>
     [...noodleKeys.all, "hub", subscriberKind, subscriberEntityId] as const,
 };
@@ -54,8 +56,8 @@ function preservePollVotes(current: NoodleBootstrap | undefined, next: NoodleBoo
 }
 
 export function useNoodle(viewerPersonaId?: string, enabled = true) {
-  const query = useQuery({
-    queryKey: noodleKeys.bootstrap(),
+  return useQuery({
+    queryKey: noodleKeys.bootstrap(viewerPersonaId ?? "none"),
     queryFn: () => {
       const params = viewerPersonaId ? `?viewerPersonaId=${encodeURIComponent(viewerPersonaId)}` : "";
       return api.get<NoodleBootstrap>(`/noodle${params}`);
@@ -67,16 +69,9 @@ export function useNoodle(viewerPersonaId?: string, enabled = true) {
     structuralSharing: (current, next) =>
       preservePollVotes(current as NoodleBootstrap | undefined, next as NoodleBootstrap),
   });
-  const { refetch } = query;
-
-  useEffect(() => {
-    if (enabled) void refetch();
-  }, [enabled, refetch, viewerPersonaId]);
-
-  return query;
 }
 
-export function useLoadOlderNoodlePosts() {
+export function useLoadOlderNoodlePosts(viewerPersonaId?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (before: string) =>
@@ -84,7 +79,7 @@ export function useLoadOlderNoodlePosts() {
         `/noodle/posts?before=${encodeURIComponent(before)}&limit=40`,
       ),
     onSuccess: (page) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) => {
+      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(viewerPersonaId ?? "none"), (current) => {
         if (!current) return current;
         const existingPostIds = new Set(current.posts.map((post) => post.id));
         const existingInteractionIds = new Set(current.interactions.map((interaction) => interaction.id));
@@ -109,15 +104,22 @@ export function useUpdateNoodleSettings() {
     mutationFn: (settings: NoodleSettingsUpdateInput) => api.put<NoodleSettings>("/noodle/settings", settings),
     onMutate: async (patch) => {
       await qc.cancelQueries({ queryKey: noodleKeys.bootstrap() });
-      const previous = qc.getQueryData<NoodleBootstrap>(noodleKeys.bootstrap());
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      const previous = qc.getQueriesData<NoodleBootstrap>({ queryKey: noodleKeys.bootstrap() });
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current
           ? {
               ...current,
               settings: {
                 ...current.settings,
                 ...patch,
-                noodler: { ...current.settings.noodler, ...patch.noodler },
+                noodler: {
+                  ...current.settings.noodler,
+                  ...patch.noodler,
+                  creatorPosts: {
+                    ...current.settings.noodler.creatorPosts,
+                    ...patch.noodler?.creatorPosts,
+                  },
+                },
               } as NoodleSettings,
             }
           : current,
@@ -125,10 +127,10 @@ export function useUpdateNoodleSettings() {
       return { previous };
     },
     onError: (_error, _patch, context) => {
-      if (context?.previous) qc.setQueryData(noodleKeys.bootstrap(), context.previous);
+      for (const [key, value] of context?.previous ?? []) qc.setQueryData(key, value);
     },
     onSuccess: (settings) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) => {
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) => {
         if (!current) return current;
         // Evict private accounts/posts/subscriptions/postUnlocks from the
         // cache immediately on disable, rather than waiting for the
@@ -162,7 +164,7 @@ export function useRescheduleNoodleRefresh() {
     mutationFn: (input: NoodleRescheduleRefreshInput) =>
       api.put<NoodleRefreshSchedulerStatus>("/noodle/refresh-schedule", input),
     onSuccess: (scheduler) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current ? { ...current, scheduler } : current,
       );
     },
@@ -176,7 +178,7 @@ export function useUpdateNoodleAccount() {
     mutationFn: ({ id, ...patch }: { id: string } & Partial<NoodleAccount>) =>
       api.put<NoodleAccount>(`/noodle/accounts/${id}`, patch),
     onSuccess: (account) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current
           ? {
               ...current,
@@ -220,7 +222,7 @@ export function useClearNoodleInvites() {
   return useMutation({
     mutationFn: () => api.delete<NoodleBootstrap>("/noodle/invites"),
     onSuccess: (bootstrap) => {
-      qc.setQueryData<NoodleBootstrap>(noodleKeys.bootstrap(), bootstrap);
+      qc.setQueriesData<NoodleBootstrap>({ queryKey: noodleKeys.bootstrap() }, bootstrap);
       qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() });
     },
   });
@@ -240,7 +242,7 @@ export function useUpdateNoodlePost() {
     mutationFn: ({ id, ...input }: { id: string } & NoodlePostUpdateInput) =>
       api.patch<NoodlePost>(`/noodle/posts/${encodeURIComponent(id)}`, input),
     onSuccess: (post) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current
           ? {
               ...current,
@@ -258,7 +260,7 @@ export function useDeleteNoodlePost() {
   return useMutation({
     mutationFn: (id: string) => api.delete<NoodlePost>(`/noodle/posts/${encodeURIComponent(id)}`),
     onSuccess: (post) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current
           ? {
               ...current,
@@ -277,7 +279,7 @@ export function useResetNoodleTimeline() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api.delete<NoodleBootstrap>("/noodle/timeline"),
-    onSuccess: (bootstrap) => qc.setQueryData(noodleKeys.bootstrap(), bootstrap),
+    onSuccess: (bootstrap) => qc.setQueriesData({ queryKey: noodleKeys.bootstrap() }, bootstrap),
     onSettled: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
   });
 }
@@ -294,7 +296,7 @@ export function useCreateNoodleInteraction() {
       actorEntityId: string;
     }) => api.post<NoodleInteraction>(`/noodle/posts/${postId}/interactions`, input),
     onSuccess: (interaction) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current
           ? {
               ...current,
@@ -328,7 +330,7 @@ export function useRemoveNoodleInteraction() {
       return api.delete<NoodleInteraction>(`/noodle/posts/${encodeURIComponent(postId)}/interactions?${params}`);
     },
     onSuccess: (interaction) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current
           ? {
               ...current,
@@ -353,7 +355,7 @@ export function useUpdateNoodleInteraction() {
         input,
       ),
     onSuccess: (interaction) => {
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current
           ? {
               ...current,
@@ -374,7 +376,7 @@ export function useDeleteNoodleInteraction() {
       ),
     onSuccess: (interactions) => {
       const deletedIds = new Set(interactions.map((interaction) => interaction.id));
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         current
           ? {
               ...current,
@@ -396,7 +398,7 @@ export function useRefreshNoodle() {
         reviewImagePromptsBeforeSend: useUIStore.getState().reviewImagePromptsBeforeSend,
       }),
     onSuccess: (result) =>
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         preservePollVotes(current, result.bootstrap),
       ),
     onSettled: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
@@ -412,7 +414,7 @@ export function useConfirmNoodleImagePrompts() {
         debugMode: useUIStore.getState().debugMode,
       }),
     onSuccess: (bootstrap) =>
-      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>
+      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
         preservePollVotes(current, bootstrap),
       ),
     onSettled: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),

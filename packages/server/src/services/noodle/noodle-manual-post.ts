@@ -133,11 +133,6 @@ export async function createManualNoodlePost(
   characters: ReturnType<typeof createCharactersStorage>,
   params: NoodleCreatePostInput,
 ): Promise<CreateManualNoodlePostResult> {
-  if (params.target === "noodler") {
-    const settings = await noodle.getSettings();
-    if (!settings.enableNoodler) return { error: "noodler_disabled" };
-  }
-
   let account: NoodleAccount | null = null;
   if (params.target && params.authorKind === "character") {
     await ensureCharacterNoodleAccount(noodle, characters, params.authorEntityId);
@@ -160,11 +155,8 @@ export async function createManualNoodlePost(
   }
   if (!account) return { error: "account_not_found" };
 
-  if (params.target === "noodler" && account.visibility === "private") {
-    if (!isNoodlePrivatePostingActive(account) || !readAutoPostEnabled(account)) {
-      return { error: "posting_disabled" };
-    }
-  }
+  if (account.visibility === "private" && !(await noodle.getSettings()).enableNoodler)
+    return { error: "noodler_disabled" };
 
   if (account.visibility === "public" && (params.parentPostId || params.quotePostId)) {
     const referencedPostId = params.parentPostId || params.quotePostId!;
@@ -195,11 +187,14 @@ export async function createManualNoodlePost(
   });
   if (!post) return { error: "account_not_found" };
 
-  const digest = await noodle.createDigest({
-    accountIds: [account.id, ...mentionedAccounts.map((mentionedAccount) => mentionedAccount.id)],
-    content: `${account.displayName} posted on Noodle: ${post.content}`,
-    sourcePostId: post.id,
-  });
+  const digest =
+    account.visibility === "public"
+      ? await noodle.createDigest({
+          accountIds: [account.id, ...mentionedAccounts.map((mentionedAccount) => mentionedAccount.id)],
+          content: `${account.displayName} posted on Noodle: ${post.content}`,
+          sourcePostId: post.id,
+        })
+      : null;
   if (!digest) return { post };
   return { post: (await noodle.updatePostMedia(post.id, { metadata: { activityDigestId: digest.id } })) ?? post };
 }

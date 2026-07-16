@@ -451,7 +451,7 @@ function blockedPublicNames(context: NoodleLinkedAuthorContext, profile: NoodleP
 
 function blockedPublicHandles(context: NoodleLinkedAuthorContext, profile: NoodlePrivateStageProfile): string[] {
   if (profile.identityDisclosure !== "secret") return [];
-  const handle = context.publicHandle.trim();
+  const handle = context.publicHandle?.trim() ?? "";
   return handle ? [handle] : [];
 }
 
@@ -1000,20 +1000,30 @@ async function buildRefreshPrompt(input: {
       ? input.activeAccounts[0]!
       : null;
   const recentCutoff = sinceHoursIso(48);
-  const [recentCreatedPostsRaw, recentPersonaComments] = await Promise.all([
-    input.noodle.listPosts({ since: recentCutoff, limit: 100 }),
+  const [recentCreatedPosts, recentPersonaComments] = await Promise.all([
+    input.noodle.listSurfacePosts(isolatedTargetAccount ? "private" : "public", {
+      since: recentCutoff,
+      limit: 100,
+      ...(isolatedTargetAccount ? { authorAccountId: isolatedTargetAccount.id } : {}),
+    }),
     isolatedTargetAccount || !input.personaAccount
       ? Promise.resolve([])
       : input.noodle.listRepliesByActorSince(input.personaAccount.id, recentCutoff, 100),
   ]);
-  const recentCreatedPosts = isolatedTargetAccount
-    ? recentCreatedPostsRaw.filter((post) => post.authorAccountId === isolatedTargetAccount.id)
-    : recentCreatedPostsRaw;
   const recentlyCommentedPostIds = noodlePersonaCommentPostIds(recentPersonaComments, input.personaAccount?.id);
   const recentlyCommentedPosts = (
     await Promise.all(recentlyCommentedPostIds.map((postId) => input.noodle.getPostById(postId)))
   ).filter((post): post is NoodlePost => Boolean(post));
-  const recentPostById = new Map([...recentCreatedPosts, ...recentlyCommentedPosts].map((post) => [post.id, post]));
+  const surfaceSafeCommentedPosts = isolatedTargetAccount
+    ? []
+    : (
+        await Promise.all(
+          recentlyCommentedPosts.map(async (post) =>
+            (await input.noodle.getPostSurface(post.id)) === "public" ? post : null,
+          ),
+        )
+      ).filter((post): post is NoodlePost => Boolean(post));
+  const recentPostById = new Map([...recentCreatedPosts, ...surfaceSafeCommentedPosts].map((post) => [post.id, post]));
   const recentPosts = [...recentPostById.values()].sort(
     (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
   );
@@ -1029,7 +1039,9 @@ async function buildRefreshPrompt(input: {
         );
   const olderPosts =
     pastMemorySampleSize > 0
-      ? (await input.noodle.listPostsBefore(noodlePastMemoryCutoff())).filter((post) => !recentPostById.has(post.id))
+      ? (await input.noodle.listSurfacePostsBefore("public", noodlePastMemoryCutoff())).filter(
+          (post) => !recentPostById.has(post.id),
+        )
       : [];
   let recalledPosts: NoodlePost[];
   if (enhancedTimelineWriting) {
@@ -2555,39 +2567,15 @@ export async function noodleRoutes(app: FastifyInstance) {
     return bootstrapVisibleNoodle(noodle, characters, typeof viewerPersonaId === "string" ? viewerPersonaId : null);
   });
 
-  // Cursor pagination for history older than the bootstrap's fixed-size
-  // window (bootstrap() only ever returns the newest 160 posts). Posts from
-  // private (NoodleR) accounts are excluded unless enableNoodler is on,
-  // matching bootstrap()'s scoping — without this, scrolling far enough back
-  // would leak private posts even with NoodleR disabled.
+  // This endpoint backs the public Noodle timeline. NoodleR creator history
+  // uses its own private-account views and must never be appended here.
   app.get("/posts", async (req, reply) => {
     const query = req.query as Record<string, unknown>;
     const before = typeof query.before === "string" ? query.before : null;
     if (!before) return reply.code(400).send({ error: "before is required" });
     const requestedLimit = typeof query.limit === "string" ? Number.parseInt(query.limit, 10) : 40;
     const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(100, requestedLimit)) : 40;
-    const settings = await noodle.getSettings();
-    let visibleAccountIds: Set<string> | null = null;
-    if (!settings.enableNoodler) {
-      const visibleAccounts = await noodle.listAccounts({ includePrivate: false });
-      visibleAccountIds = new Set(visibleAccounts.map((account) => account.id));
-    }
-    // Fetch raw pages and filter out private-account posts client-side of the
-    // query (listPostsBefore has no visibility filter). Loop rather than
-    // filtering a single fixed-size page so hasMore/cursor stay correct when
-    // private posts are interspersed with public ones.
-    const collected: NoodlePost[] = [];
-    let cursor = before;
-    for (;;) {
-      const batch = await noodle.listPostsBefore(cursor, { limit: limit + 1 });
-      if (batch.length === 0) break;
-      const filteredBatch = visibleAccountIds
-        ? batch.filter((post) => visibleAccountIds.has(post.authorAccountId))
-        : batch;
-      collected.push(...filteredBatch);
-      cursor = batch[batch.length - 1]!.createdAt;
-      if (batch.length <= limit || collected.length > limit) break;
-    }
+    const collected = await noodle.listSurfacePostsBefore("public", before, { limit: limit + 1 });
     const hasMore = collected.length > limit;
     const posts = hasMore ? collected.slice(0, limit) : collected;
     const interactions = await noodle.listInteractions(posts.map((post) => post.id));
@@ -3000,6 +2988,9 @@ export async function noodleRoutes(app: FastifyInstance) {
     const parsed = noodleRefreshSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     const settings = await noodle.getSettings();
+    if (parsed.data.targetAccountId && !settings.enableNoodler) {
+      return reply.code(403).send({ error: "NoodleR is disabled." });
+    }
     const connectionId = parsed.data.connectionId ?? settings.generationConnectionId;
     const conn = connectionId ? await connections.getWithKey(connectionId) : await connections.getDefaultForAgents();
     if (!conn) {
@@ -3030,12 +3021,16 @@ export async function noodleRoutes(app: FastifyInstance) {
     // profile UI: it should always produce exactly one post, regardless of the
     // global timeline generation settings. The guided flow may disable images.
     const forceSinglePrivatePost = Boolean(targetPrivateAccount);
-    const requireImageForPrivatePost = forceSinglePrivatePost && parsed.data.privatePostGuide?.includeImage !== false;
+    const enableImageForPrivatePost = forceSinglePrivatePost && parsed.data.privatePostGuide?.includeImage === true;
+    const requireImageForPrivatePost =
+      forceSinglePrivatePost &&
+      enableImageForPrivatePost &&
+      parsed.data.privatePostGuide?.requireImage !== false;
     const effectiveSettings: NoodleSettings = forceSinglePrivatePost
       ? {
           ...settings,
-          enableImagePrompts: requireImageForPrivatePost,
-          maxImagesPerRefresh: requireImageForPrivatePost ? Math.max(settings.maxImagesPerRefresh, 1) : 0,
+          enableImagePrompts: enableImageForPrivatePost,
+          maxImagesPerRefresh: enableImageForPrivatePost ? Math.max(settings.maxImagesPerRefresh, 1) : 0,
           maxGeneratedPostsPerRefresh: 1,
         }
       : settings;
@@ -3140,7 +3135,7 @@ export async function noodleRoutes(app: FastifyInstance) {
         const participantAccounts = await noodle.listAccounts();
         const selectionCutoff = sinceHoursIso(48);
         const [recentCreatedSelectionPosts, recentPersonaSelectionReplies] = await Promise.all([
-          noodle.listPosts({ since: selectionCutoff, limit: 200 }),
+          noodle.listSurfacePosts("public", { since: selectionCutoff, limit: 200 }),
           personaAccount
             ? noodle.listRepliesByActorSince(personaAccount.id, selectionCutoff, 200)
             : Promise.resolve([]),
@@ -3148,8 +3143,15 @@ export async function noodleRoutes(app: FastifyInstance) {
         const personaSelectionPostIds = Array.from(
           new Set(recentPersonaSelectionReplies.map((interaction) => interaction.postId)),
         );
-        const personaSelectionPosts = (
+        const personaSelectionPostsRaw = (
           await Promise.all(personaSelectionPostIds.map((postId) => noodle.getPostById(postId)))
+        ).filter((post): post is NoodlePost => Boolean(post));
+        const personaSelectionPosts = (
+          await Promise.all(
+            personaSelectionPostsRaw.map(async (post) =>
+              (await noodle.getPostSurface(post.id)) === "public" ? post : null,
+            ),
+          )
         ).filter((post): post is NoodlePost => Boolean(post));
         const recentSelectionPosts = [
           ...new Map(
@@ -3362,7 +3364,11 @@ export async function noodleRoutes(app: FastifyInstance) {
       const mutableAccountSettings = new Map(
         activeAccounts.map((account) => [account.id, { ...account.settings }] as const),
       );
-      const freshPosts = await noodle.listPosts({ since: sinceHoursIso(48), limit: 200 });
+      const freshPosts = await noodle.listSurfacePosts(targetPrivateAccount ? "private" : "public", {
+        since: sinceHoursIso(48),
+        limit: 200,
+        ...(targetPrivateAccount ? { authorAccountId: targetPrivateAccount.id } : {}),
+      });
       const allowedExistingPostIds = new Set([...freshPosts.map((post) => post.id), ...recalledPostIds]);
       const existingInteractionById = new Map(
         (await noodle.listInteractions([...allowedExistingPostIds])).map((interaction) => [
@@ -3498,18 +3504,27 @@ export async function noodleRoutes(app: FastifyInstance) {
             ...(poll ? { poll } : {}),
             ...noodlePpvPriceMetadata(access, privatePostGuide?.ppvPrice),
             ...(identityRedactionApplied ? { identityRedactionApplied: true } : {}),
+            ...(parsed.data.privateProjectWork
+              ? {
+                  projectId: parsed.data.privateProjectWork.projectId,
+                  projectMilestoneId: parsed.data.privateProjectWork.milestoneId,
+                }
+              : {}),
           },
         });
         if (!post) continue;
         createdPostIds.push(post.id);
         if (imagePromptPreview) imagePromptReviewItems.push({ id: post.id, ...imagePromptPreview });
         if (generatedPost.tempId) tempIdToPostId.set(generatedPost.tempId, post.id);
-        const digest = await noodle.createDigest({
-          accountIds: [account.id, ...mentionedAccounts.map((mentionedAccount) => mentionedAccount.id)],
-          content: `${noodleDigestAccountLabel(account)} posted on Noodle: ${post.content}`,
-          sourceRunId: runId,
-          sourcePostId: post.id,
-        });
+        const digest =
+          account.visibility === "public"
+            ? await noodle.createDigest({
+                accountIds: [account.id, ...mentionedAccounts.map((mentionedAccount) => mentionedAccount.id)],
+                content: `${noodleDigestAccountLabel(account)} posted on Noodle: ${post.content}`,
+                sourceRunId: runId,
+                sourcePostId: post.id,
+              })
+            : null;
         if (digest) await noodle.updatePostMedia(post.id, { metadata: { activityDigestId: digest.id } });
       }
 
@@ -3575,7 +3590,7 @@ export async function noodleRoutes(app: FastifyInstance) {
         existingInteractions.push(interaction);
         existingInteractionById.set(interaction.id, interaction);
         quotas[generatedInteraction.type] -= 1;
-        if (generatedInteraction.type !== "like") {
+        if (generatedInteraction.type !== "like" && (await noodle.getPostSurface(targetPostId)) === "public") {
           const interactionSummary =
             generatedInteraction.type === "vote" && poll && selectedPollOption
               ? `${poll.question}: ${selectedPollOption.label}`

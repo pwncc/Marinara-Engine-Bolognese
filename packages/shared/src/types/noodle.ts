@@ -5,6 +5,7 @@ import type { LegacyPersonaAvatarCrop, PersonaAvatarCrop } from "./persona.js";
 
 export type NoodleAccountKind = "persona" | "character" | "random_user";
 export type NoodleAccountVisibility = "public" | "private";
+export type NoodleSurface = NoodleAccountVisibility;
 export type NoodleInteractionType = "like" | "repost" | "reply" | "vote";
 export type NoodlePostSource = "manual" | "generated";
 export type NoodlePostAccess = "public" | "subscriber" | "ppv";
@@ -15,6 +16,10 @@ export type NoodleCarryoverTarget = "conversation" | "roleplay" | "game";
 export type NoodleParticipantSelectionMode = "all" | "random_range" | "exact";
 export type NoodleAvatarCrop = PersonaAvatarCrop | LegacyPersonaAvatarCrop;
 export type NoodleFanActivityIntensity = "low" | "medium" | "high";
+export type NoodlerProjectStatus = "draft" | "active" | "paused" | "completed" | "archived";
+export type NoodlerProjectInfluence = "loose" | "balanced" | "focused";
+export type NoodlerMilestoneStatus = "planned" | "ready" | "completed" | "skipped";
+export type NoodlerProjectMediaPreference = "text" | "image" | "text_and_image" | "model_choice";
 
 export interface NoodleFanActivitySettings {
   enabled: boolean;
@@ -45,6 +50,11 @@ export interface NoodlerSettings {
   // Global kill switch for the NoodleR fan-activity scheduler. Off by default;
   // even accounts with fanActivity.autoSchedule on stay dormant until this is on.
   enableFanActivityScheduler: boolean;
+  creatorPosts: {
+    enabled: boolean;
+    postsPerDay: number;
+    generationConnectionId: string | null;
+  };
 }
 
 export interface NoodlePollOption {
@@ -149,6 +159,46 @@ export interface NoodlePostUnlock {
   createdAt: string;
 }
 
+export interface NoodlerCreatorProject {
+  id: string;
+  creatorAccountId: string;
+  title: string;
+  brief: string;
+  toneGuidance: string;
+  influence: NoodlerProjectInfluence;
+  status: NoodlerProjectStatus;
+  startsAt: string | null;
+  endsAt: string | null;
+  minimumSpacingHours: number | null;
+  lastGeneratedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NoodlerProjectMilestone {
+  id: string;
+  projectId: string;
+  title: string;
+  notes: string;
+  position: number;
+  status: NoodlerMilestoneStatus;
+  notBefore: string | null;
+  dueAt: string | null;
+  access: NoodlePostAccess;
+  ppvPrice: number | null;
+  mediaPreference: NoodlerProjectMediaPreference;
+  generatedPostId: string | null;
+  completionSummary: string;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NoodlerCreatorProjectDetail {
+  project: NoodlerCreatorProject;
+  milestones: NoodlerProjectMilestone[];
+}
+
 export interface NoodleInteraction {
   id: string;
   postId: string;
@@ -215,6 +265,7 @@ export interface NoodleRefreshSchedulerStatus {
 export interface NoodleBootstrap {
   settings: NoodleSettings;
   scheduler: NoodleRefreshSchedulerStatus;
+  noodlerScheduler: NoodleRefreshSchedulerStatus;
   accounts: NoodleAccount[];
   posts: NoodlePost[];
   interactions: NoodleInteraction[];

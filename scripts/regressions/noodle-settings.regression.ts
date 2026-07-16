@@ -72,12 +72,21 @@ try {
     allowRandomUsers: true,
     enableNoodler: true,
     maxGeneratedPostsPerRefresh: 11,
-    noodler: { enableFanActivityScheduler: true },
+    noodler: {
+      enableFanActivityScheduler: true,
+      creatorPosts: { enabled: true, postsPerDay: 4, generationConnectionId: null },
+    },
   });
   assert.equal(updated.maxImagesPerRefresh, 9);
   assert.equal(updated.allowRandomUsers, true);
   assert.equal(updated.maxGeneratedPostsPerRefresh, 11);
   assert.equal(updated.noodler.enableFanActivityScheduler, true);
+  assert.equal(updated.noodler.creatorPosts.postsPerDay, 4);
+  const partiallyUpdatedCreatorSchedule = await firstNoodle.updateSettings({
+    noodler: { creatorPosts: { enabled: false } },
+  });
+  assert.equal(partiallyUpdatedCreatorSchedule.noodler.creatorPosts.enabled, false);
+  assert.equal(partiallyUpdatedCreatorSchedule.noodler.creatorPosts.postsPerDay, 4);
   const partiallyUpdated = await firstNoodle.updateSettings({ allowRandomUsers: false });
   assert.equal(partiallyUpdated.allowRandomUsers, false);
   assert.equal(partiallyUpdated.noodler.enableFanActivityScheduler, true);
@@ -139,6 +148,33 @@ try {
 
   const privateAccount = await firstNoodle.createPrivateAccount(renamedCharacterAccount.id);
   assert.ok(privateAccount);
+  const publicSurfacePost = await firstNoodle.createPost({
+    authorAccountId: renamedCharacterAccount.id,
+    content: "PUBLIC_SURFACE_MARKER",
+  });
+  const privateSurfacePost = await firstNoodle.createPost({
+    authorAccountId: privateAccount.id,
+    content: "PRIVATE_SURFACE_MARKER",
+    access: "subscriber",
+  });
+  assert.ok(publicSurfacePost);
+  assert.ok(privateSurfacePost);
+  assert.deepEqual(
+    (await firstNoodle.listSurfacePosts("public", { limit: 20 })).map((post) => post.content),
+    ["PUBLIC_SURFACE_MARKER"],
+  );
+  assert.deepEqual(
+    (await firstNoodle.listSurfacePosts("private", { limit: 20 })).map((post) => post.content),
+    ["PRIVATE_SURFACE_MARKER"],
+  );
+  assert.deepEqual(
+    (await firstNoodle.listSurfacePosts("private", { authorAccountId: privateAccount.id })).map(
+      (post) => post.content,
+    ),
+    ["PRIVATE_SURFACE_MARKER"],
+  );
+  assert.equal(await firstNoodle.hasSurfacePostsBefore("public", "9999-12-31T23:59:59.999Z"), true);
+  assert.equal(await firstNoodle.hasSurfacePostsBefore("private", "9999-12-31T23:59:59.999Z"), true);
   const passivePrivateAccount = await firstNoodle.updateAccount(privateAccount.id, {
     settings: {
       ...privateAccount.settings,
@@ -161,13 +197,14 @@ try {
   assert.equal(explicitManualPost.post.authorAccountId, passivePrivateAccount.id);
   assert.equal(explicitManualPost.post.metadata.ppvPrice, 12.5);
 
-  const implicitAutomaticPost = await createManualNoodlePost(firstNoodle, firstCharacters, {
+  const manualTargetPost = await createManualNoodlePost(firstNoodle, firstCharacters, {
     authorKind: passivePrivateAccount.kind,
     authorEntityId: passivePrivateAccount.entityId,
     target: "noodler",
-    content: "Automatic post from a passive page.",
+    content: "Manual command post from a passive page.",
   });
-  assert.deepEqual(implicitAutomaticPost, { error: "posting_disabled" });
+  assert.ok("post" in manualTargetPost);
+  assert.equal(manualTargetPost.post.authorAccountId, passivePrivateAccount.id);
 
   assert.deepEqual(noodlePpvPriceMetadata("ppv", 19.99), { ppvPrice: 19.99 });
   assert.deepEqual(noodlePpvPriceMetadata("subscriber", 19.99), {});

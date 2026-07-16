@@ -11,6 +11,10 @@ export const noodleCarryoverModeSchema = z.enum(["off", "conversation", "rolepla
 export const noodleCarryoverTargetSchema = z.enum(["conversation", "roleplay", "game"]);
 export const noodleThemeSchema = z.enum(["system", "light", "dark"]);
 export const noodleLayoutSchema = z.enum(["timeline", "grid"]);
+export const noodlerProjectStatusSchema = z.enum(["draft", "active", "paused", "completed", "archived"]);
+export const noodlerProjectInfluenceSchema = z.enum(["loose", "balanced", "focused"]);
+export const noodlerMilestoneStatusSchema = z.enum(["planned", "ready", "completed", "skipped"]);
+export const noodlerProjectMediaPreferenceSchema = z.enum(["text", "image", "text_and_image", "model_choice"]);
 
 export const DEFAULT_NOODLE_SETTINGS = {
   refreshesPerDay: 2,
@@ -47,11 +51,27 @@ export const DEFAULT_NOODLE_SETTINGS = {
   allowGlobalPersona: false,
   noodler: {
     enableFanActivityScheduler: false,
+    creatorPosts: {
+      enabled: false,
+      postsPerDay: 0,
+      generationConnectionId: null,
+    },
   },
 } as const;
 
+export const noodlerCreatorPostsSettingsSchema = z.object({
+  enabled: z.boolean().default(DEFAULT_NOODLE_SETTINGS.noodler.creatorPosts.enabled),
+  postsPerDay: z.number().int().min(0).max(24).default(DEFAULT_NOODLE_SETTINGS.noodler.creatorPosts.postsPerDay),
+  generationConnectionId: z
+    .string()
+    .min(1)
+    .nullable()
+    .default(DEFAULT_NOODLE_SETTINGS.noodler.creatorPosts.generationConnectionId),
+});
+
 export const noodlerSettingsSchema = z.object({
   enableFanActivityScheduler: z.boolean().default(DEFAULT_NOODLE_SETTINGS.noodler.enableFanActivityScheduler),
+  creatorPosts: noodlerCreatorPostsSettingsSchema.default(() => ({ ...DEFAULT_NOODLE_SETTINGS.noodler.creatorPosts })),
 });
 
 export const noodleSettingsSchema = z.object({
@@ -107,7 +127,10 @@ export const noodleSettingsSchema = z.object({
 });
 
 export const noodleSettingsUpdateSchema = noodleSettingsSchema.partial().extend({
-  noodler: noodlerSettingsSchema.partial().optional(),
+  noodler: noodlerSettingsSchema
+    .partial()
+    .extend({ creatorPosts: noodlerCreatorPostsSettingsSchema.partial().optional() })
+    .optional(),
 });
 
 export const noodleAccountUpdateSchema = z.object({
@@ -295,6 +318,32 @@ export const noodlePrivateAccountCreateSchema = z.object({
   stageProfile: noodlePrivateStageProfileSchema.partial().optional(),
 });
 
+export const noodlerProjectCreateSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+  brief: z.string().trim().max(4000).default(""),
+  toneGuidance: z.string().trim().max(2000).default(""),
+  influence: noodlerProjectInfluenceSchema.default("balanced"),
+  status: noodlerProjectStatusSchema.default("draft"),
+  startsAt: z.string().datetime().nullable().default(null),
+  endsAt: z.string().datetime().nullable().default(null),
+  minimumSpacingHours: z.number().int().min(0).max(720).nullable().default(null),
+});
+
+export const noodlerProjectUpdateSchema = noodlerProjectCreateSchema.partial();
+
+export const noodlerMilestoneCreateSchema = z.object({
+  title: z.string().trim().min(1).max(240),
+  notes: z.string().trim().max(2000).default(""),
+  status: noodlerMilestoneStatusSchema.default("planned"),
+  notBefore: z.string().datetime().nullable().default(null),
+  dueAt: z.string().datetime().nullable().default(null),
+  access: noodlePostAccessSchema.default("subscriber"),
+  ppvPrice: z.number().min(0).max(999_999).nullable().default(null),
+  mediaPreference: noodlerProjectMediaPreferenceSchema.default("model_choice"),
+});
+
+export const noodlerMilestoneUpdateSchema = noodlerMilestoneCreateSchema.partial();
+
 export const noodleFanActivityIntensitySchema = z.enum(["low", "medium", "high"]);
 
 export const noodleFanActivitySettingsSchema = z.object({
@@ -351,12 +400,16 @@ export const noodleRefreshSchema = z.object({
       ppvPrice: z.number().min(0).max(999_999).optional(),
       includeText: z.boolean().optional(),
       includeImage: z.boolean().optional(),
+      requireImage: z.boolean().optional(),
       theme: z.string().trim().max(120).optional(),
       prompt: z.string().trim().max(1000).optional(),
     })
     .refine((guide) => guide.includeText !== false || guide.includeImage !== false, {
       message: "Enable text, image, or both for a guided NoodleR post.",
     })
+    .optional(),
+  privateProjectWork: z
+    .object({ projectId: z.string().min(1), milestoneId: z.string().min(1) })
     .optional(),
 });
 
@@ -478,6 +531,10 @@ export type NoodlePostingMode = z.infer<typeof noodlePostingModeSchema>;
 export type NoodlePrivateStageProfileInput = z.input<typeof noodlePrivateStageProfileSchema>;
 export type NoodlePrivateStageProfile = z.infer<typeof noodlePrivateStageProfileSchema>;
 export type NoodlePrivateAccountCreateInput = z.infer<typeof noodlePrivateAccountCreateSchema>;
+export type NoodlerProjectCreateInput = z.infer<typeof noodlerProjectCreateSchema>;
+export type NoodlerProjectUpdateInput = z.infer<typeof noodlerProjectUpdateSchema>;
+export type NoodlerMilestoneCreateInput = z.infer<typeof noodlerMilestoneCreateSchema>;
+export type NoodlerMilestoneUpdateInput = z.infer<typeof noodlerMilestoneUpdateSchema>;
 export type NoodleCreateInteractionInput = z.infer<typeof noodleCreateInteractionSchema>;
 export type NoodleRemoveInteractionInput = z.infer<typeof noodleRemoveInteractionSchema>;
 export type NoodleInteractionOwnerInput = z.infer<typeof noodleInteractionOwnerSchema>;
