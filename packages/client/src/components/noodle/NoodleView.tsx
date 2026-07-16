@@ -630,11 +630,11 @@ function NoodleSettingsGroupHeading({ groupId }: { groupId: NoodleSettingsGroupI
   if (!group) return null;
   const Icon = group.icon;
   return (
-    <div className="flex items-center gap-2 border-b border-[var(--noodle-divider)] bg-[var(--accent)]/40 px-4 py-2.5">
-      <Icon size={14} className="shrink-0 text-[var(--noodle-blue)]" />
+    <div className="flex items-center gap-2.5 border-b border-[var(--noodle-divider)] bg-[var(--accent)]/60 px-4 py-3">
+      <Icon size={17} className="shrink-0 text-[var(--noodle-blue)]" />
       <div className="min-w-0">
-        <p className="text-xs font-bold text-[var(--foreground)]">{group.label}</p>
-        <p className="truncate text-[0.65rem] text-[var(--muted-foreground)]">{group.description}</p>
+        <p className="text-sm font-bold tracking-tight text-[var(--foreground)]">{group.label}</p>
+        <p className="truncate text-[0.68rem] text-[var(--muted-foreground)]">{group.description}</p>
       </div>
     </div>
   );
@@ -652,12 +652,11 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section id={id} className="scroll-mt-3 border-b border-[var(--noodle-divider)] p-4 last:border-b-0">
-      <h3 className="mb-3 flex items-center gap-2 text-xs font-semibold text-[var(--foreground)]">
-        <Settings2 size={13} className="text-[var(--noodle-blue)]" />
+    <section id={id} className="scroll-mt-3 border-t border-[var(--noodle-divider)] px-4 py-3.5 first:border-t-0">
+      <h4 className="mb-2.5 flex items-center gap-1.5 text-[0.7rem] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
         {title}
         {help && <HelpTooltip text={help} side="bottom" wide />}
-      </h3>
+      </h4>
       {children}
     </section>
   );
@@ -3315,7 +3314,7 @@ export function NoodleView() {
 
   const settingsContent = (
     <>
-      <div id={getNoodleSettingsGroupAnchorId("invites")} className="scroll-mt-3">
+      <div id={getNoodleSettingsGroupAnchorId("invites")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
       <NoodleSettingsGroupHeading groupId="invites" />
       <Section
         id={getNoodleSettingsSectionAnchorId("invites")}
@@ -3662,7 +3661,7 @@ export function NoodleView() {
 
       {settings && (
         <>
-          <div id={getNoodleSettingsGroupAnchorId("participants-activity")} className="scroll-mt-3">
+          <div id={getNoodleSettingsGroupAnchorId("participants-activity")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
           <NoodleSettingsGroupHeading groupId="participants-activity" />
           <Section
             id={getNoodleSettingsSectionAnchorId("active-accounts")}
@@ -3764,7 +3763,7 @@ export function NoodleView() {
           </Section>
           </div>
 
-          <div id={getNoodleSettingsGroupAnchorId("refresh")} className="scroll-mt-3">
+          <div id={getNoodleSettingsGroupAnchorId("refresh")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
           <NoodleSettingsGroupHeading groupId="refresh" />
           <Section
             id={getNoodleSettingsSectionAnchorId("refresh")}
@@ -3914,7 +3913,7 @@ export function NoodleView() {
           </Section>
           </div>
 
-          <div id={getNoodleSettingsGroupAnchorId("content")} className="scroll-mt-3">
+          <div id={getNoodleSettingsGroupAnchorId("content")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
           <NoodleSettingsGroupHeading groupId="content" />
           <Section
             title="Noodle Prompt"
@@ -4113,7 +4112,7 @@ export function NoodleView() {
           </Section>
           </div>
 
-          <div id={getNoodleSettingsGroupAnchorId("appearance")} className="scroll-mt-3">
+          <div id={getNoodleSettingsGroupAnchorId("appearance")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
           <NoodleSettingsGroupHeading groupId="appearance" />
           <Section
             id={getNoodleSettingsSectionAnchorId("appearance")}
@@ -4145,7 +4144,7 @@ export function NoodleView() {
           </Section>
           </div>
 
-          <div id={getNoodleSettingsGroupAnchorId("chat")} className="scroll-mt-3">
+          <div id={getNoodleSettingsGroupAnchorId("chat")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
           <NoodleSettingsGroupHeading groupId="chat" />
           <Section
             id={getNoodleSettingsSectionAnchorId("carryover")}
@@ -4200,7 +4199,7 @@ export function NoodleView() {
           </Section>
           </div>
 
-          <div id={getNoodleSettingsGroupAnchorId("noodler")} className="scroll-mt-3">
+          <div id={getNoodleSettingsGroupAnchorId("noodler")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
           <NoodleSettingsGroupHeading groupId="noodler" />
           <Section
             id={getNoodleSettingsSectionAnchorId("noodler-access")}
@@ -4693,7 +4692,7 @@ export function NoodleView() {
             ))}
           </div>
 
-          <div id={getNoodleSettingsGroupAnchorId("danger")} className="scroll-mt-3">
+          <div id={getNoodleSettingsGroupAnchorId("danger")} className="scroll-mt-3 mb-4 overflow-hidden rounded-xl border border-[var(--noodle-divider)] last:mb-0">
           <NoodleSettingsGroupHeading groupId="danger" />
           <Section
             id={getNoodleSettingsSectionAnchorId("reset-noodle")}
@@ -6939,7 +6938,7 @@ export function NoodleView() {
                     })}
                   </div>
 
-                  <div ref={noodleSettingsPanelRef} className="min-h-0 flex-1 overflow-y-auto">
+                  <div ref={noodleSettingsPanelRef} className="min-h-0 flex-1 overflow-y-auto px-2 py-3 lg:px-4">
                     {settingsContent}
                   </div>
                 </div>
