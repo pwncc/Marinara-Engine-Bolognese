@@ -1030,6 +1030,16 @@ function parseAssistantWorkspaceAction(content: string): AssistantWorkspaceActio
   };
 }
 
+function isEmptyCompletedAction(action: AssistantWorkspaceAction): boolean {
+  return (
+    action.commands.length === 0 &&
+    action.stop &&
+    !action.visibleText &&
+    action.suggestions.length === 0 &&
+    action.plan.length === 0
+  );
+}
+
 function sanitizeSuggestionChips(raw: unknown): MariSuggestionChip[] {
   const chips = sanitizeMariSuggestionChips(raw, { maxChips: 6 });
   if (Array.isArray(raw) && raw.length > 0 && chips.length === 0) {
@@ -1568,13 +1578,7 @@ export class ProfessorMariWorkspaceService {
           appendTraceStatus(workspaceTrace, content);
           args.onEvent({ type: "status", data: { content, kind: "info", level: "warning" } });
         }
-        const emptyCompletedAction =
-          action.commands.length === 0 &&
-          action.stop &&
-          !action.visibleText &&
-          action.suggestions.length === 0 &&
-          action.plan.length === 0;
-        if (emptyCompletedAction) {
+        if (isEmptyCompletedAction(action)) {
           protocolRepairRounds += 1;
           if (protocolRepairRounds <= MAX_PROTOCOL_REPAIR_ROUNDS) {
             messages.push({ role: "assistant", content: action.assistantHistoryContent });

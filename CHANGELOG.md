@@ -14,7 +14,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Fixed Conversation Calls failing to recognize downloaded Local Whisper models when `DATA_DIR` was not explicitly configured. Downloaded capability runtimes now inherit Engine's resolved host data directory instead of deriving a private nested model path (#3671).
 - Fixed Professor Mari returning blank character or lorebook generation turns, normalized common character-card field names, and made lorebook creation save generated entries atomically (#3674).
 - Fixed Tic-Tac-Toe failing to render when an installed legacy game client expects React on the global scope (#3675).
-- Kept cropped Character and Persona avatars contained inside the Colors message preview, including cards with additional sprites, instead of letting the preview image cover the editor.
+- Kept cropped Character and Persona avatars contained inside the Colors message preview, including cards with additional sprites, instead of letting the preview image cover the editor (#3678).
 
 ## [2.3.1]
 

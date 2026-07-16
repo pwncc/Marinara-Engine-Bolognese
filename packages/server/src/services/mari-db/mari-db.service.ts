@@ -747,21 +747,13 @@ function actionDataWithTopLevel(source: Row, recordKeys: string[], scalarKeys: s
 
 export function normalizeCharacterActionData(input: Row): Row {
   const out: Row = { ...input };
-  if (out.firstMes !== undefined && out.first_mes === undefined) out.first_mes = out.firstMes;
-  if (out.firstMessage !== undefined && out.first_mes === undefined) out.first_mes = out.firstMessage;
-  if (out.greeting !== undefined && out.first_mes === undefined) out.first_mes = out.greeting;
-  if (out.mesExample !== undefined && out.mes_example === undefined) out.mes_example = out.mesExample;
-  if (out.creatorNotes !== undefined && out.creator_notes === undefined) out.creator_notes = out.creatorNotes;
-  if (out.systemPrompt !== undefined && out.system_prompt === undefined) out.system_prompt = out.systemPrompt;
-  if (out.postHistoryInstructions !== undefined && out.post_history_instructions === undefined) {
-    out.post_history_instructions = out.postHistoryInstructions;
-  }
-  if (out.characterVersion !== undefined && out.character_version === undefined) {
-    out.character_version = out.characterVersion;
-  }
-  if (out.alternateGreetings !== undefined && out.alternate_greetings === undefined) {
-    out.alternate_greetings = out.alternateGreetings;
-  }
+  out.first_mes = out.first_mes ?? out.firstMes ?? out.firstMessage ?? out.greeting;
+  out.mes_example = out.mes_example ?? out.mesExample;
+  out.creator_notes = out.creator_notes ?? out.creatorNotes;
+  out.system_prompt = out.system_prompt ?? out.systemPrompt;
+  out.post_history_instructions = out.post_history_instructions ?? out.postHistoryInstructions;
+  out.character_version = out.character_version ?? out.characterVersion;
+  out.alternate_greetings = out.alternate_greetings ?? out.alternateGreetings;
   delete out.firstMes;
   delete out.firstMessage;
   delete out.greeting;
