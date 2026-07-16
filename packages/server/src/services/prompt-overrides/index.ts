@@ -27,6 +27,7 @@ export {
   NOODLE_IMAGE_POST,
   NOODLE_TIMELINE_BASE,
   NOODLE_TIMELINE_VOICE,
+  NOODLER_TIMELINE_BASE,
   getPromptOverrideDef,
   listPromptOverrideKeys,
 } from "./registry.js";
@@ -51,4 +52,5 @@ export type {
   NoodleImagePostCtx,
   NoodleTimelineBaseCtx,
   NoodleTimelineVoiceCtx,
+  NoodlerTimelineBaseCtx,
 } from "./registry.js";

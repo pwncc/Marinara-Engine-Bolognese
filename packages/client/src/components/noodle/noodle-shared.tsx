@@ -50,8 +50,18 @@ import type { AvatarCropValue } from "../../lib/utils";
 import { getAvatarCropStyle } from "../../lib/utils";
 import { renderInlineWithCustomEmojis } from "../../lib/custom-emoji-render";
 import type { ChatImage } from "../../hooks/use-gallery";
+import { HelpTooltip } from "../ui/HelpTooltip";
 
 export type ComposerTool = "image" | "poll" | "media";
+
+export function FieldLabel({ children, help }: { children: React.ReactNode; help?: React.ReactNode }) {
+  return (
+    <span className={cn(labelClass, "inline-flex items-center gap-1")}>
+      {children}
+      {help && <HelpTooltip text={help} side="top" wide />}
+    </span>
+  );
+}
 export type ReplyComposerTool = "image" | "media";
 export type ProfileTab = "posts" | "likes" | "media";
 export type ProfileConnectionTab = "followers" | "following";

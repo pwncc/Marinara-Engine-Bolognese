@@ -67,6 +67,7 @@ import {
   NOODLE_IMAGE_POST,
   NOODLE_TIMELINE_BASE,
   NOODLE_TIMELINE_VOICE,
+  NOODLER_TIMELINE_BASE,
 } from "../services/prompt-overrides/index.js";
 import { parseGameJsonish } from "../services/game/jsonish.js";
 import { resolveIllustratorCharacterReferences } from "./generate/illustrator-references.js";
@@ -1174,7 +1175,7 @@ async function buildRefreshPrompt(input: {
   // the voice text is deliberately appended last so users can tune style without hunting through
   // the structural instructions.
   const [timelineBaseText, timelineVoiceText] = await Promise.all([
-    loadPrompt(input.promptOverrides, NOODLE_TIMELINE_BASE, {}),
+    loadPrompt(input.promptOverrides, isolatedTargetAccount ? NOODLER_TIMELINE_BASE : NOODLE_TIMELINE_BASE, {}),
     loadPrompt(input.promptOverrides, NOODLE_TIMELINE_VOICE, {
       enhanced: String(enhancedTimelineWriting),
       allowRandomUsers: String(input.settings.allowRandomUsers),

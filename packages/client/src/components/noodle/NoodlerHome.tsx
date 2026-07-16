@@ -12,6 +12,7 @@ import type { NoodleAccount, NoodlePost, NoodlePostAccess, NoodlePostingMode } f
 import { cn } from "../../lib/utils";
 import type { AvatarCropValue } from "../../lib/utils";
 import { CreatorToolsPanel } from "./CreatorToolsPanel";
+import { NoodlerPageSettingsPanel } from "./NoodlerPageSettingsPanel";
 import {
   fieldClass,
   textareaClass,
@@ -755,6 +756,7 @@ function NoodlerIdBuilder({
 export interface PrivateProfileViewProps {
   onBackToHome: () => void;
   viewedProfileAccount: NoodleAccount | null;
+  accounts: NoodleAccount[];
   profileDisplayHandle: string;
   canEditViewedProfile: boolean;
   profileUploadTarget: "avatar" | "banner" | null;
@@ -825,6 +827,7 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
   const {
     onBackToHome,
     viewedProfileAccount,
+    accounts,
     profileDisplayHandle,
     canEditViewedProfile,
     profileUploadTarget,
@@ -969,7 +972,7 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
       />
 
       {viewingOwnPrivateAccount && viewedProfileAccount && (
-        <div className="border-t border-[var(--noodle-divider)] px-4 py-3">
+        <div className="space-y-3 border-t border-[var(--noodle-divider)] px-4 py-3">
           <CreatorToolsPanel
             mode="noodler"
             account={viewedProfileAccount}
@@ -988,6 +991,7 @@ export function PrivateProfileView(props: PrivateProfileViewProps) {
             onSubmitPost={onSubmitPrivatePost}
             createPostPending={createPostPending}
           />
+          <NoodlerPageSettingsPanel account={viewedProfileAccount} accounts={accounts} />
         </div>
       )}
 

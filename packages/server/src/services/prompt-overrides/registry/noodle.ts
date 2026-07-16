@@ -2,7 +2,11 @@
 // Registered prompt-override keys: Noodle social feed
 // ──────────────────────────────────────────────
 import type { PromptOverrideKeyDef } from "../types.js";
-import { NOODLE_TIMELINE_BASE_DEFAULT_PROMPT, noodleTimelineVoiceDefaultText } from "../../noodle/noodle-prompt.js";
+import {
+  NOODLE_TIMELINE_BASE_DEFAULT_PROMPT,
+  NOODLER_TIMELINE_BASE_DEFAULT_PROMPT,
+  noodleTimelineVoiceDefaultText,
+} from "../../noodle/noodle-prompt.js";
 import { joinDedupedBlocks } from "../../noodle/noodle-image-prompt.js";
 
 export interface NoodleImagePostCtx extends Record<string, string | number | undefined> {
@@ -69,6 +73,18 @@ export const NOODLE_TIMELINE_BASE: PromptOverrideKeyDef<NoodleTimelineBaseCtx> =
     "The editable base system prompt used for Noodle timeline refreshes. Timeline voice and tone instructions are appended after this prompt.",
   variables: [],
   defaultBuilder: () => NOODLE_TIMELINE_BASE_DEFAULT_PROMPT,
+  exampleContext: {},
+};
+
+export type NoodlerTimelineBaseCtx = Record<string, string | number | undefined>;
+
+export const NOODLER_TIMELINE_BASE: PromptOverrideKeyDef<NoodlerTimelineBaseCtx> = {
+  key: "noodler.timelineBase",
+  label: "NoodleR Timeline Prompt",
+  description:
+    "The editable base system prompt used when generating activity for a single private NoodleR page. Timeline voice and tone instructions are appended after this prompt, same as the public Noodle prompt.",
+  variables: [],
+  defaultBuilder: () => NOODLER_TIMELINE_BASE_DEFAULT_PROMPT,
   exampleContext: {},
 };
 

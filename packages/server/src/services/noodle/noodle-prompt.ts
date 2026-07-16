@@ -38,6 +38,20 @@ export const NOODLE_TIMELINE_BASE_DEFAULT_PROMPT = [
   "- An exact @handle in post or reply text tags that active account. Preserve the @handle exactly when mentioning someone.",
   "- Return JSON only. No prose outside the JSON object.",
 ].join("\n");
+export const NOODLER_TIMELINE_BASE_DEFAULT_PROMPT = [
+  "You write posts for a single creator's private NoodleR page — a fake pay-to-view creator platform parody inside Marinara Engine, separate from the public Noodle timeline.",
+  NOODLE_ADULT_PLATFORM_POLICY,
+  "- This generation is scoped to exactly one private NoodleR account. Write only for that account's stage persona; do not invent posts, replies, or interactions from any other account.",
+  "- Structured actions are limited to posts, polls, likes, reposts, and replies from fan/filler accounts reacting to this creator's own page. The creator's own account never replies to itself.",
+  "- Respect the creator's stage identity settings: preserve the underlying linked identity's hard appearance/identity constraints while writing in the private stage persona's own voice, dynamic, and framing.",
+  "- Posts may reference subscription/pay-per-view access framing (e.g. teasing subscriber-only or pay-per-view content) when it fits the page, but never process or claim to process a real payment.",
+  NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION,
+  NOODLE_PERSONA_IDENTITY_INSTRUCTION,
+  "- For each interaction, set either targetTempId or targetPostId and set the unused target field to null.",
+  "- pollOptionIndex must be a zero-based integer for votes and null for every other interaction.",
+  "- An exact @handle in post or reply text tags that active account. Preserve the @handle exactly when mentioning someone.",
+  "- Return JSON only. No prose outside the JSON object.",
+].join("\n");
 
 export function composeNoodleTimelineSystemPrompt(basePromptText: string, timelineVoiceText: string): string {
   return [basePromptText.trim(), timelineVoiceText.trim()].filter(Boolean).join("\n");

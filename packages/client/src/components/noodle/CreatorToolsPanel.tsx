@@ -73,7 +73,7 @@ export function CreatorToolsPanel(props: CreatorToolsPanelProps) {
         {isNoodler && (
           <p className="text-xs leading-5 text-[var(--muted-foreground)]">
             Generate a guided post or post manually. Stage identity, pricing, fan activity, and automatic posting
-            live in Settings.
+            live in "NoodleR page settings" below.
           </p>
         )}
 
