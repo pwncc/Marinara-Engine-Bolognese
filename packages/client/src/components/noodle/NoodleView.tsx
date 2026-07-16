@@ -3318,54 +3318,6 @@ export function NoodleView() {
       <div id={getNoodleSettingsGroupAnchorId("invites")} className="scroll-mt-3">
       <NoodleSettingsGroupHeading groupId="invites" />
       <Section
-        title="Noodle Prompt"
-        help="Controls the editable base instructions used to write Noodle timeline refreshes. Timeline voice and tone instructions are appended after this prompt."
-      >
-        <div data-component="NoodleView.PromptSetting" className="space-y-3">
-          <div className="flex items-start gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
-              {noodlePromptLoading ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="text-xs font-semibold text-[var(--foreground)]">Timeline base prompt</p>
-                <span className="rounded-full border border-[var(--noodle-blue)]/30 bg-[var(--noodle-blue)]/10 px-2 py-0.5 text-[0.625rem] font-semibold text-[var(--noodle-blue)]">
-                  {noodlePromptOverride?.enabled === true ? "Custom" : "Default"}
-                </span>
-              </div>
-              <p className="mt-1 line-clamp-3 whitespace-pre-line text-[0.68rem] leading-5 text-[var(--muted-foreground)]">
-                {noodlePromptDetail.isError || noodlePromptDefault.isError
-                  ? "The Noodle prompt could not be loaded."
-                  : noodlePromptText || "Loading the default Noodle prompt…"}
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => void restoreDefaultNoodlePrompt()}
-              disabled={!noodlePromptHasOverride || resetNoodlePrompt.isPending}
-              className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-md border border-[var(--noodle-blue)]/35 px-3 text-xs font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              {resetNoodlePrompt.isPending ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
-              Restore default
-            </button>
-            <button
-              type="button"
-              onClick={openNoodlePromptEditor}
-              disabled={
-                noodlePromptLoading || noodlePromptDetail.isError || noodlePromptDefault.isError || !noodlePromptText
-              }
-              className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:bg-[var(--noodle-blue)]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--noodle-blue)]/70 disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              <Pencil size={14} aria-hidden="true" className="shrink-0 text-[var(--noodle-blue)]" />
-              <span>Edit prompt</span>
-            </button>
-          </div>
-        </div>
-      </Section>
-
-      <Section
         id={getNoodleSettingsSectionAnchorId("invites")}
         title="Invites"
         help="Choose who can participate in Noodle refreshes. Direct character invites, selected character folders, and optional random users form the pool the generator can draw from."
@@ -3965,6 +3917,86 @@ export function NoodleView() {
           <div id={getNoodleSettingsGroupAnchorId("content")} className="scroll-mt-3">
           <NoodleSettingsGroupHeading groupId="content" />
           <Section
+            title="Noodle Prompt"
+            help="Controls the editable base instructions used to write Noodle timeline refreshes. Timeline voice and tone instructions are appended after this prompt."
+          >
+            <div data-component="NoodleView.PromptSetting" className="space-y-3">
+              <div className="flex items-start gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--noodle-blue)]/10 text-[var(--noodle-blue)]">
+                  {noodlePromptLoading ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-xs font-semibold text-[var(--foreground)]">Timeline base prompt</p>
+                    <span className="rounded-full border border-[var(--noodle-blue)]/30 bg-[var(--noodle-blue)]/10 px-2 py-0.5 text-[0.625rem] font-semibold text-[var(--noodle-blue)]">
+                      {noodlePromptOverride?.enabled === true ? "Custom" : "Default"}
+                    </span>
+                  </div>
+                  <p className="mt-1 line-clamp-3 whitespace-pre-line text-[0.68rem] leading-5 text-[var(--muted-foreground)]">
+                    {noodlePromptDetail.isError || noodlePromptDefault.isError
+                      ? "The Noodle prompt could not be loaded."
+                      : noodlePromptText || "Loading the default Noodle prompt…"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => void restoreDefaultNoodlePrompt()}
+                  disabled={!noodlePromptHasOverride || resetNoodlePrompt.isPending}
+                  className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-md border border-[var(--noodle-blue)]/35 px-3 text-xs font-semibold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {resetNoodlePrompt.isPending ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+                  Restore default
+                </button>
+                <button
+                  type="button"
+                  onClick={openNoodlePromptEditor}
+                  disabled={
+                    noodlePromptLoading || noodlePromptDetail.isError || noodlePromptDefault.isError || !noodlePromptText
+                  }
+                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition-colors hover:border-[var(--noodle-blue)]/60 hover:bg-[var(--noodle-blue)]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--noodle-blue)]/70 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  <Pencil size={14} aria-hidden="true" className="shrink-0 text-[var(--noodle-blue)]" />
+                  <span>Edit prompt</span>
+                </button>
+              </div>
+            </div>
+          </Section>
+
+          <Section
+            id={getNoodleSettingsSectionAnchorId("world-lore")}
+            title="World / Lore"
+            help="Lets Noodle refreshes pull matching lorebook entries into the timeline prompt, the same lorebook system used by chat generation."
+          >
+            <div className="space-y-3">
+              <ToggleSetting
+                label="Lorebook context"
+                help="Scans recent Noodle activity and character profiles for lorebook keyword matches and includes them as world/lore context. Off by default; existing timelines are unaffected until you turn this on."
+                checked={settings.enableLorebookContext}
+                disabled={updateSettings.isPending}
+                onChange={(checked) => saveSettings({ enableLorebookContext: checked })}
+              />
+            </div>
+          </Section>
+
+          <Section
+            id={getNoodleSettingsSectionAnchorId("timeline-writing")}
+            title="Timeline Writing"
+            help="Tunes how the refresh writer approaches tone and long-term memory. Off by default; existing timelines keep their current behavior until you turn this on."
+          >
+            <div className="space-y-3">
+              <ToggleSetting
+                label="Enhanced tone & continuity"
+                help="When on: each account's voice is grounded more strongly in its own personality instead of a default upbeat tone, accounts are encouraged to react to each other's posts in the same refresh, and older-post recall happens more often and favors posts relevant to currently active accounts. When off, refreshes use the original tone and recall behavior. The Noodle Timeline Voice & Tone prompt override (Settings -> Generations -> Image Generation Prompt Overrides) still lets you rewrite the tone text directly regardless of this toggle."
+                checked={settings.enableEnhancedTimelineWriting}
+                disabled={updateSettings.isPending}
+                onChange={(checked) => saveSettings({ enableEnhancedTimelineWriting: checked })}
+              />
+            </div>
+          </Section>
+
+          <Section
             id={getNoodleSettingsSectionAnchorId("image-generation")}
             title="Image Generation"
             help="Controls generated post images and whether characters can reuse existing gallery images."
@@ -4077,38 +4109,6 @@ export function NoodleView() {
                   </select>
                 </label>
               )}
-            </div>
-          </Section>
-
-          <Section
-            id={getNoodleSettingsSectionAnchorId("timeline-writing")}
-            title="Timeline Writing"
-            help="Tunes how the refresh writer approaches tone and long-term memory. Off by default; existing timelines keep their current behavior until you turn this on."
-          >
-            <div className="space-y-3">
-              <ToggleSetting
-                label="Enhanced tone & continuity"
-                help="When on: each account's voice is grounded more strongly in its own personality instead of a default upbeat tone, accounts are encouraged to react to each other's posts in the same refresh, and older-post recall happens more often and favors posts relevant to currently active accounts. When off, refreshes use the original tone and recall behavior. The Noodle Timeline Voice & Tone prompt override (Settings -> Generations -> Image Generation Prompt Overrides) still lets you rewrite the tone text directly regardless of this toggle."
-                checked={settings.enableEnhancedTimelineWriting}
-                disabled={updateSettings.isPending}
-                onChange={(checked) => saveSettings({ enableEnhancedTimelineWriting: checked })}
-              />
-            </div>
-          </Section>
-
-          <Section
-            id={getNoodleSettingsSectionAnchorId("world-lore")}
-            title="World / Lore"
-            help="Lets Noodle refreshes pull matching lorebook entries into the timeline prompt, the same lorebook system used by chat generation."
-          >
-            <div className="space-y-3">
-              <ToggleSetting
-                label="Lorebook context"
-                help="Scans recent Noodle activity and character profiles for lorebook keyword matches and includes them as world/lore context. Off by default; existing timelines are unaffected until you turn this on."
-                checked={settings.enableLorebookContext}
-                disabled={updateSettings.isPending}
-                onChange={(checked) => saveSettings({ enableLorebookContext: checked })}
-              />
             </div>
           </Section>
           </div>
