@@ -2,7 +2,7 @@
 // NoodleR: private creator hub, profile creation, and profile view.
 // State and mutations live in NoodleView and are passed down as props.
 // ──────────────────────────────────────────────
-import { AtSign, Check, Globe2, ImageIcon, Loader2, Trash2, User } from "lucide-react";
+import { AtSign, Check, Globe2, ImageIcon, Info, Loader2, Trash2, User } from "lucide-react";
 import type { ChangeEvent, ReactNode, RefObject } from "react";
 import type { NoodleAccount, NoodlePost } from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
@@ -76,6 +76,9 @@ export interface NoodlerHomeProps {
   // screen instead of PrivateProfileView.
   showNoodlerSignup: boolean;
   stageDraft: PrivateStageDraft | null;
+  stageSourceAccount: NoodleAccount | null;
+  imageGenerationAvailable: boolean;
+  recoveringExistingProfile: boolean;
   onStartStageDraft: () => void;
   onStageDraftChange: (patch: Partial<PrivateStageDraft>) => void;
   onSubmitStageDraft: () => void;
@@ -112,6 +115,9 @@ export function NoodlerHome(props: NoodlerHomeProps) {
     personaLinkedNoodlerAccount,
     showNoodlerSignup,
     stageDraft,
+    stageSourceAccount,
+    imageGenerationAvailable,
+    recoveringExistingProfile,
     onStartStageDraft,
     onStageDraftChange,
     onSubmitStageDraft,
@@ -164,8 +170,10 @@ export function NoodlerHome(props: NoodlerHomeProps) {
       }
       return (
         <NoodlerIdBuilder
-          personaAccount={personaAccount}
+          personaAccount={stageSourceAccount ?? personaAccount}
           draft={stageDraft}
+          imageGenerationAvailable={imageGenerationAvailable}
+          recoveringExistingProfile={recoveringExistingProfile}
           onChange={onStageDraftChange}
           onSubmit={onSubmitStageDraft}
           onCancel={onCancelStageDraft}
@@ -443,6 +451,8 @@ function NoodlerIdBuilder({
   onSubmit,
   onCancel,
   pending,
+  imageGenerationAvailable,
+  recoveringExistingProfile,
   onBack,
 }: {
   personaAccount: NoodleAccount | null;
@@ -451,6 +461,8 @@ function NoodlerIdBuilder({
   onSubmit: () => void;
   onCancel: () => void;
   pending: boolean;
+  imageGenerationAvailable: boolean;
+  recoveringExistingProfile: boolean;
   onBack: () => void;
 }) {
   const canSubmit = draft.ageAcknowledged && draft.stageName.trim().length > 0 && !pending;
@@ -519,6 +531,12 @@ function NoodlerIdBuilder({
         </div>
 
         <div className="mt-5 space-y-4">
+          {!imageGenerationAvailable && (
+            <div className="flex items-start gap-2 rounded-lg border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/8 px-3 py-2 text-xs leading-5 text-[var(--muted-foreground)]">
+              <Info size={15} className="mt-0.5 shrink-0 text-[var(--noodle-blue)]" />
+              <span>No image generator is available. This profile will use a private initials avatar.</span>
+            </div>
+          )}
           <label className="block space-y-1.5">
             <span className="text-[0.68rem] font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">
               Profile name
@@ -645,7 +663,13 @@ function NoodlerIdBuilder({
             className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--noodle-blue)] px-6 text-sm font-black text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {pending ? <Loader2 size={17} className="animate-spin" /> : <Check size={17} />}
-            {pending ? "Creating..." : "Create NoodleR profile"}
+            {pending
+              ? recoveringExistingProfile
+                ? "Retrying..."
+                : "Creating..."
+              : recoveringExistingProfile
+                ? "Retry profile setup"
+                : "Create NoodleR profile"}
           </button>
           <button
             type="button"

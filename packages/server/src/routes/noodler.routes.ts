@@ -202,6 +202,12 @@ export async function noodlerRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     const publicAccount = await noodle.getAccountById(id);
     if (!publicAccount) return reply.code(404).send({ error: "Noodle account not found" });
+    if (publicAccount.linkedAccountId) {
+      const linkedAccount = await noodle.getAccountById(publicAccount.linkedAccountId);
+      if (linkedAccount?.visibility === "private" && linkedAccount.settings.profileReady === true) {
+        return linkedAccount;
+      }
+    }
     const created = await noodle.createPrivateAccount(id);
     if (!created) return reply.code(400).send({ error: "Could not create a private Noodle account for that account." });
 

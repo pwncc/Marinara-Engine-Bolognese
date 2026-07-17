@@ -698,6 +698,8 @@ function ToggleSetting({
 export function NoodleView() {
   const selectedPersonaId = useUIStore((state) => state.noodleSelectedPersonaId) ?? "";
   const setSelectedPersonaId = useUIStore((state) => state.setNoodleSelectedPersonaId);
+  const persistedNoodlerProfileId = useUIStore((state) => state.noodleProfileAccountId);
+  const setPersistedNoodlerProfileId = useUIStore((state) => state.setNoodleProfileAccountId);
   const { data: activePersona } = useActivePersona();
   const noodleViewerPersonaId =
     selectedPersonaId && selectedPersonaId !== NOODLE_GLOBAL_PERSONA_ID ? selectedPersonaId : activePersona?.id;
@@ -723,7 +725,7 @@ export function NoodleView() {
   const refreshNoodle = useRefreshNoodle();
   const confirmNoodleImagePrompts = useConfirmNoodleImagePrompts();
   const resetNoodleTimeline = useResetNoodleTimeline();
-  const createPrivateAccount = useCreatePrivateNoodleAccount();
+  const createPrivateAccount = useCreatePrivateNoodleAccount(noodleViewerPersonaId);
   const deletePrivateAccount = useDeletePrivateNoodleAccount();
   const retryPrivateIdentity = useRetryPrivateIdentityGeneration();
   const simulateNoodlerFanActivity = useSimulateNoodlerFanActivity();
@@ -819,12 +821,16 @@ export function NoodleView() {
   const [noodlerNotificationTab, setNoodlerNotificationTab] = useState<"subscribers" | "unlocks" | "activity">(
     "subscribers",
   );
-  const [activeNoodleView, setActiveNoodleView] = useState<NoodleViewId>("home");
+  const [activeNoodleView, setActiveNoodleView] = useState<NoodleViewId>(
+    persistedNoodlerProfileId ? "profile" : "home",
+  );
   // Explicit source of truth for chrome selection — set only by
   // transitionNoodleMode/openProfile/openOwnProfile, never derived from
   // account data, so no render path can accidentally infer NoodleR chrome.
-  const [activeNoodleMode, setActiveNoodleMode] = useState<NoodleMode>("noodle");
-  const [viewedProfileAccountId, setViewedProfileAccountId] = useState<string | null>(null);
+  const [activeNoodleMode, setActiveNoodleMode] = useState<NoodleMode>(
+    persistedNoodlerProfileId ? "noodler" : "noodle",
+  );
+  const [viewedProfileAccountId, setViewedProfileAccountId] = useState<string | null>(persistedNoodlerProfileId);
   const [timelineTab, setTimelineTab] = useState<TimelineTab>("main");
   const [noodlerHubTab, setNoodlerHubTab] = useState<NoodlerHubTab>("timeline");
   const [inviteSearch, setInviteSearch] = useState("");
@@ -1035,10 +1041,27 @@ export function NoodleView() {
       personaAccounts.find((account) => account.entityId === noodleViewerPersonaId) ?? sortedPersonaAccounts[0] ?? null
     );
   }, [isGlobalPersonaSelected, noodleViewerPersonaId, personaAccounts, sortedPersonaAccounts]);
-  const viewedProfileAccount = useMemo(
-    () => (viewedProfileAccountId ? (accountById.get(viewedProfileAccountId) ?? null) : personaAccount),
-    [accountById, personaAccount, viewedProfileAccountId],
+  const isNoodlerEnabled = settings?.enableNoodler === true;
+  const noodlerHubQuery = useNoodlerHub(
+    personaAccount?.kind,
+    personaAccount?.entityId,
+    activeNoodleMode === "noodler" && isNoodlerEnabled && Boolean(personaAccount),
   );
+  const noodlerHub = noodlerHubQuery.data;
+  const ownedNoodlerAccountById = useMemo(
+    () => new Map((noodlerHub?.owned ?? []).map((account) => [account.id, account])),
+    [noodlerHub?.owned],
+  );
+  const viewedProfileAccount = useMemo(
+    () =>
+      viewedProfileAccountId
+        ? (accountById.get(viewedProfileAccountId) ?? ownedNoodlerAccountById.get(viewedProfileAccountId) ?? null)
+        : personaAccount,
+    [accountById, ownedNoodlerAccountById, personaAccount, viewedProfileAccountId],
+  );
+  const privateStageSourceAccount = privateStageDraft
+    ? (accountById.get(privateStageDraft.publicAccountId) ?? null)
+    : null;
   const guidedPostAccount = guidedPostAccountId ? (accountById.get(guidedPostAccountId) ?? null) : null;
   const noodleCustomEmojiMap = useNoodleCustomEmojiMap(viewedProfileAccount);
   const viewingOwnProfile = Boolean(personaAccount && viewedProfileAccount?.id === personaAccount.id);
@@ -1080,13 +1103,6 @@ export function NoodleView() {
       postUnlocks.filter((unlock) => unlock.accountId === personaAccount.id).map((unlock) => unlock.postId),
     );
   }, [personaAccount, postUnlocks]);
-  const isNoodlerEnabled = settings?.enableNoodler === true;
-  const noodlerHubQuery = useNoodlerHub(
-    personaAccount?.kind,
-    personaAccount?.entityId,
-    activeNoodleView === "noodler" && isNoodlerEnabled && Boolean(personaAccount),
-  );
-  const noodlerHub = noodlerHubQuery.data;
   const privateAccounts = useMemo(() => accounts.filter((account) => account.visibility === "private"), [accounts]);
   const privateAccountIds = useMemo(() => new Set(privateAccounts.map((account) => account.id)), [privateAccounts]);
   const privatePosts = useMemo(
@@ -1625,6 +1641,9 @@ export function NoodleView() {
   };
 
   const openPrivateStageSetup = (account: NoodleAccount) => {
+    if (account.kind === "persona" && account.entityId !== noodleViewerPersonaId) {
+      setSelectedPersonaId(account.entityId);
+    }
     setPrivateStageDraft({
       publicAccountId: account.id,
       identityDisclosure: "hinted",
@@ -1635,6 +1654,10 @@ export function NoodleView() {
       postingMode: "active",
       ageAcknowledged: false,
     });
+    setViewedProfileAccountId(null);
+    setPersistedNoodlerProfileId(null);
+    setActiveNoodleMode("noodler");
+    setActiveNoodleView("profile");
   };
 
   const createPrivateStageAccount = () => {
@@ -1653,9 +1676,18 @@ export function NoodleView() {
       { publicAccountId: privateStageDraft.publicAccountId, input: { stageProfile } },
       {
         onSuccess: (account) => {
-          setPrivateStageDraft(null);
-          setViewedProfileAccountId(account.id);
-          toast.success("NoodleR profile created.");
+          if (account.settings.profileReady === true) {
+            setPrivateStageDraft(null);
+            setViewedProfileAccountId(account.id);
+            setPersistedNoodlerProfileId(account.id);
+            toast.success("NoodleR profile created.");
+            return;
+          }
+          toast.error(
+            account.settings.avatarGenerationFailed === true
+              ? "The profile was saved, but its avatar could not be generated. Retry when ready."
+              : "The profile was saved, but its stage identity is not ready. Retry when ready.",
+          );
         },
         onError: (error) => toast.error(error instanceof Error ? error.message : "Could not create NoodleR profile."),
       },
@@ -2515,6 +2547,9 @@ export function NoodleView() {
       enterNoodlerVerification();
       return;
     }
+    if (account.visibility === "private" && account.kind === "persona" && account.entityId !== noodleViewerPersonaId) {
+      setSelectedPersonaId(account.entityId);
+    }
     markNoodlerAccountViewed(account);
     setViewedProfileAccountId(account.id === personaAccount?.id ? null : account.id);
     setProfileEditing(false);
@@ -2522,9 +2557,28 @@ export function NoodleView() {
     setProfileConnectionTab(null);
     setActiveNoodleMode(account.visibility === "private" ? "noodler" : "noodle");
     setActiveNoodleView("profile");
+    setPersistedNoodlerProfileId(
+      account.visibility === "private" && account.settings.profileReady !== false ? account.id : null,
+    );
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
   };
+
+  useEffect(() => {
+    if (!persistedNoodlerProfileId || noodlerHubQuery.isLoading || !data) return;
+    if (accountById.has(persistedNoodlerProfileId) || ownedNoodlerAccountById.has(persistedNoodlerProfileId)) return;
+    setPersistedNoodlerProfileId(null);
+    setViewedProfileAccountId(null);
+    setActiveNoodleMode("noodler");
+    setActiveNoodleView("noodler");
+  }, [
+    accountById,
+    data,
+    noodlerHubQuery.isLoading,
+    ownedNoodlerAccountById,
+    persistedNoodlerProfileId,
+    setPersistedNoodlerProfileId,
+  ]);
 
   const openOwnProfile = () => {
     if (isGlobalPersonaSelected) return;
@@ -3198,7 +3252,7 @@ export function NoodleView() {
   };
 
   const confirmReviewedNoodleImagePrompts = (overrides: ImagePromptOverride[]) => {
-    confirmNoodleImagePrompts.mutate(overrides, {
+    confirmNoodleImagePrompts.mutate({ prompts: overrides, personaId: personaAccount?.entityId }, {
       onSuccess: () => {
         setImagePromptReviewItems([]);
         toast.success("Noodle timeline refreshed.");
@@ -3232,8 +3286,9 @@ export function NoodleView() {
     setActiveComposerTool(null);
     setProfileConnectionTab(null);
     setViewedProfileAccountId(null);
+    setPersistedNoodlerProfileId(null);
     setNoodlerHubTab("timeline");
-  }, []);
+  }, [setPersistedNoodlerProfileId]);
 
   const transitionNoodleMode = useCallback(
     (next: NoodleMode) => {
@@ -6385,8 +6440,14 @@ export function NoodleView() {
     hasNoodlerAccount: Boolean(personaLinkedNoodlerAccount),
     personaLinkedNoodlerAccount,
     onOpenOwnProfile: openOwnProfile,
-    showNoodlerSignup: activeNoodleMode === "noodler" && !viewedProfileAccountId && !personaLinkedNoodlerAccount,
+    showNoodlerSignup:
+      activeNoodleMode === "noodler" &&
+      !viewedProfileAccountId &&
+      (Boolean(privateStageDraft) || !personaLinkedNoodlerAccount),
     stageDraft: privateStageDraft,
+    stageSourceAccount: privateStageSourceAccount,
+    imageGenerationAvailable: imageConnections.length > 0,
+    recoveringExistingProfile: Boolean(privateStageSourceAccount?.linkedAccountId),
     onStartStageDraft: () => {
       if (personaAccount) openPrivateStageSetup(personaAccount);
     },

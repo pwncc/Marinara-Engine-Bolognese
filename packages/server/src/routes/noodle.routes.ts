@@ -437,9 +437,8 @@ function escapeRegExp(value: string) {
 
 // What gets blocked scales with the disclosure level so "hinted" and "secret"
 // are observably different, not the same redaction behind two labels:
-//  - "hinted" only redacts the exact public display name, deliberately
-//    leaving room for the subtle allusions/in-jokes its own prompt
-//    instruction (identityDisclosureInstruction) says are allowed.
+//  - "hinted" redacts the exact public display name and handle, deliberately
+//    leaving room for subtle allusions and in-jokes.
 //  - "secret" additionally redacts the public handle (bare and @-prefixed)
 //    and each individual name token, since its instruction promises the
 //    handle stays hidden too and a bare first name would otherwise slip
@@ -457,7 +456,7 @@ function blockedPublicNames(context: NoodleLinkedAuthorContext, profile: NoodleP
 }
 
 function blockedPublicHandles(context: NoodleLinkedAuthorContext, profile: NoodlePrivateStageProfile): string[] {
-  if (profile.identityDisclosure !== "secret") return [];
+  if (profile.identityDisclosure === "open") return [];
   const handle = context.publicHandle?.trim() ?? "";
   return handle ? [handle] : [];
 }
@@ -745,6 +744,7 @@ async function ensurePersonaAccounts(
       avatarCrop: parseNoodleAvatarCrop(persona.avatarCrop),
       bio: persona.aboutMe || persona.description || "",
       invited: true,
+      syncIdentity: true,
     });
   }
   return livePersonaIds;
@@ -1847,6 +1847,7 @@ export async function ensurePrivateAccountIdentity(input: {
     let stageIdentityFailed = false;
     let stageIdentityError: string | undefined;
     let avatarFailed = false;
+    let avatarUnavailable = false;
     let avatarError: string | undefined;
     // Previous attempt's text identity already succeeded and only the
     // avatar failed — reuse the persisted name/bio/appearance instead of
@@ -1881,15 +1882,19 @@ export async function ensurePrivateAccountIdentity(input: {
           settings: {
             ...privateAccount.settings,
             avatarGenerationFailed: !avatarUrl,
-            ...(avatarError ? { avatarGenerationError: avatarError } : {}),
+            avatarGenerationUnavailable: false,
+            profileReady: Boolean(avatarUrl),
+            avatarGenerationError: avatarError ?? null,
           },
         });
       } else {
         await noodle.updateAccount(privateAccount.id, {
           settings: {
             ...privateAccount.settings,
-            avatarGenerationFailed: true,
-            avatarGenerationError: "No image generation connection is configured.",
+            avatarGenerationFailed: false,
+            avatarGenerationUnavailable: true,
+            profileReady: true,
+            avatarGenerationError: null,
           },
         });
       }
@@ -1953,8 +1958,7 @@ export async function ensurePrivateAccountIdentity(input: {
             return null;
           });
         } else {
-          avatarFailed = true;
-          avatarError = "No image generation connection is configured.";
+          avatarUnavailable = true;
         }
         await noodle.updateAccount(privateAccount.id, {
           handle: identity.handle,
@@ -1966,7 +1970,9 @@ export async function ensurePrivateAccountIdentity(input: {
             stageIdentityGenerationFailed: false,
             stageIdentityGenerationError: null,
             avatarGenerationFailed: avatarFailed,
-            ...(avatarError ? { avatarGenerationError: avatarError } : {}),
+            avatarGenerationUnavailable: avatarUnavailable,
+            profileReady: !avatarFailed,
+            avatarGenerationError: avatarError ?? null,
             // Persisted so a later avatar-only retry (avatarOnlyRetry above)
             // can regenerate just the image without another LLM call.
             stageAppearanceGenerated: sanitizedAppearance,
@@ -1995,7 +2001,13 @@ export async function ensurePrivateAccountIdentity(input: {
       await noodle.updateAccount(privateAccount.id, {
         displayName: profile.stageName,
         bio: profile.stageBio,
-        settings: writePrivateStageProfileSettings(privateAccount.settings, profile),
+        settings: {
+          ...writePrivateStageProfileSettings(privateAccount.settings, profile),
+          stageIdentityGenerationFailed: false,
+          avatarGenerationFailed: false,
+          avatarGenerationUnavailable: true,
+          profileReady: true,
+        },
       });
       // A manually-submitted stage profile is a deliberate choice, not a
       // failure. Only the no-connection retry path (no requestedStageProfile
@@ -2010,6 +2022,7 @@ export async function ensurePrivateAccountIdentity(input: {
         settings: {
           ...privateAccount.settings,
           stageIdentityGenerationFailed: true,
+          profileReady: false,
           ...(stageIdentityError ? { stageIdentityGenerationError: stageIdentityError } : {}),
         },
       });
@@ -2020,6 +2033,7 @@ export async function ensurePrivateAccountIdentity(input: {
       settings: {
         ...privateAccount.settings,
         stageIdentityGenerationFailed: true,
+        profileReady: false,
         stageIdentityGenerationError: getErrorMessage(error).slice(0, 500),
       },
     });
@@ -2636,6 +2650,7 @@ const noodleImagePromptConfirmationSchema = z.object({
     )
     .max(20),
   debugMode: z.boolean().optional(),
+  personaId: z.string().min(1).optional(),
 });
 
 export async function noodleRoutes(app: FastifyInstance) {
@@ -3077,7 +3092,7 @@ export async function noodleRoutes(app: FastifyInstance) {
       }
     }
 
-    return bootstrapVisibleNoodle(noodle, characters);
+    return bootstrapVisibleNoodle(noodle, characters, parsed.data.personaId);
   });
 
   app.post("/refresh", async (req, reply) => {
@@ -3781,7 +3796,7 @@ export async function noodleRoutes(app: FastifyInstance) {
 
       await noodle.finishRefreshRun(runId, { status: "completed", result: content });
       return {
-        bootstrap: await bootstrapVisibleNoodle(noodle, characters),
+        bootstrap: await bootstrapVisibleNoodle(noodle, characters, parsed.data.personaId),
         imagePromptReviewItems,
         createdPostIds,
       };

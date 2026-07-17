@@ -50,6 +50,7 @@ import {
 } from "../../packages/server/src/services/prompt-overrides/registry/noodle.js";
 import {
   collectNoodlePriorityAccountIds,
+  enforceNoodlerIdentityBlocklist,
   sanitizePrivateNoodlerImageIdea,
 } from "../../packages/server/src/routes/noodle.routes.js";
 import { NOODLE_TIMELINE_VOICE } from "../../packages/server/src/services/prompt-overrides/registry/noodle.js";
@@ -610,6 +611,7 @@ assert.equal(
     {
       sourceKind: "character",
       publicName: "Alyssa",
+      publicHandle: "alyssa_public",
       visualDescription: "20-year-old woman, black hair, green eyes",
       personalityDescription: "",
       avatarPath: null,
@@ -625,6 +627,33 @@ assert.equal(
     },
   ),
   "Velvet Lecture selfie\nVelvet Lecture posing in a pink room",
+);
+assert.deepEqual(
+  enforceNoodlerIdentityBlocklist(
+    "Follow @alyssa_public for the public page. Alyssa posts there too.",
+    {
+      sourceKind: "character",
+      publicName: "Alyssa",
+      publicHandle: "alyssa_public",
+      visualDescription: "",
+      personalityDescription: "",
+      avatarPath: null,
+    },
+    {
+      identityDisclosure: "hinted",
+      stageName: "Velvet Lecture",
+      stageBio: "",
+      stagePersonality: "",
+      stageDynamic: "",
+      stageAppearanceOverride: "",
+      preserveLinkedAppearance: true,
+      postingMode: "active",
+    },
+  ),
+  {
+    sanitized: "Follow Velvet Lecture for the public page. Velvet Lecture posts there too.",
+    redactionsApplied: true,
+  },
 );
 
 const cutoffAnchor = new Date("2026-07-10T12:00:00.000Z");

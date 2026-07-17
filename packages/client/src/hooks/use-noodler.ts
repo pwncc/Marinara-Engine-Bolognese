@@ -124,12 +124,24 @@ export function useNoodlerHub(
   });
 }
 
-export function useCreatePrivateNoodleAccount() {
+export function useCreatePrivateNoodleAccount(viewerPersonaId?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ publicAccountId, input }: { publicAccountId: string; input?: NoodlePrivateAccountCreateInput }) =>
       api.post<NoodleAccount>(`/noodle/accounts/${publicAccountId}/private`, input ?? {}),
-    onSuccess: () => {
+    onSuccess: (account, variables) => {
+      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(viewerPersonaId ?? "none"), (current) => {
+        if (!current) return current;
+        const accounts = current.accounts.some((item) => item.id === account.id)
+          ? current.accounts.map((item) => (item.id === account.id ? account : item))
+          : [...current.accounts, account];
+        return {
+          ...current,
+          accounts: accounts.map((item) =>
+            item.id === variables.publicAccountId ? { ...item, linkedAccountId: account.id } : item,
+          ),
+        };
+      });
       qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() });
       qc.invalidateQueries({ queryKey: [...noodleKeys.all, "hub"] });
     },

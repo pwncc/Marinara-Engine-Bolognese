@@ -741,35 +741,48 @@ export function createNoodleStorage(db: DB) {
 
     async createPrivateAccount(publicAccountId: string): Promise<NoodleAccount | null> {
       const publicAccount = await this.getAccountById(publicAccountId);
-      if (!publicAccount || publicAccount.visibility !== "public" || publicAccount.linkedAccountId) return null;
+      if (!publicAccount || publicAccount.visibility !== "public") return null;
+      if (publicAccount.linkedAccountId) {
+        const linkedAccount = await this.getAccountById(publicAccount.linkedAccountId);
+        return linkedAccount?.visibility === "private" ? linkedAccount : null;
+      }
       if (publicAccount.kind !== "persona" && publicAccount.kind !== "character") return null;
       const timestamp = now();
       const id = newId();
       const handle = await resolveUniqueHandle(db, `${publicAccount.handle}_private`, publicAccount.entityId);
-      await db.insert(noodleAccounts).values({
-        id,
-        kind: publicAccount.kind,
-        entityId: publicAccount.entityId,
-        handle,
-        displayName: publicAccount.displayName,
-        bio: "",
-        avatarUrl: null,
-        invited: "false",
-        // Defaults new private accounts to requiring a separate PPV unlock
-        // even for subscribers. Accounts created before this flag existed
-        // read as `undefined` and keep the legacy subscription-includes-PPV
-        // behavior (see canRevealPostAccess in NoodleView.tsx).
-        settings: JSON.stringify({ subscriptionIncludesPpv: false }),
-        visibility: "private",
-        linkedAccountId: null,
-        createdAt: timestamp,
-        updatedAt: timestamp,
+      const privateAccountId = await db.transaction(async (tx) => {
+        const currentRows = await tx.select().from(noodleAccounts).where(eq(noodleAccounts.id, publicAccountId));
+        const currentPublicAccount = currentRows[0];
+        if (!currentPublicAccount || currentPublicAccount.visibility !== "public") return null;
+        if (currentPublicAccount.linkedAccountId) return currentPublicAccount.linkedAccountId;
+        await tx.insert(noodleAccounts).values({
+          id,
+          kind: publicAccount.kind,
+          entityId: publicAccount.entityId,
+          handle,
+          displayName: publicAccount.displayName,
+          bio: "",
+          avatarUrl: null,
+          invited: "false",
+          // Defaults new private accounts to requiring a separate PPV unlock
+          // even for subscribers. Accounts created before this flag existed
+          // read as `undefined` and keep the legacy subscription-includes-PPV
+          // behavior (see canRevealPostAccess in NoodleView.tsx).
+          settings: JSON.stringify({ subscriptionIncludesPpv: false }),
+          visibility: "private",
+          linkedAccountId: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        });
+        await tx
+          .update(noodleAccounts)
+          .set({ linkedAccountId: id, updatedAt: now() })
+          .where(eq(noodleAccounts.id, publicAccountId));
+        return id;
       });
-      await db
-        .update(noodleAccounts)
-        .set({ linkedAccountId: id, updatedAt: now() })
-        .where(eq(noodleAccounts.id, publicAccountId));
-      return this.getAccountById(id);
+      if (!privateAccountId) return null;
+      const privateAccount = await this.getAccountById(privateAccountId);
+      return privateAccount?.visibility === "private" ? privateAccount : null;
     },
 
     async deletePrivateAccount(id: string): Promise<NoodleAccount | null> {

@@ -152,6 +152,20 @@ try {
 
   const privateAccount = await firstNoodle.createPrivateAccount(renamedCharacterAccount.id);
   assert.ok(privateAccount);
+  assert.equal((await firstNoodle.createPrivateAccount(renamedCharacterAccount.id))?.id, privateAccount.id);
+  assert.equal((await firstNoodle.getAccountById(renamedCharacterAccount.id))?.linkedAccountId, privateAccount.id);
+  const concurrentPublicAccount = await firstNoodle.upsertAccountFromProfile({
+    kind: "persona",
+    entityId: "concurrent-persona",
+    displayName: "Concurrent Persona",
+    invited: true,
+  });
+  const concurrentPrivateAccounts = await Promise.all([
+    firstNoodle.createPrivateAccount(concurrentPublicAccount.id),
+    firstNoodle.createPrivateAccount(concurrentPublicAccount.id),
+  ]);
+  assert.ok(concurrentPrivateAccounts[0]);
+  assert.equal(concurrentPrivateAccounts[1]?.id, concurrentPrivateAccounts[0].id);
   const publicSurfacePost = await firstNoodle.createPost({
     authorAccountId: renamedCharacterAccount.id,
     content: "PUBLIC_SURFACE_MARKER",
@@ -243,6 +257,8 @@ try {
   assert.equal(reopenedSettings.allowRandomUsers, false);
   assert.equal(reopenedSettings.maxGeneratedPostsPerRefresh, 11);
   assert.equal(reopenedSettings.noodler.enableFanActivityScheduler, true);
+  assert.equal((await reopenedNoodle.getAccountById(renamedCharacterAccount.id))?.linkedAccountId, privateAccount.id);
+  assert.equal((await reopenedNoodle.getAccountById(privateAccount.id))?.visibility, "private");
   const reopenedRuns = await reopenedNoodle.listRefreshRuns({ status: "completed", limit: 2 });
   const reopenedRun = reopenedRuns.find((entry) => entry.id === refreshRun.id);
   assert.equal(reopenedRun?.result, correctedResponse);

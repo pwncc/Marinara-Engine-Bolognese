@@ -397,8 +397,8 @@ export function useRefreshNoodle() {
         debugMode: useUIStore.getState().debugMode,
         reviewImagePromptsBeforeSend: useUIStore.getState().reviewImagePromptsBeforeSend,
       }),
-    onSuccess: (result) =>
-      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
+    onSuccess: (result, input) =>
+      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(input.personaId ?? "none"), (current) =>
         preservePollVotes(current, result.bootstrap),
       ),
     onSettled: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),
@@ -408,13 +408,14 @@ export function useRefreshNoodle() {
 export function useConfirmNoodleImagePrompts() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (prompts: ImagePromptOverride[]) =>
+    mutationFn: ({ prompts, personaId }: { prompts: ImagePromptOverride[]; personaId?: string }) =>
       api.post<NoodleBootstrap>("/noodle/refresh/images", {
         prompts,
+        personaId,
         debugMode: useUIStore.getState().debugMode,
       }),
-    onSuccess: (bootstrap) =>
-      qc.setQueriesData<NoodleBootstrap | undefined>({ queryKey: noodleKeys.bootstrap() }, (current) =>
+    onSuccess: (bootstrap, input) =>
+      qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(input.personaId ?? "none"), (current) =>
         preservePollVotes(current, bootstrap),
       ),
     onSettled: () => qc.invalidateQueries({ queryKey: noodleKeys.bootstrap() }),

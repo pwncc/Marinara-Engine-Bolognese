@@ -497,6 +497,8 @@ interface UIState {
   noodleOpen: boolean;
   /** Last persona selected inside Noodle, persisted per browser. */
   noodleSelectedPersonaId: string | null;
+  /** Ready NoodleR profile to restore after a browser refresh. */
+  noodleProfileAccountId: string | null;
   /** When true, the main area shows the full-page character library */
   characterLibraryOpen: boolean;
   /** Which resource collection the shared full-page card library displays */
@@ -873,6 +875,7 @@ interface UIState {
   openNoodle: () => void;
   closeNoodle: () => void;
   setNoodleSelectedPersonaId: (id: string | null) => void;
+  setNoodleProfileAccountId: (id: string | null) => void;
 
   /** Returns true if any full-page detail editor is currently open */
   hasAnyDetailOpen: () => boolean;
@@ -1248,6 +1251,7 @@ export const useUIStore = create<UIState>()(
       gameAssetsBrowserOpen: false,
       noodleOpen: false,
       noodleSelectedPersonaId: null,
+      noodleProfileAccountId: null,
       characterLibraryOpen: false,
       cardLibraryKind: "characters" as CardLibraryKind,
       agentCatalogOpen: false,
@@ -1920,6 +1924,7 @@ export const useUIStore = create<UIState>()(
         }),
       closeNoodle: () => set({ noodleOpen: false }),
       setNoodleSelectedPersonaId: (id) => set({ noodleSelectedPersonaId: id }),
+      setNoodleProfileAccountId: (id) => set({ noodleProfileAccountId: id }),
 
       hasAnyDetailOpen: () => {
         const s = get();
@@ -2830,6 +2835,7 @@ export const useUIStore = create<UIState>()(
         gameAssetsBrowserOpen: state.gameAssetsBrowserOpen,
         noodleOpen: state.noodleOpen,
         noodleSelectedPersonaId: state.noodleSelectedPersonaId,
+        noodleProfileAccountId: state.noodleProfileAccountId,
         characterLibraryOpen: state.characterLibraryOpen,
         cardLibraryKind: state.cardLibraryKind,
         agentCatalogOpen: state.agentCatalogOpen,
