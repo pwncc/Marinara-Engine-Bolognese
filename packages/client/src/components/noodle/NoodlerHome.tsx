@@ -90,7 +90,7 @@ export function NoodlerHome({ navigation, onNavigate }: NoodlerHomeProps) {
           {accountsQuery.data.map((account) => (
             <article key={account.id} className="flex items-center gap-3 px-4 py-4">
               <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 font-bold text-[var(--noodle-blue)]">
-                {account.displayName.slice(0, 1).toUpperCase() || <UserRound size={20} />}
+                {Array.from(account.displayName)[0]?.toUpperCase() || <UserRound size={20} />}
               </span>
               <div className="min-w-0">
                 <h3 className="truncate text-sm font-bold">{account.displayName}</h3>

@@ -110,7 +110,6 @@ import {
   useRemoveNoodleInteraction,
   useRescheduleNoodleRefresh,
   useResetNoodleTimeline,
-  useUpdateNoodleAccount,
   useUpdateNoodleAccountFollow,
   useUpdateNoodleAccountProfile,
   useUpdateNoodleInteraction,
@@ -118,6 +117,7 @@ import {
   useUpdateNoodleSettings,
 } from "../../hooks/use-noodle";
 import { useUIStore } from "../../stores/ui.store";
+import { useDialogFocusScope } from "../../hooks/use-dialog-focus-scope";
 import type {
   NoodleNavigationState,
   NoodleProfileConnection,
@@ -883,6 +883,7 @@ function NoodleAnchoredPopover({
   return createPortal(
     <div
       ref={panelRef}
+      data-noodle-focus-portal
       className={cn(
         "fixed z-[80] max-w-[calc(100vw-2rem)]",
         NOODLE_ICON_SCOPE_CLASS,
@@ -957,7 +958,6 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
   const { data: characterGroupsRaw } = useCharacterGroups();
   const { data: connectionsRaw } = useConnections();
   const updateSettings = useUpdateNoodleSettings();
-  const updateAccount = useUpdateNoodleAccount();
   const updateAccountFollow = useUpdateNoodleAccountFollow();
   const updateAccountProfile = useUpdateNoodleAccountProfile();
   const patchAccountSettings = usePatchNoodleAccountSettings();
@@ -1003,6 +1003,11 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
   const replyMediaToolRef = useRef<HTMLDivElement | null>(null);
   const accountSwitcherRef = useRef<HTMLDivElement | null>(null);
   const timelineScrollRef = useRef<HTMLElement | null>(null);
+  const mobileDrawerRef = useRef<HTMLElement | null>(null);
+  const mobileDrawerCloseRef = useRef<HTMLButtonElement | null>(null);
+  const mobileDrawerTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const composerRestoreFocusRef = useRef<HTMLElement | null>(null);
+  const profileDraftAccountIdRef = useRef<string | null>(null);
 
   const characters = useMemo(
     () => (Array.isArray(charactersRaw) ? charactersRaw.filter(isRawCharacter) : []),
@@ -1085,6 +1090,7 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState(["", ""]);
   const [draftPoll, setDraftPoll] = useState<NoodlePollInput | null>(null);
+  useDialogFocusScope(mobileDrawerOpen, mobileDrawerRef, mobileDrawerCloseRef);
 
   const activeNoodleView = navigation.mode === "public" ? navigation.view : navigation.mode;
   const viewedProfileAccountId = navigation.mode === "public" && navigation.view === "profile" ? navigation.accountId : null;
@@ -1222,15 +1228,21 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
   }, [noodlePromptEditorOpen, noodlePromptText]);
 
   useEffect(() => {
+    const accountId = viewedProfileAccount?.id ?? null;
+    const identityChanged = profileDraftAccountIdRef.current !== accountId;
+    profileDraftAccountIdRef.current = accountId;
     if (!viewedProfileAccount) return;
-    setProfileHandle(viewedProfileAccount.handle);
-    setProfileName(viewedProfileAccount.displayName);
-    setProfileBio(viewedProfileAccount.bio);
+
+    if (identityChanged || !profileEditing) {
+      setProfileHandle(viewedProfileAccount.handle);
+      setProfileName(viewedProfileAccount.displayName);
+      setProfileBio(viewedProfileAccount.bio);
+      setProfileLocation(readAccountSetting(viewedProfileAccount, "location"));
+      setProfileEditing(false);
+    }
     setProfileAvatarUrl(viewedProfileAccount.avatarUrl ?? "");
     setProfileBannerUrl(readAccountSetting(viewedProfileAccount, "bannerUrl"));
-    setProfileLocation(readAccountSetting(viewedProfileAccount, "location"));
-    setProfileEditing(false);
-  }, [viewedProfileAccount]);
+  }, [profileEditing, viewedProfileAccount]);
 
   useEffect(() => {
     setInviteCharacterLimit(NOODLE_INVITE_PAGE_SIZE);
@@ -1505,6 +1517,34 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
     setReplyImageUrl("");
     setReplyImageUrlDraft("");
     setActiveReplyComposerTool(null);
+  };
+
+  const switchPersona = (account: NoodleAccount, mobile: boolean) => {
+    composerValueRef.current = "";
+    composerHasTextRef.current = false;
+    setComposer("");
+    if (inlineComposerRef.current) inlineComposerRef.current.value = "";
+    if (modalComposerRef.current) modalComposerRef.current.value = "";
+    setComposerHasText(false);
+    setActiveMention(null);
+    setActiveMentionIndex(0);
+    setAttachedImageUrl("");
+    setImageUrlDraft("");
+    setDraftPoll(null);
+    setPollQuestion("");
+    setPollOptions(["", ""]);
+    setActiveComposerTool(null);
+    setComposeOpen(false);
+    clearReplyComposer();
+    setSelectedPersonaId(account.entityId);
+    setProfileEditing(false);
+    setProfileTab("posts");
+    onNavigate({ mode: "public", view: "home" });
+    setAccountSwitcherOpen(false);
+    if (mobile) {
+      setMobileAccountSwitcherOpen(false);
+      setMobileDrawerOpen(false);
+    }
   };
 
   const openReplyComposer = (postId: string, parentInteractionId: string | null = null) => {
@@ -2508,6 +2548,14 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
     setActiveMention(null);
     setActiveComposerTool(null);
   }, []);
+
+  const openComposeModal = (opener: HTMLElement) => {
+    composerRestoreFocusRef.current = mobileDrawerOpen ? mobileDrawerTriggerRef.current : opener;
+    setComposer(composerValueRef.current);
+    setComposeOpen(true);
+    setActiveComposerTool(null);
+    setMobileDrawerOpen(false);
+  };
 
   const scrollTimelineToTop = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -4086,7 +4134,7 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
           <button
             type="button"
             onClick={() => updateFollowedAccount(account, !followed)}
-            disabled={updateAccount.isPending}
+            disabled={updateAccountFollow.isPending}
             className={cn(
               "mt-1 h-8 shrink-0 rounded-full px-4 text-xs font-bold transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50",
               followed
@@ -4404,7 +4452,7 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
                 <button
                   type="button"
                   onClick={() => updateFollowedAccount(character.account, true)}
-                  disabled={updateAccount.isPending}
+                  disabled={updateAccountFollow.isPending}
                   className="h-8 rounded-full bg-[var(--foreground)] px-4 text-xs font-bold text-[var(--background)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Follow
@@ -4466,7 +4514,7 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
                   <button
                     type="button"
                     onClick={() => updateFollowedAccount(character.account, true)}
-                    disabled={updateAccount.isPending}
+                    disabled={updateAccountFollow.isPending}
                     className="h-8 rounded-full bg-[var(--foreground)] px-4 text-xs font-bold text-[var(--background)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Follow
@@ -4521,9 +4569,11 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
             data-motion="slide-x"
           >
             <aside
+              ref={mobileDrawerRef}
               role="dialog"
               aria-modal="true"
               aria-label="Noodle account menu"
+              tabIndex={-1}
               className={cn(
                 "mari-chrome-token-scope flex h-full w-full flex-col overflow-y-auto bg-[var(--background)] px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-5 text-[var(--foreground)]",
                 NOODLE_ICON_SCOPE_CLASS,
@@ -4550,6 +4600,7 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
                   </p>
                 </div>
                 <button
+                  ref={mobileDrawerCloseRef}
                   type="button"
                   onClick={() => setMobileDrawerOpen(false)}
                   className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10"
@@ -4587,12 +4638,7 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setComposer(composerValueRef.current);
-                    setComposeOpen(true);
-                    setActiveComposerTool(null);
-                    setMobileDrawerOpen(false);
-                  }}
+                  onClick={(event) => openComposeModal(event.currentTarget)}
                   className="flex min-h-12 w-full items-center gap-4 rounded-xl px-2 text-left text-base font-bold transition-colors hover:bg-[var(--accent)]"
                 >
                   <Pencil size={23} />
@@ -4613,14 +4659,7 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
                               key={account.id}
                               data-noodle-persona-id={account.entityId}
                               type="button"
-                              onClick={() => {
-                                setSelectedPersonaId(account.entityId);
-                                setProfileEditing(false);
-                                setProfileTab("posts");
-                                onNavigate({ mode: "public", view: "home" });
-                                setMobileAccountSwitcherOpen(false);
-                                setMobileDrawerOpen(false);
-                              }}
+                              onClick={() => switchPersona(account, true)}
                               className={cn(
                                 "flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition-colors hover:bg-[var(--accent)]",
                                 selected && "bg-[var(--noodle-blue)]/10",
@@ -4735,11 +4774,7 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
               </nav>
               <button
                 type="button"
-                onClick={() => {
-                  setComposer(composerValueRef.current);
-                  setComposeOpen(true);
-                  setActiveComposerTool(null);
-                }}
+                onClick={(event) => openComposeModal(event.currentTarget)}
                 className="mt-5 h-12 rounded-full bg-[var(--noodle-blue)] px-6 text-sm font-bold text-zinc-950 transition-opacity hover:opacity-90"
               >
                 Post
@@ -4757,13 +4792,7 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
                               key={account.id}
                               data-noodle-persona-id={account.entityId}
                               type="button"
-                              onClick={() => {
-                                setSelectedPersonaId(account.entityId);
-                                setProfileEditing(false);
-                                setProfileTab("posts");
-                                onNavigate({ mode: "public", view: "home" });
-                                setAccountSwitcherOpen(false);
-                              }}
+                              onClick={() => switchPersona(account, false)}
                               className={cn(
                                 "flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--accent)]",
                                 selected && "bg-[var(--noodle-blue)]/10",
@@ -4829,6 +4858,7 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
                   data-component="NoodleView.MobileHeader"
                 >
                   <button
+                    ref={mobileDrawerTriggerRef}
                     type="button"
                     onClick={() => setMobileDrawerOpen(true)}
                     className="flex h-10 w-10 items-center justify-center rounded-full transition-colors hover:bg-[var(--accent)]"
@@ -5475,31 +5505,18 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
         </div>
       </nav>
 
-      {composeOpen && (
-        <div className="absolute inset-0 z-[70] flex items-start justify-center bg-black/45 px-3 py-12 sm:px-4 sm:py-16">
-          <button
-            type="button"
-            aria-label="Close post composer"
-            onClick={closeComposeModal}
-            className="absolute inset-0"
-          />
-          <section
-            className="marinara-chat-popover relative z-10 w-full max-w-[36rem] overflow-hidden rounded-2xl border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] text-[var(--foreground)] shadow-2xl shadow-black/35"
-            style={{ backgroundColor: "var(--background)" }}
-            data-component="NoodleView.ModalComposer"
-          >
-            <div className="flex min-h-12 items-center gap-3 border-b border-[var(--noodle-divider)] px-3">
-              <button
-                type="button"
-                onClick={closeComposeModal}
-                className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--noodle-blue)] hover:bg-[var(--noodle-blue)]/10"
-                title="Close"
-              >
-                <X size={17} />
-              </button>
-              <h2 className="text-sm font-bold">New post</h2>
-            </div>
-            <div className="p-4">
+      <Modal
+        open={composeOpen}
+        onClose={closeComposeModal}
+        title="New post"
+        width="max-w-[36rem]"
+        initialFocusRef={modalComposerRef}
+        restoreFocusRef={composerRestoreFocusRef}
+        focusScopePortalSelector="[data-noodle-focus-portal]"
+        panelClassName={cn("marinara-chat-popover", NOODLE_ICON_SCOPE_CLASS)}
+        panelStyle={{ "--noodle-blue": NOODLE_BLUE, "--noodle-divider": "var(--marinara-chat-chrome-panel-divider)" } as CSSProperties}
+      >
+        <div data-component="NoodleView.ModalComposer">
               <div className="grid grid-cols-[2.75rem_minmax(0,1fr)] gap-3">
                 {personaAccount ? (
                   <Avatar account={personaAccount} />
@@ -5509,7 +5526,6 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
                 <div className="min-w-0">
                   <textarea
                     ref={modalComposerRef}
-                    autoFocus
                     defaultValue={composer}
                     onChange={handleComposerChange}
                     onBlur={() => setComposer(composerValueRef.current)}
@@ -5594,10 +5610,8 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
                     mediaRef: modalMediaToolRef,
                   })}
               </div>
-            </div>
-          </section>
         </div>
-      )}
+      </Modal>
       <ExpandedTextarea
         open={noodlePromptEditorOpen}
         onClose={closeNoodlePromptEditor}
