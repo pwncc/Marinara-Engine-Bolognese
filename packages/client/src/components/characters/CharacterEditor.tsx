@@ -145,7 +145,7 @@ const CHARACTER_CARD_SECTIONS = [
 ] as const;
 
 const CHARACTER_METADATA_HELP =
-  "Use metadata for identity, sharing, and library organization. Name is used as {{char}}, creator/version help track authorship and revisions, tags make the card searchable, talkativeness affects group chat response frequency, and creator notes stay private.";
+  "Use metadata for identity, sharing, and library organization. The avatar identifies the character throughout Marinara, name is used as {{char}}, creator/version help track authorship and revisions, tags make the card searchable, talkativeness affects group chat response frequency, and creator notes stay private.";
 
 const CHARACTER_CARD_HELP =
   "Write the fields that define how the model sees and plays the character. Description, personality, backstory, appearance, scenario, and dialogue are kept together here so you can treat the card as one writing document.";
@@ -1045,6 +1045,8 @@ export function CharacterEditor() {
                 removeTag={removeTag}
                 removeAllTags={removeAllTags}
                 avatarPreview={avatarPreview}
+                onSelectAvatar={() => fileInputRef.current?.click()}
+                avatarUploading={avatarUploading}
                 onRemoveAvatar={handleAvatarRemove}
                 removingAvatar={removeAvatar.isPending}
               />
@@ -1307,6 +1309,8 @@ function MetadataTab({
   removeTag,
   removeAllTags,
   avatarPreview,
+  onSelectAvatar,
+  avatarUploading,
   onRemoveAvatar,
   removingAvatar,
 }: {
@@ -1322,6 +1326,8 @@ function MetadataTab({
   removeTag: (tag: string) => void;
   removeAllTags: () => void;
   avatarPreview: string | null;
+  onSelectAvatar: () => void;
+  avatarUploading: boolean;
   onRemoveAvatar: () => void;
   removingAvatar: boolean;
 }) {
@@ -1333,9 +1339,57 @@ function MetadataTab({
     <div className="space-y-5">
       <SectionHeader
         title="Metadata"
-        subtitle="Basic character info: name, title, creator, version, tags."
+        subtitle="Basic character info: avatar, name, title, creator, version, tags."
         helpText={CHARACTER_METADATA_HELP}
       />
+
+      <div className="space-y-1.5">
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)]">
+          Avatar
+          <HelpTooltip text="The character image shown in the library and chats. You can replace it at any time without changing the character card." />
+        </span>
+        <button
+          type="button"
+          onClick={onSelectAvatar}
+          disabled={avatarUploading}
+          aria-busy={avatarUploading}
+          className="group flex min-h-20 w-full items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--secondary)] px-3 py-3 text-left transition-colors hover:border-[var(--primary)]/40 hover:bg-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]/30 disabled:cursor-wait disabled:opacity-60"
+        >
+          <span
+            className={cn(
+              "flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--background)]",
+              !avatarPreview && "mari-avatar-placeholder mari-avatar-placeholder--character",
+            )}
+          >
+            {avatarPreview ? (
+              <img
+                src={avatarPreview}
+                alt=""
+                className="h-full w-full object-cover"
+                style={getAvatarCropStyle(savedCrop ?? undefined)}
+              />
+            ) : (
+              <User size="1.375rem" className="text-white" />
+            )}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-[var(--foreground)]">
+              {avatarUploading ? "Uploading avatar…" : avatarPreview ? "Replace avatar" : "Upload avatar"}
+            </span>
+            <span className="mt-0.5 block text-xs leading-5 text-[var(--muted-foreground)]">
+              Choose an image from this device. You can adjust its crop after uploading.
+            </span>
+          </span>
+          {avatarUploading ? (
+            <Loader2 size="1rem" className="shrink-0 animate-spin text-[var(--primary)]" />
+          ) : (
+            <Upload
+              size="1rem"
+              className="shrink-0 text-[var(--muted-foreground)] transition-colors group-hover:text-[var(--primary)]"
+            />
+          )}
+        </button>
+      </div>
 
       {characterId && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--secondary)]/70 px-3 py-2">
