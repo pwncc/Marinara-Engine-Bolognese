@@ -1420,7 +1420,32 @@ function clampNovelAiDimension(value: number): number {
   return Math.max(NOVELAI_MIN_DIMENSION, Math.min(NOVELAI_MAX_DIMENSION, rounded));
 }
 
-function resolveNovelAiSize(request: ImageGenRequest): { width: number; height: number } {
+export function detectNovelAiSubjectCount(prompt: string): number | null {
+  const [baseFragment = ""] = prompt.split("|", 1);
+  const subjectTokens = baseFragment.matchAll(/\b(\d+)\s*(?:girls?|boys?|others?)\b/gi);
+  let tokenCount = 0;
+  for (const match of subjectTokens) tokenCount += Number.parseInt(match[1] ?? "0", 10);
+  if (tokenCount > 0) return tokenCount;
+
+  const pipeSegments = prompt
+    .split("|")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  return pipeSegments.length > 1 ? pipeSegments.length - 1 : null;
+}
+
+export function resolveNovelAiSize(
+  request: ImageGenRequest,
+  prompt = request.prompt,
+  defaults: NovelAiDefaults = resolveNovelAiDefaults(request),
+): { width: number; height: number } {
+  if (defaults.dynamicResolutionBySubjectCount) {
+    const subjectCount = detectNovelAiSubjectCount(prompt);
+    if (subjectCount === 1) return { width: 832, height: 1216 };
+    if (subjectCount === 2) return { width: 1024, height: 1024 };
+    if (subjectCount !== null && subjectCount >= 3) return { width: 1216, height: 832 };
+  }
+
   let width = clampNovelAiDimension(request.width ?? 832);
   let height = clampNovelAiDimension(request.height ?? 1216);
   const pixels = width * height;
@@ -1670,20 +1695,29 @@ async function generateNovelAI(baseUrl: string, apiKey: string, request: ImageGe
   const model = request.model || "nai-diffusion-4-5-full";
   const isV4 = isNovelAiV4Model(model);
   const defaults = resolveNovelAiDefaults(request);
-  const prompt = prepareNovelAiPrompt(mergePromptPrefix(defaults.promptPrefix, request.prompt), "prompt", model);
+  const mergedPrompt = mergePromptPrefix(defaults.promptPrefix, request.prompt);
+  const prompt = prepareNovelAiPrompt(mergedPrompt, "prompt", model);
   const negativePrompt = prepareNovelAiPrompt(
     mergeNegativePrompt(defaults.negativePromptPrefix, request.negativePrompt),
     "negative prompt",
     model,
   );
   const seed = resolveSeed(request.imageDefaults);
-  const referenceImages = collectNovelAiReferenceImages(request);
+  const styleReferenceImage = isNovelAiPreciseReferenceModel(model) && defaults.styleReferenceImage
+    ? collectNovelAiReferenceImages({ ...request, referenceImage: defaults.styleReferenceImage, referenceImages: [] })[0]
+    : undefined;
+  const characterReferenceImages = collectNovelAiReferenceImages(request)
+    .filter((reference) => reference !== styleReferenceImage)
+    .slice(0, styleReferenceImage ? 15 : 16);
+  const referenceImages = styleReferenceImage
+    ? [styleReferenceImage, ...characterReferenceImages]
+    : characterReferenceImages;
   if (referenceImages.length > 0 && !isNovelAiPreciseReferenceModel(model)) {
     throw new Error("NovelAI precise reference images require a V4.5 model such as nai-diffusion-4-5-full.");
   }
   const directorReferenceImages = await prepareNovelAiDirectorReferenceImages(referenceImages);
   const characterPromptPayload = buildNovelAiV4CharacterPromptPayload(request.characterPrompts, model);
-  const size = resolveNovelAiSize(request);
+  const size = resolveNovelAiSize(request, mergedPrompt, defaults);
 
   const parameters: Record<string, unknown> = {
     width: size.width,
@@ -1722,14 +1756,19 @@ async function generateNovelAI(baseUrl: string, apiKey: string, request: ImageGe
     parameters.reference_strength_multiple = [];
   }
   if (directorReferenceImages.length > 0) {
+    const styleReferenceOffset = styleReferenceImage ? 1 : 0;
     parameters.director_reference_images = directorReferenceImages;
-    parameters.director_reference_descriptions = directorReferenceImages.map(() => ({
-      caption: { base_caption: "character&style", char_captions: [] },
+    parameters.director_reference_descriptions = directorReferenceImages.map((_, index) => ({
+      caption: { base_caption: index < styleReferenceOffset ? "style" : "character&style", char_captions: [] },
       legacy_uc: false,
     }));
     parameters.director_reference_information_extracted = directorReferenceImages.map(() => 1);
-    parameters.director_reference_strength_values = directorReferenceImages.map(() => 1);
-    parameters.director_reference_secondary_strength_values = directorReferenceImages.map(() => 0);
+    parameters.director_reference_strength_values = directorReferenceImages.map((_, index) =>
+      index < styleReferenceOffset ? defaults.styleReferenceStrength : 1,
+    );
+    parameters.director_reference_secondary_strength_values = directorReferenceImages.map((_, index) =>
+      index < styleReferenceOffset ? defaults.styleReferenceFidelity : 0,
+    );
   }
 
   const body: Record<string, unknown> = {

@@ -4,6 +4,18 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+### Added
+
+- Added `CHAT_GENERATION_TIMEOUT_MS` for slow Conversation, Roleplay, and Game providers and `AUTO_UPDATE_ENABLED=false` for persistent launcher update opt-out on Windows, macOS/Linux, and Termux, without disabling manual updates (#3730).
+- Added persistent NovelAI V4.5 style plates with independent strength and fidelity, plus optional subject-count framing that selects portrait, square, or landscape dimensions (#3725, #3726).
+- Added compatibility-aware official Agent catalog selection so each Engine major installs and updates only from its matching catalog lane (#3712).
+- Added configurable pauses between generated TTS dialogue lines, with the saved preference shared across playback sessions (#3718).
+
+### Fixed
+
+- Accepted dot or comma decimal input for Connection temperature, top-p, and other generation parameters without truncating fractional values (#3713).
+- Kept mobile Game CYOA choices visible between compact widget rails and exposed a direct host action from the world-map surface to the full hierarchical map editor (#3691).
+
 ## [2.3.2]
 
 ### Added

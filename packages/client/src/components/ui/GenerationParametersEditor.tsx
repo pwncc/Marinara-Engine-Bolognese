@@ -11,6 +11,7 @@ import { cn } from "../../lib/utils";
 import { SettingsSwitch } from "../panels/settings/SettingControls";
 import { DraftTextarea } from "./DraftTextarea";
 import { HelpTooltip } from "./HelpTooltip";
+import { parseGenerationParameterDraft } from "../../lib/generation-parameter-draft";
 import { parseCustomParametersDraft } from "../../lib/generation-custom-parameters";
 
 export type EditableGenerationParameters = Pick<
@@ -593,8 +594,8 @@ function ParamInput({
   }, [value]);
 
   const commit = () => {
-    const nextValue = parseFloat(draft);
-    if (!Number.isNaN(nextValue) && nextValue >= min && (max === undefined || nextValue <= max)) {
+    const nextValue = parseGenerationParameterDraft(draft);
+    if (nextValue !== null && nextValue >= min && (max === undefined || nextValue <= max)) {
       onChange(nextValue);
       setDraft(String(nextValue));
       setError(null);

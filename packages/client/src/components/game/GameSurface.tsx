@@ -284,6 +284,8 @@ const GAME_MOBILE_ROOT_BUTTON = getChatToolbarButtonClass({
 const GAME_MOBILE_ICON_BUTTON = getChatToolbarButtonClass({ compact: true });
 const GAME_ACTION_MENU = cn(ROLEPLAY_POPOVER_SHELL, "flex w-72 max-w-[calc(100vw-2rem)] flex-col gap-1 p-1.5");
 const GAME_MOBILE_ACTIONS_MENU = cn(CHAT_TOOLBAR_OVERFLOW_MENU_CLASS, "absolute right-0 top-9");
+const GAME_MOBILE_CHOICE_STAGE_HEIGHT =
+  "max-h-[clamp(8rem,30svh,14rem)] sm:max-h-[clamp(9rem,36svh,20rem)]";
 const GAME_MOBILE_ACTION_MENU = cn(ROLEPLAY_POPOVER_SHELL, "flex w-72 max-w-[calc(100vw-4rem)] flex-col gap-1 p-1.5");
 const GAME_MOBILE_FLOATING_PANEL =
   "fixed z-[9999] h-[min(42rem,calc(100dvh-4.75rem))] w-[min(42rem,calc(100vw-4.75rem))]";
@@ -11374,7 +11376,10 @@ function GameSurfaceComponent({
                         ? (
                             <div
                               data-component="GameSurface.MobileChoiceStage"
-                              className="pointer-events-auto mb-2 flex max-h-[clamp(8rem,30svh,14rem)] min-h-0 w-full shrink items-stretch gap-1.5 overflow-hidden sm:max-h-[clamp(9rem,36svh,20rem)]"
+                              className={cn(
+                                "pointer-events-auto mb-2 flex min-h-0 w-full shrink items-stretch gap-1.5 overflow-hidden",
+                                GAME_MOBILE_CHOICE_STAGE_HEIGHT,
+                              )}
                             >
                               <div
                                 data-component="GameSurface.MobileWidgetRailLeft"
@@ -11412,7 +11417,10 @@ function GameSurfaceComponent({
                         : (
                             <div
                               data-component="GameSurface.MobileChoiceStack"
-                              className="pointer-events-auto mb-2 flex max-h-[clamp(8rem,30svh,14rem)] min-h-0 w-full shrink justify-center overflow-hidden sm:max-h-[clamp(9rem,36svh,20rem)] md:max-h-[min(52dvh,32rem)]"
+                              className={cn(
+                                "pointer-events-auto mb-2 flex min-h-0 w-full shrink justify-center overflow-hidden md:max-h-[min(52dvh,32rem)]",
+                                GAME_MOBILE_CHOICE_STAGE_HEIGHT,
+                              )}
                             >
                               <GameChoiceCards
                                 choices={activeChoices}

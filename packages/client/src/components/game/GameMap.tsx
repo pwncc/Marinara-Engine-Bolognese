@@ -8,6 +8,7 @@ import { GameGridMap } from "./GameGridMap";
 import { GameNodeMap } from "./GameNodeMap";
 import { CapabilityElement } from "../capabilities/CapabilityElement";
 import { useChatStore, type PendingSpatialTransitionDraft } from "../../stores/chat.store";
+import { useUIStore } from "../../stores/ui.store";
 import {
   ChevronDown,
   ChevronUp,
@@ -21,6 +22,7 @@ import {
   Minus,
   Plus,
   Globe2,
+  ExternalLink,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { PanelLockButton, useDraggablePanel } from "./DraggablePanel";
@@ -625,6 +627,7 @@ export function GameMapPanel({
   const mapInteractionDisabled = disabled || !activeMap;
   const hasWorldMap = hasActiveSpatialWorldMap(spatialContext);
   const effectiveMapView = hasWorldMap ? mapViewMode : "local";
+  const openFullMapEditor = () => useUIStore.getState().openSpatialMapDetail(chatId);
   const zoomControls = (
     <MapZoomControls
       zoom={mapZoom}
@@ -727,6 +730,20 @@ export function GameMapPanel({
             <span className="block truncate">{mapName}</span>
           )}
         </span>
+        {hasWorldMap && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              openFullMapEditor();
+            }}
+            className={getChatToolbarButtonClass({ compact: true, sizeClassName: "h-6 w-6 shrink-0" })}
+            aria-label="Open full map editor"
+            title="Open full map editor"
+          >
+            <ExternalLink size={11} />
+          </button>
+        )}
         <PanelLockButton locked={locked} onToggle={toggleLocked} onReset={resetPosition} size={11} />
         <span className="shrink-0 text-[var(--marinara-chat-chrome-button-text)]">
           {collapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
@@ -764,6 +781,7 @@ export function GameMapPanel({
               chatId,
               disabled,
               pendingTransition: pendingSpatialTransition,
+              onOpenEditor: openFullMapEditor,
               onPendingTransitionChange: (pending: unknown) => syncPackageSpatialTransition(chatId, pending),
             }}
             className="block h-full min-h-0"
@@ -872,6 +890,11 @@ export function MobileMapButton({
   const mapInteractionDisabled = disabled || !activeMap;
   const hasWorldMap = hasActiveSpatialWorldMap(spatialContext);
   const effectiveMapView = hasWorldMap ? mapViewMode : "local";
+  const openFullMapEditor = useCallback(() => {
+    setOpen(false);
+    setSelectedNode(null);
+    useUIStore.getState().openSpatialMapDetail(chatId);
+  }, [chatId]);
   const zoomControls = (
     <MapZoomControls
       zoom={mapZoom}
@@ -1037,6 +1060,17 @@ export function MobileMapButton({
                   </select>
                 )}
               </div>
+              {hasWorldMap && (
+                <button
+                  type="button"
+                  onClick={openFullMapEditor}
+                  className={getChatToolbarButtonClass({ compact: true, sizeClassName: "h-7 w-7 shrink-0" })}
+                  aria-label="Open full map editor"
+                  title="Open full map editor"
+                >
+                  <ExternalLink size={13} />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -1067,6 +1101,7 @@ export function MobileMapButton({
                     chatId,
                     disabled,
                     compact: true,
+                    onOpenEditor: openFullMapEditor,
                     pendingTransition: pendingSpatialTransition,
                     onPendingTransitionChange: (pending: unknown) => {
                       syncPackageSpatialTransition(chatId, pending);

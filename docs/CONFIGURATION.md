@@ -59,7 +59,7 @@ A small group of low-level settings are locked in when the server starts. Changi
 - `ENCRYPTION_KEY`
 - `MARINARA_ENV_FILE`
 - `TZ`
-- `AUTO_OPEN_BROWSER`, `AUTO_CREATE_DEFAULT_CONNECTION`
+- `AUTO_OPEN_BROWSER`, `AUTO_UPDATE_ENABLED`, `AUTO_CREATE_DEFAULT_CONNECTION`
 - `LOG_DISABLE_REQUEST_LOGGING`
 - The image, video, sprite, and ComfyUI timeout and poll settings (`IMAGE_GEN_TIMEOUT_MS`, `VIDEO_GEN_TIMEOUT_MS`, `VIDEO_GEN_MAX_RESPONSE_BYTES`, `SPRITE_GENERATION_TIMEOUT_MS`, `SPRITE_ANIMATED_FFMPEG_TIMEOUT_MS`, `COMFYUI_GEN_TIMEOUT`, and the four `*_VIDEO_POLL_INTERVAL_MS` settings)
 
@@ -157,6 +157,7 @@ A timeout is the longest time the server waits for a slow job before giving up. 
 
 | Variable | Default | What it does |
 | --- | --- | --- |
+| `CHAT_GENERATION_TIMEOUT_MS` | `300000` (5 minutes) | Provider headers/time-to-first-token and inter-chunk timeout for ordinary Conversation, Roleplay, and Game generations. Valid range: `10000`-`3600000`. It does not change Agent, media, embedding, tool, or background-job timeouts. |
 | `EMBEDDING_TIMEOUT_MS` | `300000` (5 minutes) | Time allowed for one embedding request. Higher helps slow local embedding servers. |
 | `IMAGE_GEN_TIMEOUT_MS` | `1800000` (30 minutes) | Time allowed for one image generation request. |
 | `VIDEO_GEN_TIMEOUT_MS` | `1800000` (30 minutes) | Time allowed for one scene video generation request. |
@@ -166,7 +167,7 @@ A timeout is the longest time the server waits for a slow job before giving up. 
 | `CUSTOM_TOOL_TIMEOUT_MS` | `60000` (1 minute) | Time allowed for one custom tool call. |
 | `MAX_TOOL_ROUNDS` | `100` | Most tool-call rounds before the model must give a final answer. |
 
-The image, video, sprite, and ComfyUI timeouts are locked in at startup, so a change to them needs a restart. The embedding and custom-tool timeouts take effect on the next request, with no restart. Raise a media timeout when large or high-quality jobs fail partway through. To learn more about video jobs, see [Scene Video](media/scene-video.md).
+The image, video, sprite, and ComfyUI timeouts are locked in at startup, so a change to them needs a restart. Chat-generation, embedding, and custom-tool timeouts take effect on the next request, with no restart. Invalid, zero, negative, or out-of-range chat timeout values log a warning and safely use the five-minute default. Raise a media timeout when large or high-quality jobs fail partway through. To learn more about video jobs, see [Scene Video](media/scene-video.md).
 
 ## Privileged APIs (ADMIN_SECRET)
 
@@ -222,6 +223,7 @@ This section lists the remaining settings, grouped by purpose. The tables above 
 | `PORT` | `7860` | The port the server listens on. Keep Android, Docker, and Termux on the same value. |
 | `HOST` | `127.0.0.1` (`0.0.0.0` in the shell launchers) | The network interface to bind. Use `0.0.0.0` for LAN access. |
 | `AUTO_OPEN_BROWSER` | `true` | Whether the shell launchers open the app URL for you. Set `false` to stop this. |
+| `AUTO_UPDATE_ENABLED` | `true` | Whether Git-based Windows, macOS/Linux, and Termux launchers fetch and apply Engine updates before startup. Set `false` for a persistent opt-out; this takes effect on the next launch and does not disable manual update checks, in-app apply, package updates, or model updates. |
 | `MARINARA_ENV_FILE` | project-root `.env` | Optional path override for the `.env` file. Set it before startup. |
 | `TZ` | system default | Host fallback timezone for server-side jobs. Conversation schedules use the global timezone selected in their schedule controls when one has been saved. Leave `TZ` unset to inherit the host timezone; an empty `TZ=` is also treated as unset. |
 | `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Browser origins allowed to make cross-origin requests. |

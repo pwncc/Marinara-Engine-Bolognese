@@ -26,6 +26,7 @@ import {
 import { getAvatarCropStyle } from "../../packages/client/src/lib/utils.js";
 import { getApiErrorMessage } from "../../packages/client/src/lib/api-client.js";
 import { parseCustomParametersDraft } from "../../packages/client/src/lib/generation-custom-parameters.js";
+import { parseGenerationParameterDraft } from "../../packages/client/src/lib/generation-parameter-draft.js";
 import {
   isSameNpcAvatarResource,
   normalizeNpcAvatarName,
@@ -82,7 +83,16 @@ import {
 import { persistGeneratedImageToEntityGalleries } from "../../packages/server/src/services/image/generated-image-entity-gallery.js";
 import { fetchBotBrowserJson } from "../../packages/server/src/services/bot-browser/fetch-json.js";
 import { isAllowedResponseContentType } from "../../packages/server/src/utils/security.js";
+import {
+  DEFAULT_CHAT_GENERATION_TIMEOUT_MS,
+  getChatGenerationTimeoutMs,
+} from "../../packages/server/src/config/runtime-config.js";
 import { runImageGenerationRequest } from "../../packages/server/src/services/image/image-generation-queue.js";
+import {
+  detectNovelAiSubjectCount,
+  resolveNovelAiSize,
+} from "../../packages/server/src/services/image/image-generation.js";
+import { DEFAULT_NOVELAI_DEFAULTS } from "../../packages/shared/src/constants/image-generation-defaults.js";
 import {
   parseIllustratorPromptReviewOverride,
   resolveIllustratorPromptSubmission,
@@ -1539,5 +1549,56 @@ assert.deepEqual(
 );
 assert.equal(parseCustomParametersDraft("[1, 2]").ok, false);
 assert.equal(parseCustomParametersDraft('{ "broken": [1, }').ok, false);
+
+assert.equal(parseGenerationParameterDraft("0.85"), 0.85);
+assert.equal(parseGenerationParameterDraft("0,85"), 0.85);
+assert.equal(parseGenerationParameterDraft("0.85 trailing"), null);
+assert.equal(parseGenerationParameterDraft("0,8,5"), null);
+
+assert.equal(detectNovelAiSubjectCount("2girls, 1boy, outdoors | first | second | third"), 3);
+assert.equal(detectNovelAiSubjectCount("cinematic scene | first character | second character"), 2);
+assert.equal(detectNovelAiSubjectCount("empty landscape"), null);
+assert.deepEqual(
+  resolveNovelAiSize(
+    { prompt: "1girl", width: 1216, height: 832 },
+    "1girl",
+    { ...DEFAULT_NOVELAI_DEFAULTS, dynamicResolutionBySubjectCount: true },
+  ),
+  { width: 832, height: 1216 },
+);
+assert.deepEqual(
+  resolveNovelAiSize(
+    { prompt: "2girls", width: 832, height: 1216 },
+    "2girls",
+    { ...DEFAULT_NOVELAI_DEFAULTS, dynamicResolutionBySubjectCount: true },
+  ),
+  { width: 1024, height: 1024 },
+);
+assert.deepEqual(
+  resolveNovelAiSize(
+    { prompt: "1girl, 1boy, 1other", width: 832, height: 1216 },
+    "1girl, 1boy, 1other",
+    { ...DEFAULT_NOVELAI_DEFAULTS, dynamicResolutionBySubjectCount: true },
+  ),
+  { width: 1216, height: 832 },
+);
+assert.deepEqual(
+  resolveNovelAiSize(
+    { prompt: "1girl", width: 1024, height: 1024 },
+    "1girl",
+    { ...DEFAULT_NOVELAI_DEFAULTS, dynamicResolutionBySubjectCount: false },
+  ),
+  { width: 1024, height: 1024 },
+);
+
+const originalChatGenerationTimeout = process.env.CHAT_GENERATION_TIMEOUT_MS;
+process.env.CHAT_GENERATION_TIMEOUT_MS = "600000";
+assert.equal(getChatGenerationTimeoutMs(), 600_000);
+process.env.CHAT_GENERATION_TIMEOUT_MS = "0";
+assert.equal(getChatGenerationTimeoutMs(), DEFAULT_CHAT_GENERATION_TIMEOUT_MS);
+process.env.CHAT_GENERATION_TIMEOUT_MS = "3600001";
+assert.equal(getChatGenerationTimeoutMs(), DEFAULT_CHAT_GENERATION_TIMEOUT_MS);
+if (originalChatGenerationTimeout === undefined) delete process.env.CHAT_GENERATION_TIMEOUT_MS;
+else process.env.CHAT_GENERATION_TIMEOUT_MS = originalChatGenerationTimeout;
 
 console.info("Open-issue regressions passed.");

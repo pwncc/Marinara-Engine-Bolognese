@@ -13,6 +13,19 @@ echo ""
 # Navigate to script directory
 cd "$(dirname "$0")"
 
+# Load launcher settings before the update decision. Server settings are reused below.
+if [ -f .env ]; then
+  set -a
+  . ./.env
+  set +a
+fi
+
+AUTO_UPDATE_ENABLED_NORMALIZED=$(printf '%s' "${AUTO_UPDATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')
+case "$AUTO_UPDATE_ENABLED_NORMALIZED" in
+  0|false|no|off) AUTO_UPDATE_DISABLED=1 ;;
+  *) AUTO_UPDATE_DISABLED=0 ;;
+esac
+
 SKIP_UPDATE=0
 for arg in "$@"; do
     case "$arg" in
@@ -193,6 +206,8 @@ has_git_worktree_changes() {
 # ── Auto-update from Git ──
 if [ "$SKIP_UPDATE" = "1" ]; then
     echo "  [OK] Skipping update check; starting the current local install."
+elif [ "$AUTO_UPDATE_DISABLED" = "1" ]; then
+    echo "  [OK] Automatic Engine updates disabled by AUTO_UPDATE_ENABLED=false."
 elif [ -d ".git" ]; then
     echo "  [..] Checking for updates..."
     OLD_HEAD=$(git rev-parse HEAD 2>/dev/null)
@@ -339,13 +354,6 @@ if [ ! -d "packages/client/dist" ]; then
         run_pnpm install --filter @marinara-engine/client 2>/dev/null || true
         SKIP_PWA=1 run_pnpm --filter @marinara-engine/client exec vite build
     fi
-fi
-
-# Load .env if present (respects user overrides)
-if [ -f .env ]; then
-  set -a
-  . ./.env
-  set +a
 fi
 
 export NODE_ENV=production

@@ -17,7 +17,11 @@ const DEFAULT_DATA_DIR = resolve(SERVER_ROOT, "data");
 const DEFAULT_MAX_TOOL_ROUNDS = 100;
 const MAX_CONFIGURED_TOOL_ROUNDS = 10_000;
 const DEFAULT_CUSTOM_TOOL_TIMEOUT_MS = 60_000;
+export const DEFAULT_CHAT_GENERATION_TIMEOUT_MS = 300_000;
+const MIN_CHAT_GENERATION_TIMEOUT_MS = 10_000;
+const MAX_CHAT_GENERATION_TIMEOUT_MS = 3_600_000;
 const MAX_TIMEOUT_MS = 2_147_483_647;
+let lastInvalidChatGenerationTimeout: string | null = null;
 
 let envLoaded = false;
 // Keys that the .env file currently contributes to process.env. Tracked so a
@@ -417,6 +421,34 @@ export function isProviderLocalUrlsEnabled() {
 
 export function getEmbeddingRequestTimeoutMs() {
   return parsePositiveIntEnv(process.env.EMBEDDING_TIMEOUT_MS, 300_000, MAX_TIMEOUT_MS);
+}
+
+/** Main-chat provider timeout. Read per request so .env hot reloads apply without a restart. */
+export function getChatGenerationTimeoutMs() {
+  const raw = normalizeEnvValue(process.env.CHAT_GENERATION_TIMEOUT_MS);
+  if (raw === null) return DEFAULT_CHAT_GENERATION_TIMEOUT_MS;
+
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (
+    Number.isSafeInteger(parsed) &&
+    parsed >= MIN_CHAT_GENERATION_TIMEOUT_MS &&
+    parsed <= MAX_CHAT_GENERATION_TIMEOUT_MS
+  ) {
+    lastInvalidChatGenerationTimeout = null;
+    return parsed;
+  }
+
+  if (lastInvalidChatGenerationTimeout !== raw) {
+    lastInvalidChatGenerationTimeout = raw;
+    sharedLogger.warn(
+      "[runtime-config] Ignoring invalid CHAT_GENERATION_TIMEOUT_MS=%s; expected %d-%d milliseconds, using %d",
+      raw,
+      MIN_CHAT_GENERATION_TIMEOUT_MS,
+      MAX_CHAT_GENERATION_TIMEOUT_MS,
+      DEFAULT_CHAT_GENERATION_TIMEOUT_MS,
+    );
+  }
+  return DEFAULT_CHAT_GENERATION_TIMEOUT_MS;
 }
 
 export function getMaxToolRounds() {

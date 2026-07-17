@@ -4628,59 +4628,58 @@ test("mobile Game keeps CYOA usable above four HUD widgets", async ({ page, requ
     await expect(composer).toBeVisible();
     await expect(options).toHaveCount(3);
 
-    for (const viewport of [{ width: 390, height: 700 }]) {
-      await page.setViewportSize(viewport);
-      await expect(page.getByTitle("Game actions")).toBeVisible();
-      await expect(page.locator('[data-tour="game-map"]').getByRole("button", { name: "Open map" })).toBeVisible();
+    const viewport = { width: 390, height: 700 };
+    await page.setViewportSize(viewport);
+    await expect(page.getByTitle("Game actions")).toBeVisible();
+    await expect(page.locator('[data-tour="game-map"]').getByRole("button", { name: "Open map" })).toBeVisible();
 
-      await expect
-        .poll(async () => {
-          const stageRect = await choiceStage.boundingBox();
-          const choiceRect = await choiceStack.boundingBox();
-          const leftWidgetRect = await leftWidgetRail.boundingBox();
-          const rightWidgetRect = await rightWidgetRail.boundingBox();
-          const narrationRect = await narrationPanel.boundingBox();
-          const composerRect = await composer.boundingBox();
-          if (!stageRect || !choiceRect || !leftWidgetRect || !rightWidgetRect || !narrationRect || !composerRect) {
-            return null;
-          }
-          return {
-            choiceFillsCenter: choiceRect.height >= stageRect.height - 1,
-            choiceBetweenWidgets:
-              leftWidgetRect.x + leftWidgetRect.width <= choiceRect.x + 1 &&
-              choiceRect.x + choiceRect.width <= rightWidgetRect.x + 1,
-            widgetsShareChoiceBand:
-              leftWidgetRect.y >= stageRect.y - 1 &&
-              leftWidgetRect.y + leftWidgetRect.height <= stageRect.y + stageRect.height + 1 &&
-              rightWidgetRect.y >= stageRect.y - 1 &&
-              rightWidgetRect.y + rightWidgetRect.height <= stageRect.y + stageRect.height + 1,
-            choiceStageBeforeNarration: stageRect.y + stageRect.height <= narrationRect.y + 1,
-            narrationStartsInViewport: narrationRect.y >= 0 && narrationRect.y < viewport.height,
-            composerFullyInViewport: composerRect.y >= 0 && composerRect.y + composerRect.height <= viewport.height + 1,
-          };
-        })
-        .toEqual({
-          choiceFillsCenter: true,
-          choiceBetweenWidgets: true,
-          widgetsShareChoiceBand: true,
-          choiceStageBeforeNarration: true,
-          narrationStartsInViewport: true,
-          composerFullyInViewport: true,
-        });
+    await expect
+      .poll(async () => {
+        const stageRect = await choiceStage.boundingBox();
+        const choiceRect = await choiceStack.boundingBox();
+        const leftWidgetRect = await leftWidgetRail.boundingBox();
+        const rightWidgetRect = await rightWidgetRail.boundingBox();
+        const narrationRect = await narrationPanel.boundingBox();
+        const composerRect = await composer.boundingBox();
+        if (!stageRect || !choiceRect || !leftWidgetRect || !rightWidgetRect || !narrationRect || !composerRect) {
+          return null;
+        }
+        return {
+          choiceFillsCenter: choiceRect.height >= stageRect.height - 1,
+          choiceBetweenWidgets:
+            leftWidgetRect.x + leftWidgetRect.width <= choiceRect.x + 1 &&
+            choiceRect.x + choiceRect.width <= rightWidgetRect.x + 1,
+          widgetsShareChoiceBand:
+            leftWidgetRect.y >= stageRect.y - 1 &&
+            leftWidgetRect.y + leftWidgetRect.height <= stageRect.y + stageRect.height + 1 &&
+            rightWidgetRect.y >= stageRect.y - 1 &&
+            rightWidgetRect.y + rightWidgetRect.height <= stageRect.y + stageRect.height + 1,
+          choiceStageBeforeNarration: stageRect.y + stageRect.height <= narrationRect.y + 1,
+          narrationStartsInViewport: narrationRect.y >= 0 && narrationRect.y < viewport.height,
+          composerFullyInViewport: composerRect.y >= 0 && composerRect.y + composerRect.height <= viewport.height + 1,
+        };
+      })
+      .toEqual({
+        choiceFillsCenter: true,
+        choiceBetweenWidgets: true,
+        widgetsShareChoiceBand: true,
+        choiceStageBeforeNarration: true,
+        narrationStartsInViewport: true,
+        composerFullyInViewport: true,
+      });
 
-      await optionList.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
-      await expect(page.getByText("Choose your action", { exact: true })).toBeVisible();
-      await expect(options.last()).toBeVisible();
-      const optionListRect = await optionList.boundingBox();
-      const lastOptionRect = await options.last().boundingBox();
-      expect(optionListRect).not.toBeNull();
-      expect(lastOptionRect).not.toBeNull();
-      expect(lastOptionRect!.y).toBeGreaterThanOrEqual(optionListRect!.y - 1);
-      expect(lastOptionRect!.y + lastOptionRect!.height).toBeLessThanOrEqual(
-        optionListRect!.y + optionListRect!.height + 1,
-      );
-      await expect(page.getByText("The party reaches a fork in the flooded vault.", { exact: true })).toBeVisible();
-    }
+    await optionList.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+    await expect(page.getByText("Choose your action", { exact: true })).toBeVisible();
+    await expect(options.last()).toBeVisible();
+    const optionListRect = await optionList.boundingBox();
+    const lastOptionRect = await options.last().boundingBox();
+    expect(optionListRect).not.toBeNull();
+    expect(lastOptionRect).not.toBeNull();
+    expect(lastOptionRect!.y).toBeGreaterThanOrEqual(optionListRect!.y - 1);
+    expect(lastOptionRect!.y + lastOptionRect!.height).toBeLessThanOrEqual(
+      optionListRect!.y + optionListRect!.height + 1,
+    );
+    await expect(page.getByText("The party reaches a fork in the flooded vault.", { exact: true })).toBeVisible();
 
     expect(errors).toEqual([]);
   } finally {
