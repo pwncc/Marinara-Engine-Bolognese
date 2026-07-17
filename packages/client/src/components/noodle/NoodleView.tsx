@@ -119,6 +119,10 @@ import {
   useUpdateNoodleSettings,
 } from "../../hooks/use-noodle";
 import { useUIStore } from "../../stores/ui.store";
+import type {
+  NoodleNavigationState,
+  NoodleProfileConnection,
+} from "./noodle-navigation.types";
 
 type RawCharacter = { id?: unknown; data?: unknown; avatarPath?: unknown };
 type RawCharacterGroup = { id?: unknown; name?: unknown; description?: unknown; characterIds?: unknown };
@@ -149,10 +153,9 @@ const NOODLE_MEDIA_PICKER_TABS: ConversationMediaPickerTab[] = [
 type ComposerTool = "image" | "poll" | "media";
 type ReplyComposerTool = "image" | "media";
 type ProfileTab = "posts" | "likes" | "media";
-type ProfileConnectionTab = "followers" | "following";
+type ProfileConnectionTab = NoodleProfileConnection;
 type NotificationTab = "likes" | "follows" | "replies";
 type TimelineTab = "main" | "following";
-type NoodleViewId = "home" | "search" | "notifications" | "profile" | "settings";
 type NoodleNotificationFocusTarget = {
   postId: string;
   interactionId: string | null;
@@ -1014,10 +1017,8 @@ export function NoodleView() {
   const [profileUploadTarget, setProfileUploadTarget] = useState<"avatar" | "banner" | null>(null);
   const [profileEditing, setProfileEditing] = useState(false);
   const [profileTab, setProfileTab] = useState<ProfileTab>("posts");
-  const [profileConnectionTab, setProfileConnectionTab] = useState<ProfileConnectionTab | null>(null);
   const [notificationTab, setNotificationTab] = useState<NotificationTab>("likes");
-  const [activeNoodleView, setActiveNoodleView] = useState<NoodleViewId>("home");
-  const [viewedProfileAccountId, setViewedProfileAccountId] = useState<string | null>(null);
+  const [navigation, setNavigation] = useState<NoodleNavigationState>({ mode: "public", view: "home" });
   const [timelineTab, setTimelineTab] = useState<TimelineTab>("main");
   const [inviteSearch, setInviteSearch] = useState("");
   const [inviteFoldersOpen, setInviteFoldersOpen] = useState(false);
@@ -1059,6 +1060,11 @@ export function NoodleView() {
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState(["", ""]);
   const [draftPoll, setDraftPoll] = useState<NoodlePollInput | null>(null);
+
+  const activeNoodleView = navigation.mode === "public" ? navigation.view : navigation.mode;
+  const viewedProfileAccountId = navigation.mode === "public" && navigation.view === "profile" ? navigation.accountId : null;
+  const profileConnectionTab =
+    navigation.mode === "public" && navigation.view === "profile" ? navigation.connection : null;
 
   const noodlePromptOverride = noodlePromptDetail.data?.override ?? null;
   const noodleDefaultPromptText = noodlePromptDefault.data?.template ?? "";
@@ -1986,21 +1992,22 @@ export function NoodleView() {
 
   const openProfile = (account: NoodleAccount | null) => {
     if (!account) return;
-    setViewedProfileAccountId(account.id === personaAccount?.id ? null : account.id);
     setProfileEditing(false);
     setProfileTab("posts");
-    setProfileConnectionTab(null);
-    setActiveNoodleView("profile");
+    setNavigation({
+      mode: "public",
+      view: "profile",
+      accountId: account.id === personaAccount?.id ? null : account.id,
+      connection: null,
+    });
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
   };
 
   const openOwnProfile = () => {
-    setViewedProfileAccountId(null);
     setProfileEditing(false);
     setProfileTab("posts");
-    setProfileConnectionTab(null);
-    setActiveNoodleView("profile");
+    setNavigation({ mode: "public", view: "profile", accountId: null, connection: null });
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
   };
@@ -2008,9 +2015,8 @@ export function NoodleView() {
   const handleSearchChange = (value: string) => {
     setPostSearch(value);
     if (!value.trim()) return;
-    setActiveNoodleView("home");
+    setNavigation({ mode: "public", view: "home" });
     setAccountSwitcherOpen(false);
-    setProfileConnectionTab(null);
   };
 
   const handleComposerChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
@@ -2490,11 +2496,10 @@ export function NoodleView() {
   }, []);
 
   const openHomeTimeline = useCallback(() => {
-    setActiveNoodleView("home");
+    setNavigation({ mode: "public", view: "home" });
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
     setActiveComposerTool(null);
-    setProfileConnectionTab(null);
     scrollTimelineToTop();
   }, [scrollTimelineToTop]);
 
@@ -2507,21 +2512,19 @@ export function NoodleView() {
     clearReplyComposer();
     setPostSearch("");
     setTimelineTab("main");
-    setActiveNoodleView("home");
+    setNavigation({ mode: "public", view: "home" });
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
     setActiveComposerTool(null);
-    setProfileConnectionTab(null);
     setNotificationFocusTarget({ postId, interactionId });
   };
 
   const openSearch = () => {
-    setActiveNoodleView("search");
+    setNavigation({ mode: "public", view: "search" });
     setTimelineTab("main");
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
     setActiveComposerTool(null);
-    setProfileConnectionTab(null);
     scrollTimelineToTop();
   };
 
@@ -2559,19 +2562,22 @@ export function NoodleView() {
         },
       );
     }
-    setActiveNoodleView("notifications");
+    setNavigation({ mode: "public", view: "notifications" });
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
     setActiveComposerTool(null);
-    setProfileConnectionTab(null);
   };
 
   const openSettings = () => {
-    setActiveNoodleView("settings");
+    setNavigation({ mode: "settings" });
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
     setActiveComposerTool(null);
-    setProfileConnectionTab(null);
+  };
+
+  const openProfileConnection = (connection: ProfileConnectionTab | null) => {
+    if (navigation.mode !== "public" || navigation.view !== "profile") return;
+    setNavigation({ ...navigation, connection });
   };
 
   const normalizedInviteSearch = inviteSearch.trim().toLowerCase();
@@ -4579,10 +4585,9 @@ export function NoodleView() {
                               type="button"
                               onClick={() => {
                                 setSelectedPersonaId(account.entityId);
-                                setViewedProfileAccountId(null);
                                 setProfileEditing(false);
                                 setProfileTab("posts");
-                                setProfileConnectionTab(null);
+                                setNavigation({ mode: "public", view: "home" });
                                 setMobileAccountSwitcherOpen(false);
                                 setMobileDrawerOpen(false);
                               }}
@@ -4724,10 +4729,9 @@ export function NoodleView() {
                               type="button"
                               onClick={() => {
                                 setSelectedPersonaId(account.entityId);
-                                setViewedProfileAccountId(null);
                                 setProfileEditing(false);
                                 setProfileTab("posts");
-                                setProfileConnectionTab(null);
+                                setNavigation({ mode: "public", view: "home" });
                                 setAccountSwitcherOpen(false);
                               }}
                               className={cn(
@@ -5062,7 +5066,7 @@ export function NoodleView() {
                       <MobileTimelineBackButton onClick={openMobileHomeTimeline} />
                       <button
                         type="button"
-                        onClick={() => setProfileConnectionTab(null)}
+                        onClick={() => openProfileConnection(null)}
                         className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 lg:flex"
                         title="Back to profile"
                         aria-label="Back to profile"
@@ -5081,7 +5085,7 @@ export function NoodleView() {
                         <button
                           key={tab.id}
                           type="button"
-                          onClick={() => setProfileConnectionTab(tab.id)}
+                          onClick={() => openProfileConnection(tab.id)}
                           className={cn(
                             "relative flex h-12 items-center justify-center text-sm font-bold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
                             profileConnectionTab === tab.id && "text-[var(--foreground)]",
@@ -5276,7 +5280,7 @@ export function NoodleView() {
                         <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm text-[var(--muted-foreground)]">
                           <button
                             type="button"
-                            onClick={() => setProfileConnectionTab("following")}
+                            onClick={() => openProfileConnection("following")}
                             className="transition-colors hover:text-[var(--noodle-blue)]"
                           >
                             <span className="font-bold text-[var(--foreground)]">{profileFollowingCount}</span>{" "}
@@ -5284,7 +5288,7 @@ export function NoodleView() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => setProfileConnectionTab("followers")}
+                            onClick={() => openProfileConnection("followers")}
                             className="transition-colors hover:text-[var(--noodle-blue)]"
                           >
                             <span className="font-bold text-[var(--foreground)]">{profileFollowerCount}</span> Followers
