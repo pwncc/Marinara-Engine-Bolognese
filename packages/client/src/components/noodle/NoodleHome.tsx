@@ -3416,7 +3416,10 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
                 help="Opt in to private creator accounts. Turning this off hides private account data from NoodleR queries without changing the public timeline."
                 checked={settings.enableNoodler}
                 disabled={updateSettings.isPending}
-                onChange={(checked) => saveSettings({ enableNoodler: checked })}
+                onChange={(checked) => {
+                  if (checked) onNavigate({ mode: "verification" });
+                  else saveSettings({ enableNoodler: false });
+                }}
               />
               {settings.enableNoodler && (
                 <button
