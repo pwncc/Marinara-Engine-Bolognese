@@ -45,6 +45,10 @@ export function NoodlerHome({ navigation, onNavigate }: NoodlerHomeProps) {
             NoodleR is intended for adults. Private creator accounts stay isolated from the public Noodle timeline.
             Enable access only if you are 18 or older and want to view the private account hub.
           </p>
+          <p className="mt-4 rounded-lg border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/10 px-4 py-3 text-sm leading-6 text-[var(--foreground)]">
+            NoodleR is not a finalized feature. Please do not submit feature requests for NoodleR while it is still in
+            development.
+          </p>
           <button
             type="button"
             onClick={enableNoodler}
