@@ -687,9 +687,9 @@ async function buildRetryAgentContext(args: {
       )
     : [];
   const retryOwnerSpatialProjection = retryVisibleAnchor
-    ? ((await resolveOwnerSpatialProjection(db, chatId, { exactAnchor: retryVisibleAnchor })) ??
-      (await resolveOwnerSpatialProjection(db, chatId, { throughMessageId: retryVisibleAnchor.messageId })))
-    : await resolveOwnerSpatialProjection(db, chatId);
+    ? ((await resolveOwnerSpatialProjection(chatId, { exactAnchor: retryVisibleAnchor })) ??
+      (await resolveOwnerSpatialProjection(chatId, { throughMessageId: retryVisibleAnchor.messageId })))
+    : await resolveOwnerSpatialProjection(chatId);
   const resolvedLastAssistantContent = lastAssistant
     ? (resolveHistoryMessageMacros([
         {
@@ -1136,6 +1136,9 @@ async function resolveRetryAgents(args: {
       storedConn.maxContext,
       storedConn.openrouterProvider,
       storedConn.maxTokensOverride,
+      storedConn.claudeFastMode === "true",
+      storedConn.treatAsLocalEndpoint === "true",
+      storedConn.defaultParameters,
     );
     return {
       entry: {
@@ -2504,13 +2507,13 @@ async function applyRetryResultEffects(args: {
   let currentResponseForRewrite = agentContext.mainResponse;
   const retryOwnerSpatialProjection =
     (retryMessageId
-      ? await resolveOwnerSpatialProjection(app.db, chatId, {
+      ? await resolveOwnerSpatialProjection(chatId, {
           exactAnchor: { messageId: retryMessageId, swipeIndex: retrySwipeIndex },
         })
       : null) ??
     (retryMessageId
-      ? await resolveOwnerSpatialProjection(app.db, chatId, { throughMessageId: retryMessageId })
-      : await resolveOwnerSpatialProjection(app.db, chatId));
+      ? await resolveOwnerSpatialProjection(chatId, { throughMessageId: retryMessageId })
+      : await resolveOwnerSpatialProjection(chatId));
   const retryCompatibilityLocation =
     retryOwnerSpatialProjection?.ownerMode === "game"
       ? formatOwnerSpatialBreadcrumb(retryOwnerSpatialProjection)

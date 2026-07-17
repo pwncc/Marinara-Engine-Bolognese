@@ -109,7 +109,6 @@ import {
   normalizeSpriteExpressionLabel,
   normalizeRpgStatPools,
   syncRpgHpFromPools,
-  type AboutMeSourceConfig,
   type CharacterCardVersion,
   type CharacterData,
   type ConversationCallCharacterVideoClipKind,
@@ -1276,8 +1275,8 @@ function ConvoTab({
 }) {
   const ext = formData.extensions;
   return (
-    // Key by the edited character so all transient state (revert snapshot, open
-    // panels, connection choice) resets on switch — the editor reuses this instance.
+    // Key by the edited character so transient edit state resets on switch. The
+    // editor reuses this component instance while moving between characters.
     <ConvoProfileFields
       key={characterId ?? "new-character"}
       kind={kind}
@@ -1287,21 +1286,10 @@ function ConvoTab({
       onDisplayNameChange={(v) => updateExtension("convoDisplayName", v)}
       displayNameInCard={ext.convoDisplayNameInCard === true}
       onDisplayNameInCardChange={(v) => updateExtension("convoDisplayNameInCard", v)}
-      characterId={characterId}
-      sources={ext.aboutMeSources as AboutMeSourceConfig | undefined}
-      onSourcesChange={(v) => updateExtension("aboutMeSources", v)}
       aboutMe={(ext.aboutMe as string) ?? ""}
       onAboutMeChange={(v) => updateExtension("aboutMe", v)}
       behavior={ext.convoBehavior as ConvoBehaviorConfig | undefined}
       onBehaviorChange={(b) => updateExtension("convoBehavior", b)}
-      aiSource={{
-        name: formData.name ?? "",
-        description: formData.description ?? "",
-        personality: formData.personality ?? "",
-        scenario: formData.scenario ?? "",
-        backstory: (ext.backstory as string) ?? "",
-        appearance: (ext.appearance as string) ?? "",
-      }}
     />
   );
 }
@@ -4102,10 +4090,10 @@ function ColorsTab({
       </button>
 
       {/* Preview card */}
-      <div className="rounded-xl border border-[var(--border)] bg-black/30 p-4 space-y-3">
+      <div className="space-y-3 overflow-hidden rounded-xl border border-[var(--border)] bg-black/30 p-4">
         <p className="text-[0.625rem] font-medium uppercase tracking-widest text-[var(--muted-foreground)]">Preview</p>
         <div className="flex gap-3">
-          <div className="mari-chrome-accent-tile mari-accent-animated flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full ring-2 ring-[var(--marinara-chat-chrome-button-border-active)]">
+          <div className="mari-chrome-accent-tile mari-accent-animated relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full ring-2 ring-[var(--marinara-chat-chrome-button-border-active)]">
             {avatarUrl ? (
               <img
                 src={avatarUrl}
@@ -4117,7 +4105,7 @@ function ColorsTab({
               <User size="1rem" className="text-white" />
             )}
           </div>
-          <div className="flex-1 space-y-1">
+          <div className="min-w-0 flex-1 space-y-1">
             <span
               className="text-[0.75rem] font-bold tracking-tight"
               style={

@@ -27,6 +27,7 @@ import {
   createInlineThinkingStreamFilter,
   EDITABLE_CHARACTER_CARD_FIELDS,
   normalizeThinkingTagPairs,
+  resolveChatPersonaCandidate,
   type AgentWriteApprovalProposal,
   type AgentCallDebugEvent,
   type CharacterCardFieldUpdate,
@@ -498,7 +499,7 @@ import { presetKeys } from "./use-presets";
 import { playConfiguredNotificationPing } from "../lib/notification-sound";
 import { showLocalMessageNotification, showNativeMessageNotification } from "../lib/local-notifications";
 import { dispatchCapabilityClientEvent } from "../lib/capability-client-events";
-import { messageHasPendingPostProcessing } from "../lib/chat-message-extra";
+import { messageHasPendingPostProcessing, parseMessageExtraRecord } from "../lib/chat-message-extra";
 import { stripGmTagsKeepReadables } from "../lib/game-tag-parser";
 import type { APIConnection, Chat, GameMap, Message } from "@marinara-engine/shared";
 
@@ -508,19 +509,6 @@ function sortMessagesByCreatedAt(messages: Message[]): Message[] {
     if (createdAtOrder !== 0) return createdAtOrder;
     return 0;
   });
-}
-
-function parseMessageExtraRecordForMerge(value: unknown): Record<string, unknown> {
-  if (!value) return {};
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
-    } catch {
-      return {};
-    }
-  }
-  return typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function mergeCachedGeneratedMessage(existing: Message, incoming: Message): Message {
@@ -534,8 +522,8 @@ function mergeCachedGeneratedMessage(existing: Message, incoming: Message): Mess
   if (existingSwipeCount || incomingSwipeCount || activeSwipeFloor) {
     merged.swipeCount = Math.max(existingSwipeCount, incomingSwipeCount, activeSwipeFloor);
   }
-  const existingExtra = parseMessageExtraRecordForMerge(existing.extra);
-  const incomingExtra = parseMessageExtraRecordForMerge(incoming.extra);
+  const existingExtra = parseMessageExtraRecord(existing.extra);
+  const incomingExtra = parseMessageExtraRecord(incoming.extra);
   // The saved-message SSE snapshot can predate post-processing extras such as
   // expression avatars or illustration attachments already present in cache.
   if (Object.keys(existingExtra).length > 0 || Object.keys(incomingExtra).length > 0) {
@@ -1169,12 +1157,10 @@ export function useGenerate() {
           qc.getQueryData<any>(chatKeys.detail(params.chatId)) ??
           (qc.getQueryData<any[]>(chatKeys.list()) ?? []).find((c: any) => c.id === params.chatId);
         const chatPersonaId = activeChat?.personaId as string | null | undefined;
-        // Game mode skips the active-persona fallback, matching the server's snapshot stamping
+        // Roleplay may intentionally have no Persona. Keep optimistic snapshot
+        // stamping identical to the server's Conversation-only fallback policy.
         const snapshotPersona = cachedPersonas
-          ? ((chatPersonaId ? cachedPersonas.find((p) => p.id === chatPersonaId) : null) ??
-            (activeChat?.mode !== "game"
-              ? cachedPersonas.find((p) => p.isActive === "true" || p.isActive === true)
-              : null))
+          ? resolveChatPersonaCandidate(cachedPersonas, chatPersonaId, activeChat?.mode)
           : null;
         const personaSnapshot = snapshotPersona
           ? {
@@ -1993,7 +1979,7 @@ export function useGenerate() {
                       setStreamBuffer(fullBuffer, params.chatId);
                     }
                   }
-                  const heldExtra = parseMessageExtraRecordForMerge(heldTextRewriteMessage.extra);
+                  const heldExtra = { ...parseMessageExtraRecord(heldTextRewriteMessage.extra) };
                   delete heldExtra.postProcessingPending;
                   if (builtInRewriteApplied) {
                     heldExtra.proseGuardianOriginalText = rw.originalText;
@@ -2029,7 +2015,7 @@ export function useGenerate() {
                 if (useChatStore.getState().committedStreamChatIds.has(params.chatId)) {
                   const latestSavedMessage = latestAssistantMessage(persistedMessages.values());
                   if (latestSavedMessage) {
-                    const nextExtra = parseMessageExtraRecordForMerge(latestSavedMessage.extra);
+                    const nextExtra = { ...parseMessageExtraRecord(latestSavedMessage.extra) };
                     if (builtInRewriteApplied) {
                       nextExtra.proseGuardianOriginalText = rw.originalText;
                       nextExtra.proseGuardianRewrittenText = rewrittenText;
@@ -2076,7 +2062,7 @@ export function useGenerate() {
                     ? savedMessage.activeSwipeIndex
                     : 0,
               };
-              const savedExtra = parseMessageExtraRecordForMerge(savedMessage.extra);
+              const savedExtra = parseMessageExtraRecord(savedMessage.extra);
               const pendingPostProcessing = savedExtra.postProcessingPending;
               const pendingPostProcessingAgentType =
                 pendingPostProcessing &&

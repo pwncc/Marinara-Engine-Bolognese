@@ -13,6 +13,7 @@ import {
   parseTrackerFieldLocks,
   parseTrackerHiddenFields,
   resolveMacros,
+  resolveChatPersonaCandidate,
   unwrapConversationInstructions,
   wrapConversationInstructions,
   type CharacterStat,
@@ -43,20 +44,15 @@ export type SpeakerPrefixMessage = SimpleMessage & {
 export type StoredGenerationParameters = Partial<GenerationParameters>;
 
 /**
- * Resolve the persona visible to a chat. An explicit chat persona always wins;
- * non-game chats may fall back to the globally active persona, while Game Mode
- * deliberately remains persona-less unless setup selected one.
+ * Preserve the route-layer export while sharing the same Persona policy with
+ * the client: only Conversation falls back to the globally active Persona.
  */
 export function resolveActivePersonaCandidate<T extends { id: string; isActive?: unknown }>(
   personas: readonly T[],
   chatPersonaId: string | null | undefined,
   chatMode: string | null | undefined,
 ): T | null {
-  return (
-    (chatPersonaId ? personas.find((persona) => persona.id === chatPersonaId) : null) ??
-    (chatMode !== "game" ? personas.find((persona) => persona.isActive === "true") : null) ??
-    null
-  );
+  return resolveChatPersonaCandidate(personas, chatPersonaId, chatMode);
 }
 
 export type LocalSidecarGenerationConnection = {
@@ -964,11 +960,19 @@ export function shouldPreferLatestVisibleGameState(input: {
 }
 
 export function resolveVisibleGameStateAnchor(
-  messages: Array<{ role?: unknown; id?: unknown; activeSwipeIndex?: unknown }>,
+  messages: Array<{ role?: unknown; id?: unknown; activeSwipeIndex?: unknown; extra?: unknown }>,
 ): { messageId: string; swipeIndex: number } | null {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
-    if (message.role !== "assistant" || typeof message.id !== "string" || !message.id) continue;
+    const markedSystemAnchor =
+      message.role === "system" && parseExtra(message.extra).gameStateAnchor === "checkpoint_restore";
+    if (
+      (message.role !== "assistant" && !markedSystemAnchor) ||
+      typeof message.id !== "string" ||
+      !message.id
+    ) {
+      continue;
+    }
     const swipeIndex =
       typeof message.activeSwipeIndex === "number" &&
       Number.isInteger(message.activeSwipeIndex) &&
@@ -1173,16 +1177,14 @@ export function resolveBaseUrl(connection: { baseUrl: string | null; provider: s
 
 export function shouldEnableAgentsForGeneration({
   chatEnableAgents,
-  chatMode,
   impersonate,
   impersonateBlockAgents,
 }: {
   chatEnableAgents: boolean;
-  chatMode: string;
   impersonate: boolean;
   impersonateBlockAgents: boolean;
 }): boolean {
-  return chatEnableAgents && chatMode !== "conversation" && !(impersonate && impersonateBlockAgents);
+  return chatEnableAgents && !(impersonate && impersonateBlockAgents);
 }
 
 export function shouldInjectIdentityFallback({
@@ -1320,9 +1322,35 @@ export function injectIntoOutputFormatOrLastUser(
     }
   }
 
-  const lastIdx = Math.max(findLastIndex(messages, "user"), messages.length - 1);
+  const lastUserIdx = findLastIndex(messages, "user");
+  const lastIdx = lastUserIdx >= 0 ? lastUserIdx : messages.length - 1;
+  if (lastIdx < 0) {
+    messages.push({ role: "user", content: block });
+    return;
+  }
   const target = messages[lastIdx]!;
   messages[lastIdx] = { ...target, content: target.content + "\n\n" + block };
+}
+
+/**
+ * Remove speaker wrappers from older group-chat history while preserving the
+ * latest assistant turn as a concrete formatting example for the model.
+ */
+export function stripSpeakerTagsExceptLastAssistant(messages: SimpleMessage[]): void {
+  const lastAssistantIdx = findLastIndex(messages, "assistant");
+  const speakerCloseRegex = /<\/speaker>/g;
+
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i]!;
+    if (message.role === "system" || i === lastAssistantIdx || !message.content.includes("<speaker=")) continue;
+
+    const content = message.content
+      .replace(/<speaker="[^"]*">/g, "")
+      .replace(speakerCloseRegex, "")
+      .replace(/^\s*\n/gm, "")
+      .trim();
+    messages[i] = { ...message, content };
+  }
 }
 
 /** Build wrapped field parts from a record of { fieldName: value }. */

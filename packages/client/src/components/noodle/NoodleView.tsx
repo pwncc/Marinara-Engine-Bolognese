@@ -480,18 +480,20 @@ function NoodleMentionSuggestions({
   );
 }
 
-function NoodlePostContent({
+function NoodleTextContent({
   content,
   accountByHandle,
   onOpenProfile,
+  className,
 }: {
   content: string;
   accountByHandle: Map<string, NoodleAccount>;
   onOpenProfile: (account: NoodleAccount) => void;
+  className?: string;
 }) {
   const mentions = findNoodleTextMentions(content);
   if (mentions.length === 0) {
-    return <p className="mt-2 whitespace-pre-wrap text-sm leading-6">{content}</p>;
+    return <p className={cn("whitespace-pre-wrap text-sm", className)}>{content}</p>;
   }
 
   const parts: React.ReactNode[] = [];
@@ -518,7 +520,7 @@ function NoodlePostContent({
     cursor = mention.end;
   }
   if (cursor < content.length) parts.push(content.slice(cursor));
-  return <p className="mt-2 whitespace-pre-wrap text-sm leading-6">{parts}</p>;
+  return <p className={cn("whitespace-pre-wrap text-sm", className)}>{parts}</p>;
 }
 
 function NoodlePollCard({
@@ -661,21 +663,34 @@ function ToggleSetting({
   help,
   checked,
   disabled,
+  compact = false,
   onChange,
 }: {
   label: string;
   help?: React.ReactNode;
   checked: boolean;
   disabled?: boolean;
+  compact?: boolean;
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex items-center justify-between gap-3 rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] px-3 py-2 text-xs">
-      <span className="inline-flex min-w-0 items-center gap-1 font-semibold">
-        {label}
+    <label
+      className={cn(
+        "flex items-center justify-between rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--background)] py-2 text-xs",
+        compact ? "gap-2 px-1.5" : "gap-3 px-3",
+      )}
+    >
+      <span
+        className={cn(
+          "inline-flex min-w-0 items-center gap-1 font-semibold",
+          compact && "flex-1",
+        )}
+      >
+        <span className={cn(compact && "min-w-0 truncate text-[10px] leading-none")}>{label}</span>
         {help && <HelpTooltip text={help} side="top" wide />}
       </span>
       <input
+        className="shrink-0"
         type="checkbox"
         checked={checked}
         disabled={disabled}
@@ -4367,18 +4382,21 @@ export function NoodleView() {
                   <div className="grid gap-2 sm:grid-cols-3">
                     <ToggleSetting
                       label="Conversations"
+                      compact
                       checked={carryoverTargets.has("conversation")}
                       disabled={updateSettings.isPending}
                       onChange={(checked) => toggleCarryoverTarget("conversation", checked)}
                     />
                     <ToggleSetting
                       label="Roleplays"
+                      compact
                       checked={carryoverTargets.has("roleplay")}
                       disabled={updateSettings.isPending}
                       onChange={(checked) => toggleCarryoverTarget("roleplay", checked)}
                     />
                     <ToggleSetting
                       label="Games"
+                      compact
                       checked={carryoverTargets.has("game")}
                       disabled={updateSettings.isPending}
                       onChange={(checked) => toggleCarryoverTarget("game", checked)}
@@ -4961,7 +4979,12 @@ export function NoodleView() {
                 </div>
               </div>
             ) : !poll || post.content.trim() !== poll.question ? (
-              <NoodlePostContent content={post.content} accountByHandle={accountByHandle} onOpenProfile={openProfile} />
+              <NoodleTextContent
+                content={post.content}
+                accountByHandle={accountByHandle}
+                onOpenProfile={openProfile}
+                className="mt-2 leading-6"
+              />
             ) : null}
             {post.metadata.accessLocked !== true && poll && (
               <NoodlePollCard
@@ -5082,9 +5105,8 @@ export function NoodleView() {
                   const parentReply = reply.parentInteractionId
                     ? (replyById.get(reply.parentInteractionId) ?? null)
                     : null;
-                  const parentActor = parentReply
-                    ? (accountById.get(parentReply.actorAccountId) ?? parentReply.actorSnapshot)
-                    : null;
+                  const parentActorAccount = parentReply ? (accountById.get(parentReply.actorAccountId) ?? null) : null;
+                  const parentActor = parentActorAccount ?? parentReply?.actorSnapshot ?? null;
                   const replyLikes = postInteractions.filter(
                     (interaction) => interaction.type === "like" && interaction.parentInteractionId === reply.id,
                   );
@@ -5136,7 +5158,19 @@ export function NoodleView() {
                           </div>
                           {parentActor && (
                             <p className="mt-0.5 text-[var(--muted-foreground)]">
-                              Replying to <span className="text-[var(--noodle-blue)]">@{parentActor.handle}</span>
+                              Replying to{" "}
+                              {parentActorAccount ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openProfile(parentActorAccount)}
+                                  className="font-medium text-[var(--noodle-blue)] hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--noodle-blue)]/70"
+                                  aria-label={`View @${parentActorAccount.handle} profile`}
+                                >
+                                  @{parentActorAccount.handle}
+                                </button>
+                              ) : (
+                                <span className="text-[var(--noodle-blue)]">@{parentActor.handle}</span>
+                              )}
                             </p>
                           )}
                           {editingReplyId === reply.id ? (
@@ -5170,7 +5204,12 @@ export function NoodleView() {
                               </div>
                             </div>
                           ) : reply.content ? (
-                            <p className="mt-1 whitespace-pre-wrap text-sm leading-5">{reply.content}</p>
+                            <NoodleTextContent
+                              content={reply.content}
+                              accountByHandle={accountByHandle}
+                              onOpenProfile={openProfile}
+                              className="mt-1 leading-5"
+                            />
                           ) : null}
                           {reply.imageUrl && (
                             <button

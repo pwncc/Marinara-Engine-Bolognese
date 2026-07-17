@@ -51,6 +51,7 @@ import { getChatCharacterIds } from "../../lib/chat-macros";
 import { resolveSpriteExpression } from "../../lib/sprite-expression-match";
 import { parseCharacterDisplayData } from "../../lib/character-display";
 import { showConfirmDialog } from "../../lib/app-dialogs";
+import { parseMessageExtraRecord } from "../../lib/chat-message-extra";
 import { chatBackgroundMetadataToUrl, chatBackgroundUrlToMetadata } from "../../lib/backgrounds";
 import { useGameStateStore } from "../../stores/game-state.store";
 import { useGalleryStore } from "../../stores/gallery.store";
@@ -267,19 +268,6 @@ const normalizeSpriteDisplayValue = (value: unknown, fallback: number, min: numb
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(min, Math.min(max, numeric));
 };
-
-function parseMessageExtraRecord(value: unknown): Record<string, unknown> {
-  if (!value) return {};
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
-    } catch {
-      return {};
-    }
-  }
-  return typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
 
 function startsNewAssistantBubble(message: { extra?: unknown } | null | undefined): boolean {
   return parseMessageExtraRecord(message?.extra).startsNewAssistantBubble === true;
@@ -891,7 +879,9 @@ export function ChatArea() {
   const chatCharIds = useMemo(() => getChatCharacterIds({ characterIds: chatCharacterIdsRaw }), [chatCharacterIdsRaw]);
   const chatPersonaId = useMemo(() => resolveChatPersonaId(chat), [chat]);
   const { data: chatPersona } = usePersona(chatPersonaId);
-  const { data: activePersonaFallback } = useActivePersona(!!chat?.id && !chatPersonaId && !isGameChat);
+  const { data: activePersonaFallback } = useActivePersona(
+    !!chat?.id && !chatPersonaId && chatMode === "conversation",
+  );
 
   const activeCharacterQueries = useQueries({
     queries: chatCharIds.map((id) => ({
@@ -1055,8 +1045,9 @@ export function ChatArea() {
 
   // Active persona info (for user message styling: name, avatar, colors)
   const personaInfo = useMemo(() => {
-    // Prefer per-chat personaId, fall back to the globally active persona outside Game mode.
-    const persona = chatPersona ?? (!isGameChat ? activePersonaFallback : null);
+    // Roleplay and Game may intentionally have no Persona; only Conversation
+    // falls back to the globally active account Persona.
+    const persona = chatPersona ?? (chatMode === "conversation" ? activePersonaFallback : null);
     if (!persona) return undefined;
     const avatarCrop =
       typeof persona.avatarCrop === "string" ? parseAvatarCropJson(persona.avatarCrop) : (persona.avatarCrop ?? null);
@@ -1076,7 +1067,7 @@ export function ChatArea() {
       dialogueColor: persona.dialogueColor || undefined,
       boxColor: persona.boxColor || undefined,
     };
-  }, [activePersonaFallback, chatPersona, isGameChat]);
+  }, [activePersonaFallback, chatMode, chatPersona]);
 
   const { startEncounter } = useEncounter();
   const { concludeScene, abandonScene, forkScene, isForking } = useScene();
@@ -1525,14 +1516,14 @@ export function ChatArea() {
   // (personas have no other data-card-css hook), so only feed it in Convo mode.
   const cardCssPersonas = useMemo<PersonaCssRow[] | undefined>(() => {
     if (chatMode !== "conversation") return undefined;
-    const persona = (chatPersona ?? (!isGameChat ? activePersonaFallback : null)) as
+    const persona = (chatPersona ?? (chatMode === "conversation" ? activePersonaFallback : null)) as
       | { id?: string; creatorNotes?: string | null }
       | null
       | undefined;
     return persona?.id
       ? [{ id: persona.id, creatorNotes: typeof persona.creatorNotes === "string" ? persona.creatorNotes : null }]
       : undefined;
-  }, [chatMode, chatPersona, activePersonaFallback, isGameChat]);
+  }, [chatMode, chatPersona, activePersonaFallback]);
   const cardCssInjector = (
     <CreatorNotesCssInjector
       characterIds={chatCharIds}

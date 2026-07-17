@@ -587,7 +587,6 @@ export async function registerDryRunRoute(app: FastifyInstance) {
     const dryRunActiveAgentIds = Array.isArray(chatMeta.activeAgentIds) ? (chatMeta.activeAgentIds as string[]) : [];
     const dryRunChatEnableAgents = shouldEnableAgentsForGeneration({
       chatEnableAgents: chatMeta.enableAgents === true,
-      chatMode,
       impersonate,
       impersonateBlockAgents: false,
     });
@@ -609,7 +608,6 @@ export async function registerDryRunRoute(app: FastifyInstance) {
         ? body.regenerateMessageId.trim()
         : null;
     const ownerSpatialProjection = await resolveOwnerSpatialProjection(
-      app.db,
       chatId,
       regenerateMessageId ? { beforeMessageId: regenerateMessageId } : {},
     );
@@ -1506,6 +1504,9 @@ export async function registerDryRunRoute(app: FastifyInstance) {
     }
     finalMessages = injectOwnerSpatialPrompt(finalMessages, promptSpatialProjection);
     dedupeLastMessageWrappers(finalMessages);
+    // Mirror the live route's provider-boundary macro guard so Peek Prompt is
+    // both accurate and incapable of exposing late raw identity macros (#3704).
+    finalMessages = resolveHistoryMessageMacros(finalMessages);
 
     // ── Parameter normalization (mirror /api/generate) ──
     const modelLower = (conn.model ?? "").toLowerCase();
@@ -1560,6 +1561,9 @@ export async function registerDryRunRoute(app: FastifyInstance) {
             conn.maxContext,
             conn.openrouterProvider,
             conn.maxTokensOverride,
+            conn.claudeFastMode === "true",
+            conn.treatAsLocalEndpoint === "true",
+            conn.defaultParameters,
           );
 
     // ── Mirror /api/generate: normalize + fit prompt to context ──

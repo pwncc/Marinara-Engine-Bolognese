@@ -308,10 +308,9 @@ const JSON_COLUMNS: Record<string, readonly string[]> = {
     "manualOverrides",
     "fieldLocks",
   ],
-  // game_checkpoints has no JSON columns (snapshotId is a plain FK; there is
-  // no snapshot/metadata column — see db/schema/checkpoints.ts). The same goes
-  // for chat_images, character_images, assets, custom_themes, and
-  // installed_extensions, whose former entries named columns that do not exist.
+  game_checkpoints: ["snapshotData", "spatialSnapshotData"],
+  // chat_images, character_images, assets, custom_themes, and installed_extensions
+  // have no JSON columns; their former entries named columns that do not exist.
   game_engine_state: ["state"],
   regex_scripts: ["trimStrings", "placement", "targetCharacterIds"],
 };
@@ -745,10 +744,35 @@ function actionDataWithTopLevel(source: Row, recordKeys: string[], scalarKeys: s
   return out;
 }
 
-function normalizeCharacterActionData(input: Row): Row {
+export function normalizeCharacterActionData(input: Row): Row {
   const out: Row = { ...input };
-  if (out.firstMes !== undefined && out.first_mes === undefined) out.first_mes = out.firstMes;
-  if (out.creatorNotes !== undefined && out.creator_notes === undefined) out.creator_notes = out.creatorNotes;
+  out.first_mes = out.first_mes ?? out.firstMes ?? out.firstMessage ?? out.greeting;
+  out.mes_example = out.mes_example ?? out.mesExample;
+  out.creator_notes = out.creator_notes ?? out.creatorNotes;
+  out.system_prompt = out.system_prompt ?? out.systemPrompt;
+  out.post_history_instructions = out.post_history_instructions ?? out.postHistoryInstructions;
+  out.character_version = out.character_version ?? out.characterVersion;
+  out.alternate_greetings = out.alternate_greetings ?? out.alternateGreetings;
+  for (const key of [
+    "first_mes",
+    "mes_example",
+    "creator_notes",
+    "system_prompt",
+    "post_history_instructions",
+    "character_version",
+    "alternate_greetings",
+  ]) {
+    if (out[key] === undefined) delete out[key];
+  }
+  delete out.firstMes;
+  delete out.firstMessage;
+  delete out.greeting;
+  delete out.mesExample;
+  delete out.creatorNotes;
+  delete out.systemPrompt;
+  delete out.postHistoryInstructions;
+  delete out.characterVersion;
+  delete out.alternateGreetings;
   const extensions = isRecord(out.extensions) ? { ...(out.extensions as Row) } : {};
   if (typeof out.backstory === "string") {
     extensions.backstory = out.backstory;
@@ -758,8 +782,61 @@ function normalizeCharacterActionData(input: Row): Row {
     extensions.appearance = out.appearance;
     delete out.appearance;
   }
+  const aboutMe = out.aboutMe ?? out.about_me ?? out["about-me"];
+  if (typeof aboutMe === "string") extensions.aboutMe = aboutMe;
+  delete out.aboutMe;
+  delete out.about_me;
+  delete out["about-me"];
   if (Object.keys(extensions).length > 0) out.extensions = extensions;
   return out;
+}
+
+export function buildLorebookEntryCreateRow(
+  data: Row,
+  lorebookId: string,
+  id: string,
+  timestamp: string,
+  defaultOrder = 100,
+): Row {
+  return {
+    id,
+    lorebookId,
+    name: requiredString(data, ["name"], "lorebook entry name"),
+    content: firstString(data, ["content"]) ?? "",
+    description: firstString(data, ["description"]) ?? "",
+    tag: firstString(data, ["tag"]) ?? "",
+    keys: firstStringList(data, ["keys"]) ?? [],
+    secondaryKeys: firstStringList(data, ["secondaryKeys", "secondary_keys"]) ?? [],
+    enabled: boolText(firstBoolean(data, ["enabled"]) ?? true),
+    constant: boolText(firstBoolean(data, ["constant"]) ?? false),
+    selective: "false",
+    selectiveLogic: "and",
+    matchWholeWords: "false",
+    caseSensitive: "false",
+    useRegex: "false",
+    characterFilterMode: "any",
+    characterFilterIds: [],
+    characterTagFilterMode: "any",
+    characterTagFilters: [],
+    generationTriggerFilterMode: "any",
+    generationTriggerFilters: [],
+    additionalMatchingSources: [],
+    position: firstNumber(data, ["position"]) ?? 0,
+    depth: firstNumber(data, ["depth"]) ?? 4,
+    order: firstNumber(data, ["order"]) ?? defaultOrder,
+    role: firstString(data, ["role"]) ?? "system",
+    group: firstString(data, ["group"]) ?? "",
+    relationships: {},
+    dynamicState: {},
+    activationConditions: [],
+    preventRecursion: "true",
+    excludeRecursion: "false",
+    delayUntilRecursion: "false",
+    excludeFromVectorization: "false",
+    locked: "false",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
 }
 
 function normalizePersonaConvoBehavior(value: unknown): unknown {
@@ -1479,6 +1556,7 @@ function buildMinimalCharacterData(
   const extMap: Array<[string, string]> = [
     ["backstory", "backstory"],
     ["appearance", "appearance"],
+    ["about-me", "aboutMe"],
   ];
   for (const [flagName, fieldName] of extMap) {
     const val = flagString(flags, flagName);
@@ -1655,6 +1733,9 @@ export class MariDbService {
             "creatorNotes",
             "backstory",
             "appearance",
+            "aboutMe",
+            "about_me",
+            "about-me",
             "tags",
             "comment",
           ]),
@@ -1706,6 +1787,9 @@ export class MariDbService {
             "creatorNotes",
             "backstory",
             "appearance",
+            "aboutMe",
+            "about_me",
+            "about-me",
             "tags",
             "comment",
           ]),
@@ -1713,7 +1797,7 @@ export class MariDbService {
         const comment = firstString(patchData, ["comment"]) ?? (typeof existing.comment === "string" ? existing.comment : "");
         delete patchData.comment;
         if (Object.keys(patchData).length === 0 && comment === (typeof existing.comment === "string" ? existing.comment : "")) {
-          throw new Error("character.update needs a patch field such as name, description, personality, scenario, firstMes, creatorNotes, backstory, appearance, tags, or comment");
+          throw new Error("character.update needs a patch field such as name, description, personality, scenario, firstMes, creatorNotes, backstory, appearance, aboutMe, tags, or comment");
         }
         const name = firstString(patchData, ["name"]) ?? (typeof existingData.name === "string" ? existingData.name : "");
         const row: Row = {
@@ -2073,6 +2157,7 @@ export class MariDbService {
           "vectorScoreThreshold",
           "vectorMaxResults",
           "scope",
+          "entries",
         ]);
         const name = requiredString(data, ["name"], "lorebook name");
         const timestamp = now();
@@ -2101,6 +2186,14 @@ export class MariDbService {
           updatedAt: timestamp,
         };
         this.assignLorebookActionFields(row, data);
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+        const relatedInserts = entries.map((entry, index) => {
+          if (!isRecord(entry)) throw new Error(`lorebook entry ${index + 1} must be an object`);
+          return {
+            table: "lorebook_entries",
+            row: buildLorebookEntryCreateRow(entry, id, newId(), timestamp, (index + 1) * 100),
+          };
+        });
         return this.executeMutation(
           {
             kind: "insert",
@@ -2112,6 +2205,7 @@ export class MariDbService {
             cascade: false,
             reason: firstString(args, ["reason"]) ?? null,
             cwd: context.cwd,
+            relatedInserts,
           },
           context.command,
           context.sessionId,
@@ -2181,48 +2275,9 @@ export class MariDbService {
           "role",
           "group",
         ]);
-        const entryName = requiredString(data, ["name"], "lorebook entry name");
         const timestamp = now();
         const id = firstString(args, ["entryId", "id"]) ?? newId();
-        const row: Row = {
-          id,
-          lorebookId,
-          name: entryName,
-          content: "",
-          description: "",
-          tag: "",
-          keys: [],
-          secondaryKeys: [],
-          enabled: "true",
-          constant: "false",
-          selective: "false",
-          selectiveLogic: "and",
-          matchWholeWords: "false",
-          caseSensitive: "false",
-          useRegex: "false",
-          characterFilterMode: "any",
-          characterFilterIds: [],
-          characterTagFilterMode: "any",
-          characterTagFilters: [],
-          generationTriggerFilterMode: "any",
-          generationTriggerFilters: [],
-          additionalMatchingSources: [],
-          position: 0,
-          depth: 4,
-          order: 100,
-          role: "system",
-          group: "",
-          relationships: {},
-          dynamicState: {},
-          activationConditions: [],
-          preventRecursion: "true",
-          excludeRecursion: "false",
-          delayUntilRecursion: "false",
-          excludeFromVectorization: "false",
-          locked: "false",
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        };
+        const row = buildLorebookEntryCreateRow(data, lorebookId, id, timestamp);
         this.assignLorebookEntryActionFields(row, data);
         return this.executeMutation(
           {
@@ -3073,7 +3128,7 @@ export class MariDbService {
         const rawJson = await resolveJsonInput(flags, context.cwd);
         if (!name && !rawJson) {
           throw new Error(
-            "Usage: mari characters create --name <name> [--description <text>] [--personality <text>] [--scenario <text>] [--apply]\n" +
+            "Usage: mari characters create --name <name> [--description <text>] [--personality <text>] [--scenario <text>] [--about-me <text>] [--apply]\n" +
               "       or: mari characters create --json '<data_json>' [--json-file <path>] [--apply]",
           );
         }
@@ -3106,7 +3161,7 @@ export class MariDbService {
         const id = parsed.positionals[0];
         if (!id)
           throw new Error(
-            "Usage: mari characters update <id> [--name <name>] [--description <text>] [--personality <text>] [--scenario <text>] [--first-mes <text>] [--creator-notes <text>] [--backstory <text>] [--appearance <text>] [--tags <t1,t2,...>] [--comment <text>] [--json '<data_json>' | --json-file <path>] [--apply] [--reason <text>]",
+            "Usage: mari characters update <id> [--name <name>] [--description <text>] [--personality <text>] [--scenario <text>] [--first-mes <text>] [--creator-notes <text>] [--backstory <text>] [--appearance <text>] [--about-me <text>] [--tags <t1,t2,...>] [--comment <text>] [--json '<data_json>' | --json-file <path>] [--apply] [--reason <text>]",
           );
         const existing = await this.getRawById(getMeta("characters"), id);
         if (!existing) throw new Error(`Character ${id} not found`);
@@ -4694,9 +4749,9 @@ export class MariDbService {
       "Read:  list [--limit <n>] [--search <text>]",
       "Read:  get <id>",
       "Read:  search <query> [--limit <n>]",
-      "Write: create (--name <name> [--description <text>] [--personality <text>] [--scenario <text>] [--first-mes <text>] [--creator-notes <text>] [--backstory <text>] [--appearance <text>] [--tags <t1,t2,...>] [--comment <text>] | --json '<data_json>' | --json-file <path>) [--apply] [--reason <text>]",
-      "       --backstory and --appearance write to data.extensions.backstory / data.extensions.appearance",
-      "Write: update <id> [--name <name>] [--description <text>] [--personality <text>] [--scenario <text>] [--first-mes <text>] [--creator-notes <text>] [--backstory <text>] [--appearance <text>] [--tags <t1,t2,...>] [--comment <text>] [--json '<data_json>' | --json-file <path>] [--apply] [--reason <text>]",
+      "Write: create (--name <name> [--description <text>] [--personality <text>] [--scenario <text>] [--first-mes <text>] [--creator-notes <text>] [--backstory <text>] [--appearance <text>] [--about-me <text>] [--tags <t1,t2,...>] [--comment <text>] | --json '<data_json>' | --json-file <path>) [--apply] [--reason <text>]",
+      "       --backstory, --appearance, and --about-me write to matching data.extensions fields",
+      "Write: update <id> [--name <name>] [--description <text>] [--personality <text>] [--scenario <text>] [--first-mes <text>] [--creator-notes <text>] [--backstory <text>] [--appearance <text>] [--about-me <text>] [--tags <t1,t2,...>] [--comment <text>] [--json '<data_json>' | --json-file <path>] [--apply] [--reason <text>]",
       "Write: delete <id> [--apply] [--reason <text>]",
       "Writes dry-run by default; --apply saves reversible changes and shows a Keep/Restore review card.",
     ].join("\n");

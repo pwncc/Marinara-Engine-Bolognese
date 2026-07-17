@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { findKnownModel } from "../../packages/shared/src/constants/model-lists.js";
+import {
+  findKnownModel,
+  resolveProviderReasoningEffort,
+} from "../../packages/shared/src/constants/model-lists.js";
 import {
   applyGlmThinkingParameters,
   isNativeGlmEndpoint,
@@ -30,6 +33,10 @@ import {
   type ChatOptions,
   type LLMUsage,
 } from "../../packages/server/src/services/llm/base-provider.js";
+import {
+  createLLMProvider,
+  normalizeCohereOpenAIBaseUrl,
+} from "../../packages/server/src/services/llm/provider-registry.js";
 import {
   runWithGenerationFallbackNotifier,
   type GenerationFallbackNotice,
@@ -107,6 +114,62 @@ try {
 } finally {
   await new Promise<void>((resolve, reject) =>
     gatewayServer.close((error) => (error ? reject(error) : resolve())),
+  );
+}
+
+let openRouterRequestBody: Record<string, unknown> | null = null;
+const openRouterServer = createServer(async (request, response) => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  openRouterRequestBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+  response.writeHead(200, { "content-type": "application/json" });
+  response.end(JSON.stringify({ choices: [{ message: { content: "reasoned response" }, finish_reason: "stop" }] }));
+});
+await new Promise<void>((resolve) => openRouterServer.listen(0, "127.0.0.1", resolve));
+try {
+  const address = openRouterServer.address();
+  assert.ok(address && typeof address === "object");
+  const provider = createLLMProvider(
+    "openrouter",
+    `http://127.0.0.1:${address.port}/v1`,
+    "test",
+    undefined,
+    undefined,
+    undefined,
+    false,
+    false,
+    JSON.stringify({
+      customParameters: {
+        connection_only: "inherited",
+        nested: { connection: true, shared: "connection" },
+      },
+    }),
+  );
+  const resolvedTencentEffort = resolveProviderReasoningEffort({
+    provider: "openrouter",
+    model: "tencent/hy3:free",
+    reasoningEffort: "xhigh",
+  });
+  assert.equal(resolvedTencentEffort, "high");
+  assert.equal(
+    await collectProviderOutput(provider, {
+      model: "tencent/hy3:free",
+      stream: false,
+      enableThinking: true,
+      reasoningEffort: resolvedTencentEffort,
+      customParameters: { awesomesauce: "enabled", nested: { level: 3, shared: "chat" } },
+    }),
+    "reasoned response",
+  );
+  const capturedOpenRouterBody = openRouterRequestBody as Record<string, unknown> | null;
+  assert.ok(capturedOpenRouterBody);
+  assert.deepEqual(capturedOpenRouterBody.reasoning, { effort: "high" });
+  assert.equal(capturedOpenRouterBody.connection_only, "inherited");
+  assert.equal(capturedOpenRouterBody.awesomesauce, "enabled");
+  assert.deepEqual(capturedOpenRouterBody.nested, { connection: true, shared: "chat", level: 3 });
+} finally {
+  await new Promise<void>((resolve, reject) =>
+    openRouterServer.close((error) => (error ? reject(error) : resolve())),
   );
 }
 
@@ -220,6 +283,11 @@ assert.equal(isOpenRouterApiUrl("https://openrouter.ai/api/v1"), true);
 assert.equal(isOpenRouterApiUrl("https://api.openrouter.ai/v1"), true);
 assert.equal(isOpenRouterApiUrl("https://openrouter.ai.example.com/v1"), false);
 assert.equal(isOpenRouterApiUrl("not a URL"), false);
+assert.equal(normalizeCohereOpenAIBaseUrl("https://api.cohere.com"), "https://api.cohere.ai/compatibility/v1");
+assert.equal(normalizeCohereOpenAIBaseUrl("https://api.cohere.ai/"), "https://api.cohere.ai/compatibility/v1");
+assert.equal(normalizeCohereOpenAIBaseUrl("https://api.cohere.com/v1"), "https://api.cohere.ai/compatibility/v1");
+assert.equal(normalizeCohereOpenAIBaseUrl("https://api.cohere.ai/v2"), "https://api.cohere.ai/compatibility/v1");
+assert.equal(normalizeCohereOpenAIBaseUrl("https://example.com/v1/"), "https://example.com/v1");
 
 const fallbackConnection: FallbackConnection = {
   id: "fallback-connection",
@@ -228,13 +296,25 @@ const fallbackConnection: FallbackConnection = {
   baseUrl: "https://fallback.example/v1",
   apiKey: "test",
   model: "fallback-model",
-  defaultParameters: JSON.stringify({ temperature: 0.35, maxTokens: 512 }),
+  defaultParameters: JSON.stringify({
+    temperature: 0.35,
+    maxTokens: 512,
+    customParameters: {
+      fallback_only: "inherited",
+      nested: { fallback: true, shared: "fallback" },
+    },
+  }),
 };
 const primaryFailure = new RegressionProvider([], new Error("primary unavailable"));
 const successfulFallback = new RegressionProvider(["fallback response"]);
 const fallbackProvider = new ConnectionFallbackProvider(primaryFailure, successfulFallback, fallbackConnection, "main");
 assert.equal(
-  await collectProviderOutput(fallbackProvider, { model: "primary-model", temperature: 0.9, maxTokens: 1024 }),
+  await collectProviderOutput(fallbackProvider, {
+    model: "primary-model",
+    temperature: 0.9,
+    maxTokens: 1024,
+    customParameters: { request_only: "preserved", nested: { request: true, shared: "request" } },
+  }),
   "fallback response",
 );
 assert.equal(primaryFailure.calls, 1);
@@ -242,6 +322,11 @@ assert.equal(successfulFallback.calls, 1);
 assert.equal(successfulFallback.lastOptions?.model, "fallback-model");
 assert.equal(successfulFallback.lastOptions?.temperature, 0.35);
 assert.equal(successfulFallback.lastOptions?.maxTokens, 512);
+assert.deepEqual(successfulFallback.lastOptions?.customParameters, {
+  fallback_only: "inherited",
+  request_only: "preserved",
+  nested: { fallback: true, shared: "request", request: true },
+});
 
 let fallbackNotice: GenerationFallbackNotice | null = null;
 await runWithGenerationFallbackNotifier(

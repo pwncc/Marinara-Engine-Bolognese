@@ -742,7 +742,6 @@ const CHAT_SETTINGS_ORDER = {
   scopedRegex: -750,
   connectedChat: -700,
   connectedNotes: -690,
-  spatialMap: -650,
   lorebooks: -600,
   agents: -500,
   widgets: -450,
@@ -939,6 +938,9 @@ export function ChatSettingsDrawer({
   const setMusicPlayerSource = useUIStore((s) => s.setMusicPlayerSource);
   const openToolDetail = useUIStore((s) => s.openToolDetail);
   const openPresetDetail = useUIStore((s) => s.openPresetDetail);
+  const debugMode = useUIStore((s) => s.debugMode);
+  const setEditorDirty = useUIStore((s) => s.setEditorDirty);
+  const openLorebookDetail = useUIStore((s) => s.openLorebookDetail);
 
   const { data: allCharacters } = useCharacters({ includeBuiltIn: true });
   const { data: characterGroups } = useCharacterGroups();
@@ -1291,11 +1293,10 @@ export function ChatSettingsDrawer({
   );
   const mapsPackage = installedCapabilities.find(
     (item) =>
-      item.status === "active" &&
-      item.manifest.kind.includes("maps") &&
-      item.manifest.entrypoints.client &&
-      activeAgentIds.includes(item.id),
+      item.status === "active" && item.manifest.kind.includes("maps") && item.manifest.entrypoints.client,
   );
+  const mapsPackageEnabledForChat =
+    metadata.enableAgents === true && Boolean(mapsPackage && activeAgentIds.includes(mapsPackage.id));
   const callsPackage = installedCapabilities.find(
     (item) =>
       item.status === "active" &&
@@ -6115,15 +6116,6 @@ export function ChatSettingsDrawer({
             </Section>
           )}
 
-          {(chatMode === "roleplay" || chatMode === "game") && mapsPackage && (
-            <CapabilityElement
-              packageId={mapsPackage.id}
-              view="settings"
-              capabilityProps={{ chatId: chat.id, style: { order: CHAT_SETTINGS_ORDER.spatialMap } }}
-              className="contents"
-            />
-          )}
-
           <div style={{ order: CHAT_SETTINGS_ORDER.lorebooks }}>
             <LorebooksSection
               chatId={chat.id}
@@ -8149,7 +8141,7 @@ export function ChatSettingsDrawer({
                                 const active = activeAgentIds.includes(agent.id);
                                 const knowledgeAgentType = isKnowledgeAgentType(agent.id) ? agent.id : null;
                                 return (
-                                  <div key={agent.id} className="space-y-1.5">
+                                  <div key={agent.id} data-chat-agent-entry={agent.id} className="space-y-1.5">
                                     <button
                                       onClick={() => {
                                         const latestActiveAgentIds = readLatestActiveAgentIds();
@@ -8238,6 +8230,32 @@ export function ChatSettingsDrawer({
                                         />
                                       </AgentSettingsCard>
                                     )}
+                                    {active && agent.id === "hierarchical-maps" && mapsPackage && (
+                                      <CapabilityElement
+                                        packageId={mapsPackage.id}
+                                        view="settings"
+                                        capabilityProps={{
+                                          chatId: chat.id,
+                                          debugMode,
+                                          enabledForChat: mapsPackageEnabledForChat,
+                                          onEnabledForChatChange: async (enabled: boolean) => {
+                                            const current = readLatestActiveAgentIds();
+                                            const nextActiveAgentIds = enabled
+                                              ? Array.from(new Set([...current, mapsPackage.id]))
+                                              : current.filter((id) => id !== mapsPackage.id);
+                                            await updateMeta.mutateAsync({
+                                              id: chat.id,
+                                              ...(enabled ? { enableAgents: true } : {}),
+                                              activeAgentIds: nextActiveAgentIds,
+                                            });
+                                          },
+                                          confirmAction: showConfirmDialog,
+                                          onDirtyChange: setEditorDirty,
+                                          onOpenLorebook: openLorebookDetail,
+                                        }}
+                                        className="block overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--background)]/45"
+                                      />
+                                    )}
                                   </div>
                                 );
                               })}
@@ -8322,6 +8340,7 @@ export function ChatSettingsDrawer({
                                       return (
                                         <div
                                           key={agent.id}
+                                          data-chat-agent-entry={agent.id}
                                           className="rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30"
                                         >
                                           <div className="flex items-start gap-2.5">
@@ -8355,6 +8374,32 @@ export function ChatSettingsDrawer({
                                               <Trash2 size="0.6875rem" />
                                             </button>
                                           </div>
+                                          {agent.id === "hierarchical-maps" && mapsPackage && (
+                                            <CapabilityElement
+                                              packageId={mapsPackage.id}
+                                              view="settings"
+                                              capabilityProps={{
+                                                chatId: chat.id,
+                                                debugMode,
+                                                enabledForChat: mapsPackageEnabledForChat,
+                                                onEnabledForChatChange: async (enabled: boolean) => {
+                                                  const current = readLatestActiveAgentIds();
+                                                  const nextActiveAgentIds = enabled
+                                                    ? Array.from(new Set([...current, mapsPackage.id]))
+                                                    : current.filter((id) => id !== mapsPackage.id);
+                                                  await updateMeta.mutateAsync({
+                                                    id: chat.id,
+                                                    ...(enabled ? { enableAgents: true } : {}),
+                                                    activeAgentIds: nextActiveAgentIds,
+                                                  });
+                                                },
+                                                confirmAction: showConfirmDialog,
+                                                onDirtyChange: setEditorDirty,
+                                                onOpenLorebook: openLorebookDetail,
+                                              }}
+                                              className="mt-2 block overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--background)]/45"
+                                            />
+                                          )}
                                         </div>
                                       );
                                     })}
@@ -8684,8 +8729,8 @@ export function ChatSettingsDrawer({
 
             {agentAddIsFeature ? (
               <div className="rounded-xl bg-[var(--secondary)]/70 px-3 py-2.5 text-[0.6875rem] leading-5 text-[var(--muted-foreground)] ring-1 ring-[var(--border)]">
-                This activates the downloaded feature for this chat. Its package owns the UI and runtime, so it does not
-                make a separate agent model call or use an agent connection.
+                This lets characters initiate the downloaded feature in this chat. Manual controls supplied by the
+                installed package remain available independently, and no separate agent model call or connection is used.
               </div>
             ) : agentAddIsRuntimeDisabled ? (
               <div className="rounded-xl bg-[var(--secondary)]/70 px-3 py-2.5 text-[0.6875rem] leading-5 text-[var(--muted-foreground)] ring-1 ring-[var(--border)]">

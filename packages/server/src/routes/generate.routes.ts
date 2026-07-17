@@ -110,6 +110,7 @@ import {
   resolvePromptIdleDuration,
   resolvePromptLastGenerationType,
   resolvePromptMessageMacros,
+  scopePromptMacroContextToCharacter,
   type AssemblerInput,
 } from "../services/prompt/index.js";
 import { wrapContent } from "../services/prompt/format-engine.js";
@@ -222,6 +223,7 @@ import {
   shouldAbortOnPassiveGenerationDisconnect,
   shouldEnableAgentsForGeneration,
   shouldInjectIdentityFallback,
+  stripSpeakerTagsExceptLastAssistant,
   type PromptAttachment,
   type SimpleMessage,
 } from "./generate/generate-route-utils.js";
@@ -345,6 +347,7 @@ import {
   clampRoleplaySummaryContextSize,
   clampRoleplaySummaryInterval,
   clampRoleplaySummaryMaxTokens,
+  formatRoleplaySummaryChatLog,
   isAutomaticRoleplaySummaryEnabled,
   parseChatSummaryText,
   resolveChatSummaryPrompt,
@@ -783,7 +786,7 @@ export async function generateRoutes(app: FastifyInstance) {
       let userMsg: Awaited<ReturnType<typeof chats.createMessage>>;
       if (input.pendingSpatialTransition) {
         try {
-          const committed = await commitSpatialOwnerTurn(app.db, {
+          const committed = await commitSpatialOwnerTurn({
             chatId: input.chatId,
             content: input.userMessage ?? "",
             transition: input.pendingSpatialTransition,
@@ -829,8 +832,8 @@ export async function generateRoutes(app: FastifyInstance) {
           .catch(releaseActiveGenerationAndRethrow);
       }
 
-      // Snapshot persona info for per-message persona tracking
-      // (game mode skips the active-persona fallback, matching the prompt's persona resolution below)
+      // Snapshot Persona info for per-message tracking. Only Conversation may
+      // fall back to the active Persona; Roleplay and Game can stay Persona-less.
       if (userMsg?.id) {
         const snapshotPersonas = await chars.listPersonas().catch(releaseActiveGenerationAndRethrow);
         const snapshotPersona = resolveActivePersonaCandidate(snapshotPersonas, chat.personaId, requestChatMode);
@@ -1152,7 +1155,6 @@ export async function generateRoutes(app: FastifyInstance) {
         fallbackMessageIds: resolveRegenerationGameStateFallbackMessageIds(scopedMessages, input.regenerateMessageId),
       };
       const ownerSpatialProjectionPromise = resolveOwnerSpatialProjection(
-        app.db,
         input.chatId,
         input.regenerateMessageId
           ? { beforeMessageId: input.regenerateMessageId }
@@ -1286,8 +1288,8 @@ export async function generateRoutes(app: FastifyInstance) {
         throw new Error("All characters in this chat are disabled. Enable at least one character before generating.");
       }
 
-      // Resolve persona — prefer per-chat personaId, fall back to globally active persona
-      // (Game mode skips the fallback — persona must be explicitly selected in the setup wizard)
+      // Resolve Persona — explicit selection always wins, while only
+      // Conversation may fall back to the globally active Persona.
       let personaId: string | null = null;
       let personaName = "User";
       let personaPhoneticName = "";
@@ -1472,7 +1474,6 @@ export async function generateRoutes(app: FastifyInstance) {
               : "spotify";
         const chatEnableAgents = shouldEnableAgentsForGeneration({
           chatEnableAgents: chatMeta.enableAgents === true,
-          chatMode,
           impersonate: input.impersonate,
           impersonateBlockAgents: input.impersonateBlockAgents,
         });
@@ -1586,6 +1587,12 @@ export async function generateRoutes(app: FastifyInstance) {
           messages: T[],
         ): T[] => resolvePromptMessageMacros(messages, promptMacroContext, historyMacroProfilesById);
         const resolvePromptMacros = (value: string) => resolveMacros(value, promptMacroContext);
+        const resolvePromptMacrosWithoutVariableWrites = (value: string) =>
+          resolveMacros(
+            value,
+            { ...promptMacroContext, variables: { ...promptMacroContext.variables } },
+            { trimResult: false },
+          );
         const resolvePromptMacrosForLorebook = (value: string) =>
           resolveMacrosWithVariableSnapshot(
             value,
@@ -1672,6 +1679,7 @@ export async function generateRoutes(app: FastifyInstance) {
               content: m.content,
             })),
             input,
+            resolvePromptMacrosWithoutVariableWrites,
           );
         const injectCharacterAdvancedPrompts = async () => {
           if (characterAdvancedPromptsInjected) return;
@@ -2958,20 +2966,9 @@ export async function generateRoutes(app: FastifyInstance) {
         const groupTurnPromptEnabled = chatMeta.groupTurnPromptEnabled !== false;
 
         if (isGroupChat && chatMode !== "conversation") {
-          // Strip <speaker> tags from history to save tokens in roleplay mode.
-          // Just remove the tags, keep the dialogue content as-is.
-          const speakerCloseRegex = /<\/speaker>/g;
-          for (let i = 0; i < finalMessages.length; i++) {
-            const msg = finalMessages[i]!;
-            if (msg.role === "system") continue;
-            if (msg.content.includes("<speaker=")) {
-              let converted = msg.content;
-              converted = converted.replace(/<speaker="[^"]*">/g, "");
-              converted = converted.replace(speakerCloseRegex, "");
-              converted = converted.replace(/^\s*\n/gm, "").trim();
-              finalMessages[i] = { ...msg, content: converted };
-            }
-          }
+          // Keep one concrete tagged assistant example while trimming redundant
+          // wrappers from older roleplay history.
+          stripSpeakerTagsExceptLastAssistant(finalMessages);
         }
 
         if (isGroupChat) {
@@ -4711,8 +4708,8 @@ export async function generateRoutes(app: FastifyInstance) {
           oocMessages: string[];
           characterId: string | null;
         } | null> => {
-          const targetCharacterProfile =
-            deferCharacterMacros && targetCharId ? characterMacroProfilesById.get(targetCharId) : undefined;
+          const targetCharacterProfile = targetCharId ? characterMacroProfilesById.get(targetCharId) : undefined;
+          const deferredTargetCharacterProfile = deferCharacterMacros ? targetCharacterProfile : undefined;
           // Turn-game board awareness: when a table game is active in this chat,
           // give THIS responder the current board — from their own seat when they
           // are playing (own hand / color / last move), spectator view otherwise.
@@ -4754,13 +4751,24 @@ export async function generateRoutes(app: FastifyInstance) {
             targetScopedMessagesForGen,
             ownerSpatialProjection,
           );
-          const preparedMessagesForGen = spatiallyScopedMessagesForGen.map((message) => ({
+          const macroScopedMessagesForGen = spatiallyScopedMessagesForGen.map((message) => ({
             ...message,
-            content: (targetCharacterProfile
-              ? resolveDeferredCharacterMacros(message.content, targetCharacterProfile, promptMacroContext)
+            content: (deferredTargetCharacterProfile
+              ? resolveDeferredCharacterMacros(message.content, deferredTargetCharacterProfile, promptMacroContext)
               : message.content
             ).replace(/\n([ \t]*\n){2,}/g, "\n\n"),
           }));
+          // Resolve again at the provider boundary. History is normally expanded
+          // earlier, but guide/system/depth blocks can be appended afterward; a
+          // last scoped pass prevents raw identity macros from escaping (#3704).
+          const providerMacroContext = targetCharacterProfile
+            ? scopePromptMacroContextToCharacter(promptMacroContext, targetCharacterProfile)
+            : promptMacroContext;
+          const preparedMessagesForGen = resolvePromptMessageMacros(
+            macroScopedMessagesForGen,
+            providerMacroContext,
+            historyMacroProfilesById,
+          );
           if (chatMode === "conversation" && conversationIsGroup && !input.impersonate) {
             preparedMessagesForGen.push({
               role: "user",
@@ -5735,7 +5743,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 anchoredMsg?.id &&
                 (requestChatMode === "roleplay" || requestChatMode === "game")
               ) {
-                await materializeAssistantSpatialState(app.db, {
+                await materializeAssistantSpatialState({
                   chatId: input.chatId,
                   messageId: anchoredMsg.id,
                   swipeIndex: anchoredMsg.activeSwipeIndex ?? 0,
@@ -5797,7 +5805,7 @@ export async function generateRoutes(app: FastifyInstance) {
             !input.impersonate &&
             (requestChatMode === "roleplay" || requestChatMode === "game")
           ) {
-            await materializeAssistantSpatialState(app.db, {
+            await materializeAssistantSpatialState({
               chatId: input.chatId,
               messageId: savedMsg.id,
               swipeIndex: savedSwipeIndex,
@@ -6280,9 +6288,7 @@ export async function generateRoutes(app: FastifyInstance) {
           const summaryProvider = resolvedSummaryConnection.provider;
           const summaryModel = resolvedSummaryConnection.model;
 
-          const chatLog = selectedMessages
-            .map((message: any) => `[${message.role}]: ${(message.content as string).slice(0, 2000)}`)
-            .join("\n\n");
+          const chatLog = formatRoleplaySummaryChatLog(selectedMessages);
           const previousSummary = typeof chatMeta.summary === "string" ? chatMeta.summary.trim() : "";
           const globalSummaryPromptSettings = await appSettings.get(CHAT_SUMMARY_PROMPT_SETTINGS_KEY);
           const result = await summaryProvider.chatComplete(
@@ -7278,6 +7284,7 @@ export async function generateRoutes(app: FastifyInstance) {
                               imageEndpointId: imgConnFull.imageEndpointId || undefined,
                               comfyWorkflow: imgConnFull.comfyuiWorkflow || undefined,
                               imageDefaults,
+                              debugMode: input.debugMode,
                               fallback: imageFallback,
                               onFallback,
                             });
@@ -7956,6 +7963,7 @@ export async function generateRoutes(app: FastifyInstance) {
                         comfyWorkflow: imgConnFull.comfyuiWorkflow || undefined,
                         imageDefaults,
                         referenceImages: illustratorRefImages,
+                        debugMode: input.debugMode,
                         fallback: imageFallback,
                         onFallback,
                       });

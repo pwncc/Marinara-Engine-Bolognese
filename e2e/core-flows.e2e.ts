@@ -135,6 +135,81 @@ test("turning off the custom mouse pointer persists immediately and after reload
     .toBeNull();
 });
 
+test("Convo About Me keeps manual editing and native expanded-editor keyboard behavior", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("desktop"), "The shared Convo profile fields are covered on desktop.");
+
+  const characterName = "About Me Controls Smoke";
+  const createResponse = await page.request.post("/api/characters", {
+    data: {
+      data: {
+        name: characterName,
+        personality: "Dryly funny and observant.",
+        extensions: { aboutMe: "alpha\nbeta" },
+      },
+    },
+  });
+  expect(createResponse.ok()).toBeTruthy();
+  const character = (await createResponse.json()) as { id: string };
+
+  try {
+    await page.goto("/");
+    await page.locator('[data-tour="panel-characters"]').click();
+    await page.getByText(characterName, { exact: true }).first().click();
+
+    const editorSections = page.getByRole("navigation", { name: "Editor sections" });
+    await editorSections.getByRole("button", { name: "Convo", exact: true }).click();
+
+    const fields = page.locator('[data-component="ConvoProfileFields"]');
+    await expect(fields.getByText("About Me", { exact: true })).toBeVisible();
+    const aboutMe = fields.locator("textarea").first();
+    await expect(aboutMe).toHaveValue("alpha\nbeta");
+    await expect(fields.getByRole("button", { name: "AI Write", exact: true })).toHaveCount(0);
+    await expect(fields.getByRole("button", { name: "AI Write sources", exact: true })).toHaveCount(0);
+    await expect(fields.locator("select")).toHaveCount(1);
+
+    await aboutMe.evaluate((textarea) => {
+      textarea.focus();
+      textarea.setSelectionRange(0, textarea.value.length);
+    });
+    await page.keyboard.press("Tab");
+    await expect(aboutMe).toHaveValue("  alpha\n  beta");
+    await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+z`);
+    await expect(aboutMe).toHaveValue("alpha\nbeta");
+
+    await fields.getByRole("button", { name: "Expand editor", exact: true }).first().click();
+    const expandedEditor = page.locator('[data-component="ExpandedMacroEditor"] textarea');
+    await expect(expandedEditor).toHaveValue("alpha\nbeta");
+
+    await expandedEditor.evaluate((textarea) => {
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+    await page.keyboard.type("!");
+    await expect(expandedEditor).toHaveValue("alpha\nbeta!");
+    await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+z`);
+    await expect(expandedEditor).toHaveValue("alpha\nbeta");
+
+    await expandedEditor.evaluate((textarea) => {
+      textarea.focus();
+      textarea.setSelectionRange(0, textarea.value.length);
+    });
+    await page.keyboard.press("Tab");
+    await expect(expandedEditor).toHaveValue("  alpha\n  beta");
+    await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+z`);
+    await expect(expandedEditor).toHaveValue("alpha\nbeta");
+
+    await expandedEditor.evaluate((textarea) => {
+      textarea.focus();
+      textarea.setSelectionRange(0, textarea.value.length);
+    });
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Shift+Tab");
+    await expect(expandedEditor).toHaveValue("alpha\nbeta");
+  } finally {
+    await page.request.delete(`/api/characters/${character.id}`);
+  }
+});
+
 test("Conversation membership notices begin only after the chat starts", async ({ request }, testInfo) => {
   test.skip(!testInfo.project.name.includes("desktop"), "Conversation membership regression is covered on desktop.");
 
@@ -1021,6 +1096,34 @@ test("downloadable agent catalog is usable on desktop and mobile", async ({ page
   expect(errors).toEqual([]);
 });
 
+test("agent catalog reports API failures without diagnosing an internet outage", async ({ page }) => {
+  await page.route("**/api/capability-packages/catalog", async (route) => {
+    await route.fulfill({
+      status: 400,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Validation Error" }),
+    });
+  });
+  await page.route("**/api/capability-packages/installed", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+  });
+  await page.route("**/api/capability-packages/agents", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+  });
+  await page.route("**/api/agents", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+  });
+
+  await page.goto("/");
+  await page.locator('[data-tour="panel-agents"]').click();
+  await page.getByLabel("Agents").getByRole("button", { name: "Download Agents", exact: true }).click();
+
+  const catalogView = page.locator('[data-component="AgentCatalogView"]');
+  await expect(catalogView.getByText("The agent catalog is unavailable.")).toBeVisible();
+  await expect(catalogView.getByText(/Marinara Engine returned HTTP 400: Validation Error\./)).toBeVisible();
+  await expect(catalogView.getByText(/Check the server internet connection/)).toHaveCount(0);
+});
+
 test("Music Player links to Music DJ while its package is unavailable", async ({ page }) => {
   const errors = collectUnexpectedErrors(page);
   let musicDjInstalled = false;
@@ -1160,7 +1263,15 @@ test("Connections exposes Local Whisper only while Conversation Calls is install
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
   await page.route("**/api/capability-packages/conversation-calls/client?*", async (route) => {
-    await route.fulfill({ status: 200, contentType: "application/javascript", body: "export {};" });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/javascript",
+      body: `
+        if (!customElements.get("marinara-capability-conversation-calls")) {
+          customElements.define("marinara-capability-conversation-calls", class extends HTMLElement {});
+        }
+      `,
+    });
   });
   await page.route("**/api/sidecar/speech/status", async (route) => {
     await route.fulfill({
@@ -1499,6 +1610,8 @@ test("Conversation feature packages expose commands and settings without per-cha
   expect(chatResponse.ok()).toBeTruthy();
   const chat = (await chatResponse.json()) as { id: string };
   let conversationFeaturesInstalled = false;
+  let clientLoadAttempts = 0;
+  const releaseInitialClientLoad = createDeferred();
   const illustratorManifest = {
     id: "illustrator",
     name: "Illustrator",
@@ -1570,6 +1683,16 @@ test("Conversation feature packages expose commands and settings without per-cha
     });
   });
   await page.route("**/api/capability-packages/conversation-calls/client?*", async (route) => {
+    clientLoadAttempts += 1;
+    if (clientLoadAttempts === 1) {
+      await releaseInitialClientLoad.promise;
+      await route.fulfill({
+        status: 503,
+        contentType: "application/javascript",
+        body: "Service unavailable",
+      });
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: "application/javascript",
@@ -1584,9 +1707,14 @@ test("Conversation feature packages expose commands and settings without per-cha
               if (this.getAttribute("view") !== "settings") return;
               const props = this.capabilityProps || {};
               const enabled = props.metadata?.conversationCallsEnabled === true;
-              this.innerHTML = '<section class="mari-chat-option-field"><span>Conversation Calls</span><button type="button">Audio/Video Calls</button>' + (enabled ? '<span>Call Audio Pipeline</span>' : '') + '</section>';
-              this.querySelector("button")?.addEventListener("click", () => {
+              this.innerHTML = '<section class="mari-chat-option-field"><span>Conversation Calls</span><button type="button">Audio/Video Calls</button><button type="button" data-crash-capability>Crash capability</button>' + (enabled ? '<span>Call Audio Pipeline</span>' : '') + '</section>';
+              this.querySelector("button:not([data-crash-capability])")?.addEventListener("click", () => {
                 props.updateMetadata?.({ conversationCallsEnabled: !enabled });
+              });
+              this.querySelector("[data-crash-capability]")?.addEventListener("click", () => {
+                const message = "Injected capability runtime failure";
+                this.capabilityRuntimeError = message;
+                this.dispatchEvent(new CustomEvent("marinara-capability-runtime-error", { detail: { message }, bubbles: true }));
               });
             }
           });
@@ -1639,6 +1767,21 @@ test("Conversation feature packages expose commands and settings without per-cha
     agentsSection = drawer.locator('[role="button"][aria-expanded]').filter({ hasText: /^Agents$/ });
     await expect(agentsSection).toHaveCount(1);
     await agentsSection.click();
+    await expect(
+      drawer.locator(
+        '[data-capability-client-state="loading"][data-capability-package-id="conversation-calls"]',
+      ),
+    ).toBeVisible();
+    releaseInitialClientLoad.resolve();
+    const clientLoadFailure = drawer.getByRole("alert").filter({ hasText: "Conversation Calls didn't load" });
+    await expect(clientLoadFailure).toBeVisible();
+    await expect(
+      clientLoadFailure.getByText("Your chat and saved data are unchanged.", { exact: false }),
+    ).toBeVisible();
+    const clientLoadRetry = clientLoadFailure.getByRole("button", { name: "Try again", exact: true });
+    expect((await clientLoadRetry.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await clientLoadRetry.click();
+    await expect(clientLoadFailure).toHaveCount(0);
     await expect(drawer.getByText("Commands", { exact: true })).toBeVisible();
     await expect(drawer.getByText("Selfies", { exact: true })).toBeVisible();
     await expect(drawer.getByText("8-Ball Pool", { exact: true })).toBeVisible();
@@ -1666,8 +1809,24 @@ test("Conversation feature packages expose commands and settings without per-cha
     ).toBe(true);
     await drawer.getByRole("button", { name: "Audio/Video Calls", exact: true }).click();
     await expect(drawer.getByText("Call Audio Pipeline", { exact: true })).toBeVisible();
+    await drawer.getByRole("button", { name: "Crash capability", exact: true }).click();
+    const runtimeFailure = drawer.getByRole("alert").filter({ hasText: "Conversation Calls stopped" });
+    await expect(runtimeFailure).toBeVisible();
+    const runtimeRetry = runtimeFailure.getByRole("button", { name: "Try again", exact: true });
+    expect((await runtimeRetry.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await runtimeRetry.click();
+    await expect(runtimeFailure).toHaveCount(0);
+    await expect(drawer.getByText("Conversation Calls", { exact: true })).toBeVisible();
     await expect(drawer.locator('[role="button"][aria-expanded]').filter({ hasText: /^Commands$/ })).toHaveCount(0);
-    expect(errors).toEqual([]);
+    expect(clientLoadAttempts).toBe(2);
+    expect(errors.some((error) => error.includes("Could not load client capability conversation-calls"))).toBe(true);
+    expect(
+      errors.filter(
+        (error) =>
+          !error.includes("Could not load client capability conversation-calls") &&
+          !/Failed to load resource:.*503/iu.test(error),
+      ),
+    ).toEqual([]);
   } finally {
     await page.request.delete(`/api/chats/${chat.id}`);
   }
@@ -1872,7 +2031,71 @@ test("Game setup only shows features owned by installed agents", async ({ page, 
 
   try {
     await page.goto("/");
-    let dialog = await openLorebooksStep();
+    const initialDialog = page.getByRole("dialog", { name: "New Game" });
+    const importButton = initialDialog.getByRole("button", { name: "Import setup", exact: true });
+    await expect(importButton).toBeEnabled();
+    await initialDialog.getByLabel("Import Game Mode setup file").setInputFiles({
+      name: "tower-run.marinara-game-setup.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(
+        JSON.stringify({
+          format: "marinara-game-setup",
+          version: 1,
+          exportedAt: "2026-07-16T12:00:00.000Z",
+          gameName: "Imported Tower Run",
+          setup: {
+            config: {
+              genre: "Fantasy",
+              setting: "A city built around a shifting dungeon tower",
+              tone: "Heroic",
+              difficulty: "Hard",
+              playerGoals: "Reach the final floor",
+              gmMode: "standalone",
+              rating: "sfw",
+              partyCharacterIds: [],
+              generationParameters: { temperature: 0.65 },
+            },
+            effectiveGenerationParameters: { temperature: 0.65, maxTokens: 8192 },
+            preferences: "Use clear progression and frequent loot rewards.",
+            createdAt: "2026-07-16T11:00:00.000Z",
+          },
+        }),
+      ),
+    });
+    await expect(initialDialog.locator('input[placeholder="Name your adventure..."]')).toHaveValue(
+      "Imported Tower Run",
+    );
+    await expect(
+      initialDialog.getByText(
+        "tower-run.marinara-game-setup.json loaded. Review the steps, then start the new game.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+
+    const temperatureField = initialDialog.locator('input[inputmode="decimal"]').first();
+    await expect(temperatureField).toHaveValue("0.65");
+    await initialDialog.getByRole("button", { name: "Next", exact: true }).click();
+    await expect(initialDialog.getByRole("heading", { name: "World", exact: true })).toBeVisible();
+    await expect(initialDialog.locator('input[placeholder="Describe your world…"]')).toHaveValue(
+      "A city built around a shifting dungeon tower",
+    );
+    await expect(initialDialog.getByRole("button", { name: "Hard", exact: true })).toHaveClass(
+      /bg-\[var\(--primary\)\]\/20/,
+    );
+    await initialDialog.getByRole("button", { name: "Next", exact: true }).click();
+    await expect(initialDialog.getByRole("heading", { name: "Party", exact: true })).toBeVisible();
+    await initialDialog.getByRole("button", { name: "Next", exact: true }).click();
+    await expect(initialDialog.getByRole("heading", { name: "Goals", exact: true })).toBeVisible();
+    await expect(initialDialog.locator('textarea[placeholder="What do you want to achieve?"]')).toHaveValue(
+      "Reach the final floor",
+    );
+    await expect(initialDialog.locator('textarea[placeholder="Any extra details for the GM?"]')).toHaveValue(
+      "Use clear progression and frequent loot rewards.",
+    );
+    await initialDialog.getByRole("button", { name: "Next", exact: true }).click();
+    await expect(initialDialog.getByRole("heading", { name: "Lorebooks", exact: true })).toBeVisible();
+
+    let dialog = initialDialog;
     await expect(dialog.getByText("Hierarchical world map", { exact: true })).toHaveCount(0);
     await dialog.getByRole("button", { name: "Next", exact: true }).click();
     await expect(dialog.getByRole("heading", { name: "Features", exact: true })).toBeVisible();
@@ -2004,6 +2227,215 @@ test("Roleplay and Game chat settings link empty agent libraries to Download Age
       await expect(page.locator('[data-component="RightPanelDesktop"]')).toBeVisible();
       await catalog.getByRole("button", { name: "Back to Agents" }).click();
       await expect(catalog).toHaveCount(0);
+    }
+    expect(errors).toEqual([]);
+  } finally {
+    await Promise.all(chats.map((chat) => request.delete(`/api/chats/${chat.id}`, { timeout: 10_000 })));
+  }
+});
+
+test("Hierarchical Maps settings stay inside the active agent entry", async ({ page, request }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("desktop"), "Hierarchical Maps agent placement is covered on desktop.");
+  test.setTimeout(90_000);
+
+  const errors = collectUnexpectedErrors(page);
+  const chats: Array<{ id: string; mode: "roleplay" | "game" }> = [];
+  for (const mode of ["roleplay", "game"] as const) {
+    const response = await request.post("/api/chats", {
+      data: { name: `${mode} Hierarchical Maps Agent Menu Smoke`, mode, characterIds: [] },
+    });
+    expect(response.ok()).toBeTruthy();
+    const chat = (await response.json()) as { id: string };
+    const metadataResponse = await request.patch(`/api/chats/${chat.id}/metadata`, {
+      data: {
+        enableAgents: true,
+        activeAgentIds: ["hierarchical-maps"],
+        ...(mode === "game"
+          ? {
+              gameId: "hierarchical-maps-agent-menu-smoke",
+              gameSessionStatus: "active",
+              gameSessionNumber: 1,
+              gameIntroPresented: true,
+            }
+          : {}),
+      },
+    });
+    expect(metadataResponse.ok()).toBeTruthy();
+    if (mode === "game") {
+      const messageResponse = await request.post(`/api/chats/${chat.id}/messages`, {
+        data: { role: "assistant", content: "The party studies the map." },
+      });
+      expect(messageResponse.ok()).toBeTruthy();
+    }
+    chats.push({ id: chat.id, mode });
+  }
+
+  const agentManifest = {
+    id: "hierarchical-maps",
+    name: "Hierarchical Maps",
+    description: "Adds persistent hierarchical locations and spatial context.",
+    author: "Pasta Devs",
+    phase: "pre_generation",
+    enabledByDefault: false,
+    category: "tracker",
+    runtimeDisabled: true,
+    modeAllowlist: ["roleplay", "game"],
+    defaultPromptTemplate: "",
+    execution: "feature",
+  };
+  const packageManifest = {
+    schemaVersion: 1,
+    id: "hierarchical-maps",
+    name: "Hierarchical Maps",
+    version: "1.0.6",
+    description: agentManifest.description,
+    engine: { min: "2.3.0", maxExclusive: "2.4.0" },
+    kind: ["agent", "maps"],
+    entrypoints: { agents: "agents.json", client: "client.js" },
+    contributions: {
+      slots: ["chat-settings", "spatial-workspace", "chat-runtime", "game-world-map"],
+      agentDetail: { agentIds: ["hierarchical-maps"] },
+    },
+    files: [],
+    permissions: ["ui"],
+    restartRequired: true,
+  };
+
+  await page.route("**/api/capability-packages/agents", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([agentManifest]) });
+  });
+  await page.route("**/api/capability-packages/catalog", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ schemaVersion: 1, generatedAt: "2026-07-16T00:00:00.000Z", packages: [] }),
+    });
+  });
+  await page.route("**/api/capability-packages/installed", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([
+        {
+          id: "hierarchical-maps",
+          version: packageManifest.version,
+          manifest: packageManifest,
+          installedAt: "2026-07-16T00:00:00.000Z",
+          status: "active",
+          error: null,
+          legacy: false,
+        },
+      ]),
+    });
+  });
+  await page.route("**/api/capability-packages/hierarchical-maps/client?*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/javascript",
+      body: `
+        class HierarchicalMapsSmokeElement extends HTMLElement {
+          connectedCallback() {
+            this.addEventListener('marinara-capability-props', () => this.render());
+            this.render();
+          }
+          render() {
+            const props = this.capabilityProps || {};
+            if (this.getAttribute('view') === 'detail') {
+              this.innerHTML = '<section data-testid="hierarchical-maps-detail"><h1>Hierarchical Maps home</h1><p>' + (props.chatName || 'No current chat') + '</p><button type="button">Back to Agents</button></section>';
+              this.querySelector('button')?.addEventListener('click', () => props.onClose?.());
+              return;
+            }
+            this.innerHTML = '<div data-testid="hierarchical-maps-controls">Hierarchical map controls</div>';
+          }
+        }
+        if (!customElements.get('marinara-capability-hierarchical-maps')) {
+          customElements.define('marinara-capability-hierarchical-maps', HierarchicalMapsSmokeElement);
+        }
+        export {};
+      `,
+    });
+  });
+  await page.route("**/api/agents", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+  });
+  await page.route("**/api/lorebooks/scan/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ entries: [], budgetSkippedEntries: [], totalTokens: 0, totalEntries: 0 }),
+    });
+  });
+  await page.route("**/api/chats/*/spatial-context", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        definition: null,
+        currentLocationId: null,
+        breadcrumb: [],
+        destinations: [],
+        warnings: [],
+        hasCommittedSpatialHistory: false,
+      }),
+    });
+  });
+  await page.route("**/api/game-assets/manifest", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ scannedAt: "2026-07-16T00:00:00.000Z", count: 0, assets: {}, byCategory: {} }),
+    });
+  });
+  await page.route("**/api/backgrounds/file/Black.jpg", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "image/gif",
+      body: Buffer.from(TRANSPARENT_GIF_BASE64, "base64"),
+    });
+  });
+
+  try {
+    await page.addInitScript((chatId) => {
+      if (sessionStorage.getItem("maps-feature-detail-chat-seeded")) return;
+      localStorage.setItem("marinara-active-chat-id", chatId);
+      sessionStorage.setItem("maps-feature-detail-chat-seeded", "true");
+    }, chats[0]!.id);
+    await page.goto("/");
+    await page.locator('[data-tour="panel-agents"]').click();
+    const agentsPanel = page.locator('[data-component="RightPanelDesktop"]');
+    const mapsCard = agentsPanel.locator('[data-agent-name="Hierarchical Maps"]');
+    await expect(mapsCard).toBeVisible();
+    await mapsCard.getByText("Hierarchical Maps", { exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Hierarchical Maps home" })).toBeVisible();
+    await expect(page.getByTestId("hierarchical-maps-detail")).toContainText(
+      "roleplay Hierarchical Maps Agent Menu Smoke",
+    );
+    await expect(page.getByText("System Prompt", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Back to Agents" }).click();
+    await expect(page.getByTestId("hierarchical-maps-detail")).toHaveCount(0);
+
+    for (const chat of chats) {
+      await page.evaluate((chatId) => localStorage.setItem("marinara-active-chat-id", chatId), chat.id);
+      await page.reload();
+      await page.getByRole("button", { name: "Chat Settings" }).click();
+      const drawer = page.locator(".mari-chat-settings-drawer");
+      await expect(drawer).toBeVisible();
+      await expect(
+        drawer.locator('[role="button"][aria-expanded]').filter({ hasText: /^Hierarchical map/ }),
+        `${chat.mode} should not expose a top-level Hierarchical map section`,
+      ).toHaveCount(0);
+
+      const agentsSection = drawer.locator('[role="button"][aria-expanded]').filter({ hasText: /^Agents/ });
+      await agentsSection.click();
+      if (chat.mode === "roleplay") {
+        await drawer.getByRole("button", { name: /Tracker Agents/ }).click();
+      }
+
+      const agentEntry = drawer.locator('[data-chat-agent-entry="hierarchical-maps"]');
+      await expect(agentEntry, `${chat.mode} Hierarchical Maps agent entry`).toBeVisible();
+      await expect(agentEntry.getByTestId("hierarchical-maps-controls")).toBeVisible();
+      await expect(drawer.locator("marinara-capability-hierarchical-maps")).toHaveCount(1);
+      await expect(agentEntry.locator("marinara-capability-hierarchical-maps")).toHaveCount(1);
     }
     expect(errors).toEqual([]);
   } finally {
@@ -2742,6 +3174,36 @@ test("Noodle settings edit and restore the timeline base prompt", async ({ page 
   }
 });
 
+test("Noodle carryover mode labels fit inside their controls", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("desktop"), "The compact three-column settings row is desktop-only.");
+
+  await page.setViewportSize({ width: 1024, height: 700 });
+  await page.goto("/");
+  await page.locator('[data-tour="noodle-tab"]').click();
+  const noodle = page.locator('[data-component="NoodleView"]');
+  await noodle.getByRole("button", { name: "Settings", exact: true }).click();
+  const carryoverSection = noodle.getByRole("heading", { name: "Carryover" }).locator("..");
+
+  for (const name of ["Conversations", "Roleplays", "Games"]) {
+    const checkbox = carryoverSection.getByRole("checkbox", { name, exact: true });
+    const control = checkbox.locator("..");
+    const text = control.getByText(name, { exact: true });
+    await expect(control).toBeVisible();
+    const [controlRect, textRect, checkboxRect] = await Promise.all([
+      control.boundingBox(),
+      text.boundingBox(),
+      checkbox.boundingBox(),
+    ]);
+    expect(controlRect).not.toBeNull();
+    expect(textRect).not.toBeNull();
+    expect(checkboxRect).not.toBeNull();
+    expect(textRect!.x).toBeGreaterThanOrEqual(controlRect!.x);
+    expect(checkboxRect!.x - (textRect!.x + textRect!.width)).toBeGreaterThanOrEqual(6);
+    expect(checkboxRect!.x + checkboxRect!.width).toBeLessThanOrEqual(controlRect!.x + controlRect!.width);
+    expect(await text.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  }
+});
+
 test("Noodle settings persist through refetch and reload", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.includes("desktop"), "Noodle settings persistence is covered on desktop.");
 
@@ -3019,6 +3481,26 @@ test("Noodle posts tag invited characters with @handle mentions", async ({ page 
     const roleplayPrompt = noodle.locator('[data-component="InlineComposer.noodle-profile.Prompt"]');
     await roleplayPrompt.getByRole("button", { name: "Post as @professor_mari" }).click();
     await expect(noodle.getByPlaceholder("Post as @professor_mari...")).toBeVisible();
+
+    const replyResponse = await page.request.post(`/api/noodle/posts/${post.id}/interactions`, {
+      data: {
+        actorKind: "persona",
+        actorEntityId: personaId,
+        type: "reply",
+        content: "Reply mention for @professor_mari.",
+      },
+    });
+    expect(replyResponse.ok()).toBe(true);
+    const reply = (await replyResponse.json()) as { id: string };
+
+    await page.reload();
+    await page.locator('[data-tour="noodle-tab"]').click();
+    const replyMention = page
+      .locator(`[data-noodle-interaction-id="${reply.id}"]`)
+      .getByRole("button", { name: "View @professor_mari profile" });
+    await expect(replyMention).toBeVisible();
+    await replyMention.click();
+    await expect(noodle.getByRole("heading", { name: "Professor Mari", exact: true })).toBeVisible();
     expect(errors).toEqual([]);
   } finally {
     if (createdPostId) {
@@ -4039,11 +4521,14 @@ test("Roleplay displays a selected background when its file route is GET-only", 
         contentType: "application/json",
         body: JSON.stringify([
           {
+            id: "user:rp-background-smoke.png",
             filename: "rp-background-smoke.png",
             url: backgroundUrl,
             originalName: "Roleplay background smoke",
             tags: [],
             source: "user",
+            createdAt: "2026-07-16T00:00:00.000Z",
+            folderId: null,
           },
         ]),
       });
@@ -4089,5 +4574,124 @@ test("Roleplay displays a selected background when its file route is GET-only", 
     expect(requestedMethods).not.toContain("HEAD");
   } finally {
     await page.request.delete(`/api/chats/${chat.id}`);
+  }
+});
+
+test("Background library organization works with desktop drag and touch drag", async ({ page }, testInfo) => {
+  const suffix = testInfo.project.name.includes("mobile") ? "mobile" : "desktop";
+  const originalFilename = `background-folder-${suffix}.gif`;
+  const uploadResponse = await page.request.post("/api/backgrounds/upload", {
+    multipart: {
+      file: {
+        name: originalFilename,
+        mimeType: "image/gif",
+        buffer: Buffer.from(TRANSPARENT_GIF_BASE64, "base64"),
+      },
+    },
+  });
+  expect(uploadResponse.ok()).toBeTruthy();
+  const uploaded = (await uploadResponse.json()) as { filename: string; url: string };
+  const backgroundId = `user:${uploaded.filename}`;
+  let folderId: string | null = null;
+
+  try {
+    const tagResponse = await page.request.patch(
+      `/api/backgrounds/${encodeURIComponent(uploaded.filename)}/tags`,
+      { data: { tags: ["smoke-folder"] } },
+    );
+    expect(tagResponse.ok()).toBeTruthy();
+
+    await page.goto("/");
+    await page.locator('[data-tour="panel-settings"]').click();
+    await page.getByRole("tab", { name: "Appearance" }).click();
+    await page.getByPlaceholder("Search settings").fill("Backgrounds");
+    await page.getByRole("button", { name: /Backgrounds Section/ }).click();
+
+    await expect(page.getByText("Drag and drop backgrounds to folders, double-click or double-tap to rename.")).toBeVisible();
+    const sortSelect = page.getByLabel("Sort backgrounds");
+    await expect(sortSelect.locator("option")).toHaveText(["A-Z", "Z-A", "Newest", "Oldest"]);
+    await page.getByRole("button", { name: /Tags \(/ }).click();
+    await page.getByRole("button", { name: "smoke-folder", exact: true }).click();
+
+    const backgroundRow = page.locator(`[data-background-id="${backgroundId}"]`);
+    await expect(backgroundRow).toBeVisible();
+    const defaultToggle = backgroundRow.locator("[data-background-default-toggle]");
+    await defaultToggle.scrollIntoViewIfNeeded();
+    const starBefore = await defaultToggle.boundingBox();
+    await defaultToggle.click();
+    await expect(defaultToggle).toHaveAttribute("aria-pressed", "true");
+    const starAfter = await defaultToggle.boundingBox();
+    expect(Math.abs((starAfter?.x ?? 0) - (starBefore?.x ?? 0))).toBeLessThan(1);
+    expect(Math.abs((starAfter?.y ?? 0) - (starBefore?.y ?? 0))).toBeLessThan(1);
+    await defaultToggle.click();
+
+    const [createFolderResponse] = await Promise.all([
+      page.waitForResponse(
+        (response) =>
+          response.request().method() === "POST" && new URL(response.url()).pathname === "/api/backgrounds/folders",
+      ),
+      page.getByRole("button", { name: "New Folder" }).click(),
+    ]);
+    expect(createFolderResponse.ok()).toBeTruthy();
+    const createdFolder = (await createFolderResponse.json()) as { id: string; name: string };
+    folderId = createdFolder.id;
+
+    const folder = page.locator(`[data-background-folder-id="${folderId}"]`);
+    await expect(folder).toBeVisible();
+    if (testInfo.project.name.includes("mobile")) {
+      await page.evaluate(
+        ({ sourceId, targetFolderId }) => {
+          const source = document.querySelector<HTMLElement>(`[data-background-id="${sourceId}"]`);
+          const handle = source?.querySelector<HTMLElement>("button[title^='Drag']");
+          const target = document.querySelector<HTMLElement>(`[data-background-folder-id="${targetFolderId}"]`);
+          if (!source || !handle || !target) throw new Error("Background touch drag fixtures were not rendered");
+          const startRect = handle.getBoundingClientRect();
+          const targetRect = target.getBoundingClientRect();
+          const start = new Touch({
+            identifier: 1,
+            target: handle,
+            clientX: startRect.left + startRect.width / 2,
+            clientY: startRect.top + startRect.height / 2,
+          });
+          const end = new Touch({
+            identifier: 1,
+            target: handle,
+            clientX: targetRect.left + targetRect.width / 2,
+            clientY: targetRect.top + Math.min(targetRect.height / 2, 20),
+          });
+          handle.dispatchEvent(
+            new TouchEvent("touchstart", { bubbles: true, cancelable: true, touches: [start], changedTouches: [start] }),
+          );
+          window.dispatchEvent(
+            new TouchEvent("touchmove", { bubbles: true, cancelable: true, touches: [end], changedTouches: [end] }),
+          );
+          window.dispatchEvent(
+            new TouchEvent("touchend", { bubbles: true, cancelable: true, touches: [], changedTouches: [end] }),
+          );
+        },
+        { sourceId: backgroundId, targetFolderId: folderId! },
+      );
+    } else {
+      await backgroundRow.dragTo(folder);
+    }
+
+    await expect
+      .poll(async () => {
+        const response = await page.request.get("/api/backgrounds");
+        const backgrounds = (await response.json()) as Array<{ id: string; folderId: string | null }>;
+        return backgrounds.find((background) => background.id === backgroundId)?.folderId ?? null;
+      })
+      .toBe(folderId);
+
+    const folderHeader = folder.getByRole("button", { name: /folder .*Double-tap or press F2 to rename/i });
+    await folderHeader.dblclick();
+    const folderNameInput = folder.locator("input");
+    await expect(folderNameInput).toBeVisible();
+    await folderNameInput.fill(`Scenes ${suffix}`);
+    await folderNameInput.press("Enter");
+    await expect(folder.getByText(`Scenes ${suffix}`, { exact: true })).toBeVisible();
+  } finally {
+    if (folderId) await page.request.delete(`/api/backgrounds/folders/${encodeURIComponent(folderId)}`);
+    await page.request.delete(`/api/backgrounds/${encodeURIComponent(uploaded.filename)}`);
   }
 });

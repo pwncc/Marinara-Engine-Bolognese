@@ -1,9 +1,10 @@
 // ──────────────────────────────────────────────
 // Game: Setup Wizard (initial game setup modal)
 // ──────────────────────────────────────────────
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef, type ChangeEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { toast } from "sonner";
 import {
   Wand2,
   ArrowRight,
@@ -26,6 +27,8 @@ import {
   Map as MapIcon,
   RotateCcw,
   FolderOpen,
+  FileUp,
+  CheckCircle2,
 } from "lucide-react";
 import {
   ANIME_GAME_PROMPT_TEMPLATE_ID,
@@ -41,6 +44,7 @@ import {
   type GameInitialSetupLabels,
   type GameSetupConfig,
   type GameGmMode,
+  type GenerationParameters,
   type SpatialMapGroundingMode,
   type SpatialMapDraftSize,
   type GameCombatStyle,
@@ -51,6 +55,7 @@ import { cn, getAvatarCropStyle, parseAvatarCropJson, type AvatarCropValue } fro
 import {
   GenerationParametersFields,
   getEditableGenerationParameters,
+  parseEditableGenerationParameters,
   ROLEPLAY_PARAMETER_DEFAULTS,
   type EditableGenerationParameters,
 } from "../ui/GenerationParametersEditor";
@@ -75,6 +80,7 @@ import { useLorebooks } from "../../hooks/use-lorebooks";
 import { useCapabilityAgentRegistry } from "../../hooks/use-capability-packages";
 import { useGameAssetStore } from "../../stores/game-asset.store";
 import { useUIStore } from "../../stores/ui.store";
+import { parseGameSetupShareFileJson, resolveGameSetupImport } from "../../lib/game-setup-share";
 
 interface GameSetupWizardProps {
   onComplete: (
@@ -86,6 +92,7 @@ interface GameSetupWizardProps {
       size: SpatialMapDraftSize;
       groundingMode: SpatialMapGroundingMode;
       sourceLorebookIds: string[];
+      instructions?: string;
     },
   ) => void;
   onCancel: () => void;
@@ -154,6 +161,7 @@ const GENRES = ["Fantasy", "Sci-Fi", "Horror", "Modern", "Post-Apocalyptic", "Cy
 const TONES = ["Heroic", "Dark", "Comedic", "Gritty", "Whimsical", "Serious", "Campy"];
 const DIFFICULTIES = ["Casual", "Normal", "Hard", "Brutal"];
 const LEARNED_OPTION_PREVIEW_LIMIT = 8;
+const GAME_SETUP_IMPORT_MAX_BYTES = 1_000_000;
 
 const SETTING_SUGGESTIONS = [
   "Surprise me!",
@@ -472,6 +480,7 @@ export function GameSetupWizard({
   const [draftSpatialMap, setDraftSpatialMap] = useState(false);
   const [spatialMapDraftSize, setSpatialMapDraftSize] = useState<SpatialMapDraftSize>("medium");
   const [spatialMapGroundingMode, setSpatialMapGroundingMode] = useState<SpatialMapGroundingMode>("setup");
+  const [spatialMapInstructions, setSpatialMapInstructions] = useState("");
   const [expandedLearnedOptions, setExpandedLearnedOptions] = useState<Record<LearnedOptionGroup, boolean>>({
     genres: false,
     tones: false,
@@ -479,6 +488,16 @@ export function GameSetupWizard({
     goals: false,
     preferences: false,
   });
+  const [importedSetupNotice, setImportedSetupNotice] = useState<string | null>(null);
+  const setupImportInputRef = useRef<HTMLInputElement>(null);
+  const pendingImportedGenerationParametersRef = useRef<Partial<EditableGenerationParameters> | null>(null);
+  const importedGenerationParametersRef = useRef<Partial<GenerationParameters> | null>(null);
+  const importedArtStyleSettingsRef = useRef<
+    Pick<
+      GameSetupConfig,
+      "artStylePrompt" | "generatedArtStylePrompt" | "useCampaignArtStyle" | "imageStyleProfileId"
+    > | null
+  >(null);
 
   const sidecarStatus = useSidecarStore((s) => s.status);
   const sidecarConfig = useSidecarStore((s) => s.config);
@@ -516,12 +535,12 @@ export function GameSetupWizard({
   // "local" = sidecar, a connection id = API connection, null = skip
   const sceneModelValue = useLocalScene && sidecarAvailable ? "local" : sceneConnectionId;
 
-  const { data: connectionsList } = useConnections();
-  const { data: promptPresetsList } = usePresets();
+  const { data: connectionsList, isLoading: connectionsLoading } = useConnections();
+  const { data: promptPresetsList, isLoading: promptPresetsLoading } = usePresets();
   const { data: defaultPreset } = useDefaultPreset();
-  const { data: personasList } = usePersonas();
+  const { data: personasList, isLoading: personasLoading } = usePersonas();
   const { data: characterGroupsList } = useCharacterGroups();
-  const { data: lorebooksList } = useLorebooks();
+  const { data: lorebooksList, isLoading: lorebooksLoading } = useLorebooks();
   const { data: installedAgentManifests = [], isLoading: installedAgentsLoading } = useCapabilityAgentRegistry();
   const installedAgentIds = useMemo(
     () => new Set(installedAgentManifests.map((agent) => agent.id)),
@@ -616,6 +635,8 @@ export function GameSetupWizard({
     () => (lorebooksList as Array<{ id: string; name: string; enabled?: boolean }>) ?? [],
     [lorebooksList],
   );
+  const setupImportResourcesReady =
+    !connectionsLoading && !promptPresetsLoading && !personasLoading && !lorebooksLoading;
 
   const availableLorebooks = useMemo(
     () =>
@@ -746,8 +767,15 @@ export function GameSetupWizard({
   }, []);
 
   useEffect(() => {
+    const importedParameters = pendingImportedGenerationParametersRef.current;
+    if (importedParameters) {
+      if (!gmConnectionId) return;
+      pendingImportedGenerationParametersRef.current = null;
+      setGenerationParameters(getEditableGenerationParameters(gmParameterDefaults, importedParameters));
+      return;
+    }
     setGenerationParameters(gmParameterDefaults);
-  }, [gmParameterDefaults]);
+  }, [gmConnectionId, gmParameterDefaults]);
 
   useEffect(() => {
     if (enableSpriteGeneration && !imageConnectionId && preferredImageConnectionId) {
@@ -852,6 +880,166 @@ export function GameSetupWizard({
     }
   };
 
+  const handleImportSetupFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file || isLoading) return;
+
+    try {
+      if (!setupImportResourcesReady) {
+        throw new Error("Setup resources are still loading. Try the import again in a moment.");
+      }
+      if (file.size > GAME_SETUP_IMPORT_MAX_BYTES) {
+        throw new Error("This setup file is too large. Choose a Game Mode setup file smaller than 1 MB.");
+      }
+
+      const shareFile = parseGameSetupShareFileJson(await file.text());
+      const imported = resolveGameSetupImport(shareFile, {
+        characters,
+        connections,
+        lorebooks,
+        personas,
+        promptPresets,
+      });
+      const config = imported.config;
+      const importedGenres = config.genre
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const importedTones = config.tone
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const importedPresentation =
+        config.gameGmPromptTemplateId === ANIME_GAME_PROMPT_TEMPLATE_ID ? "anime" : "standard";
+      const importedPromptPreset = promptPresets.find((preset) => preset.id === config.promptPresetId) ?? null;
+      const importedCustomPrompt = config.gameSystemPrompt?.trim() ?? "";
+      const importedBasePrompt =
+        importedPresentation === "anime"
+          ? ANIME_GAME_SYSTEM_PROMPT
+          : importedPromptPreset?.gamePrompt?.trim() || DEFAULT_GAME_SYSTEM_PROMPT;
+      const importedWidgets = normalizeGameHudWidgets(config.customHudWidgets ?? []);
+      const importedGenerationParameters = imported.effectiveGenerationParameters ?? config.generationParameters ?? null;
+      const importedParameterOverrides = parseEditableGenerationParameters(importedGenerationParameters);
+      const hasImportedGenerationParameters =
+        importedGenerationParameters !== null && Object.keys(importedGenerationParameters).length > 0;
+      const importedGmConnection = connections.find((connection) => connection.id === imported.gmConnectionId) ?? null;
+      const importedGmDefaults = getEditableGenerationParameters(
+        ROLEPLAY_PARAMETER_DEFAULTS,
+        importedGmConnection?.defaultParameters,
+      );
+
+      setStep(0);
+      setGameName(imported.gameName);
+      setGenres(importedGenres.length > 0 ? importedGenres : ["Fantasy"]);
+      setCustomGenre("");
+      setSetting(config.setting);
+      setTones(importedTones.length > 0 ? importedTones : ["Heroic"]);
+      setCustomTone("");
+      setDifficulty(config.difficulty);
+      setCombatStyle(config.combatStyle === "tactical" ? "tactical" : "classic");
+      setRating(config.rating);
+      setLanguage(config.language?.trim() || "English");
+      setGmMode(config.gmMode);
+      setGmCharacterId(config.gmCharacterId ?? null);
+      setPartyCharacterIds(config.partyCharacterIds);
+      setPersonaId(config.personaId ?? null);
+      setPlayerGoals(config.playerGoals);
+      setPreferences(imported.preferences);
+      setGmSearch("");
+      setPartySearch("");
+      setPartyFolderId("");
+      setPersonaSearch("");
+      setGmConnectionId(imported.gmConnectionId);
+      setCustomizeParameters(hasImportedGenerationParameters);
+      setGenerationParameters(getEditableGenerationParameters(importedGmDefaults, importedParameterOverrides));
+      importedGenerationParametersRef.current = importedGenerationParameters;
+      pendingImportedGenerationParametersRef.current =
+        importedParameterOverrides &&
+        (imported.gmConnectionId === null || imported.gmConnectionId !== gmConnectionId)
+          ? importedParameterOverrides
+          : null;
+      importedArtStyleSettingsRef.current = {
+        artStylePrompt: config.artStylePrompt,
+        generatedArtStylePrompt: config.generatedArtStylePrompt,
+        useCampaignArtStyle: config.useCampaignArtStyle,
+        imageStyleProfileId: config.imageStyleProfileId,
+      };
+      setUseLocalScene(
+        sidecarAvailable &&
+          !config.sceneConnectionId &&
+          shareFile.setup.connections?.scene?.provider === "local",
+      );
+      setSceneConnectionId(config.sceneConnectionId ?? null);
+
+      const visualGenerationEnabled =
+        config.enableSpriteGeneration === true ||
+        config.gameStoryboardAutoIllustrationsEnabled === true ||
+        config.gameStoryboardAutoGenerationEnabled === true;
+      setEnableSpriteGeneration(visualGenerationEnabled);
+      setImageConnectionId(config.imageConnectionId ?? null);
+      setVideoConnectionId(config.videoConnectionId ?? null);
+      setEnableStoryboardIllustrations(
+        config.gameStoryboardAutoIllustrationsEnabled === true ||
+          config.gameStoryboardAutoGenerationEnabled === true,
+      );
+      setEnableStoryboardAnimations(config.gameStoryboardAutoGenerationEnabled === true);
+      setStoryboardKeyframeCount(
+        Math.min(
+          GAME_STORYBOARD_KEYFRAME_COUNT_MAX,
+          Math.max(
+            GAME_STORYBOARD_KEYFRAME_COUNT_MIN,
+            Number.isFinite(config.gameStoryboardKeyframeCount)
+              ? Math.round(config.gameStoryboardKeyframeCount!)
+              : GAME_STORYBOARD_KEYFRAME_COUNT_DEFAULT,
+          ),
+        ),
+      );
+      setGamePresentation(importedPresentation);
+      setActiveLorebookIds(config.activeLorebookIds ?? []);
+      setLbSearch("");
+      setEnableCustomWidgets(config.enableCustomWidgets !== false);
+      setManualWidgetSetupEnabled(importedWidgets.length > 0);
+      setCustomHudWidgets(
+        importedWidgets.length > 0
+          ? importedWidgets
+          : normalizeGameHudWidgets([createDefaultGameHudWidget("progress_bar", [])]),
+      );
+      setEnableSpotifyDj(config.enableSpotifyDj === true);
+      setGameSpotifySourceType(normalizeGameSpotifySourceType(config.spotifySourceType));
+      setGameSpotifyPlaylistId(config.spotifyPlaylistId?.trim() || "");
+      setGameSpotifyPlaylistName(config.spotifyPlaylistName?.trim() || "");
+      setGameSpotifyArtist(config.spotifyArtist?.trim() || "");
+      setEnableLorebookKeeper(config.enableLorebookKeeper === true);
+      setPromptPresetTouched(true);
+      setPromptPresetId(config.promptPresetId ?? null);
+      setCustomGamePromptEnabled(Boolean(importedCustomPrompt));
+      setGameSystemPromptDraft(importedCustomPrompt || importedBasePrompt);
+      setGameSystemPromptEdited(Boolean(importedCustomPrompt));
+      setGameSpecialInstructions(config.gameSpecialInstructions?.trim() || "");
+      setDraftSpatialMap(false);
+      setSpatialMapDraftSize("medium");
+      setSpatialMapGroundingMode("setup");
+
+      const warningCount = imported.warnings.length;
+      setImportedSetupNotice(
+        warningCount > 0
+          ? `${file.name} loaded. ${warningCount} local ${warningCount === 1 ? "selection needs" : "selections need"} review.`
+          : `${file.name} loaded. Review the steps, then start the new game.`,
+      );
+      toast.success("Game Mode setup imported.");
+      if (warningCount > 0) {
+        toast.warning("Some local selections could not be restored.", {
+          description: imported.warnings.join(" "),
+        });
+      }
+    } catch (error) {
+      setImportedSetupNotice(null);
+      toast.error(error instanceof Error ? error.message : "Could not import this Game Mode setup file.");
+    }
+  };
+
   const handleComplete = () => {
     if (isLoading || !canStart) return;
     const trimmedGameSystemPrompt = gameSystemPromptDraft.trim();
@@ -899,6 +1087,7 @@ export function GameSetupWizard({
         enableSpriteGeneration: illustratorEnabled || undefined,
         imageConnectionId: illustratorEnabled && imageConnectionId ? imageConnectionId : undefined,
         videoConnectionId: illustratorEnabled && videoConnectionId ? videoConnectionId : undefined,
+        ...(importedArtStyleSettingsRef.current ?? {}),
         gameStoryboardAutoIllustrationsEnabled: illustratorEnabled
           ? enableStoryboardIllustrations
           : undefined,
@@ -929,7 +1118,9 @@ export function GameSetupWizard({
           musicDjEnabled && gameSpotifySourceType === "artist" ? gameSpotifyArtist.trim() || undefined : undefined,
         enableLorebookKeeper: lorebookKeeperEnabled || undefined,
         language: normalizedLanguage || undefined,
-        generationParameters: customizeParameters ? generationParameters : undefined,
+        generationParameters: customizeParameters
+          ? { ...(importedGenerationParametersRef.current ?? {}), ...generationParameters }
+          : undefined,
         promptPresetId,
         gameSystemPrompt: customGameSystemPrompt,
         gameSpecialInstructions: trimmedGameSpecialInstructions || null,
@@ -962,6 +1153,7 @@ export function GameSetupWizard({
             size: spatialMapDraftSize,
             groundingMode: spatialMapGroundingMode,
             sourceLorebookIds: spatialMapGroundingMode === "setup" ? [] : activeLorebookIds,
+            instructions: spatialMapInstructions.trim() || undefined,
           }
         : undefined,
     );
@@ -1007,6 +1199,47 @@ export function GameSetupWizard({
               <div className="space-y-4">
         {step === 0 && (
           <>
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-3">
+              <input
+                ref={setupImportInputRef}
+                type="file"
+                accept=".json,application/json"
+                onChange={(event) => void handleImportSetupFile(event)}
+                className="sr-only"
+                aria-label="Import Game Mode setup file"
+              />
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                  <FileUp size={16} className="mt-0.5 shrink-0 text-[var(--primary)]" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-[var(--foreground)]">Reuse a game setup</p>
+                    <p className="mt-0.5 text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
+                      Import a setup downloaded from another campaign. You can review every step before starting.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setupImportInputRef.current?.click()}
+                  disabled={isLoading || !setupImportResourcesReady}
+                  className="flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]/40 disabled:cursor-wait disabled:opacity-50"
+                >
+                  <FileUp size={13} />
+                  {setupImportResourcesReady ? "Import setup" : "Loading…"}
+                </button>
+              </div>
+              {importedSetupNotice && (
+                <p
+                  className="mt-3 flex items-start gap-2 border-t border-[var(--border)] pt-3 text-[0.6875rem] leading-relaxed text-[var(--foreground)]"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-[var(--primary)]" />
+                  <span>{importedSetupNotice}</span>
+                </p>
+              )}
+            </div>
+
             <div>
               <label className={GAME_SETUP_FIELD_LABEL}>Game Name</label>
               <input
@@ -2401,6 +2634,27 @@ export function GameSetupWizard({
 
                 {draftSpatialMap && (
                   <div className="mt-2 space-y-3 rounded-lg bg-[var(--background)]/55 p-3 ring-1 ring-[var(--border)]">
+                    <div>
+                      <label
+                        htmlFor="game-setup-spatial-map-instructions"
+                        className="text-[0.625rem] font-medium text-[var(--foreground)]"
+                      >
+                        What should this world include?
+                      </label>
+                      <textarea
+                        id="game-setup-spatial-map-instructions"
+                        value={spatialMapInstructions}
+                        onChange={(event) => setSpatialMapInstructions(event.target.value)}
+                        maxLength={4_000}
+                        rows={3}
+                        placeholder="A misty coastal city with a harbor, market, haunted inn, lighthouse, and sewers beneath the old district."
+                        className="mt-2 w-full resize-y rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs leading-relaxed text-[var(--foreground)] outline-none ring-1 ring-[var(--border)] transition-all placeholder:text-[var(--muted-foreground)] focus:ring-[var(--primary)]/40"
+                      />
+                      <p className="mt-1 text-[0.5625rem] leading-relaxed text-[var(--muted-foreground)]">
+                        Optional. If left blank, Marinara builds from the existing game setup.
+                      </p>
+                    </div>
+
                   <fieldset>
                     <legend className="text-[0.625rem] font-medium text-[var(--foreground)]">Map size</legend>
                     <div className="mt-2 grid grid-cols-3 gap-2">

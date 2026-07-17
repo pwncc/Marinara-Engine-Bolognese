@@ -1,8 +1,11 @@
 import { ExternalLink } from "lucide-react";
 import { Modal } from "../ui/Modal";
 
+const FONT_AWESOME_D20_SOURCE_URL = "https://github.com/FortAwesome/Font-Awesome/blob/5.15.4/svgs/solid/dice-d20.svg";
+const CC_BY_4_0_LICENSE_URL = "https://creativecommons.org/licenses/by/4.0/";
+
 const CONTRIBUTORS = [
-  { login: "SpicyMarinara", url: "https://github.com/SpicyMarinara", contributions: 1463 },
+  { login: "SpicyMarinara", url: "https://github.com/SpicyMarinara", contributions: 1476 },
   { login: "cha1latte", url: "https://github.com/cha1latte", contributions: 319 },
   { login: "kolacheee", url: "https://github.com/kolacheee", contributions: 213 },
   { login: "Romuromylus", url: "https://github.com/Romuromylus", contributions: 202 },
@@ -30,29 +33,29 @@ const CONTRIBUTORS = [
   { login: "myaiexp", url: "https://github.com/myaiexp", contributions: 3 },
   { login: "LightD31", url: "https://github.com/LightD31", contributions: 3 },
   { login: "Lochalan", url: "https://github.com/Lochalan", contributions: 2 },
+  { login: "Lamboozled", url: "https://github.com/Lamboozled", contributions: 2 },
   { login: "ailthrim", url: "https://github.com/ailthrim", contributions: 2 },
   { login: "adunato", url: "https://github.com/adunato", contributions: 2 },
   { login: "Trade-Mottoes", url: "https://github.com/Trade-Mottoes", contributions: 2 },
   { login: "RaynoldVanHeyningen", url: "https://github.com/RaynoldVanHeyningen", contributions: 2 },
-  { login: "OnlyJimmy", url: "https://github.com/OnlyJimmy", contributions: 2 },
-  { login: "MagicGoddess", url: "https://github.com/MagicGoddess", contributions: 2 },
-  { login: "JurijPietrowicz", url: "https://github.com/JurijPietrowicz", contributions: 2 },
-  { login: "Javedz678", url: "https://github.com/Javedz678", contributions: 2 },
-  { login: "Morgul", url: "https://github.com/Morgul", contributions: 2 },
   { login: "BahamutRU", url: "https://github.com/BahamutRU", contributions: 2 },
-  { login: "smurfboyyessir", url: "https://github.com/smurfboyyessir", contributions: 1 },
-  { login: "taiman724", url: "https://github.com/taiman724", contributions: 1 },
-  { login: "abhi-0203", url: "https://github.com/abhi-0203", contributions: 1 },
-  { login: "Yasyasyasvil", url: "https://github.com/Yasyasyasvil", contributions: 1 },
-  { login: "vanta-jack", url: "https://github.com/vanta-jack", contributions: 1 },
-  { login: "pwildani", url: "https://github.com/pwildani", contributions: 1 },
-  { login: "Lemon-will", url: "https://github.com/Lemon-will", contributions: 1 },
-  { login: "Lamboozled", url: "https://github.com/Lamboozled", contributions: 1 },
-  { login: "kevin-ho", url: "https://github.com/kevin-ho", contributions: 1 },
-  { login: "Rafa-Ross", url: "https://github.com/Rafa-Ross", contributions: 1 },
-  { login: "Dinokin", url: "https://github.com/Dinokin", contributions: 1 },
-  { login: "DarthTheMonster", url: "https://github.com/DarthTheMonster", contributions: 1 },
+  { login: "Morgul", url: "https://github.com/Morgul", contributions: 2 },
+  { login: "Javedz678", url: "https://github.com/Javedz678", contributions: 2 },
+  { login: "JurijPietrowicz", url: "https://github.com/JurijPietrowicz", contributions: 2 },
+  { login: "MagicGoddess", url: "https://github.com/MagicGoddess", contributions: 2 },
+  { login: "OnlyJimmy", url: "https://github.com/OnlyJimmy", contributions: 2 },
   { login: "Anarchistcowboy", url: "https://github.com/Anarchistcowboy", contributions: 1 },
+  { login: "DarthTheMonster", url: "https://github.com/DarthTheMonster", contributions: 1 },
+  { login: "Dinokin", url: "https://github.com/Dinokin", contributions: 1 },
+  { login: "Rafa-Ross", url: "https://github.com/Rafa-Ross", contributions: 1 },
+  { login: "kevin-ho", url: "https://github.com/kevin-ho", contributions: 1 },
+  { login: "Lemon-will", url: "https://github.com/Lemon-will", contributions: 1 },
+  { login: "pwildani", url: "https://github.com/pwildani", contributions: 1 },
+  { login: "vanta-jack", url: "https://github.com/vanta-jack", contributions: 1 },
+  { login: "Yasyasyasvil", url: "https://github.com/Yasyasyasvil", contributions: 1 },
+  { login: "abhi-0203", url: "https://github.com/abhi-0203", contributions: 1 },
+  { login: "taiman724", url: "https://github.com/taiman724", contributions: 1 },
+  { login: "smurfboyyessir", url: "https://github.com/smurfboyyessir", contributions: 1 },
 ];
 
 const SPECIAL_THANKS = [
@@ -144,7 +147,7 @@ export function HomeCreditsModal({ open, onClose }: { open: boolean; onClose: ()
           <p className="text-xs leading-relaxed text-[var(--muted-foreground)]">
             The tracker panel d20 icon uses the path geometry from{" "}
             <a
-              href="https://github.com/FortAwesome/Font-Awesome/blob/5.15.4/svgs/solid/dice-d20.svg"
+              href={FONT_AWESOME_D20_SOURCE_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="font-medium text-[var(--primary)] underline-offset-2 hover:underline"
@@ -153,7 +156,7 @@ export function HomeCreditsModal({ open, onClose }: { open: boolean; onClose: ()
             </a>{" "}
             by Fonticons, Inc., licensed under{" "}
             <a
-              href="https://creativecommons.org/licenses/by/4.0/"
+              href={CC_BY_4_0_LICENSE_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="font-medium text-[var(--primary)] underline-offset-2 hover:underline"

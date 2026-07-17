@@ -31,6 +31,7 @@ import {
   noodleSettingsUpdateSchema,
   PROFESSOR_MARI_ID,
   readNoodlePollFromMetadata,
+  resolveMacros,
   type APIProvider,
   type NoodleAccount,
   type NoodleAccountSubscription,
@@ -102,6 +103,7 @@ import {
 } from "../services/noodle/noodle-prompt.js";
 import { processLorebooks } from "../services/lorebook/index.js";
 import { injectAtDepth } from "../services/lorebook/prompt-injector.js";
+import { buildPromptMacroContext, resolveMacrosWithVariableSnapshot } from "../services/prompt/index.js";
 import type { DB } from "../db/connection.js";
 import {
   generateImageCaptionForDataUrl,
@@ -140,6 +142,10 @@ import {
   readAutoPostEnabled,
   resolvePersonaAccount,
 } from "../services/noodle/noodle-manual-post.js";
+import {
+  isNoodleProfileGenerated,
+  noodleAccountsNeedingProfiles,
+} from "../services/noodle/noodle-profile-selection.js";
 
 const NOODLE_ROUTE_DIR = dirname(fileURLToPath(import.meta.url));
 const CLIENT_PUBLIC_DIR = resolve(NOODLE_ROUTE_DIR, "../../../client/public");
@@ -523,15 +529,6 @@ function characterGalleryImageUrl(characterId: string, filePath: string) {
   return `/api/characters/${encodeURIComponent(characterId)}/gallery/file/${encodeURIComponent(filename)}`;
 }
 
-function readBoolSetting(settings: Record<string, unknown>, key: string) {
-  const value = settings[key];
-  return value === true || value === "true";
-}
-
-function isProfileGenerated(account: NoodleAccount) {
-  return readBoolSetting(account.settings, "profileGenerated");
-}
-
 function generatedProfileSettings(settings: Record<string, unknown>, location: string, bannerUrl: string | null) {
   return {
     ...settings,
@@ -690,7 +687,7 @@ async function ensureProfessorMariAccount(
   });
   if (
     account.settings.profileManuallyEdited !== true &&
-    (account.bio !== PROFESSOR_MARI_NOODLE_BIO || !isProfileGenerated(account) || !account.settings.location)
+    (account.bio !== PROFESSOR_MARI_NOODLE_BIO || !isNoodleProfileGenerated(account) || !account.settings.location)
   ) {
     await noodle.updateAccount(account.id, {
       handle: account.handle || "professor_mari",
@@ -1128,9 +1125,25 @@ async function buildRefreshPrompt(input: {
     input.noodle.listInteractions(recalledPosts.map((post) => post.id)),
   ]);
 
+  const promptMacroContext = await buildPromptMacroContext({
+    db: input.db,
+    characterIds: selectedCharacterIds,
+    personaName: personaNameFromRow(personaRow),
+    personaPhoneticName: personaRow?.phoneticName ?? "",
+    personaDescription: personaRow?.description ?? "",
+    personaFields: {
+      phoneticName: personaRow?.phoneticName ?? "",
+      personality: personaRow?.personality ?? "",
+      scenario: personaRow?.scenario ?? "",
+      backstory: personaRow?.backstory ?? "",
+      appearance: personaRow?.appearance ?? "",
+    },
+    lastGenerationType: "noodle",
+  });
+  const resolveNoodleMacros = (value: string) => resolveMacros(value, promptMacroContext, { trimResult: false });
   const characterContext = characterRows
     .filter((row): row is NonNullable<typeof row> => !!row)
-    .map(characterContextFromRow)
+    .map((row) => resolveNoodleMacros(characterContextFromRow(row)))
     .join("\n\n");
   const randomUserContext = activeRandomUsers
     .map(
@@ -1143,7 +1156,7 @@ async function buildRefreshPrompt(input: {
   const personaContext = isolatedTargetAccount
     ? "Viewer persona intentionally omitted for private single-account NoodleR generation. It is not the author and must not influence the author's identity or image prompt."
     : personaRow
-      ? personaContextFromRow(personaRow)
+      ? resolveNoodleMacros(personaContextFromRow(personaRow))
       : "No user persona is active.";
   // A guided private NoodleR post can target a persona-linked private account, which
   // is otherwise never allowed to author generated activity. That single active
@@ -1163,7 +1176,7 @@ async function buildRefreshPrompt(input: {
   );
   const personaAuthorContext = personaAuthorRows
     .filter((row): row is NonNullable<typeof row> => !!row)
-    .map(personaContextFromRow)
+    .map((row) => resolveNoodleMacros(personaContextFromRow(row)))
     .join("\n\n");
   const privateStageProfile = isolatedTargetAccount ? parsePrivateStageProfile(isolatedTargetAccount) : null;
   const linkedAuthorContext = isolatedTargetAccount
@@ -1194,7 +1207,7 @@ async function buildRefreshPrompt(input: {
   // messages from recent timeline text give keyword-scoped entries real content to match against;
   // character context is appended last so entries keyed to a character's own traits stay in scan depth.
   const lorebookScanMessages = isolatedTargetAccount
-    ? [
+      ? [
         {
           role: "user",
           content: formatNoodleTimelineForPrompt(recentPosts, recentInteractions),
@@ -1222,6 +1235,8 @@ async function buildRefreshPrompt(input: {
         tokenBudget: noodleLorebookTokenBudget(isolatedTargetAccount ? 1 : activeCharacters.length),
         generationTriggers: ["noodle"],
         previewOnly: true,
+        resolveContent: (value) =>
+          resolveMacrosWithVariableSnapshot(value, promptMacroContext, { trimResult: false }),
       })
     : null;
   const loreContext = lorebookResult
@@ -1501,8 +1516,7 @@ async function generateMissingNoodleProfiles(input: {
     row: { id: string; data: unknown; avatarPath?: string | null };
     bannerUrl: string | null;
   }> = [];
-  for (const account of input.accounts) {
-    if (account.kind !== "character" || isProfileGenerated(account)) continue;
+  for (const account of noodleAccountsNeedingProfiles(input.accounts)) {
     const row = await input.characters.getById(account.entityId);
     if (!row) continue;
     const bannerUrl = await pickRandomCharacterBannerUrl(input.characterGallery, account.entityId);
@@ -2551,6 +2565,7 @@ async function generateNoodlePostImage(input: {
         comfyWorkflow: input.imageConnection.comfyuiWorkflow || undefined,
         imageDefaults,
         referenceImages,
+        debugMode: input.debugMode,
         fallback: imageFallback,
       }),
     (error, attempt, maxAttempts) => {
@@ -3149,6 +3164,7 @@ export async function noodleRoutes(app: FastifyInstance) {
         conn.maxTokensOverride,
         conn.claudeFastMode === "true",
         conn.treatAsLocalEndpoint === "true",
+        conn.defaultParameters,
       );
       const fallbackConnection = await connections.getFallbackForMain();
       const provider = withConnectionFallbackProvider({
@@ -3168,7 +3184,7 @@ export async function noodleRoutes(app: FastifyInstance) {
         // participant pool entirely so this never mixes a private account's
         // generation into the same prompt/batch as public accounts.
         selectedGroupCharacterIds = new Set<string>();
-        if (targetPrivateAccount.kind === "character" && !targetPrivateAccount.bio.trim()) {
+        if (noodleAccountsNeedingProfiles([targetPrivateAccount]).length > 0) {
           await generateMissingNoodleProfiles({
             noodle,
             characters,
@@ -3187,22 +3203,6 @@ export async function noodleRoutes(app: FastifyInstance) {
           settings.invitedCharacterGroupIds,
         );
         if (settings.allowRandomUsers) await ensureRandomUserAccounts(noodle);
-        const eligibleAccounts = await noodle.listAccounts();
-        const eligibleCharacterAccounts = eligibleAccounts.filter(
-          (account) =>
-            account.kind === "character" &&
-            (settings.allowProfessorMari || account.entityId !== PROFESSOR_MARI_ID) &&
-            (account.invited || selectedGroupCharacterIds.has(account.entityId)),
-        );
-        await generateMissingNoodleProfiles({
-          noodle,
-          characters,
-          characterGallery,
-          accounts: eligibleCharacterAccounts,
-          provider,
-          connection: conn,
-          debugMode,
-        });
         const participantAccounts = await noodle.listAccounts();
         const selectionCutoff = sinceHoursIso(48);
         const [recentCreatedSelectionPosts, recentPersonaSelectionReplies] = await Promise.all([
@@ -3256,6 +3256,19 @@ export async function noodleRoutes(app: FastifyInstance) {
           .code(400)
           .send({ error: "Invite a character, select a character folder, or enable random users before refreshing." });
       }
+
+      await generateMissingNoodleProfiles({
+        noodle,
+        characters,
+        characterGallery,
+        accounts: selectedParticipants,
+        provider,
+        connection: conn,
+        debugMode,
+      });
+      selectedParticipants = (
+        await Promise.all(selectedParticipants.map((account) => noodle.getAccountById(account.id)))
+      ).filter((account): account is NoodleAccount => account !== null);
 
       // Persona-linked NoodleR accounts can share an entityId with the viewer's active
       // persona; list selectedParticipants last so entityToAccount (built from this

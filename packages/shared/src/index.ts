@@ -32,6 +32,7 @@ export * from "./types/achievement.js";
 export * from "./types/conversation-call.js";
 export * from "./types/noodle.js";
 export * from "./types/spatial-context.js";
+export * from "./types/capability-runtime.js";
 
 // Schemas
 export * from "./schemas/chat.schema.js";
@@ -104,6 +105,7 @@ export * from "./utils/game-state-text.js";
 export * from "./utils/custom-tracker-fields.js";
 export * from "./utils/tracker-field-locks.js";
 export * from "./utils/chat-summary-entries.js";
+export * from "./utils/chat-persona.js";
 export * from "./utils/quest-state.js";
 export * from "./utils/quote-format.js";
 export * from "./utils/image-prompt-compiler.js";

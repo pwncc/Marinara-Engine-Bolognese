@@ -75,7 +75,7 @@ Sometimes the server is running but the browser shows a blank page, or the app l
 
 If **Agents → Download Agents** says the catalog is unavailable, the machine running the Marinara server—not only the browser—must be able to reach the official [Pasta-Devs/Marinara-Agents](https://github.com/Pasta-Devs/Marinara-Agents) catalog over GitHub HTTPS. Installed agents continue to work offline at their current version. Restore the server connection and restart Marinara to retry automatic package updates, or click **Refresh** or **Try again** to browse the catalog immediately.
 
-If an installed map, call, or Conversation game does not appear, close Marinara Engine completely and start it again. Packages containing server or client runtime code deliberately remain in **Restart required** state until the next process start. Then enable the agent for the chat in Chat Settings; Game-compatible agents can also be selected during game creation.
+If an installed map or call does not appear, close Marinara Engine completely and start it again. Those route-bearing packages remain in **Restart required** state until the next process start. Conversation games are different: current Engine builds hot-activate them immediately. Refresh the catalog if installation failed, then confirm the game shows as ready; adding it under a chat's **Commands** settings is only necessary when you want characters to initiate it themselves, not for the game's manual slash command.
 
 If an older installation cannot complete its first package migration, do not delete the `data/capability-packages` folder or your chat data. Marinara leaves the migration incomplete and retries on the next startup. Existing chat selections and settings remain stored while the catalog is unreachable.
 
@@ -200,7 +200,7 @@ If starting a game fails because the model returned broken JSON, Marinara opens 
 ## Voice, calls, and TTS
 
 - If characters do not speak during a call, Text to Speech is not set up. Open **Connections** > **Text to Speech**, enable it, choose a source, enter your key, pick a voice, and save. A character with no voice appears as text only.
-- If the microphone is not working, you may need the local speech model. Install **Conversation Calls** from **Agents > Download Agents**, then open **Connections** > **Local Model**, expand the card, find **Local Speech Model**, choose a Whisper model, and click **Download Whisper**. Firefox in particular needs this because it lacks browser speech recognition. Uninstalling Conversation Calls deletes its Whisper models to reclaim disk space.
+- If the microphone is not working, you may need the local speech model. Install **Calls** from **Agents > Download Agents**, then open **Connections** > **Local Model**, expand the card, find **Local Speech Model**, choose a Whisper model, and click **Download Whisper**. Firefox in particular needs this because it lacks browser speech recognition. Uninstalling Calls deletes its Whisper models to reclaim disk space.
 - On a Lite build, the message **Local Whisper is disabled in Lite mode** means that small build cannot run the local speech model. Use a full Marinara install instead.
 
 ### Music DJ Spotify login fails on a remote or network install

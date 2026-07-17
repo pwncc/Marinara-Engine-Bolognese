@@ -15,11 +15,14 @@ import {
   createRegexScriptSchema,
   createDefaultImageStyleProfileSettings,
   getDefaultBuiltInAgentSettings,
+  isAgentAvailableInChatMode,
   isPatternSafe,
   normalizeChatSummaryEntries,
   normalizeWorldCustomFields,
+  LIMITS,
   resolveRegexPatternLiteralMacros,
   resolveGameSetupArtStylePrompt,
+  resolveChatPersonaCandidate,
   resolveMacros,
   resolveAgentPromptTemplate,
   resolveDefaultAgentPromptTemplateId,
@@ -200,6 +203,10 @@ import {
   buildSceneIllustrationProviderPrompt,
 } from "../../packages/server/src/services/game/game-asset-generation.js";
 import {
+  buildLorebookScanMessagesWithGenerationGuide,
+  resolveLorebookTokenBudget,
+} from "../../packages/server/src/services/generation/lorebook-generation-runtime.js";
+import {
   buildGameIllustratorAppearanceContextBlock,
   buildIllustrationNarrationSummaryMessages,
   buildStoryboardIllustratorMessages,
@@ -209,7 +216,6 @@ import {
 } from "../../packages/server/src/routes/game.routes.js";
 import { buildLegacyDefaultAgentConfigUpdate } from "../../packages/server/src/services/agents/default-prompt-migration.js";
 import { buildMemoryRecallBlock } from "../../packages/server/src/services/generation/memory-recall-context.js";
-import { createAboutMeMacroResolver } from "../../packages/server/src/services/conversation/about-me-macros.js";
 import { truncateRecalledMemory } from "../../packages/server/src/services/generation/memory-recall-pack.js";
 import { mergeConversationCharacterMemories } from "../../packages/server/src/services/generation/conversation-memory-context.js";
 import { injectIdentityFallbackMessages } from "../../packages/server/src/services/generation/character-prompt-context.js";
@@ -239,11 +245,15 @@ import {
   buildGenerationGuideInstruction,
   appendSeparateAgentInjectionMessage,
   collectLatestTrackerCharacterHistory,
+  injectIntoOutputFormatOrLastUser,
   preserveTrackerCharacterUiFields,
+  resolveActivePersonaCandidate,
   shouldEnableAgentsForGeneration,
   shouldInjectIdentityFallback,
+  stripSpeakerTagsExceptLastAssistant,
   type SimpleMessage,
 } from "../../packages/server/src/routes/generate/generate-route-utils.js";
+import { formatRoleplaySummaryChatLog } from "../../packages/server/src/services/generation/roleplay-summary-runtime.js";
 import { resolveGenerationPromptPresetChoices } from "../../packages/server/src/routes/generate/prompt-preset-selection.js";
 import {
   calibrateLorebookSimilarity,
@@ -251,7 +261,12 @@ import {
 } from "../../packages/server/src/services/lorebook/embeddings.js";
 import { scanForActivatedEntries } from "../../packages/server/src/services/lorebook/keyword-scanner.js";
 import { fitMessagesForModelAccess } from "../../packages/server/src/services/generation/model-access-policy.js";
-import { assemblePrompt, type AssemblerInput } from "../../packages/server/src/services/prompt/index.js";
+import {
+  assemblePrompt,
+  resolvePromptMessageMacros,
+  scopePromptMacroContextToCharacter,
+  type AssemblerInput,
+} from "../../packages/server/src/services/prompt/index.js";
 import { executeToolCalls } from "../../packages/server/src/services/tools/tool-executor.js";
 import { parseRouterResponse } from "../../packages/server/src/services/agents/knowledge-router.js";
 import type { PromptOverridesStorage } from "../../packages/server/src/services/storage/prompt-overrides.storage.js";
@@ -384,32 +399,6 @@ const keywordOptions = {
 
 const cases: RegressionCase[] = [
   {
-    name: "Conversation About Me AI Write resolves card and persona macros before provider submission",
-    run() {
-      const resolvePersona = createAboutMeMacroResolver({
-        kind: "persona",
-        name: "{{user}}",
-        activePersonaName: "Mari",
-        source: {
-          description: "{{user}} builds strange machines.",
-          personality: "Curious",
-        },
-      });
-      assert.equal(resolvePersona("Name: {{user}}"), "Name: Mari");
-      assert.equal(resolvePersona("{{personaDescription}}"), "Mari builds strange machines.");
-
-      const resolveCharacter = createAboutMeMacroResolver({
-        kind: "character",
-        name: "Echo",
-        activePersonaName: "Mari",
-        activePersonaFields: { description: "An engineer" },
-        source: { description: "{{char}} trusts {{user}}." },
-      });
-      assert.equal(resolveCharacter("{{description}}"), "Echo trusts Mari.");
-      assert.equal(resolveCharacter("{{personaDescription}}"), "An engineer");
-    },
-  },
-  {
     name: "installed Conversation feature commands do not require per-chat agent attachment",
     run() {
       const commands = [
@@ -482,6 +471,21 @@ const cases: RegressionCase[] = [
     },
   },
   {
+    name: "lorebook budget normalization preserves legacy generation metadata",
+    run() {
+      assert.equal(resolveLorebookTokenBudget({ lorebookTokenBudget: 512.9 }), 512);
+      assert.equal(resolveLorebookTokenBudget({ generationLorebookTokenBudget: 384.9 }), 384);
+      assert.equal(
+        resolveLorebookTokenBudget({ lorebookTokenBudget: Number.NaN, generationLorebookTokenBudget: 384 }),
+        LIMITS.DEFAULT_LOREBOOK_TOKEN_BUDGET,
+      );
+      assert.equal(
+        resolveLorebookTokenBudget({ generationLorebookTokenBudget: -1 }),
+        LIMITS.DEFAULT_LOREBOOK_TOKEN_BUDGET,
+      );
+    },
+  },
+  {
     name: "game narration preserves angle-bracket status readouts and rejects transformed empty steps",
     run() {
       const statusReadout = [
@@ -543,6 +547,48 @@ const cases: RegressionCase[] = [
         normalized.some((message, index) => index > 0 && message.role === "system"),
         false,
       );
+    },
+  },
+  {
+    name: "group speaker instructions prefer output format and otherwise use the last user turn",
+    run() {
+      const withOutputFormat: SimpleMessage[] = [
+        { role: "system", content: "base system" },
+        { role: "user", content: "<output_format>\nexisting rule\n</output_format>" },
+      ];
+      injectIntoOutputFormatOrLastUser(withOutputFormat, "speaker tag rule", { indent: true });
+
+      assert.match(
+        withOutputFormat[1]?.content ?? "",
+        /existing rule\n    speaker tag rule\n<\/output_format>/,
+      );
+
+      const withoutOutputFormat: SimpleMessage[] = [
+        { role: "system", content: "base system" },
+        { role: "user", content: "latest user turn" },
+        { role: "assistant", content: "assistant prefill" },
+      ];
+      injectIntoOutputFormatOrLastUser(withoutOutputFormat, "speaker tag rule", { indent: true });
+
+      assert.equal(withoutOutputFormat[1]?.content, "latest user turn\n\nspeaker tag rule");
+      assert.equal(withoutOutputFormat[2]?.content, "assistant prefill");
+    },
+  },
+  {
+    name: "group speaker tag cleanup preserves the latest assistant example",
+    run() {
+      const messages: SimpleMessage[] = [
+        { role: "system", content: "base system" },
+        { role: "assistant", content: '<speaker="Dottore">"An older line."</speaker>' },
+        { role: "user", content: '<speaker="Mari">"A user-authored tag."</speaker>' },
+        { role: "assistant", content: '<speaker="Pantalone">"The latest example."</speaker>' },
+      ];
+
+      stripSpeakerTagsExceptLastAssistant(messages);
+
+      assert.equal(messages[1]?.content, '"An older line."');
+      assert.equal(messages[2]?.content, '"A user-authored tag."');
+      assert.equal(messages[3]?.content, '<speaker="Pantalone">"The latest example."</speaker>');
     },
   },
   {
@@ -1099,6 +1145,78 @@ const cases: RegressionCase[] = [
       assert.match(instruction, /Dottore reassuring Mari/);
       assert.equal(instruction.includes("{{user}}"), false);
       assert.equal(instruction.includes("{{char}}"), false);
+    },
+  },
+  {
+    name: "provider-bound greeting and /guided messages resolve identity macros",
+    run() {
+      const baseContext = {
+        user: "Mari",
+        char: "Wrong responder",
+        characters: ["Dottore", "Pantalone"],
+        variables: {},
+      };
+      const dottoreProfile = {
+        name: "Dottore",
+        description: "A precise researcher.",
+      };
+      const profilesById = new Map([["char-dottore", dottoreProfile]]);
+      const providerContext = scopePromptMacroContextToCharacter(baseContext, dottoreProfile);
+      const resolved = resolvePromptMessageMacros(
+        [
+          {
+            id: "opening-greeting",
+            role: "assistant" as const,
+            characterId: "char-dottore",
+            content: "Welcome, {{user}}. I am {{char}}.",
+          },
+          {
+            id: "late-guided-injection",
+            role: "system" as const,
+            content: buildNarratorInstructionMessage("Let {{char}} reassure {{user}}."),
+          },
+        ],
+        providerContext,
+        profilesById,
+      );
+
+      assert.equal(resolved[0]?.content, "Welcome, Mari. I am Dottore.");
+      assert.match(resolved[1]?.content ?? "", /Let Dottore reassure Mari/);
+      assert.equal(resolved.some((message) => /\{\{(?:user|char)\}\}/i.test(message.content)), false);
+
+      const generateRouteSource = readFileSync(
+        new URL("../../packages/server/src/routes/generate.routes.ts", import.meta.url),
+        "utf8",
+      );
+      const dryRunRouteSource = readFileSync(
+        new URL("../../packages/server/src/routes/generate/dry-run-route.ts", import.meta.url),
+        "utf8",
+      );
+      assert.match(generateRouteSource, /const preparedMessagesForGen = resolvePromptMessageMacros\(/);
+      assert.match(dryRunRouteSource, /finalMessages = resolveHistoryMessageMacros\(finalMessages\);/);
+    },
+  },
+  {
+    name: "/guided lorebook scans resolve macros before embedding or routing",
+    run() {
+      const context = {
+        user: "Mari",
+        char: "Dottore",
+        characters: ["Dottore"],
+        variables: {},
+      };
+      const messages = buildLorebookScanMessagesWithGenerationGuide(
+        [{ role: "assistant", content: "The experiment is ready." }],
+        {
+          generationGuide: buildNarratorInstructionMessage("Have {{char}} answer {{user}}."),
+          generationGuideSource: "narrator",
+        },
+        (value) => resolveMacros(value, context, { trimResult: false }),
+      );
+
+      assert.match(messages.at(-1)?.content ?? "", /Have Dottore answer Mari/);
+      assert.equal(messages.at(-1)?.content.includes("{{user}}"), false);
+      assert.equal(messages.at(-1)?.content.includes("{{char}}"), false);
     },
   },
   {
@@ -2600,6 +2718,22 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
     },
   },
   {
+    name: "Roleplay preserves an explicit no-Persona selection",
+    run() {
+      const personas = [
+        { id: "active-persona", isActive: "true" },
+        { id: "selected-persona", isActive: "false" },
+      ];
+
+      assert.equal(resolveChatPersonaCandidate(personas, null, "roleplay"), null);
+      assert.equal(resolveActivePersonaCandidate(personas, null, "roleplay"), null);
+      assert.equal(resolveActivePersonaCandidate(personas, null, "visual_novel"), null);
+      assert.equal(resolveActivePersonaCandidate(personas, null, "game"), null);
+      assert.equal(resolveActivePersonaCandidate(personas, null, "conversation")?.id, "active-persona");
+      assert.equal(resolveActivePersonaCandidate(personas, "selected-persona", "roleplay")?.id, "selected-persona");
+    },
+  },
+  {
     name: "chat summaries normalize legacy data and compile enabled entries only",
     run() {
       const legacyEntries = normalizeChatSummaryEntries([], {
@@ -2622,6 +2756,27 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
       ]);
 
       assert.equal(compiled, "The previous scene was summarized.");
+
+      const chapterMessage = "A".repeat(8_500);
+      assert.equal(
+        formatRoleplaySummaryChatLog([{ role: "assistant", content: chapterMessage }]),
+        `[assistant]: ${chapterMessage}`,
+        "Roleplay Summary must send a chapter-length source message without per-message truncation",
+      );
+
+      const largeSummary = "Summary detail. ".repeat(5_000);
+      const compiledLargeSummary = compileChatSummaryEntries([
+        {
+          ...legacyEntries[0]!,
+          id: "large-summary",
+          content: largeSummary,
+        },
+      ]);
+      assert.equal(
+        compiledLargeSummary,
+        largeSummary.trim(),
+        "Compiled chat metadata must preserve summaries larger than the former 64 KiB ceiling",
+      );
     },
   },
   {
@@ -2961,18 +3116,31 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
       assert.equal(
         shouldEnableAgentsForGeneration({
           chatEnableAgents: true,
-          chatMode: "roleplay",
           impersonate: false,
           impersonateBlockAgents: false,
         }),
         true,
       );
+      for (const chatMode of ["conversation", "roleplay", "visual_novel", "game"] as const) {
+        assert.equal(
+          isAgentAvailableInChatMode(chatMode, "custom-human-voice-rewriter"),
+          true,
+          `expected custom agents to be available in ${chatMode}`,
+        );
+      }
+      assert.equal(
+        shouldEnableAgentsForGeneration({
+          chatEnableAgents: false,
+          impersonate: false,
+          impersonateBlockAgents: false,
+        }),
+        false,
+      );
       assert.equal(
         shouldEnableAgentsForGeneration({
           chatEnableAgents: true,
-          chatMode: "conversation",
-          impersonate: false,
-          impersonateBlockAgents: false,
+          impersonate: true,
+          impersonateBlockAgents: true,
         }),
         false,
       );
