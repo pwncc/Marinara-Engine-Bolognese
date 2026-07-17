@@ -137,6 +137,7 @@ Adds persistent nested locations and spatial relationships to a story. You can a
 - **Integration**: Feature package; it contributes map UI and chat runtime context instead of running as a normal generation-phase agent.
 - **Where it works**: Roleplay and Game.
 - **Key settings**: enable it for the Roleplay chat from **Chat Settings → Agents**, or select it during Game creation and manage it later from that game's settings. Installing or removing it requires a Marinara restart.
+- **Full guide**: [Hierarchical Maps: Setup, Authoring, and Travel](hierarchical-maps.md).
 
 ## Misc agents
 
