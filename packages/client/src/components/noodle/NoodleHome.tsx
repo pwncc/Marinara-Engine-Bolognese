@@ -4576,14 +4576,6 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
                 </button>
                 <button
                   type="button"
-                  onClick={openNoodler}
-                  className="flex min-h-12 w-full items-center gap-4 rounded-xl px-2 text-left text-base font-bold transition-colors hover:bg-[var(--accent)]"
-                >
-                  <Lock size={23} />
-                  NoodleR
-                </button>
-                <button
-                  type="button"
                   onClick={openSettings}
                   className="flex min-h-12 w-full items-center gap-4 rounded-xl px-2 text-left text-base font-bold transition-colors hover:bg-[var(--accent)]"
                 >
@@ -4725,14 +4717,6 @@ export function NoodleHome({ navigation, onNavigate }: NoodleHomeProps) {
                 >
                   <User size={22} className="!text-[var(--noodle-blue)]" />
                   Profile
-                </button>
-                <button
-                  type="button"
-                  onClick={openNoodler}
-                  className="flex min-h-11 w-full items-center gap-4 rounded-full px-3 text-left text-[0.95rem] font-semibold hover:bg-[var(--accent)]"
-                >
-                  <Lock size={22} className="!text-[var(--noodle-blue)]" />
-                  NoodleR
                 </button>
                 <button
                   type="button"
