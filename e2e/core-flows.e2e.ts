@@ -4605,7 +4605,7 @@ test("mobile Game keeps CYOA usable above four HUD widgets", async ({ page, requ
             hasCompletedOnboarding: true,
             rightPanelOpen: false,
             sidebarOpen: false,
-            gameNarrationTextSpeed: 100,
+            gameTextSpeed: 100,
           },
           version: 65,
         }),

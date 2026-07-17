@@ -488,6 +488,9 @@ class TTSService {
         if (!result.ok) {
           if (isAbortError(result.error)) {
             detachAbortSignal();
+            if (this.abortController === abortController) {
+              this.abortController = null;
+            }
             this.setState("idle");
             return;
           }
@@ -504,6 +507,9 @@ class TTSService {
           }
         } catch (err) {
           detachAbortSignal();
+          if (this.abortController === abortController) {
+            this.abortController = null;
+          }
           if (err instanceof Error && err.name === "AbortError") {
             this.setState("idle");
             return;

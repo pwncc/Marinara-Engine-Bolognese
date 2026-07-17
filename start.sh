@@ -35,7 +35,7 @@ if [ -f .env ]; then
   set +a
 fi
 
-AUTO_UPDATE_ENABLED_NORMALIZED=$(printf '%s' "${AUTO_UPDATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')
+AUTO_UPDATE_ENABLED_NORMALIZED=$(printf '%s' "${AUTO_UPDATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '\r ')
 case "$AUTO_UPDATE_ENABLED_NORMALIZED" in
   0|false|no|off) AUTO_UPDATE_DISABLED=1 ;;
   *) AUTO_UPDATE_DISABLED=0 ;;

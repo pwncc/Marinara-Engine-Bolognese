@@ -662,6 +662,7 @@ export async function generateRoutes(app: FastifyInstance) {
    */
   app.post("/", async (req, reply) => {
     const input = generateRequestSchema.parse(req.body);
+    const chatGenerationTimeoutMs = getChatGenerationTimeoutMs();
     const requestDebug = input.debugMode === true;
     const debugLog = (message: string, ...args: any[]) => {
       logDebugOverride(requestDebug, message, ...args);
@@ -4532,21 +4533,23 @@ export async function generateRoutes(app: FastifyInstance) {
             const selectorModel = conn.model;
             const selectorMaxTokens = applyProviderMaxTokensOverride(selectorProvider, 512);
 
-            const result = await selectorProvider.chatComplete(selectionPrompt, {
-              model: selectorModel,
-              ...(suppressModelParameters
-                ? {}
-                : {
-                    temperature: 0.2,
-                    maxTokens: selectorMaxTokens,
-                    maxContext: effectiveMaxContext,
-                    topP: 1,
-                    serviceTier,
-                  }),
-              suppressModelParameters,
-              stream: false,
-              signal: abortController.signal,
-            });
+            const result = await withLlmRequestTimeout(chatGenerationTimeoutMs, () =>
+              selectorProvider.chatComplete(selectionPrompt, {
+                model: selectorModel,
+                ...(suppressModelParameters
+                  ? {}
+                  : {
+                      temperature: 0.2,
+                      maxTokens: selectorMaxTokens,
+                      maxContext: effectiveMaxContext,
+                      topP: 1,
+                      serviceTier,
+                    }),
+                suppressModelParameters,
+                stream: false,
+                signal: abortController.signal,
+              }),
+            );
             const selectedIds = parseSmartGroupSelectionIds(result.content ?? "");
             if (selectedIds.length > 0) {
               logger.debug(
@@ -4868,7 +4871,6 @@ export async function generateRoutes(app: FastifyInstance) {
 
           // Track timing and usage
           const genStartTime = Date.now();
-          const chatGenerationTimeoutMs = getChatGenerationTimeoutMs();
           let usage: LLMUsage | undefined;
           let finishReason: string | undefined;
 
