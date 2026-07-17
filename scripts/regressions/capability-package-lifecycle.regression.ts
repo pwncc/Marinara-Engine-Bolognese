@@ -69,9 +69,7 @@ try {
     getCapabilityApiCompatibilityIssue,
     installedCapabilityPackageSchema,
     supportedCapabilityApi,
-  } = await import(
-    "../../packages/shared/src/schemas/capability-package.schema.js"
-  );
+  } = await import("../../packages/shared/src/schemas/capability-package.schema.js");
   assert.equal(compareCapabilityPackageVersions("1.0.1", "1.0.0"), 1);
   assert.equal(compareCapabilityPackageVersions("1.0.0", "1.0.1"), -1);
   assert.equal(compareCapabilityPackageVersions("1.0.1", "1.0.1"), 0);
@@ -198,9 +196,8 @@ try {
     buildLegacyChatCapabilityPatch,
     correctLegacyHierarchicalMapsSelections,
   } = await import("../../packages/server/src/services/capability-packages/legacy-capability-chat-migration.js");
-  const { migrateLegacyCapabilities } = await import(
-    "../../packages/server/src/services/capability-packages/legacy-capability-migration.js"
-  );
+  const { migrateLegacyCapabilities } =
+    await import("../../packages/server/src/services/capability-packages/legacy-capability-migration.js");
 
   assert.equal(
     buildLegacyChatCapabilityPatch({
@@ -356,9 +353,34 @@ try {
   assert.equal(JSON.parse(readFileSync(migrationPath, "utf8")).kind, "legacy");
   assert.equal((await capabilityPackageManager.migrateLegacyAvailability(false)).legacy, true);
   assert.equal(existsSync(mapsCorrectionPath), false);
+  writeFileSync(mapsCorrectionPath, "{corrupted-marker");
+  assert.equal(
+    await capabilityPackageManager.isHierarchicalMapsSelectionCorrectionComplete(),
+    false,
+    "A corrupted Maps correction marker must not suppress the corrective migration",
+  );
   await capabilityPackageManager.completeHierarchicalMapsSelectionCorrection();
-  assert.equal(existsSync(mapsCorrectionPath), true);
-  rmSync(migrationPath);
+  assert.equal(await capabilityPackageManager.isHierarchicalMapsSelectionCorrectionComplete(), true);
+  writeFileSync(
+    mapsCorrectionPath,
+    JSON.stringify({ schemaVersion: 2, completedAt: new Date().toISOString() }),
+  );
+  assert.equal(
+    await capabilityPackageManager.isHierarchicalMapsSelectionCorrectionComplete(),
+    false,
+    "A Maps correction marker with an unsupported schema must not be accepted",
+  );
+  writeFileSync(migrationPath, "{corrupted-marker");
+  const recoveredCorruptedMigration = await capabilityPackageManager.migrateLegacyAvailability(false);
+  assert.deepEqual(
+    recoveredCorruptedMigration,
+    { migrated: false, legacy: false, complete: true },
+    "A corrupted availability marker must be replaced instead of treated as complete",
+  );
+  writeFileSync(
+    migrationPath,
+    JSON.stringify({ schemaVersion: 2, kind: "legacy", completedAt: new Date().toISOString() }),
+  );
   const freshMigration = await capabilityPackageManager.migrateLegacyAvailability(false);
   assert.deepEqual(freshMigration, { migrated: false, legacy: false, complete: true });
   assert.equal(JSON.parse(readFileSync(migrationPath, "utf8")).kind, "fresh");
@@ -438,6 +460,23 @@ try {
     /requires capability API 2\.0/,
     "Unsupported capability APIs must be blocked before runtime import",
   );
+  for (const version of ["1.0.0", "1.0.3", "1.0.6"]) {
+    const incompatibleMapsRuntime = installedCapabilityPackageSchema.parse({
+      ...installedPackage("hierarchical-maps", ["agent", "spatial-context"]),
+      version,
+      manifest: {
+        ...legacyManifest,
+        id: "hierarchical-maps",
+        name: "Hierarchical Maps",
+        version,
+      },
+    });
+    assert.match(
+      capabilityPackageManager.runtimeBlockReason(incompatibleMapsRuntime) ?? "",
+      /incompatible with file-native storage/,
+      `Hierarchical Maps ${version} must be blocked before its database adapter can crash the Engine`,
+    );
+  }
   const removedCalls = await capabilityPackageManager.uninstall("conversation-calls");
   assert.ok(removedCalls, "Conversation Calls should be removed");
   assert.equal(existsSync(join(modelsRoot, "Xenova", "whisper-tiny")), false);
@@ -513,9 +552,8 @@ try {
     export async function selfCheck() {}`,
   );
 
-  const { capabilityModuleRuntime, prepareCapabilityRuntimeEnvironment } = await import(
-    "../../packages/server/src/services/capability-packages/capability-module-runtime.service.js"
-  );
+  const { capabilityModuleRuntime, prepareCapabilityRuntimeEnvironment } =
+    await import("../../packages/server/src/services/capability-packages/capability-module-runtime.service.js");
   const configuredDataDir = process.env.DATA_DIR;
   delete process.env.DATA_DIR;
   prepareCapabilityRuntimeEnvironment(dataDir);
@@ -525,24 +563,19 @@ try {
     "Downloaded capability runtimes must resolve host-owned models from the host data directory",
   );
   process.env.DATA_DIR = configuredDataDir;
-  const { getCapabilityService } = await import(
-    "../../packages/server/src/services/capability-packages/capability-service-registry.service.js"
-  );
+  const { getCapabilityService } =
+    await import("../../packages/server/src/services/capability-packages/capability-service-registry.service.js");
   const { closeDB, getDB } = await import("../../packages/server/src/db/connection.js");
   closeDatabase = closeDB;
   const db = await getDB();
-  const { createCapabilityPersistenceHost } = await import(
-    "../../packages/server/src/services/capability-packages/capability-persistence.service.js"
-  );
-  const { createCapabilityResourceHost } = await import(
-    "../../packages/server/src/services/capability-packages/capability-resources.service.js"
-  );
+  const { createCapabilityPersistenceHost } =
+    await import("../../packages/server/src/services/capability-packages/capability-persistence.service.js");
+  const { createCapabilityResourceHost } =
+    await import("../../packages/server/src/services/capability-packages/capability-resources.service.js");
   const persistence = createCapabilityPersistenceHost(db);
   const resources = createCapabilityResourceHost(db);
   const { createChatsStorage } = await import("../../packages/server/src/services/storage/chats.storage.js");
-  const { createGameStateStorage } = await import(
-    "../../packages/server/src/services/storage/game-state.storage.js"
-  );
+  const { createGameStateStorage } = await import("../../packages/server/src/services/storage/game-state.storage.js");
   const { createLorebooksStorage } = await import("../../packages/server/src/services/storage/lorebooks.storage.js");
   const chatsStore = createChatsStorage(db);
   const autoAddedMapsChat = await chatsStore.create({
@@ -854,7 +887,11 @@ try {
       { id: "readiness-success", readiness: "ready", ready: true, issue: null },
     ],
   );
-  assert.equal(JSON.stringify(diagnostics).includes("snapshot read failed"), false, "Health diagnostics must omit errors");
+  assert.equal(
+    JSON.stringify(diagnostics).includes("snapshot read failed"),
+    false,
+    "Health diagnostics must omit errors",
+  );
 
   await capabilityModuleRuntime.stop();
   assert.equal(getCapabilityService("readiness:success"), null, "Runtime stop must remove ready contributions");
