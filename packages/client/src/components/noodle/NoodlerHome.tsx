@@ -2,7 +2,7 @@
 // NoodleR: private creator hub, profile creation, and profile view.
 // State and mutations live in NoodleView and are passed down as props.
 // ──────────────────────────────────────────────
-import { AtSign, Check, ImageIcon, Loader2, Menu, Trash2, User } from "lucide-react";
+import { AtSign, Check, Globe2, ImageIcon, Loader2, Trash2, User } from "lucide-react";
 import type { ChangeEvent, ReactNode, RefObject } from "react";
 import type { NoodleAccount, NoodlePost } from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
@@ -121,6 +121,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
     profileViewProps,
   } = props;
   const activeNoodlerHubTab = isGlobalPersonaSelected ? "timeline" : noodlerHubTab;
+  const mobileMenuAccount = personaLinkedNoodlerAccount ?? personaAccount;
 
   if (activeNoodleView === "profile") {
     if (showNoodlerSignup) {
@@ -296,7 +297,17 @@ export function NoodlerHome(props: NoodlerHomeProps) {
           title="Open menu"
           aria-label="Open NoodleR menu"
         >
-          <Menu size={22} />
+          {isGlobalPersonaSelected ? (
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 ring-1 ring-[var(--noodle-blue)]/25">
+              <Globe2 size={18} className="text-[var(--noodle-blue)]" />
+            </span>
+          ) : mobileMenuAccount ? (
+            <Avatar account={mobileMenuAccount} size="sm" />
+          ) : (
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 ring-1 ring-[var(--noodle-blue)]/25">
+              <AtSign size={18} className="text-[var(--noodle-blue)]" />
+            </span>
+          )}
         </button>
         <NoodlerLogo size={34} className="mx-auto" />
         <div aria-hidden="true" />

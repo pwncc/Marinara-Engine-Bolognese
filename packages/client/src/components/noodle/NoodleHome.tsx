@@ -3,7 +3,7 @@
 // Presentational public-feed surface. State, data fetching, and
 // mutation handlers live in NoodleView and are passed down as props.
 // ──────────────────────────────────────────────
-import { AtSign, Bell, Heart, Menu, MessageCircle, Search, X } from "lucide-react";
+import { AtSign, Bell, Globe2, Heart, MessageCircle, Search, X } from "lucide-react";
 import type { ChangeEvent, ReactNode, RefObject } from "react";
 import type { NoodleAccount, NoodlePost, NoodleSettings } from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
@@ -334,7 +334,17 @@ export function NoodleHome(props: NoodleHomeProps) {
           title="Open menu"
           aria-label="Open Noodle menu"
         >
-          <Menu size={22} />
+          {isGlobalPersonaSelected ? (
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 ring-1 ring-[var(--noodle-blue)]/25">
+              <Globe2 size={18} className="text-[var(--noodle-blue)]" />
+            </span>
+          ) : personaAccount ? (
+            <Avatar account={personaAccount} size="sm" />
+          ) : (
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--noodle-blue)]/15 ring-1 ring-[var(--noodle-blue)]/25">
+              <AtSign size={18} className="text-[var(--noodle-blue)]" />
+            </span>
+          )}
         </button>
         <NoodleLogo className="mx-auto h-9 w-14" />
         <div aria-hidden="true" />

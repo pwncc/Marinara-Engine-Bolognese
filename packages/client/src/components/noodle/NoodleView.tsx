@@ -3237,10 +3237,9 @@ export function NoodleView() {
     scrollTimelineToTop();
   }, [transitionNoodleMode, activeNoodleMode, scrollTimelineToTop]);
 
-  // Explicit mode-switch affordances (the Noodle/NoodleR toggle, and the
-  // mobile bottom nav's "Home" tab which doubles as that toggle) always
-  // land in Noodle mode regardless of what's currently active — unlike
-  // openHomeTimeline, which stays in the current mode.
+  // Explicit mode-switch affordances always land in Noodle mode regardless
+  // of what's currently active, unlike openHomeTimeline, which stays in the
+  // current mode.
   const switchToNoodleMode = useCallback(() => {
     transitionNoodleMode("noodle");
     scrollTimelineToTop();
@@ -4433,7 +4432,7 @@ export function NoodleView() {
             <Section
               id={getNoodleSettingsSectionAnchorId("noodler-access")}
               title="NoodleR access"
-              help="Controls whether NoodleR is available from the mode switcher and mobile navigation."
+              help="Controls whether NoodleR is available from the mode switcher."
             >
               <div className="space-y-3">
                 <ToggleSetting
@@ -6984,16 +6983,19 @@ export function NoodleView() {
         aria-label="Noodle mobile navigation"
         data-component="NoodleView.MobileBottomNav"
       >
-        <div className="grid h-[52px] grid-cols-4">
+        <div className="grid h-[52px] grid-cols-3">
           <button
             type="button"
-            onClick={switchToNoodleModeMobile}
-            aria-label="Noodle home"
-            aria-current={activeNoodleView === "home" ? "page" : undefined}
+            onClick={openMobileHomeTimeline}
+            aria-label={activeNoodleMode === "noodler" ? "NoodleR home" : "Noodle home"}
+            aria-current={activeNoodleView === "home" || activeNoodleView === "noodler" ? "page" : undefined}
             className="relative flex items-center justify-center transition-colors hover:bg-[var(--accent)]"
           >
-            <Home size={22} strokeWidth={activeNoodleView === "home" ? 2.8 : 2} />
-            {activeNoodleView === "home" && (
+            <Home
+              size={22}
+              strokeWidth={activeNoodleView === "home" || activeNoodleView === "noodler" ? 2.8 : 2}
+            />
+            {(activeNoodleView === "home" || activeNoodleView === "noodler") && (
               <span className="absolute top-1 h-1 w-1 rounded-full bg-[var(--noodle-blue)]" />
             )}
           </button>
@@ -7030,20 +7032,6 @@ export function NoodleView() {
                 )}
             </span>
             {activeNoodleView === "notifications" && (
-              <span className="absolute top-1 h-1 w-1 rounded-full bg-[var(--noodle-blue)]" />
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={openNoodlerHub}
-            aria-label="NoodleR"
-            aria-current={
-              activeNoodleView === "noodler" || activeNoodleView === "noodler-verification" ? "page" : undefined
-            }
-            className="relative flex items-center justify-center transition-colors hover:bg-[var(--accent)]"
-          >
-            <NoodlerLogo size={24} />
-            {(activeNoodleView === "noodler" || activeNoodleView === "noodler-verification") && (
               <span className="absolute top-1 h-1 w-1 rounded-full bg-[var(--noodle-blue)]" />
             )}
           </button>
