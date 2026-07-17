@@ -92,7 +92,55 @@ export const noodleSettingsSchema = z.object({
 
 export const noodleSettingsUpdateSchema = noodleSettingsSchema.partial();
 
-export const noodleAccountUpdateSchema = z.object({
+const noodleAvatarCropSchema = z.union([
+  z
+    .object({
+      srcX: z.number().finite(),
+      srcY: z.number().finite(),
+      srcWidth: z.number().finite().positive(),
+      srcHeight: z.number().finite().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      zoom: z.number().finite().positive(),
+      offsetX: z.number().finite(),
+      offsetY: z.number().finite(),
+      fullImage: z.boolean().optional(),
+    })
+    .strict(),
+]);
+
+export const noodleAccountProfileSettingsSchema = z
+  .object({
+    avatarCrop: noodleAvatarCropSchema.nullable().optional(),
+    bannerUrl: z.string().max(2000).optional(),
+    location: z.string().max(120).optional(),
+    profileGenerated: z.boolean().optional(),
+    profileManuallyEdited: z.boolean().optional(),
+  })
+  .strict();
+
+export const noodleAccountSocialSettingsSchema = z
+  .object({
+    followingAccountIds: z.array(z.string().min(1)).optional(),
+    followingAccountTimestamps: z.record(z.string(), z.string().datetime()).optional(),
+    notificationsReadAt: z.string().datetime().optional(),
+  })
+  .strict();
+
+export const noodleAccountSchedulerSettingsSchema = z.object({}).strict();
+export const noodleAccountPrivacySettingsSchema = z.object({}).strict();
+
+export const noodleAccountSocialPatchSchema = noodleAccountSocialSettingsSchema.pick({ notificationsReadAt: true });
+
+export const noodleAccountSettingsPatchSchema = z.discriminatedUnion("subtree", [
+  z.object({ subtree: z.literal("social"), patch: noodleAccountSocialPatchSchema }).strict(),
+  z.object({ subtree: z.literal("scheduler"), patch: noodleAccountSchedulerSettingsSchema }).strict(),
+  z.object({ subtree: z.literal("privacy"), patch: noodleAccountPrivacySettingsSchema }).strict(),
+]);
+
+const noodleAccountIdentityUpdateShape = {
   handle: z
     .string()
     .trim()
@@ -102,9 +150,17 @@ export const noodleAccountUpdateSchema = z.object({
   displayName: z.string().min(1).max(120).optional(),
   bio: z.string().max(500).optional(),
   avatarUrl: z.string().max(2000).nullable().optional(),
-  invited: z.boolean().optional(),
-  settings: z.record(z.string(), z.unknown()).optional(),
-});
+};
+
+export const noodleAccountUpdateSchema = z
+  .object({ ...noodleAccountIdentityUpdateShape, invited: z.boolean().optional() })
+  .strict();
+
+export const noodleAccountProfileUpdateSchema = z
+  .object({ ...noodleAccountIdentityUpdateShape, profile: noodleAccountProfileSettingsSchema })
+  .strict();
+
+export const noodleAccountFollowUpdateSchema = z.object({ followed: z.boolean() }).strict();
 
 export const noodleInviteSchema = z.object({
   characterId: z.string().min(1),
@@ -340,6 +396,9 @@ export const noodleGeneratedProfilesSchema = z.object({
 export type NoodleSettingsInput = z.infer<typeof noodleSettingsSchema>;
 export type NoodleSettingsUpdateInput = z.infer<typeof noodleSettingsUpdateSchema>;
 export type NoodleAccountUpdateInput = z.infer<typeof noodleAccountUpdateSchema>;
+export type NoodleAccountProfileUpdateInput = z.infer<typeof noodleAccountProfileUpdateSchema>;
+export type NoodleAccountSettingsPatchInput = z.infer<typeof noodleAccountSettingsPatchSchema>;
+export type NoodleAccountFollowUpdateInput = z.infer<typeof noodleAccountFollowUpdateSchema>;
 export type NoodleInviteInput = z.infer<typeof noodleInviteSchema>;
 export type NoodleBulkInviteInput = z.infer<typeof noodleBulkInviteSchema>;
 export type NoodlePollInput = z.infer<typeof noodlePollInputSchema>;
