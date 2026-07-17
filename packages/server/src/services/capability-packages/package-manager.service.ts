@@ -24,6 +24,7 @@ const ROOT = join(DATA_DIR, "capability-packages");
 const VERSIONS = join(ROOT, "versions");
 const REGISTRY = join(ROOT, "installed.json");
 const AVAILABILITY_MIGRATION = join(ROOT, "availability-migration-v1.json");
+const HIERARCHICAL_MAPS_SELECTION_CORRECTION = join(ROOT, "hierarchical-maps-selection-correction-v1.json");
 const NON_DOWNLOADABLE_CORE_PACKAGE_IDS = new Set(["about-me-keeper"]);
 const OFFICIAL_CATALOG_ROOT = "https://raw.githubusercontent.com/Pasta-Devs/Marinara-Agents/main/catalog";
 const ENGINE_RELEASE_VERSION_PATTERN = /^v?(\d+)\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
@@ -108,6 +109,24 @@ async function writeAvailabilityMigration(kind: "fresh" | "legacy") {
     mode: 0o600,
   });
   await rename(temporary, AVAILABILITY_MIGRATION);
+}
+
+async function readAvailabilityMigrationKind(): Promise<"fresh" | "legacy" | null> {
+  try {
+    const parsed = JSON.parse(await readFile(AVAILABILITY_MIGRATION, "utf8")) as Record<string, unknown>;
+    return parsed.schemaVersion === 1 && (parsed.kind === "fresh" || parsed.kind === "legacy") ? parsed.kind : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeHierarchicalMapsSelectionCorrection() {
+  await mkdir(ROOT, { recursive: true });
+  const temporary = `${HIERARCHICAL_MAPS_SELECTION_CORRECTION}.tmp-${process.pid}-${Date.now()}`;
+  await writeFile(temporary, JSON.stringify({ schemaVersion: 1, completedAt: new Date().toISOString() }, null, 2), {
+    mode: 0o600,
+  });
+  await rename(temporary, HIERARCHICAL_MAPS_SELECTION_CORRECTION);
 }
 
 async function fetchBytes(url: string, maximum: number): Promise<Buffer> {
@@ -415,7 +434,13 @@ export const capabilityPackageManager = {
   },
 
   async migrateLegacyAvailability(legacyInstall: boolean) {
-    if (existsSync(AVAILABILITY_MIGRATION)) return { migrated: false, legacy: legacyInstall, complete: true };
+    if (existsSync(AVAILABILITY_MIGRATION)) {
+      return {
+        migrated: false,
+        legacy: (await readAvailabilityMigrationKind()) === "legacy",
+        complete: true,
+      };
+    }
     if (!legacyInstall) {
       await writeAvailabilityMigration("fresh");
       return { migrated: false, legacy: false, complete: true };
@@ -434,6 +459,14 @@ export const capabilityPackageManager = {
 
   async completeLegacyAvailabilityMigration() {
     await writeAvailabilityMigration("legacy");
+  },
+
+  isHierarchicalMapsSelectionCorrectionComplete() {
+    return existsSync(HIERARCHICAL_MAPS_SELECTION_CORRECTION);
+  },
+
+  async completeHierarchicalMapsSelectionCorrection() {
+    await writeHierarchicalMapsSelectionCorrection();
   },
 
   async updateInstalledPackagesToLatest() {
