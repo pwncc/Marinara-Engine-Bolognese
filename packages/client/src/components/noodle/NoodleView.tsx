@@ -104,6 +104,7 @@ import {
   useInviteNoodleCharacter,
   useInviteNoodleCharacters,
   useNoodle,
+  useNoodlerAccounts,
   usePatchNoodleAccountSettings,
   useRefreshNoodle,
   useRemoveNoodleCharacter,
@@ -1067,6 +1068,11 @@ export function NoodleView() {
   const noodlePromptLoading = noodlePromptDetail.isLoading || noodlePromptDefault.isLoading;
   const noodlePromptDirty = noodlePromptDraft !== noodlePromptText;
   const settings = data?.settings;
+  const {
+    data: privateAccounts = [],
+    isLoading: privateAccountsLoading,
+    isError: privateAccountsError,
+  } = useNoodlerAccounts(settings?.enableNoodler === true);
   const accounts = useMemo(
     () =>
       (data?.accounts ?? []).filter(
@@ -3364,6 +3370,30 @@ export function NoodleView() {
                   onCommit={(value) => saveSettings({ carryoverMaxItems: value })}
                 />
               </div>
+            </div>
+          </Section>
+
+          <Section
+            title="NoodleR Access"
+            help="Keeps private creator accounts isolated from the public Noodle timeline. Later NoodleR slices add private navigation and creator tools."
+          >
+            <div className="space-y-3">
+              <ToggleSetting
+                label="Enable NoodleR"
+                help="Opt in to private creator accounts. Turning this off hides private account data from NoodleR queries without changing the public timeline."
+                checked={settings.enableNoodler}
+                disabled={updateSettings.isPending}
+                onChange={(checked) => saveSettings({ enableNoodler: checked })}
+              />
+              {settings.enableNoodler && (
+                <div className="rounded-md border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--noodle-blue)]/5 px-3 py-2.5 text-xs text-[var(--muted-foreground)]">
+                  {privateAccountsError
+                    ? "Private accounts could not be loaded. Try again later."
+                    : privateAccountsLoading
+                      ? "Loading private accounts..."
+                      : `${privateAccounts.length} private account${privateAccounts.length === 1 ? "" : "s"}. Private navigation arrives in the next NoodleR slice.`}
+                </div>
+              )}
             </div>
           </Section>
 

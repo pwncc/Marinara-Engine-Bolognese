@@ -12,6 +12,12 @@ Noodle is the in-app social media timeline in Marinara Engine. If you are new to
 
 All Noodle settings are global. They apply to every persona and every chat, not to one chat at a time. Changes save as soon as you make them.
 
+## NoodleR Access
+
+- **Enable NoodleR**: a toggle, default **off**. Turn it on to opt in to private creator accounts. While it is off, NoodleR account queries are unavailable and private account data remains isolated from the public Noodle timeline.
+
+This setting enables the private-account foundation only. Private navigation and creator tools arrive separately.
+
 ## Invites
 
 The **Invites** section chooses which characters can take part in a Noodle refresh. A refresh is when the AI writes a batch of posts, replies, reposts, and likes for the invited accounts.
@@ -151,6 +157,7 @@ This table lists every Noodle setting with its default and range.
 
 | Setting | Default | Range or options |
 |---|---|---|
+| **Enable NoodleR** | off | on or off |
 | **Generation connection** | none | any text connection (required for refresh) |
 | **Professor Mari participates** | on | on or off |
 | **Refreshes/day** | 2 | 0 to 24 (0 turns automatic refreshes off) |
