@@ -76,7 +76,7 @@ export function useLoadOlderNoodlePosts(viewerPersonaId?: string) {
   return useMutation({
     mutationFn: (before: string) =>
       api.get<{ posts: NoodlePost[]; interactions: NoodleInteraction[]; hasMore: boolean }>(
-        `/noodle/posts?before=${encodeURIComponent(before)}&limit=40`,
+        `/noodle/posts?before=${encodeURIComponent(before)}&limit=40${viewerPersonaId ? `&viewerPersonaId=${encodeURIComponent(viewerPersonaId)}` : ""}`,
       ),
     onSuccess: (page) => {
       qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(viewerPersonaId ?? "none"), (current) => {

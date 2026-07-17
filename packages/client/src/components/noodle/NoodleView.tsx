@@ -982,16 +982,21 @@ export function NoodleView() {
   const hasMorePersonaAccounts = visiblePersonaAccounts.length < sortedPersonaAccounts.length;
   const posts = useMemo(() => data?.posts ?? [], [data?.posts]);
   const oldestLoadedPostCreatedAt = useMemo(() => {
-    const publicAccountIds = new Set(
-      accounts.filter((account) => account.visibility === "public").map((account) => account.id),
+    const visibleAccountIds = new Set(
+      accounts
+        .filter(
+          (account) =>
+            account.visibility !== "private" || settings?.noodler.showPublicPostsOnNoodle === true,
+        )
+        .map((account) => account.id),
     );
     let oldest: string | null = null;
     for (const post of posts) {
-      if (!publicAccountIds.has(post.authorAccountId)) continue;
+      if (post.access !== "public" || !visibleAccountIds.has(post.authorAccountId)) continue;
       if (!oldest || post.createdAt < oldest) oldest = post.createdAt;
     }
     return oldest;
-  }, [accounts, posts]);
+  }, [accounts, posts, settings?.noodler.showPublicPostsOnNoodle]);
   const interactions = useMemo(() => data?.interactions ?? [], [data?.interactions]);
   const subscriptions = useMemo(() => data?.subscriptions ?? [], [data?.subscriptions]);
   const postUnlocks = useMemo(() => data?.postUnlocks ?? [], [data?.postUnlocks]);
@@ -1001,12 +1006,17 @@ export function NoodleView() {
     () => new Map(accounts.map((account) => [account.handle.toLowerCase(), account])),
     [accounts],
   );
-  // NoodleR private accounts never appear in the main feed, switcher, or search —
-  // they're only reachable via a direct link from their linked public profile.
+  // NoodleR accounts stay out of the switcher and search. Their explicitly
+  // public posts can still appear in the main feed with an origin badge.
   const feedVisibleAccounts = useMemo(() => accounts.filter((account) => account.visibility !== "private"), [accounts]);
   const feedVisiblePosts = useMemo(
-    () => posts.filter((post) => accountById.get(post.authorAccountId)?.visibility !== "private"),
-    [accountById, posts],
+    () =>
+      posts.filter((post) => {
+        if (post.access !== "public") return false;
+        const author = accountById.get(post.authorAccountId);
+        return author?.visibility !== "private" || settings?.noodler.showPublicPostsOnNoodle === true;
+      }),
+    [accountById, posts, settings?.noodler.showPublicPostsOnNoodle],
   );
   const postById = useMemo(() => new Map(posts.map((post) => [post.id, post])), [posts]);
   const interactionById = useMemo(
@@ -4442,6 +4452,15 @@ export function NoodleView() {
                   disabled={updateSettings.isPending}
                   onChange={setNoodlerEnabled}
                 />
+                {isNoodlerEnabled && (
+                  <ToggleSetting
+                    label="Show public NoodleR posts on Noodle"
+                    help="Adds NoodleR posts marked Public to the main Noodle timeline with a From NoodleR badge. Subscriber and pay-per-view posts never appear there."
+                    checked={settings.noodler.showPublicPostsOnNoodle}
+                    disabled={updateSettings.isPending}
+                    onChange={(showPublicPostsOnNoodle) => saveSettings({ noodler: { showPublicPostsOnNoodle } })}
+                  />
+                )}
                 {!isNoodlerEnabled && (
                   <p className="rounded-md border border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/5 px-3 py-2 text-xs leading-5 text-[var(--muted-foreground)]">
                     NoodleR stays hidden until it is enabled. Opening NoodleR will show the 18+ confirmation screen
@@ -4644,6 +4663,12 @@ export function NoodleView() {
   const renderPostArticle = (post: NoodlePost) => {
     const authorAccount = accountById.get(post.authorAccountId) ?? null;
     const author = authorAccount ?? post.authorSnapshot;
+    const postBadge =
+      authorAccount?.visibility === "private" && activeNoodleMode === "noodle"
+        ? "From NoodleR"
+        : activeNoodleMode === "noodler" && post.access === "public"
+          ? "Public"
+          : null;
     const postInteractions = interactions.filter((interaction) => interaction.postId === post.id);
     const rootPostInteractions = postInteractions.filter((interaction) => !interaction.parentInteractionId);
     const poll = readNoodlePollFromMetadata(post.metadata);
@@ -4886,6 +4911,12 @@ export function NoodleView() {
                   {author?.displayName ?? "Noodle User"}
                 </button>
                 <span className="text-xs text-[var(--muted-foreground)]">@{author?.handle ?? "noodle"}</span>
+                {postBadge && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-[var(--noodle-blue)]/35 bg-[var(--noodle-blue)]/10 px-2 py-0.5 text-[0.625rem] font-bold text-[var(--noodle-blue)]">
+                    {authorAccount?.visibility === "private" && <NoodlerBadge />}
+                    {postBadge}
+                  </span>
+                )}
                 <span className="text-xs text-[var(--muted-foreground)]">{formatTime(post.createdAt)}</span>
               </div>
               <div className={cn("relative shrink-0", post.metadata.accessLocked === true && "invisible")}>
@@ -6143,7 +6174,7 @@ export function NoodleView() {
     onTimelineTabChange: setTimelineTab,
     timelinePosts,
     baseTimelinePostsCount: baseTimelinePosts.length,
-    postsCount: posts.length,
+    postsCount: feedVisiblePosts.length,
     renderPostArticle,
     renderPostGrid,
     onOpenProfile: openProfile,

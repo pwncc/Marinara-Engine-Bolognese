@@ -273,7 +273,7 @@ export async function noodlerRoutes(app: FastifyInstance) {
     const privateAccounts = await noodle.listPrivateAccounts();
     // Marinara is single-player: this tab is the director's management view,
     // while subscriptions/discover below remain scoped to the selected persona.
-    const owned = privateAccounts;
+    const owned = privateAccounts.filter((account) => account.kind === "persona");
     // A page never leaks its own existence to itself, so hidden-from only
     // applies to accounts other than the requesting subscriber.
     const creatorAccounts = privateAccounts

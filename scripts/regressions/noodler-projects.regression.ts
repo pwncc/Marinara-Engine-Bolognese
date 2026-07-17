@@ -117,6 +117,24 @@ try {
   assert.equal(locked.imagePrompt, null);
   assert.deepEqual(locked.metadata, { accessLocked: true, hasLockedImage: true, ppvPrice: 8 });
 
+  const publicNoodlerPost = await noodle.createPost({
+    authorAccountId: activePrivateAccount.id,
+    content: "Public creator update",
+    access: "public",
+  });
+  const separatedBootstrap = filterPrivateNoodleBootstrapForViewer(await noodle.bootstrap(), null);
+  assert.ok(!separatedBootstrap.accounts.some((account) => account.id === activePrivateAccount.id));
+  assert.ok(!separatedBootstrap.posts.some((post) => post.id === publicNoodlerPost.id));
+
+  await noodle.updateSettings({ noodler: { showPublicPostsOnNoodle: true } });
+  const publicBootstrap = filterPrivateNoodleBootstrapForViewer(await noodle.bootstrap(), null);
+  assert.ok(publicBootstrap.accounts.some((account) => account.id === activePrivateAccount.id));
+  assert.equal(
+    publicBootstrap.posts.find((post) => post.id === publicNoodlerPost.id)?.content,
+    "Public creator update",
+  );
+  assert.equal(publicBootstrap.posts.find((post) => post.id === subscriberPost.id)?.content, "");
+
   await noodle.subscribe(viewer.id, activePrivateAccount.id);
   const subscribedBootstrap = await noodle.bootstrap();
   const revealed = filterPrivateNoodleBootstrapForViewer(subscribedBootstrap, viewer).posts.find(

@@ -1693,9 +1693,20 @@ export function createNoodleStorage(db: DB) {
         await this.ensureNoodlerCreatorPostSchedule(new Date(), settings),
         new Date(),
       );
-      const oldestLoadedPost = publicPosts[publicPosts.length - 1];
+      const accountById = new Map(accounts.map((account) => [account.id, account]));
+      const oldestLoadedPost = posts
+        .filter((post) => {
+          if (post.access !== "public") return false;
+          const author = accountById.get(post.authorAccountId);
+          return author?.visibility !== "private" || settings.noodler.showPublicPostsOnNoodle;
+        })
+        .at(-1);
       const hasOlderHistory = oldestLoadedPost
-        ? await this.hasSurfacePostsBefore("public", oldestLoadedPost.createdAt)
+        ? (await this.listPostsBefore(oldestLoadedPost.createdAt)).some((post) => {
+            if (post.access !== "public") return false;
+            const author = accountById.get(post.authorAccountId);
+            return author?.visibility !== "private" || settings.noodler.showPublicPostsOnNoodle;
+          })
         : false;
       const allSubscriptions = await this.listSubscriptions();
       const allPostUnlocks = await this.listPostUnlocks();

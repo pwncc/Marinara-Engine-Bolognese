@@ -50,6 +50,7 @@ export interface NoodlerSettings {
   // Global kill switch for the NoodleR fan-activity scheduler. Off by default;
   // even accounts with fanActivity.autoSchedule on stay dormant until this is on.
   enableFanActivityScheduler: boolean;
+  showPublicPostsOnNoodle: boolean;
   creatorPosts: {
     enabled: boolean;
     postsPerDay: number;

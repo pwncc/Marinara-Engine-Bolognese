@@ -51,6 +51,7 @@ export const DEFAULT_NOODLE_SETTINGS = {
   allowGlobalPersona: false,
   noodler: {
     enableFanActivityScheduler: false,
+    showPublicPostsOnNoodle: false,
     creatorPosts: {
       enabled: false,
       postsPerDay: 0,
@@ -71,6 +72,7 @@ export const noodlerCreatorPostsSettingsSchema = z.object({
 
 export const noodlerSettingsSchema = z.object({
   enableFanActivityScheduler: z.boolean().default(DEFAULT_NOODLE_SETTINGS.noodler.enableFanActivityScheduler),
+  showPublicPostsOnNoodle: z.boolean().default(DEFAULT_NOODLE_SETTINGS.noodler.showPublicPostsOnNoodle),
   creatorPosts: noodlerCreatorPostsSettingsSchema.default(() => ({ ...DEFAULT_NOODLE_SETTINGS.noodler.creatorPosts })),
 });
 

@@ -808,7 +808,17 @@ export function filterPrivateNoodleBootstrapForViewer(
   const publicAccountIds = new Set(
     bootstrap.accounts.filter((account) => account.visibility !== "private").map((account) => account.id),
   );
+  const accountById = new Map(bootstrap.accounts.map((account) => [account.id, account]));
   const accessiblePrivateAccountIds = new Set<string>();
+  if (bootstrap.settings.noodler.showPublicPostsOnNoodle) {
+    for (const post of bootstrap.posts) {
+      if (post.access !== "public") continue;
+      const author = accountById.get(post.authorAccountId);
+      if (author?.visibility === "private" && !isNoodleAccountHiddenFromViewer(author, viewerAccount?.id ?? null)) {
+        accessiblePrivateAccountIds.add(author.id);
+      }
+    }
+  }
   if (viewerAccount) {
     for (const account of bootstrap.accounts) {
       if (account.visibility !== "private") continue;
@@ -826,7 +836,6 @@ export function filterPrivateNoodleBootstrapForViewer(
     }
   }
   const visibleAccountIds = new Set([...publicAccountIds, ...accessiblePrivateAccountIds]);
-  const accountById = new Map(bootstrap.accounts.map((account) => [account.id, account]));
   const subscribedCreatorIds = new Set(
     bootstrap.subscriptions
       .filter((subscription) => subscription.subscriberAccountId === viewerAccount?.id)
@@ -2643,15 +2652,24 @@ export async function noodleRoutes(app: FastifyInstance) {
     return bootstrapVisibleNoodle(noodle, characters, typeof viewerPersonaId === "string" ? viewerPersonaId : null);
   });
 
-  // This endpoint backs the public Noodle timeline. NoodleR creator history
-  // uses its own private-account views and must never be appended here.
+  // This endpoint backs the public Noodle timeline, including NoodleR posts
+  // that creators explicitly marked public.
   app.get("/posts", async (req, reply) => {
     const query = req.query as Record<string, unknown>;
     const before = typeof query.before === "string" ? query.before : null;
     if (!before) return reply.code(400).send({ error: "before is required" });
     const requestedLimit = typeof query.limit === "string" ? Number.parseInt(query.limit, 10) : 40;
     const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(100, requestedLimit)) : 40;
-    const collected = await noodle.listSurfacePostsBefore("public", before, { limit: limit + 1 });
+    const viewerPersonaId = typeof query.viewerPersonaId === "string" ? query.viewerPersonaId : null;
+    const viewerAccount = viewerPersonaId ? await resolvePersonaAccount(noodle, characters, viewerPersonaId) : null;
+    const settings = await noodle.getSettings();
+    const accountById = new Map((await noodle.listAccounts({ includePrivate: true })).map((account) => [account.id, account]));
+    const collected = (await noodle.listPostsBefore(before)).filter((post) => {
+      if (post.access !== "public") return false;
+      const author = accountById.get(post.authorAccountId);
+      if (author?.visibility === "private" && !settings.noodler.showPublicPostsOnNoodle) return false;
+      return !author || !isNoodleAccountHiddenFromViewer(author, viewerAccount?.id ?? null);
+    });
     const hasMore = collected.length > limit;
     const posts = hasMore ? collected.slice(0, limit) : collected;
     const interactions = await noodle.listInteractions(posts.map((post) => post.id));

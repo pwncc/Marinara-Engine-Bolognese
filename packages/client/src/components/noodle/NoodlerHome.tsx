@@ -205,8 +205,8 @@ export function NoodlerHome(props: NoodlerHomeProps) {
                 </p>
                 <h3 className="mt-1 text-2xl font-black leading-tight">NoodleR is an optional 18+ space.</h3>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--muted-foreground)]">
-                  NoodleR keeps creator profiles, subscriptions, and pay-per-view posts separate from the public Noodle
-                  timeline. Enable it only if you want adult creator content in this installation.
+                  NoodleR keeps creator profiles and restricted posts separate from Noodle. An optional installation
+                  setting can also share posts marked public to the Noodle timeline.
                 </p>
               </div>
             </div>
@@ -217,7 +217,7 @@ export function NoodlerHome(props: NoodlerHomeProps) {
               {
                 icon: User,
                 title: "Separate from Noodle",
-                detail: "NoodleR profiles and posts stay out of the public Noodle timeline.",
+                detail: "Subscriber and pay-per-view posts stay out of Noodle; public sharing is optional and off by default.",
               },
               {
                 icon: ImageIcon,
@@ -415,14 +415,14 @@ export function NoodlerHome(props: NoodlerHomeProps) {
           ) : noodlerHub && noodlerHub.owned.length > 0 ? (
             <>
               <p className="border-b border-[var(--noodle-divider)] bg-[var(--noodle-blue)]/8 px-4 py-3 text-xs leading-5 text-[var(--muted-foreground)]">
-                Creator Pages shows every persona and character profile you can direct. Subscriptions and unlocks still
-                belong to the selected persona.
+                Creator Pages shows the NoodleR profiles for your personas. Subscriptions and unlocks still belong to the
+                selected persona.
               </p>
               <div>{noodlerHub.owned.map((account) => renderNoodlerAccountRow(account, true))}</div>
             </>
           ) : (
             <p className="px-4 py-4 text-sm text-[var(--muted-foreground)]">
-              No creator pages yet. Open a persona or character profile to create one.
+              No creator pages yet. Open a persona profile to create one.
             </p>
           )}
         </>

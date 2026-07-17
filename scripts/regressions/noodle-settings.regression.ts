@@ -67,6 +67,7 @@ try {
   const firstDb = await createFileNativeDB();
   const firstNoodle = createNoodleStorage(firstDb as unknown as DB);
   const firstCharacters = createCharactersStorage(firstDb as unknown as DB);
+  assert.equal((await firstNoodle.getSettings()).noodler.showPublicPostsOnNoodle, false);
   const updated = await firstNoodle.updateSettings({
     maxImagesPerRefresh: 9,
     allowRandomUsers: true,
@@ -74,6 +75,7 @@ try {
     maxGeneratedPostsPerRefresh: 11,
     noodler: {
       enableFanActivityScheduler: true,
+      showPublicPostsOnNoodle: true,
       creatorPosts: { enabled: true, postsPerDay: 4, generationConnectionId: null },
     },
   });
@@ -81,6 +83,7 @@ try {
   assert.equal(updated.allowRandomUsers, true);
   assert.equal(updated.maxGeneratedPostsPerRefresh, 11);
   assert.equal(updated.noodler.enableFanActivityScheduler, true);
+  assert.equal(updated.noodler.showPublicPostsOnNoodle, true);
   assert.equal(updated.noodler.creatorPosts.postsPerDay, 4);
   const partiallyUpdatedCreatorSchedule = await firstNoodle.updateSettings({
     noodler: { creatorPosts: { enabled: false } },
@@ -90,6 +93,7 @@ try {
   const partiallyUpdated = await firstNoodle.updateSettings({ allowRandomUsers: false });
   assert.equal(partiallyUpdated.allowRandomUsers, false);
   assert.equal(partiallyUpdated.noodler.enableFanActivityScheduler, true);
+  assert.equal(partiallyUpdated.noodler.showPublicPostsOnNoodle, true);
   const refreshRun = await firstNoodle.createRefreshRun({
     activeAccountIds: ["alpha"],
     prompt: "Generate a Noodle timeline.",
