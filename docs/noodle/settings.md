@@ -38,7 +38,7 @@ Inviting from a folder is a one-time bulk action. It is not a live sync. Charact
 
 The **Refresh** section controls the AI connection Noodle writes with, and how often Noodle refreshes on its own.
 
-- **Generation connection**: a dropdown. Pick the connection Noodle uses to write posts, replies, reposts, likes, and profile text. It starts unset with the placeholder **Choose connection**. You must pick one before any refresh will run. Vision-capable models also receive up to eight recent relevant images from Noodle posts and comments. Text-only models that reject those image inputs are retried automatically without the pictures.
+- **Generation connection**: a dropdown. Pick the connection Noodle uses to write posts, replies, reposts, likes, and profile text. It starts unset with the placeholder **Choose connection**. You must pick one before a refresh or a guided **Generate post with AI** request will run. Vision-capable models also receive up to eight recent relevant images from Noodle posts and comments. Text-only models that reject those image inputs are retried automatically without the pictures.
 - **Refreshes/day**: a number, from 0 to 24, default **2**. This is how many automatic refreshes Marinara runs per day. Set it to 0 to turn automatic refreshes off. It does not limit how often you refresh by hand.
 
 ### Automatic schedule
@@ -85,12 +85,12 @@ Noodle chooses the active accounts before it prepares first-time profiles. Only 
 
 The **Activity** section limits how much a single refresh may create. Each field is a per-refresh cap.
 
-| Field | Default | Range |
-|---|---|---|
-| **Posts** | 8 | 0 to 100 |
-| **Replies** | 12 | 0 to 200 |
-| **Reposts** | 4 | 0 to 100 |
-| **Likes** | 18 | 0 to 500 |
+| Field       | Default | Range    |
+| ----------- | ------- | -------- |
+| **Posts**   | 8       | 0 to 100 |
+| **Replies** | 12      | 0 to 200 |
+| **Reposts** | 4       | 0 to 100 |
+| **Likes**   | 18      | 0 to 500 |
 
 Set a field to 0 to stop the AI from creating that kind of activity.
 
@@ -108,6 +108,8 @@ The **Image Generation** section lets Noodle attach AI-made images to some posts
 - **Attach gallery images**: a separate toggle, default **off**. It stays visible even when **Image generation** is off. Instead of making a new image, it lets a post reuse an image from that character's gallery or from a chat they appear in.
 
 If you turn on **Image generation** but have no usable image connection, a refresh is blocked. You will see the message "Choose an image generation connection for Noodle first." A failed image is retried once. If the second attempt also fails, the refresh continues and publishes a clean text-only post instead of exposing the unused image prompt.
+
+The guided **Generate post with AI** composer can request an image even when automatic timeline image generation is off. It still needs the configured Noodle image connection, and an explicitly requested image must be produced before the guided post succeeds.
 
 The template Noodle uses to write these image prompts is called **Noodle Post Image**. You can edit it under **Settings** > **Generations** > **Image Generation Prompt Overrides**. Your **Prompt instructions** text is passed into that template, and the result then goes through your normal image style profile. See [Prompt Overrides for Image and Video](../prompts/prompt-overrides.md) and [Image Style Profiles](../media/style-profiles.md). Professor Mari has no character card, so her image posts use her built-in avatar and reference art instead.
 
@@ -180,37 +182,37 @@ To make Noodle activity appear in a chat, turn on the matching **Carryover to ch
 
 This table lists every Noodle setting with its default and range.
 
-| Setting | Default | Range or options |
-|---|---|---|
-| **Generation connection** | none | any text connection (required for refresh) |
-| **Professor Mari participates** | on | on or off |
-| **Refreshes/day** | 2 | 0 to 24 (0 turns automatic refreshes off) |
-| **Enable NoodleR fan activity** | off | on or off (global kill switch; also needs each page's own fan activity + auto-schedule on) |
-| **NoodleR automatic posting** (per page) | off | on or off |
-| **NoodleR automatic posting frequency** (per page) | Low | Low, Medium, High |
-| **Active selection** | Random range | Random range, Exact count, All invited |
-| **Min active** | 2 | 1 to 100 (Random range only) |
-| **Max active** | 5 | 1 to 100 (Random range only) |
-| **Active count** | matches Max active | 1 to 100 (Exact count only) |
-| **Posts** | 8 | 0 to 100 |
-| **Replies** | 12 | 0 to 200 |
-| **Reposts** | 4 | 0 to 100 |
-| **Likes** | 18 | 0 to 500 |
-| **Image generation** | off | on or off |
-| **Image generation connection** | Default | any image-generation connection |
-| **Prompt instructions** | built-in text | up to 4000 characters |
-| **Use avatar references** | on | on or off |
-| **Include descriptions** | on | on or off |
-| **Images/refresh** | 3 | 0 to 50 |
-| **Attach gallery images** | off | on or off |
-| **Lorebook context** | off | on or off |
-| **Enhanced tone & continuity** | off | on or off |
-| **Carryover: Conversations** | off | on or off |
-| **Carryover: Roleplays** | off | on or off |
-| **Carryover: Games** | off | on or off |
-| **Carry hours** | 48 | 1 to 720 |
-| **Carry items** | 8 | 1 to 50 |
-| **Allow Noodle references** (per chat) | off | on or off |
+| Setting                                            | Default            | Range or options                                                                           |
+| -------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------ |
+| **Generation connection**                          | none               | any text connection (required for refresh)                                                 |
+| **Professor Mari participates**                    | on                 | on or off                                                                                  |
+| **Refreshes/day**                                  | 2                  | 0 to 24 (0 turns automatic refreshes off)                                                  |
+| **Enable NoodleR fan activity**                    | off                | on or off (global kill switch; also needs each page's own fan activity + auto-schedule on) |
+| **NoodleR automatic posting** (per page)           | off                | on or off                                                                                  |
+| **NoodleR automatic posting frequency** (per page) | Low                | Low, Medium, High                                                                          |
+| **Active selection**                               | Random range       | Random range, Exact count, All invited                                                     |
+| **Min active**                                     | 2                  | 1 to 100 (Random range only)                                                               |
+| **Max active**                                     | 5                  | 1 to 100 (Random range only)                                                               |
+| **Active count**                                   | matches Max active | 1 to 100 (Exact count only)                                                                |
+| **Posts**                                          | 8                  | 0 to 100                                                                                   |
+| **Replies**                                        | 12                 | 0 to 200                                                                                   |
+| **Reposts**                                        | 4                  | 0 to 100                                                                                   |
+| **Likes**                                          | 18                 | 0 to 500                                                                                   |
+| **Image generation**                               | off                | on or off                                                                                  |
+| **Image generation connection**                    | Default            | any image-generation connection                                                            |
+| **Prompt instructions**                            | built-in text      | up to 4000 characters                                                                      |
+| **Use avatar references**                          | on                 | on or off                                                                                  |
+| **Include descriptions**                           | on                 | on or off                                                                                  |
+| **Images/refresh**                                 | 3                  | 0 to 50                                                                                    |
+| **Attach gallery images**                          | off                | on or off                                                                                  |
+| **Lorebook context**                               | off                | on or off                                                                                  |
+| **Enhanced tone & continuity**                     | off                | on or off                                                                                  |
+| **Carryover: Conversations**                       | off                | on or off                                                                                  |
+| **Carryover: Roleplays**                           | off                | on or off                                                                                  |
+| **Carryover: Games**                               | off                | on or off                                                                                  |
+| **Carry hours**                                    | 48                 | 1 to 720                                                                                   |
+| **Carry items**                                    | 8                  | 1 to 50                                                                                    |
+| **Allow Noodle references** (per chat)             | off                | on or off                                                                                  |
 
 ## Related guides
 

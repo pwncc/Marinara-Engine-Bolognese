@@ -172,9 +172,7 @@ try {
     ["PRIVATE_SURFACE_MARKER"],
   );
   assert.deepEqual(
-    (await firstNoodle.listSurfacePosts("private", { authorAccountId: privateAccount.id })).map(
-      (post) => post.content,
-    ),
+    (await firstNoodle.listSurfacePosts("private", { authorAccountId: privateAccount.id })).map((post) => post.content),
     ["PRIVATE_SURFACE_MARKER"],
   );
   assert.equal(await firstNoodle.hasSurfacePostsBefore("public", "9999-12-31T23:59:59.999Z"), true);
@@ -213,16 +211,20 @@ try {
   assert.deepEqual(noodlePpvPriceMetadata("ppv", 19.99), { ppvPrice: 19.99 });
   assert.deepEqual(noodlePpvPriceMetadata("subscriber", 19.99), {});
   assert.equal(
-    noodleRefreshSchema.parse({ privatePostGuide: { access: "ppv", ppvPrice: 999_999 } }).privatePostGuide
-      ?.ppvPrice,
+    noodleRefreshSchema.parse({ postGuide: { access: "ppv", ppvPrice: 999_999 } }).postGuide?.ppvPrice,
     999_999,
   );
+  assert.equal(noodleRefreshSchema.safeParse({ postGuide: { access: "ppv", ppvPrice: -0.01 } }).success, false);
+  assert.equal(noodleRefreshSchema.safeParse({ postGuide: { access: "ppv", ppvPrice: 1_000_000 } }).success, false);
   assert.equal(
-    noodleRefreshSchema.safeParse({ privatePostGuide: { access: "ppv", ppvPrice: -0.01 } }).success,
-    false,
+    noodleRefreshSchema.parse({
+      targetAccountId: "public-persona",
+      postGuide: { includeText: true, includeImage: false, theme: "A public update" },
+    }).postGuide?.theme,
+    "A public update",
   );
   assert.equal(
-    noodleRefreshSchema.safeParse({ privatePostGuide: { access: "ppv", ppvPrice: 1_000_000 } }).success,
+    noodleRefreshSchema.safeParse({ postGuide: { includeText: false, includeImage: false } }).success,
     false,
   );
   await firstDb._fileStore.close();
@@ -260,10 +262,7 @@ try {
       createdAt: "2026-07-15T19:00:01.000Z",
     },
   ]);
-  assert.deepEqual(
-    reopenedRuns.find((entry) => entry.id === legacyRefreshRun.id)?.attempts,
-    [],
-  );
+  assert.deepEqual(reopenedRuns.find((entry) => entry.id === legacyRefreshRun.id)?.attempts, []);
   await reopenedDb._fileStore.close();
 } finally {
   rmSync(storageDir, { recursive: true, force: true });

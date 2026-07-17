@@ -1768,9 +1768,7 @@ test("Conversation feature packages expose commands and settings without per-cha
     await expect(agentsSection).toHaveCount(1);
     await agentsSection.click();
     await expect(
-      drawer.locator(
-        '[data-capability-client-state="loading"][data-capability-package-id="conversation-calls"]',
-      ),
+      drawer.locator('[data-capability-client-state="loading"][data-capability-package-id="conversation-calls"]'),
     ).toBeVisible();
     releaseInitialClientLoad.resolve();
     const clientLoadFailure = drawer.getByRole("alert").filter({ hasText: "Conversation Calls didn't load" });
@@ -2066,10 +2064,9 @@ test("Game setup only shows features owned by installed agents", async ({ page, 
       "Imported Tower Run",
     );
     await expect(
-      initialDialog.getByText(
-        "tower-run.marinara-game-setup.json loaded. Review the steps, then start the new game.",
-        { exact: true },
-      ),
+      initialDialog.getByText("tower-run.marinara-game-setup.json loaded. Review the steps, then start the new game.", {
+        exact: true,
+      }),
     ).toBeVisible();
 
     const temperatureField = initialDialog.locator('input[inputmode="decimal"]').first();
@@ -3443,6 +3440,13 @@ test("Noodle posts tag invited characters with @handle mentions", async ({ page 
     const noodle = page.locator('[data-component="NoodleView"]');
     const composer = noodle.locator('[data-component="InlineComposer.noodle-timeline"]');
     const textarea = composer.getByPlaceholder("What's simmering?");
+    await composer.getByRole("button", { name: "Generate post with AI" }).click();
+    const guidedPostDialog = page.getByRole("dialog", { name: /Generate post as @/i });
+    await expect(guidedPostDialog).toBeVisible();
+    await expect(guidedPostDialog.getByLabel("Post theme")).toBeVisible();
+    await expect(guidedPostDialog.getByLabel("Direction")).toBeVisible();
+    await expect(guidedPostDialog.getByLabel("Who can view")).toHaveCount(0);
+    await guidedPostDialog.getByRole("button", { name: "Cancel" }).click();
     await textarea.fill("Dinner with @prof");
 
     const mentionList = composer.getByRole("listbox", { name: "Tag a character" });
@@ -4595,10 +4599,9 @@ test("Background library organization works with desktop drag and touch drag", a
   let folderId: string | null = null;
 
   try {
-    const tagResponse = await page.request.patch(
-      `/api/backgrounds/${encodeURIComponent(uploaded.filename)}/tags`,
-      { data: { tags: ["smoke-folder"] } },
-    );
+    const tagResponse = await page.request.patch(`/api/backgrounds/${encodeURIComponent(uploaded.filename)}/tags`, {
+      data: { tags: ["smoke-folder"] },
+    });
     expect(tagResponse.ok()).toBeTruthy();
 
     await page.goto("/");
@@ -4607,7 +4610,9 @@ test("Background library organization works with desktop drag and touch drag", a
     await page.getByPlaceholder("Search settings").fill("Backgrounds");
     await page.getByRole("button", { name: /Backgrounds Section/ }).click();
 
-    await expect(page.getByText("Drag and drop backgrounds to folders, double-click or double-tap to rename.")).toBeVisible();
+    await expect(
+      page.getByText("Drag and drop backgrounds to folders, double-click or double-tap to rename."),
+    ).toBeVisible();
     const sortSelect = page.getByLabel("Sort backgrounds");
     await expect(sortSelect.locator("option")).toHaveText(["A-Z", "Z-A", "Newest", "Oldest"]);
     await page.getByRole("button", { name: /Tags \(/ }).click();
@@ -4660,7 +4665,12 @@ test("Background library organization works with desktop drag and touch drag", a
             clientY: targetRect.top + Math.min(targetRect.height / 2, 20),
           });
           handle.dispatchEvent(
-            new TouchEvent("touchstart", { bubbles: true, cancelable: true, touches: [start], changedTouches: [start] }),
+            new TouchEvent("touchstart", {
+              bubbles: true,
+              cancelable: true,
+              touches: [start],
+              changedTouches: [start],
+            }),
           );
           window.dispatchEvent(
             new TouchEvent("touchmove", { bubbles: true, cancelable: true, touches: [end], changedTouches: [end] }),

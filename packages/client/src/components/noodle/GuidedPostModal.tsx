@@ -10,6 +10,7 @@ import { NOODLE_BLUE, NOODLE_ICON_SCOPE_CLASS, fieldClass, labelClass, textareaC
 
 export interface GuidedPostModalProps {
   account: NoodleAccount;
+  mode: "noodle" | "noodler";
   access: NoodlePostAccess;
   onAccessChange: (access: NoodlePostAccess) => void;
   ppvPrice: string;
@@ -30,6 +31,7 @@ export interface GuidedPostModalProps {
 export function GuidedPostModal(props: GuidedPostModalProps) {
   const {
     account,
+    mode,
     access,
     onAccessChange,
     ppvPrice,
@@ -59,19 +61,21 @@ export function GuidedPostModal(props: GuidedPostModalProps) {
       panelStyle={{ "--noodle-blue": NOODLE_BLUE } as CSSProperties}
     >
       <div className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block space-y-1.5">
-            <span className={labelClass}>Who can view</span>
-            <select
-              value={access}
-              onChange={(event) => onAccessChange(event.target.value as NoodlePostAccess)}
-              className={fieldClass}
-            >
-              <option value="public">Public</option>
-              <option value="subscriber">Subscribers only</option>
-              <option value="ppv">Pay-per-view</option>
-            </select>
-          </label>
+        <div className={cn("grid gap-3", mode === "noodler" && "sm:grid-cols-2")}>
+          {mode === "noodler" && (
+            <label className="block space-y-1.5">
+              <span className={labelClass}>Who can view</span>
+              <select
+                value={access}
+                onChange={(event) => onAccessChange(event.target.value as NoodlePostAccess)}
+                className={fieldClass}
+              >
+                <option value="public">Public</option>
+                <option value="subscriber">Subscribers only</option>
+                <option value="ppv">Pay-per-view</option>
+              </select>
+            </label>
+          )}
           <label className="block space-y-1.5">
             <span className={labelClass}>Post theme</span>
             <input
@@ -82,7 +86,7 @@ export function GuidedPostModal(props: GuidedPostModalProps) {
             />
           </label>
         </div>
-        {access === "ppv" && (
+        {mode === "noodler" && access === "ppv" && (
           <label className="block space-y-1.5 sm:max-w-xs">
             <span className={labelClass}>Pay-per-view price</span>
             <input

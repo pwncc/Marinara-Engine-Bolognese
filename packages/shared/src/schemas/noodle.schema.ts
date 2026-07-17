@@ -393,10 +393,10 @@ export const noodleRefreshSchema = z.object({
   connectionId: z.string().min(1).optional(),
   debugMode: z.boolean().optional(),
   reviewImagePromptsBeforeSend: z.boolean().optional(),
-  // Manual, single-account refresh for a NoodleR (private) account, which is
-  // otherwise excluded from the normal automatic participant selection.
+  // Manual, single-account generation for a public Noodle account or private
+  // NoodleR account. Public targets require an explicit postGuide.
   targetAccountId: z.string().min(1).optional(),
-  privatePostGuide: z
+  postGuide: z
     .object({
       access: noodlePostAccessSchema.optional(),
       ppvPrice: z.number().min(0).max(999_999).optional(),
@@ -407,12 +407,10 @@ export const noodleRefreshSchema = z.object({
       prompt: z.string().trim().max(1000).optional(),
     })
     .refine((guide) => guide.includeText !== false || guide.includeImage !== false, {
-      message: "Enable text, image, or both for a guided NoodleR post.",
+      message: "Enable text, image, or both for a guided Noodle post.",
     })
     .optional(),
-  privateProjectWork: z
-    .object({ projectId: z.string().min(1), milestoneId: z.string().min(1) })
-    .optional(),
+  privateProjectWork: z.object({ projectId: z.string().min(1), milestoneId: z.string().min(1) }).optional(),
 });
 
 export const noodleRescheduleRefreshSchema = z.object({

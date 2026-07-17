@@ -4,6 +4,10 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+### Added
+
+- Added Noodle's guided **Generate post with AI** composer tool for selected personas and invited characters, with theme, direction, text, and image controls while keeping generated posts public and isolated from automatic timeline activity.
+
 ## [2.3.2]
 
 ### Added

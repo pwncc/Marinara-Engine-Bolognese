@@ -680,12 +680,7 @@ function ToggleSetting({
         compact ? "gap-2 px-1.5" : "gap-3 px-3",
       )}
     >
-      <span
-        className={cn(
-          "inline-flex min-w-0 items-center gap-1 font-semibold",
-          compact && "flex-1",
-        )}
-      >
+      <span className={cn("inline-flex min-w-0 items-center gap-1 font-semibold", compact && "flex-1")}>
         <span className={cn(compact && "min-w-0 truncate text-[10px] leading-none")}>{label}</span>
         {help && <HelpTooltip text={help} side="top" wide />}
       </span>
@@ -899,13 +894,13 @@ export function NoodleView() {
   const [attachedImageUrl, setAttachedImageUrl] = useState("");
   const [composerAccess, setComposerAccess] = useState<NoodlePostAccess>("public");
   const [composerPpvPrice, setComposerPpvPrice] = useState("");
-  const [privateGuideAccess, setPrivateGuideAccess] = useState<NoodlePrivatePostAccess>("subscriber");
-  const [privateGuidePpvPrice, setPrivateGuidePpvPrice] = useState("");
-  const [privateGuideIncludeText, setPrivateGuideIncludeText] = useState(true);
-  const [privateGuideIncludeImage, setPrivateGuideIncludeImage] = useState(true);
-  const [privateGuideTheme, setPrivateGuideTheme] = useState("");
-  const [privateGuidePrompt, setPrivateGuidePrompt] = useState("");
-  const [privateGuideAccountId, setPrivateGuideAccountId] = useState<string | null>(null);
+  const [guidedPostAccess, setGuidedPostAccess] = useState<NoodlePrivatePostAccess>("subscriber");
+  const [guidedPostPpvPrice, setGuidedPostPpvPrice] = useState("");
+  const [guidedPostIncludeText, setGuidedPostIncludeText] = useState(true);
+  const [guidedPostIncludeImage, setGuidedPostIncludeImage] = useState(true);
+  const [guidedPostTheme, setGuidedPostTheme] = useState("");
+  const [guidedPostPrompt, setGuidedPostPrompt] = useState("");
+  const [guidedPostAccountId, setGuidedPostAccountId] = useState<string | null>(null);
   const [privateStageDraft, setPrivateStageDraft] = useState<PrivateStageDraft | null>(null);
   const [noodlerEditDraft, setNoodlerEditDraft] = useState<NoodlerEditProfileDraft | null>(null);
   const [imageUrlDraft, setImageUrlDraft] = useState("");
@@ -984,10 +979,7 @@ export function NoodleView() {
   const oldestLoadedPostCreatedAt = useMemo(() => {
     const visibleAccountIds = new Set(
       accounts
-        .filter(
-          (account) =>
-            account.visibility !== "private" || settings?.noodler.showPublicPostsOnNoodle === true,
-        )
+        .filter((account) => account.visibility !== "private" || settings?.noodler.showPublicPostsOnNoodle === true)
         .map((account) => account.id),
     );
     let oldest: string | null = null;
@@ -1047,7 +1039,7 @@ export function NoodleView() {
     () => (viewedProfileAccountId ? (accountById.get(viewedProfileAccountId) ?? null) : personaAccount),
     [accountById, personaAccount, viewedProfileAccountId],
   );
-  const privateGuideAccount = privateGuideAccountId ? (accountById.get(privateGuideAccountId) ?? null) : null;
+  const guidedPostAccount = guidedPostAccountId ? (accountById.get(guidedPostAccountId) ?? null) : null;
   const noodleCustomEmojiMap = useNoodleCustomEmojiMap(viewedProfileAccount);
   const viewingOwnProfile = Boolean(personaAccount && viewedProfileAccount?.id === personaAccount.id);
   const viewingOwnPersonaPrivateAccount = Boolean(
@@ -1986,6 +1978,14 @@ export function NoodleView() {
     }
     return ids;
   }, [characterGroups, selectedCharacterGroupIds]);
+  const canGenerateGuidedPost = useCallback(
+    (account: NoodleAccount, mode: "noodle" | "noodler") =>
+      mode === "noodler" ||
+      (account.visibility !== "private" &&
+        (account.kind === "persona" ||
+          (account.kind === "character" && (account.invited || folderInvitedCharacterIds.has(account.entityId))))),
+    [folderInvitedCharacterIds],
+  );
   const mentionableCharacterAccounts = useMemo(
     () =>
       accounts
@@ -2631,7 +2631,7 @@ export function NoodleView() {
       onAccessChange={mode === "noodler" ? setComposerAccess : () => setComposerAccess("public")}
       ppvPrice={composerPpvPrice}
       onPpvPriceChange={setComposerPpvPrice}
-      onOpenGuidedPost={mode === "noodler" ? openGuidedPrivatePost : undefined}
+      onOpenGuidedPost={canGenerateGuidedPost(account, mode) ? openGuidedPost : undefined}
       guidedPostPending={refreshNoodle.isPending}
       personaAccount={account}
       composeOpen={composeOpen}
@@ -3033,7 +3033,7 @@ export function NoodleView() {
       deletePrivateAccount.mutate(accountId, {
         onSuccess: () => {
           if (viewedProfileAccountId === accountId) setViewedProfileAccountId(personaAccount?.id ?? null);
-          if (privateGuideAccountId === accountId) setPrivateGuideAccountId(null);
+          if (guidedPostAccountId === accountId) setGuidedPostAccountId(null);
           setConfirmAction(null);
           toast.success("NoodleR profile deleted.");
         },
@@ -3127,13 +3127,14 @@ export function NoodleView() {
     }
   };
 
-  const generateGuidedPrivatePost = (account: NoodleAccount) => {
-    if (readPrivatePostingMode(account) === "passive") {
+  const generateGuidedPost = (account: NoodleAccount) => {
+    const isNoodler = account.visibility === "private";
+    if (isNoodler && readPrivatePostingMode(account) === "passive") {
       toast.error("Passive NoodleR profiles cannot generate guided posts. Manual posting is still available.");
       return;
     }
-    if (!privateGuideIncludeText && !privateGuideIncludeImage) {
-      toast.error("Enable text, image, or both for the NoodleR post.");
+    if (!guidedPostIncludeText && !guidedPostIncludeImage) {
+      toast.error(`Enable text, image, or both for the ${isNoodler ? "NoodleR" : "Noodle"} post.`);
       return;
     }
     if (!settings?.generationConnectionId) {
@@ -3141,49 +3142,59 @@ export function NoodleView() {
       return;
     }
     const defaultImageConnectionId = readString(imageConnections.find((connection) => connection.defaultForAgents)?.id);
-    if (privateGuideIncludeImage && !settings.imageGenerationConnectionId && !defaultImageConnectionId) {
+    if (guidedPostIncludeImage && !settings.imageGenerationConnectionId && !defaultImageConnectionId) {
       toast.error("Choose a Noodle image generation connection in Settings first.");
       return;
     }
     refreshNoodle.mutate(
       {
         targetAccountId: account.id,
+        ...(account.kind === "persona" ? { personaId: account.entityId } : {}),
         connectionId: settings.generationConnectionId,
-        privatePostGuide: {
-          access: privateGuideAccess,
-          ...(privateGuideAccess === "ppv" && Number.isFinite(Number.parseFloat(privateGuidePpvPrice))
-            ? { ppvPrice: Number.parseFloat(privateGuidePpvPrice) }
+        postGuide: {
+          ...(isNoodler ? { access: guidedPostAccess } : {}),
+          ...(isNoodler && guidedPostAccess === "ppv" && Number.isFinite(Number.parseFloat(guidedPostPpvPrice))
+            ? { ppvPrice: Number.parseFloat(guidedPostPpvPrice) }
             : {}),
-          includeText: privateGuideIncludeText,
-          includeImage: privateGuideIncludeImage,
-          theme: privateGuideTheme.trim() || undefined,
-          prompt: privateGuidePrompt.trim() || undefined,
+          includeText: guidedPostIncludeText,
+          includeImage: guidedPostIncludeImage,
+          theme: guidedPostTheme.trim() || undefined,
+          prompt: guidedPostPrompt.trim() || undefined,
         },
       },
       {
         onSuccess: (result) => {
-          setPrivateGuideAccountId(null);
+          setGuidedPostAccountId(null);
           setProfileTab("posts");
           if (result.imagePromptReviewItems.length > 0) {
             setImagePromptReviewItems(result.imagePromptReviewItems);
-            toast.success("NoodleR post created. Review its image prompt to finish the image.");
+            toast.success(
+              `${isNoodler ? "NoodleR" : "Noodle"} post created. Review its image prompt to finish the image.`,
+            );
             return;
           }
-          toast.success(result.createdPostIds?.length ? "NoodleR post created." : "NoodleR post generation finished.");
+          toast.success(
+            result.createdPostIds?.length
+              ? `${isNoodler ? "NoodleR" : "Noodle"} post created.`
+              : `${isNoodler ? "NoodleR" : "Noodle"} post generation finished.`,
+          );
         },
-        onError: (error) => toast.error(error instanceof Error ? error.message : "Could not generate a NoodleR post."),
+        onError: (error) =>
+          toast.error(
+            error instanceof Error ? error.message : `Could not generate a ${isNoodler ? "NoodleR" : "Noodle"} post.`,
+          ),
       },
     );
   };
 
-  const openGuidedPrivatePost = (account: NoodleAccount) => {
-    setPrivateGuideAccess("subscriber");
-    setPrivateGuidePpvPrice("");
-    setPrivateGuideIncludeText(true);
-    setPrivateGuideIncludeImage(true);
-    setPrivateGuideTheme("");
-    setPrivateGuidePrompt("");
-    setPrivateGuideAccountId(account.id);
+  const openGuidedPost = (account: NoodleAccount) => {
+    setGuidedPostAccess(account.visibility === "private" ? "subscriber" : "public");
+    setGuidedPostPpvPrice("");
+    setGuidedPostIncludeText(true);
+    setGuidedPostIncludeImage(true);
+    setGuidedPostTheme("");
+    setGuidedPostPrompt("");
+    setGuidedPostAccountId(account.id);
   };
 
   const confirmReviewedNoodleImagePrompts = (overrides: ImagePromptOverride[]) => {
@@ -7022,10 +7033,7 @@ export function NoodleView() {
             aria-current={activeNoodleView === "home" || activeNoodleView === "noodler" ? "page" : undefined}
             className="relative flex items-center justify-center transition-colors hover:bg-[var(--accent)]"
           >
-            <Home
-              size={22}
-              strokeWidth={activeNoodleView === "home" || activeNoodleView === "noodler" ? 2.8 : 2}
-            />
+            <Home size={22} strokeWidth={activeNoodleView === "home" || activeNoodleView === "noodler" ? 2.8 : 2} />
             {(activeNoodleView === "home" || activeNoodleView === "noodler") && (
               <span className="absolute top-1 h-1 w-1 rounded-full bg-[var(--noodle-blue)]" />
             )}
@@ -7223,23 +7231,24 @@ export function NoodleView() {
           </section>
         </div>
       )}
-      {privateGuideAccount && (
+      {guidedPostAccount && (
         <GuidedPostModal
-          account={privateGuideAccount}
-          access={privateGuideAccess}
-          onAccessChange={setPrivateGuideAccess}
-          ppvPrice={privateGuidePpvPrice}
-          onPpvPriceChange={setPrivateGuidePpvPrice}
-          theme={privateGuideTheme}
-          onThemeChange={setPrivateGuideTheme}
-          includeText={privateGuideIncludeText}
-          onIncludeTextChange={setPrivateGuideIncludeText}
-          includeImage={privateGuideIncludeImage}
-          onIncludeImageChange={setPrivateGuideIncludeImage}
-          prompt={privateGuidePrompt}
-          onPromptChange={setPrivateGuidePrompt}
-          onCancel={() => setPrivateGuideAccountId(null)}
-          onGenerate={generateGuidedPrivatePost}
+          account={guidedPostAccount}
+          mode={guidedPostAccount.visibility === "private" ? "noodler" : "noodle"}
+          access={guidedPostAccess}
+          onAccessChange={setGuidedPostAccess}
+          ppvPrice={guidedPostPpvPrice}
+          onPpvPriceChange={setGuidedPostPpvPrice}
+          theme={guidedPostTheme}
+          onThemeChange={setGuidedPostTheme}
+          includeText={guidedPostIncludeText}
+          onIncludeTextChange={setGuidedPostIncludeText}
+          includeImage={guidedPostIncludeImage}
+          onIncludeImageChange={setGuidedPostIncludeImage}
+          prompt={guidedPostPrompt}
+          onPromptChange={setGuidedPostPrompt}
+          onCancel={() => setGuidedPostAccountId(null)}
+          onGenerate={generateGuidedPost}
           isPending={refreshNoodle.isPending}
         />
       )}

@@ -54,10 +54,11 @@ You need an active persona to post. The composer is turned off until one is set.
    - **Attach image**: upload one image from your device or paste an image URL. One image per post.
    - **Create poll**: add a poll with two to four unique options. Accounts can vote, and a voter can change their pick.
    - **Emoji, GIFs and stickers**: the same picker used in chat.
+   - **Generate post with AI**: ask your Noodle generation connection to write one post as the selected persona. Choose a theme, add freeform direction, and include text, an AI-generated image, or both. The same tool is available when posting from an invited character's profile.
    - Mentions: type `@` and pick an account from the suggestions. Mentions show as clickable account links.
 4. Click **Post**.
 
-The button shows "Posting..." while it saves. Writing a post does not need an AI connection. Only **Refresh timeline** and image generation need one.
+The button shows "Posting..." while it saves. Writing a post manually does not need an AI connection. **Generate post with AI** and **Refresh timeline** need the Noodle generation connection selected in Settings. Selecting **Image** in the guided generator also requires a Noodle image generation connection and creates exactly one public post; it does not trigger replies, reactions, follows, or a wider timeline refresh.
 
 ## Posting actions: like, repost, reply
 

@@ -67,7 +67,7 @@ export function StandardPostComposer({
       onPostAccessChange={isNoodler ? onAccessChange : undefined}
       ppvPrice={ppvPrice}
       onPpvPriceChange={isNoodler ? onPpvPriceChange : undefined}
-      onOpenGuidedPost={isNoodler && onOpenGuidedPost ? () => onOpenGuidedPost(account) : undefined}
+      onOpenGuidedPost={onOpenGuidedPost ? () => onOpenGuidedPost(account) : undefined}
       guidedPostDisabled={guidedDisabled}
       guidedPostPending={guidedPostPending}
       onClose={defaultExpanded ? undefined : () => setExpanded(false)}

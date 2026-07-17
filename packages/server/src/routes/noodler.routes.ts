@@ -174,7 +174,7 @@ export async function noodlerRoutes(app: FastifyInstance) {
         targetAccountId: account.id,
         ...(request.data.connectionId ? { connectionId: request.data.connectionId } : {}),
         privateProjectWork: { projectId: id, milestoneId: next.id },
-        privatePostGuide: {
+        postGuide: {
           access: next.access,
           ...(next.ppvPrice !== null ? { ppvPrice: next.ppvPrice } : {}),
           includeText: next.mediaPreference !== "image",
