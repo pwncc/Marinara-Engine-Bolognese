@@ -2222,28 +2222,6 @@ export async function generateRoutes(app: FastifyInstance) {
             conversationSystemPrompt += "\n\n" + preparedHistory.importantMemoryBlock;
           }
 
-          // ── Living World space framing: this is their life, not a scene ──
-          if (worldSpaceKind) {
-            const charNameList2 = convoCharNames.join(", ") || "the character";
-            const spaceLines =
-              worldSpaceKind === "life"
-                ? [
-                    `This chat is ${charNameList2}'s own private LIFE SPACE — their real, ongoing life, not a roleplay scene and not a fresh meeting.`,
-                    `There is no scenario or script. Continuity comes only from this chat's history, their memories, their relationships, and what has actually happened in their world.`,
-                    `Messages in *asterisks* are their inner thoughts and lived moments accumulating over time. The human writing here is a Visitor stepping into their space — respond as yourself, mid-life, aware of what you were just doing.`,
-                  ]
-                : worldSpaceKind === "dm"
-                  ? [
-                      `This chat is a real, ongoing private DM thread between ${charNameList2} in their day-to-day lives — not a roleplay scene.`,
-                      `No scenario applies. Continuity comes from this thread's history, their memories, and their relationship. Time passes between messages; mind the gaps.`,
-                    ]
-                  : [
-                      `This chat is a real, ongoing group thread between ${charNameList2} — their own hangout space in their day-to-day lives, not a roleplay scene.`,
-                      `No scenario applies unless the group is gathering for a concrete plan they made. Continuity comes from this thread's history, their memories, and their relationships.`,
-                    ];
-            conversationSystemPrompt += "\n\n" + wrapContent(spaceLines.join("\n"), "life_space", wrapFormat);
-          }
-
           conversationSystemPrompt = resolvePromptMacros(conversationSystemPrompt);
 
           // Convo behavior + about-me are already macro-resolved in the helper, so
@@ -2935,6 +2913,35 @@ export async function generateRoutes(app: FastifyInstance) {
             },
             promptMacroContext,
           );
+        }
+
+        // ── Living World space framing (both modes): this is their life, not a scene ──
+        if (worldSpaceKind && !input.impersonate) {
+          const spaceCharNames = charInfo.map((character) => character.name).join(", ") || "the character";
+          const spaceLines =
+            worldSpaceKind === "life"
+              ? [
+                  `This chat is ${spaceCharNames}'s own private LIFE SPACE — their real, ongoing life, not a roleplay scene and not a fresh meeting.`,
+                  `There is no scenario or script. Continuity comes only from this chat's history, their memories, their relationships, and what has actually happened in their world.`,
+                  `Messages in *asterisks* are their inner thoughts and lived moments accumulating over time. The human writing here is a Visitor stepping into their space — respond as yourself, mid-life, aware of what you were just doing.`,
+                ]
+              : worldSpaceKind === "dm"
+                ? [
+                    `This chat is a real, ongoing private DM thread between ${spaceCharNames} in their day-to-day lives — not a roleplay scene.`,
+                    `No scenario applies. Continuity comes from this thread's history, their memories, and their relationship. Time passes between messages; mind the gaps.`,
+                  ]
+                : [
+                    `This chat is a real, ongoing group thread between ${spaceCharNames} — their own hangout space in their day-to-day lives, not a roleplay scene.`,
+                    `No scenario applies unless the group is gathering for a concrete plan they made. Continuity comes from this thread's history, their memories, and their relationships.`,
+                  ];
+          const lifeSpaceBlock = `<life_space>\n${spaceLines.join("\n")}\n</life_space>`;
+          const lastUserIdxForSpace = findLastIndex(finalMessages, "user");
+          if (lastUserIdxForSpace >= 0) {
+            const target = finalMessages[lastUserIdxForSpace]!;
+            finalMessages[lastUserIdxForSpace] = { ...target, content: `${target.content}\n\n${lifeSpaceBlock}` };
+          } else {
+            finalMessages.push({ role: "user" as const, content: lifeSpaceBlock });
+          }
         }
 
         // ── Body/mood ledger context (before <commands> so the directive precedes the tag spec) ──

@@ -112,10 +112,10 @@ export async function ensureWorldChatFolder(db: DB): Promise<string | null> {
   try {
     const folders = createChatFoldersStorage(db);
     const existing = (await folders.list()).find(
-      (folder) => folder.name === WORLD_FOLDER_NAME && folder.mode === "conversation",
+      (folder) => folder.name === WORLD_FOLDER_NAME && folder.mode === "roleplay",
     );
     if (existing) return String(existing.id);
-    const created = await folders.create({ name: WORLD_FOLDER_NAME, mode: "conversation" } as Parameters<
+    const created = await folders.create({ name: WORLD_FOLDER_NAME, mode: "roleplay" } as Parameters<
       typeof folders.create
     >[0]);
     return created ? String(created.id) : null;
@@ -670,7 +670,7 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       if (!dmChatId) {
         const created = await chats.create({
           name: `${nameById.get(a)} & ${nameById.get(b)}`,
-          mode: "conversation",
+          mode: "roleplay",
           characterIds: [a, b],
           groupId: null,
           personaId: null,

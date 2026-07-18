@@ -38,6 +38,7 @@ import { createWorldStorage, type CharacterMindRow } from "../storage/world.stor
 import type { ChatMessage } from "../llm/base-provider.js";
 import {
   buildNameMap,
+  ensureWorldChatFolder,
   executeWorldAction,
   fileWorldChat,
   isWorldMember,
@@ -165,7 +166,7 @@ export async function ensureLifeChat(db: DB, characterId: string, name: string):
   if (existing) return existing.id;
   const created = await chats.create({
     name: `${name}'s life`,
-    mode: "conversation",
+    mode: "roleplay",
     characterIds: [characterId],
     groupId: null,
     personaId: null,
@@ -696,7 +697,7 @@ async function executeGroupAction(
         shortText(action.name, 60) || members.map((id) => nameById.get(id) ?? "?").join(", ");
       const created = await chats.create({
         name: groupName,
-        mode: "conversation",
+        mode: "roleplay",
         characterIds: members,
         groupId: null,
         personaId: null,
@@ -921,12 +922,23 @@ export async function ensureMindsInitialized(db: DB, config: WorldEngineConfig):
   const nameById = await buildNameMap(db, config);
   const existing = new Set((await world.listMinds()).map((mind) => mind.id));
 
-  // Migration sweep: world chats created before folders existed get filed.
-  const allChats = (await chats.list()) as Array<{ id: string; folderId?: string | null; metadata?: unknown }>;
+  // Migration sweep: world chats live under the RP tab in the Living World
+  // folder — convert stragglers created as conversation chats or left unfiled.
+  const worldFolderId = await ensureWorldChatFolder(db);
+  const allChats = (await chats.list()) as Array<{
+    id: string;
+    mode?: string | null;
+    folderId?: string | null;
+    metadata?: unknown;
+  }>;
   for (const chat of allChats) {
     const meta = parseJson(chat.metadata);
     const isWorldChat = meta.worldLifeChat === true || meta.worldDmThread === true || meta.worldGroupThread === true;
-    if (isWorldChat && !chat.folderId) {
+    if (!isWorldChat) continue;
+    if (chat.mode !== "roleplay") {
+      await chats.update(chat.id, { mode: "roleplay" });
+    }
+    if (!chat.folderId || (worldFolderId && chat.folderId !== worldFolderId)) {
       await fileWorldChat(db, chat.id);
     }
   }
