@@ -190,6 +190,14 @@ export function createWorldStorage(db: DB) {
       return rows.map(toMindRow);
     },
 
+    /** Wipe all Living World state: events, relationships, queue, minds. */
+    async resetWorld(): Promise<void> {
+      await db.delete(worldActions);
+      await db.delete(worldEvents);
+      await db.delete(characterRelationships);
+      await db.delete(characterMinds);
+    },
+
     async upsertMind(
       characterId: string,
       patch: Partial<Omit<CharacterMindRow, "id" | "createdAt" | "updatedAt">>,

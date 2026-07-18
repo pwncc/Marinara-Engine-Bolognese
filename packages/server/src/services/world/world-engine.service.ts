@@ -710,7 +710,8 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       if (!dmChatId) {
         const created = await chats.create({
           name: `${nameById.get(a)} & ${nameById.get(b)}`,
-          mode: "roleplay",
+          // DMs are texting — conversation mode (two characters, not a narrator scene).
+          mode: "conversation",
           characterIds: [a, b],
           groupId: null,
           personaId: null,

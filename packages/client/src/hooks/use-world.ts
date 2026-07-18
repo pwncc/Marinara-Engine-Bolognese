@@ -119,3 +119,15 @@ export function useRunWorldTick() {
     },
   });
 }
+
+export function useResetWorld() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (resetNoodle: boolean) =>
+      api.post<{ ok: boolean; removedChats: number }>("/world/reset", { resetNoodle }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: worldKeys.all });
+      qc.invalidateQueries({ queryKey: ["chats"] });
+    },
+  });
+}

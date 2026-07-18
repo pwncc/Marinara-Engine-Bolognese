@@ -30,6 +30,7 @@ import { toast } from "sonner";
 import type { WorldEngineConfig, WorldEventRecord } from "@marinara-engine/shared";
 import { DEFAULT_WORLD_ENGINE_CONFIG } from "@marinara-engine/shared";
 import {
+  useResetWorld,
   useRunWorldTick,
   useUpdateWorldConfig,
   useWorldFeed,
@@ -275,6 +276,7 @@ function WorldConfigForm({
   const { data: connections } = useConnections();
   const { data: characters } = useCharacters();
   const updateConfig = useUpdateWorldConfig();
+  const resetWorld = useResetWorld();
 
   useEffect(() => {
     setDraft(config);
@@ -541,6 +543,27 @@ function WorldConfigForm({
         className="w-full rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity disabled:opacity-40"
       >
         {updateConfig.isPending ? "Saving…" : "Save world settings"}
+      </button>
+
+      <button
+        type="button"
+        disabled={resetWorld.isPending}
+        onClick={() => {
+          if (
+            !window.confirm(
+              "Reset the world? This permanently deletes all world events, relationships, memories, minds, and every life/DM/group/hangout chat, and clears the Noodle timeline. Characters and settings are kept.",
+            )
+          ) {
+            return;
+          }
+          resetWorld
+            .mutateAsync(true)
+            .then((result) => toast.success(`World reset — removed ${result.removedChats} world chats`))
+            .catch((err) => toast.error(err instanceof Error ? err.message : "Reset failed"));
+        }}
+        className="w-full rounded-md border border-[var(--destructive)]/50 px-3 py-1.5 text-xs font-medium text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/10 disabled:opacity-40"
+      >
+        {resetWorld.isPending ? "Resetting…" : "Reset world (wipe everything)"}
       </button>
     </div>
   );

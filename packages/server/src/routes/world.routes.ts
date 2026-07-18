@@ -5,6 +5,9 @@ import type { FastifyInstance } from "fastify";
 
 import { createWorldStorage } from "../services/storage/world.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
+import { createChatsStorage } from "../services/storage/chats.storage.js";
+import { createNoodleStorage } from "../services/storage/noodle.storage.js";
+import { createChatFoldersStorage } from "../services/storage/chat-folders.storage.js";
 import {
   loadWorldEngineConfig,
   loadWorldEngineState,
@@ -102,4 +105,33 @@ export async function worldRoutes(app: FastifyInstance) {
   // ── Manual "advance the world now" (plans a window + plays the first due moments;
   //    works while the engine is disabled — great for testing) ──
   app.post("/tick", async () => runWorldTick(app.db, { manual: true, app }));
+
+  // ── Reset the world: wipe all Living World state (events, relationships,
+  //    minds, queued actions), the world chats, their folder, and — when asked —
+  //    the Noodle timeline. Config is preserved. ──
+  app.post<{ Body: { resetNoodle?: boolean } }>("/reset", async (req) => {
+    const resetNoodle = (req.body as { resetNoodle?: boolean } | undefined)?.resetNoodle !== false;
+    const chats = createChatsStorage(app.db);
+    const noodle = createNoodleStorage(app.db);
+    const folders = createChatFoldersStorage(app.db);
+
+    // Remove world chats (life spaces, DMs, groups, hangouts).
+    const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
+    let removedChats = 0;
+    for (const chat of allChats) {
+      const meta = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
+      if (meta?.worldLifeChat === true || meta?.worldDmThread === true || meta?.worldGroupThread === true) {
+        await chats.remove(chat.id);
+        removedChats += 1;
+      }
+    }
+    // Remove the (now-empty) Living World folder.
+    for (const folder of await folders.list()) {
+      if (folder.name === "Living World") await folders.remove(folder.id);
+    }
+    await world.resetWorld();
+    if (resetNoodle) await noodle.resetTimeline();
+
+    return { ok: true, removedChats, resetNoodle };
+  });
 }

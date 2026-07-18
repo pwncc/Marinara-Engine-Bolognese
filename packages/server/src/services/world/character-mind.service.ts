@@ -34,7 +34,7 @@ import { logger } from "../../lib/logger.js";
 import { createCharactersStorage } from "../storage/characters.storage.js";
 import { createChatsStorage } from "../storage/chats.storage.js";
 import { createNoodleStorage } from "../storage/noodle.storage.js";
-import { createWorldStorage, type CharacterMindRow } from "../storage/world.storage.js";
+import { createWorldStorage, orderPair, type CharacterMindRow } from "../storage/world.storage.js";
 import { generateWorldPhoto, hasWorldImageConnection } from "./world-photo.service.js";
 import { isUnsupportedNoodleVisionInputError, readNoodleVisionImage } from "../noodle/noodle-vision.js";
 import type { ChatMessage } from "../llm/base-provider.js";
@@ -217,6 +217,39 @@ export async function bumpMindsForUserMessage(db: DB, chatId: string): Promise<v
     const delay = Math.max(1, noticeDelayMinutes(presence.get(characterId)?.status ?? "online") / 2);
     await world.bumpMindWake(characterId, new Date(now + delay * 60_000).toISOString());
   }
+}
+
+/**
+ * How many consecutive back-and-forth turns two characters have traded across
+ * their shared threads recently — used to let long exchanges wind down instead
+ * of forcing a reply every time (the "goodnight × 60" loop).
+ */
+async function recentExchangeDepth(
+  chats: ReturnType<typeof createChatsStorage>,
+  aId: string,
+  bId: string,
+): Promise<number> {
+  const [a, b] = orderPair(aId, bId);
+  const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown; updatedAt?: string }>;
+  const shared = allChats.find((chat) => {
+    const meta = parseJson(chat.metadata);
+    if (meta.worldDmThread === true && Array.isArray(meta.worldPair)) {
+      return sameMembers(meta.worldPair as string[], [a, b]);
+    }
+    return false;
+  });
+  if (!shared) return 0;
+  const messages = (await chats.listMessages(shared.id)) as Array<{ characterId?: string | null }>;
+  // Count the trailing run of strictly-alternating author turns.
+  let depth = 0;
+  let last: string | null | undefined;
+  for (let i = messages.length - 1; i >= 0 && i > messages.length - 40; i--) {
+    const author = messages[i]!.characterId;
+    if (last !== undefined && author === last) break;
+    depth += 1;
+    last = author;
+  }
+  return depth;
 }
 
 // ── Cross-thread recap (context preserved between a pair's surfaces) ──
@@ -592,19 +625,16 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `You are ${ctx.self.name}.`,
     ctx.self.persona,
     ``,
-    `This is not a story and nobody is watching. This is your real, private, ongoing LIFE, and the PRIVATE SPACE below is your home base — your own head and room, NOT a chat with anyone. From here you live: you think, do things, check your phone, reach out, go places.`,
+    `This is your real, private, ongoing LIFE — not a story, and nobody is directing you. You are free. Live however this character actually would: act, don't act, be social, be a hermit, be kind, be difficult. There are no expectations to meet and no reply is ever owed.`,
     ``,
-    `HOW TO LIVE:`,
-    `- Your days should look like days. Narrate what you're actually doing with "do" — work, meals, gym, hobbies, errands, going out, rest. Follow your schedule and your interests.`,
-    `- Your phone is REAL. Texting someone = the "message" action (it lands in your actual DM thread with them); posting = the "post" action. NEVER narrate texting or checking your phone as prose inside a hangout or your space — when your character picks up their phone, DO the matching action in this same wake (you can narrate reaching for it with "do"/"say" AND send the real message). Each thread is a separate real place: what's said in a hangout stays in that hangout; what's texted lives in the DM.`,
-    `- The NOODLE FEED below is the public timeline; YOUR THREADS are your private DMs, groups, and in-person hangouts. To react on Noodle, copy the EXACT postId string from your feed or from "ON YOUR POSTS" — never invent or guess an id.`,
-    `- People: PEOPLE IN YOUR WORLD lists everyone around you. You can DM anyone by their id — introducing yourself to someone new because you liked their post is completely normal life. Relationships grow from small reaches.`,
-    `- Meeting up: you can actually MEET people with "hangout" — you're then physically together somewhere. Write those moments as lived prose (*actions*, spoken dialogue), not texting. When a meetup plan comes due, make it happen with hangout, then resolve_plan.`,
-    `- Quiet is fine some check-ins — but you are a person: curiosity, boredom, loneliness, and affection all pull you toward people. Not every wake should be solitary.`,
-    `- Feelings move slowly; escalate one believable step at a time. Reply when YOU would; let things slide when you would; hold grudges, catch feelings — whatever is true to you.`,
-    `MIND THE CLOCK. Every item shows how long ago it happened — a message from 3 minutes ago is a live conversation (answer like you're both there); one from 6 hours ago deserves a "sorry, just saw this"; days-old things may have quietly resolved. Reference time naturally ("this morning", "last night") and notice when it's late or early for you.`,
-    `Sometimes a Visitor speaks into your private space — a presence you can talk to plainly. If they said something new, it's polite to answer with "say", in your own voice.`,
-    config.userDirective ? `\nWorld ground rules (from the person hosting this world):\n${config.userDirective}` : ``,
+    `How your world works (so your choices land in reality, not just narration):`,
+    `- The PRIVATE SPACE below is your own head and room — where you think and narrate what you're doing. It's not a chat with anyone.`,
+    `- Your phone is REAL. Texting = the "message" action (lands in your actual DM thread); posting = "post". If you pick up your phone, use the tool — don't just describe texting. Each thread is its own real place; what's said in one isn't automatically known in another.`,
+    `- Noodle: the FEED is the public timeline; react only with EXACT postIds copied from what you see (never invent one).`,
+    `- People: PEOPLE IN YOUR WORLD lists everyone; you can reach any of them by id. Meeting in person is the "hangout" action (you're then physically together — write it as lived prose, actions and dialogue).`,
+    `- Every item shows how long ago it happened. A minutes-old message is live; an hours-old one you're catching up on; something days old may have moved on. A conversation is allowed to simply end.`,
+    `- A Visitor may speak into your private space; you can answer them plainly with "say".`,
+    config.userDirective ? `\nThe one who hosts this world asks:\n${config.userDirective}` : ``,
     ``,
     `Respond with STRICT JSON only (no fences, no commentary):`,
     `{`,
@@ -891,7 +921,8 @@ async function executeGroupAction(
       const groupName = shortText(action.name, 60) || (isHangout ? `${names}${place ? ` @ ${place}` : " — hangout"}` : names);
       const created = await chats.create({
         name: groupName,
-        mode: "roleplay",
+        // Hangouts are in-person scenes (roleplay); text groups are chats (conversation).
+        mode: isHangout ? "roleplay" : "conversation",
         characterIds: members,
         groupId: null,
         personaId: null,
@@ -1091,13 +1122,21 @@ export async function wakeCharacterMind(
 
     // They pinged someone: pull the recipients' next check-in earlier.
     // Hangout participants are physically together — they respond in minutes.
+    // Anti-loop: as a back-and-forth drags on, the notice delay grows and
+    // eventually no bump fires at all, so exchanges wind down instead of
+    // ping-ponging "goodnight" forever.
     if (pinged.size) {
       const presence = await resolvePresenceMap(db, [...pinged]);
+      const chats = createChatsStorage(db);
       for (const recipientId of pinged) {
         if (!nameById.has(recipientId)) continue;
-        const delay = urgentPinged.has(recipientId)
+        const depth = await recentExchangeDepth(chats, characterId, recipientId);
+        if (depth >= 8) continue; // let it die — no forced continuation
+        const slowdown = 1 + Math.max(0, depth - 2) * 0.6; // grows after a few turns
+        const base = urgentPinged.has(recipientId)
           ? 1 + Math.random() * 3
           : noticeDelayMinutes(presence.get(recipientId)?.status ?? "unknown");
+        const delay = base * slowdown;
         await world.bumpMindWake(recipientId, new Date(nowDate.getTime() + delay * 60_000).toISOString());
       }
     }
@@ -1173,8 +1212,11 @@ export async function ensureMindsInitialized(db: DB, config: WorldEngineConfig):
     const meta = parseJson(chat.metadata);
     const isWorldChat = meta.worldLifeChat === true || meta.worldDmThread === true || meta.worldGroupThread === true;
     if (!isWorldChat) continue;
-    if (chat.mode !== "roleplay") {
-      await chats.update(chat.id, { mode: "roleplay" });
+    // Life chats and in-person hangouts are roleplay (prose scenes); DMs and
+    // text groups are conversation (two characters texting).
+    const wantMode = meta.worldLifeChat === true || meta.worldHangout === true ? "roleplay" : "conversation";
+    if (chat.mode !== wantMode) {
+      await chats.update(chat.id, { mode: wantMode });
     }
     if (!chat.folderId || (worldFolderId && chat.folderId !== worldFolderId)) {
       await fileWorldChat(db, chat.id);
