@@ -8,10 +8,14 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   Brain,
+  Building2,
   CalendarCheck2,
   CalendarClock,
   ChevronDown,
   ChevronRight,
+  Coins,
+  Compass,
+  Footprints,
   Heart,
   HeartHandshake,
   Lightbulb,
@@ -25,6 +29,7 @@ import {
   Sparkles,
   UserPlus,
   UsersRound,
+  Wrench,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { WorldEngineConfig, WorldEventRecord } from "@marinara-engine/shared";
@@ -33,6 +38,7 @@ import {
   useResetWorld,
   useRunWorldTick,
   useUpdateWorldConfig,
+  useWorldCity,
   useWorldFeed,
   useWorldPair,
   useWorldRelationships,
@@ -63,6 +69,7 @@ const KIND_FILTERS: Array<{ key: string; label: string; kinds: string[] | null }
   { key: "living", label: "Living", kinds: ["activity", "hangout"] },
   { key: "noodle", label: "Noodle", kinds: ["noodle_post", "noodle_reply", "noodle_like", "noodle_follow"] },
   { key: "messages", label: "Messages", kinds: ["dm", "group"] },
+  { key: "city", label: "City", kinds: ["moved", "discovered", "place_detail", "worked", "spent"] },
   { key: "bonds", label: "Bonds", kinds: ["relationship", "milestone"] },
   { key: "memories", label: "Memories", kinds: ["memory"] },
   { key: "plans", label: "Plans", kinds: ["plan", "plan_completed"] },
@@ -88,6 +95,16 @@ function eventIcon(kind: string) {
       return <MessageCircle size="0.8rem" className="text-amber-400" />;
     case "hangout":
       return <MapPin size="0.8rem" className="text-emerald-400" />;
+    case "moved":
+      return <Footprints size="0.8rem" className="text-teal-400" />;
+    case "discovered":
+      return <Compass size="0.8rem" className="text-teal-400" />;
+    case "place_detail":
+      return <Building2 size="0.8rem" className="text-teal-400" />;
+    case "worked":
+      return <Wrench size="0.8rem" className="text-lime-400" />;
+    case "spent":
+      return <Coins size="0.8rem" className="text-yellow-400" />;
     case "group":
       return <UsersRound size="0.8rem" className="text-sky-400" />;
     case "dm":
@@ -569,12 +586,96 @@ function WorldConfigForm({
   );
 }
 
+// ── City ──
+
+function CityView() {
+  const { data: city, isLoading } = useWorldCity();
+  const homeless = (city?.residents ?? []).filter((resident) => !resident.placeId);
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-6">
+        <Loader2 size="1rem" className="animate-spin text-[var(--muted-foreground)]" />
+      </div>
+    );
+  }
+  if (!city?.places.length && !city?.residents.length) {
+    return (
+      <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-4 text-center text-[0.7rem] leading-relaxed text-[var(--muted-foreground)]">
+        The city is empty. As characters go places, the map fills in — cafes, parks, apartments, wherever life takes
+        them.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-1.5">
+      {city.places.map((place) => {
+        const here = city.peopleByPlace[place.id] ?? [];
+        return (
+          <div key={place.id} className="rounded-lg border border-[var(--border)]/50 bg-[var(--card)]/50 px-2.5 py-2">
+            <div className="flex items-center gap-1.5">
+              <MapPin size="0.75rem" className="shrink-0 text-teal-400" />
+              <span className="text-xs font-medium">{place.name}</span>
+              <span className="text-[0.6rem] text-[var(--muted-foreground)]">{place.kind}</span>
+              {place.detail > 0 ? (
+                <span className="ml-auto text-[0.55rem] text-[var(--muted-foreground)]">detail {place.detail}</span>
+              ) : null}
+            </div>
+            {place.description ? (
+              <p className="mt-1 text-[0.68rem] leading-snug text-[var(--muted-foreground)]">{place.description}</p>
+            ) : null}
+            {place.tags.length ? (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {place.tags.map((tag) => (
+                  <span key={tag} className="rounded-full bg-[var(--secondary)] px-1.5 py-0.5 text-[0.55rem] text-[var(--muted-foreground)]">
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {here.length ? (
+              <div className="mt-1 flex items-center gap-1 text-[0.65rem] text-emerald-400">
+                <UsersRound size="0.65rem" /> {here.join(", ")}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+
+      {city.residents.length ? (
+        <div className="mt-2 rounded-lg border border-[var(--border)]/50 bg-[var(--card)]/40 px-2.5 py-2">
+          <span className="text-[0.65rem] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+            Residents
+          </span>
+          <div className="mt-1 space-y-0.5">
+            {city.residents.map((resident) => (
+              <div key={resident.characterId} className="flex items-center gap-1.5 text-[0.68rem]">
+                <span className="font-medium">{resident.name}</span>
+                {resident.job ? <span className="text-[var(--muted-foreground)]">· {resident.job}</span> : null}
+                <span className="ml-auto flex items-center gap-0.5 text-[var(--muted-foreground)]">
+                  <Coins size="0.6rem" /> {resident.money}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {homeless.length && city.places.length ? (
+        <p className="px-1 text-[0.6rem] text-[var(--muted-foreground)]">
+          {homeless.map((r) => r.name).join(", ")} {homeless.length === 1 ? "is" : "are"} home / not out right now.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 // ── Panel ──
 
 export function WorldPanel() {
   const { data: status } = useWorldStatus();
   const runTick = useRunWorldTick();
-  const [tab, setTab] = useState<"timeline" | "bonds">("timeline");
+  const [tab, setTab] = useState<"timeline" | "city" | "bonds">("timeline");
   const [configOpen, setConfigOpen] = useState(false);
   const [filterCharacterId, setFilterCharacterId] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState("all");
@@ -695,6 +796,7 @@ export function WorldPanel() {
         {(
           [
             ["timeline", "Timeline"],
+            ["city", "City"],
             ["bonds", "Bonds"],
           ] as const
         ).map(([key, label]) => (
@@ -712,7 +814,9 @@ export function WorldPanel() {
         ))}
       </div>
 
-      {tab === "timeline" ? (
+      {tab === "city" ? (
+        <CityView />
+      ) : tab === "timeline" ? (
         <div className="space-y-1.5">
           <div className="flex gap-1 overflow-x-auto pb-0.5 [scrollbar-width:thin]">
             {KIND_FILTERS.map((filter) => (

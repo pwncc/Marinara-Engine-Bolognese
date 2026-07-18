@@ -2,7 +2,14 @@
 // Storage: Living World events + character relationships
 // ──────────────────────────────────────────────
 import { and, desc, eq, or } from "../../db/file-query.js";
-import { characterMinds, characterRelationships, worldActions, worldEvents } from "../../db/schema/index.js";
+import {
+  characterMinds,
+  characterRelationships,
+  worldActions,
+  worldEvents,
+  worldPlaces,
+} from "../../db/schema/index.js";
+import { normalizeTextForMatch } from "@marinara-engine/shared";
 import type { DB } from "../../db/connection.js";
 import { newId, now } from "../../utils/id-generator.js";
 import {
@@ -74,6 +81,9 @@ export interface CharacterMindRow {
   lastWakeAt: string | null;
   nextWakeAt: string | null;
   cursors: Record<string, unknown>;
+  placeId: string | null;
+  money: number;
+  job: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -86,6 +96,37 @@ function toMindRow(row: Record<string, unknown>): CharacterMindRow {
     lastWakeAt: typeof row.lastWakeAt === "string" ? row.lastWakeAt : null,
     nextWakeAt: typeof row.nextWakeAt === "string" ? row.nextWakeAt : null,
     cursors: parseJsonRecord(row.cursors),
+    placeId: typeof row.placeId === "string" && row.placeId ? row.placeId : null,
+    money: Number.isFinite(Number(row.money)) ? Number(row.money) : 0,
+    job: String(row.job ?? ""),
+    createdAt: String(row.createdAt ?? ""),
+    updatedAt: String(row.updatedAt ?? ""),
+  };
+}
+
+export interface WorldPlaceRow {
+  id: string;
+  name: string;
+  kind: string;
+  description: string;
+  detail: number;
+  tags: string[];
+  discoveredBy: string | null;
+  visitCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function toPlaceRow(row: Record<string, unknown>): WorldPlaceRow {
+  return {
+    id: String(row.id),
+    name: String(row.name ?? ""),
+    kind: String(row.kind ?? "place"),
+    description: String(row.description ?? ""),
+    detail: Number.isFinite(Number(row.detail)) ? Number(row.detail) : 0,
+    tags: parseJsonArray<string>(row.tags),
+    discoveredBy: typeof row.discoveredBy === "string" && row.discoveredBy ? row.discoveredBy : null,
+    visitCount: Number.isFinite(Number(row.visitCount)) ? Number(row.visitCount) : 0,
     createdAt: String(row.createdAt ?? ""),
     updatedAt: String(row.updatedAt ?? ""),
   };
@@ -190,12 +231,13 @@ export function createWorldStorage(db: DB) {
       return rows.map(toMindRow);
     },
 
-    /** Wipe all Living World state: events, relationships, queue, minds. */
+    /** Wipe all Living World state: events, relationships, queue, minds, places. */
     async resetWorld(): Promise<void> {
       await db.delete(worldActions);
       await db.delete(worldEvents);
       await db.delete(characterRelationships);
       await db.delete(characterMinds);
+      await db.delete(worldPlaces);
     },
 
     async upsertMind(
@@ -210,6 +252,9 @@ export function createWorldStorage(db: DB) {
         lastWakeAt: patch.lastWakeAt !== undefined ? patch.lastWakeAt : (existing?.lastWakeAt ?? null),
         nextWakeAt: patch.nextWakeAt !== undefined ? patch.nextWakeAt : (existing?.nextWakeAt ?? null),
         cursors: JSON.stringify(patch.cursors ?? existing?.cursors ?? {}),
+        placeId: patch.placeId !== undefined ? patch.placeId : (existing?.placeId ?? null),
+        money: String(patch.money !== undefined ? patch.money : (existing?.money ?? 0)),
+        job: (patch.job ?? existing?.job ?? "").slice(0, 160),
         updatedAt: timestamp,
       };
       if (existing) {
@@ -219,6 +264,70 @@ export function createWorldStorage(db: DB) {
       const row = { id: characterId, createdAt: timestamp, ...next };
       await db.insert(characterMinds).values(row);
       return toMindRow(row);
+    },
+
+    // ── The living city (world_places) ──
+
+    async listPlaces(): Promise<WorldPlaceRow[]> {
+      const rows = await db.select().from(worldPlaces);
+      return rows.map(toPlaceRow).sort((a, b) => b.visitCount - a.visitCount);
+    },
+
+    async getPlace(id: string): Promise<WorldPlaceRow | null> {
+      const rows = await db.select().from(worldPlaces).where(eq(worldPlaces.id, id));
+      return rows[0] ? toPlaceRow(rows[0]) : null;
+    },
+
+    /** Find an existing place by fuzzy name, or create it (discovery). */
+    async ensurePlace(input: {
+      name: string;
+      kind?: string;
+      description?: string;
+      tags?: string[];
+      discoveredBy?: string | null;
+    }): Promise<{ place: WorldPlaceRow; created: boolean }> {
+      const wanted = normalizeTextForMatch(input.name);
+      const all = await db.select().from(worldPlaces);
+      const match = all.map(toPlaceRow).find((place) => normalizeTextForMatch(place.name) === wanted);
+      if (match) return { place: match, created: false };
+      const timestamp = now();
+      const row = {
+        id: newId(),
+        name: input.name.trim().slice(0, 80),
+        kind: (input.kind ?? "place").trim().slice(0, 40) || "place",
+        description: (input.description ?? "").trim().slice(0, 800),
+        detail: input.description ? "1" : "0",
+        tags: JSON.stringify((input.tags ?? []).slice(0, 12)),
+        discoveredBy: input.discoveredBy ?? null,
+        visitCount: "0",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      await db.insert(worldPlaces).values(row);
+      return { place: toPlaceRow(row), created: true };
+    },
+
+    /** Add detail to a place — append to its description, bump its detail level. */
+    async enrichPlace(id: string, input: { addition?: string; tags?: string[]; incrementVisit?: boolean }): Promise<void> {
+      const existing = await this.getPlace(id);
+      if (!existing) return;
+      const addition = input.addition?.trim();
+      const description = addition
+        ? `${existing.description}${existing.description ? " " : ""}${addition}`.slice(0, 1600)
+        : existing.description;
+      const tags = input.tags?.length
+        ? [...new Set([...existing.tags, ...input.tags])].slice(0, 16)
+        : existing.tags;
+      await db
+        .update(worldPlaces)
+        .set({
+          description,
+          detail: String(existing.detail + (addition ? 1 : 0)),
+          tags: JSON.stringify(tags),
+          visitCount: String(existing.visitCount + (input.incrementVisit ? 1 : 0)),
+          updatedAt: now(),
+        })
+        .where(eq(worldPlaces.id, id));
     },
 
     /**

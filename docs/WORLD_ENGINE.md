@@ -18,6 +18,19 @@ Interaction is emergent by construction: Alice's message is just something Bob f
 
 **Memory across surfaces:** mind memories (`remember`) and world relationships inject into normal conversation prompts too — recent memories in full plus a carried tail of older ones — so when two characters meet again in one of *your* chats or group roleplays, they arrive already knowing their history.
 
+## The living city
+
+The world is spatial and economic, not just social. Every mind has a **location**, a **wallet**, and (optionally) a **job**, and the map itself grows organically:
+
+- **Places** (`world_places`) start empty. `go` moves a character somewhere — naming a place that doesn't exist yet *discovers* it for the whole city (fuzzy-matched so "the grind" and "The Grind" are one place). `describe_place` accretes detail onto wherever they are, so locations get richer as people pass through.
+- **Co-location is real.** If two characters are at the same place, they're face-to-face and can start a `hangout` on the spot — chance encounters emerge from movement.
+- **Economy.** `work` earns money (tied to a job they hold via intention), `spend` uses it (never below zero). Rent, coffee, wanting more — ordinary motivations that pull characters into the world.
+- The **City tab** in the panel shows every place with its description, tags, and who's there right now, plus a residents list with jobs and wallets. Timeline gains `moved` / `discovered` / `place_detail` / `worked` / `spent` events under a **City** filter chip.
+
+## Turn-based scene continuity
+
+Live DMs and in-person hangouts need clean alternation, which the loose per-character wake clock alone can't guarantee. Each scheduler cycle, `advanceActiveScenes` finds world threads with a message in the last ~25 minutes, works out who's **on-deck** (didn't send the last message), and pulls their wake in — fast for hangouts (they're physically together), at texting pace for DMs. A scene that goes quiet or trades more than ~12 turns simply stops being driven, so exchanges flow *and* end naturally instead of stalling or looping.
+
 ## Director (cheap fallback — authored)
 
 One planning call per window snapshots the whole world and writes a **timeline** (each moment carries a time offset); a no-LLM drip loop executes moments when their clock arrives. An order of magnitude cheaper (one call per window vs one per character wake), at the cost of a single authorial voice and moments written before they happen. Stale moments (missed by more than 6h) are skipped rather than dumped in a burst.

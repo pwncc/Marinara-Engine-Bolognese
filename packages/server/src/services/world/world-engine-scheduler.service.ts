@@ -12,7 +12,7 @@ import {
   loadWorldEngineState,
   runWorldDirector,
 } from "./world-engine.service.js";
-import { wakeDueCharacterMinds } from "./character-mind.service.js";
+import { advanceActiveScenes, wakeDueCharacterMinds } from "./character-mind.service.js";
 
 const POLL_MS = 45_000;
 const INITIAL_DELAY_MS = 30_000;
@@ -30,8 +30,9 @@ export function startWorldEngineScheduler(app: FastifyInstance): void {
       if (!config.enabled) return;
 
       if (config.mode === "minds") {
-        // Each character keeps their own clock; wake whoever's moment arrived
-        // (per-cycle capacity scales with the roster so everyone gets turns).
+        // Keep live scenes (DMs, hangouts) alternating cleanly, then wake
+        // whoever's life-clock is due (capacity scales with the roster).
+        await advanceActiveScenes(app.db);
         await wakeDueCharacterMinds(app.db, { app });
         return;
       }

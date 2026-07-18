@@ -56,6 +56,34 @@ export const characterMinds = fileTable("character_minds", {
   nextWakeAt: text("next_wake_at"),
   /** JSON: { seenPostsAt, seenDmsAt } — what they've already caught up on. */
   cursors: text("cursors").notNull().default("{}"),
+  /** Where they physically are right now (world_places id), or null (home/unknown). */
+  placeId: text("place_id"),
+  /** Their money, in the world's currency. */
+  money: text("money").notNull().default("0"),
+  /** Their job, in their own words (e.g. "barista at The Grind"). */
+  job: text("job").notNull().default(""),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/**
+ * The living city: places that exist, discovered and enriched over time as
+ * characters move through them. Starts empty; grows organically.
+ */
+export const worldPlaces = fileTable("world_places", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  /** Free category: cafe, park, apartment, workplace, bar, shop, street… */
+  kind: text("kind").notNull().default("place"),
+  /** Description that accretes detail as characters visit and add to it. */
+  description: text("description").notNull().default(""),
+  /** 0+ — how fleshed-out this place is; rises as it's described. */
+  detail: text("detail").notNull().default("0"),
+  /** JSON string array of vibe/feature tags. */
+  tags: text("tags").notNull().default("[]"),
+  /** Character id who first discovered/created it. */
+  discoveredBy: text("discovered_by"),
+  visitCount: text("visit_count").notNull().default("0"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

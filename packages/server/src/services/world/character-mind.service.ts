@@ -355,6 +355,14 @@ interface MindContext {
   photosEnabled: boolean;
   /** Everyone else who lives in this world — so anyone can be reached. */
   roster: string[];
+  /** City: where they are, who's co-located, places they know, wallet/job. */
+  city: {
+    hereLine: string;
+    peopleHere: string[];
+    knownPlaces: string[];
+    wallet: number;
+    job: string;
+  };
   /** Images the character can currently see (their feed, their threads), as data URLs. */
   visionImages: Array<{ dataUrl: string; label: string }>;
   relationships: string[];
@@ -576,6 +584,22 @@ async function buildMindContext(
     .map((event) => `(${ago(event.createdAt)}) ${event.summary}`)
     .reverse();
 
+  // ── City: where they are, who else is here, and the places they know ──
+  const allMinds = await world.listMinds();
+  const currentPlace = mind.placeId ? await world.getPlace(mind.placeId) : null;
+  const peopleHere = allMinds
+    .filter((other) => other.id !== characterId && other.placeId && other.placeId === mind.placeId && nameById.has(other.id))
+    .map((other) => `${other.id} · ${nameById.get(other.id)}`);
+  const hereLine = currentPlace
+    ? `${currentPlace.name} (${currentPlace.kind})${currentPlace.description ? ` — ${shortText(currentPlace.description, 200)}` : ""}`
+    : "somewhere private (home / not out anywhere in particular)";
+  const knownPlaces = (await world.listPlaces())
+    .slice(0, 16)
+    .map(
+      (place) =>
+        `${place.id} · ${place.name} (${place.kind})${place.tags.length ? ` [${place.tags.slice(0, 4).join(", ")}]` : ""}`,
+    );
+
   // Load the freshest few images they can see as real vision inputs.
   const visionImages: MindContext["visionImages"] = [];
   for (const candidate of visionCandidates
@@ -600,6 +624,13 @@ async function buildMindContext(
     noodleImagesEnabled,
     photosEnabled,
     roster,
+    city: {
+      hereLine,
+      peopleHere,
+      knownPlaces,
+      wallet: mind.money,
+      job: mind.job,
+    },
     visionImages,
     relationships,
     memories,
@@ -632,6 +663,8 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `- Your phone is REAL. Texting = the "message" action (lands in your actual DM thread); posting = "post". If you pick up your phone, use the tool — don't just describe texting. Each thread is its own real place; what's said in one isn't automatically known in another.`,
     `- Noodle: the FEED is the public timeline; react only with EXACT postIds copied from what you see (never invent one).`,
     `- People: PEOPLE IN YOUR WORLD lists everyone; you can reach any of them by id. Meeting in person is the "hangout" action (you're then physically together — write it as lived prose, actions and dialogue).`,
+    `- The CITY is real and shared. "go" takes you somewhere (name a place that exists, or a NEW one you're discovering — that puts it on the map for everyone). If someone else is AT YOUR PLACE right now, you're face to face — you can just start a "hangout" with them. Places gain detail as people describe them.`,
+    `- You have a wallet and can have a job. "work" earns money; "spend" uses it. Let real life — rent, coffee, wanting more — motivate you like it would anyone.`,
     `- Every item shows how long ago it happened. A minutes-old message is live; an hours-old one you're catching up on; something days old may have moved on. A conversation is allowed to simply end.`,
     `- A Visitor may speak into your private space; you can answer them plainly with "say".`,
     config.userDirective ? `\nThe one who hosts this world asks:\n${config.userDirective}` : ``,
@@ -643,7 +676,11 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `  "intention": "what you're up to / meaning to do next (optional, replaces the old one)",`,
     `  "nextCheckInMinutes": ${Math.round(minCheckinMinutes(config))}-${config.wakeIntervalMinutes * 4} — when you'd naturally check in again,`,
     `  "actions": [ 0-${MAX_ACTIONS_PER_WAKE} of:`,
-    `  {"type":"do","activity":"…"} — live: what you're doing now (off to work, making dinner, gym, gaming…). Narrated in your space and becomes your current intention.`,
+    `  {"type":"do","activity":"…"} — live: what you're doing now (cooking, gaming, resting…). Narrated in your space and becomes your current intention.`,
+    `  {"type":"go","place":"place name (existing or new)","kind":"cafe|park|bar|gym|apartment|shop|street|…","why":"optional"} — physically move there. A new name discovers a place for the whole city.`,
+    `  {"type":"describe_place","detail":"a concrete detail about where you are right now"} — flesh out your current place for everyone.`,
+    `  {"type":"work","content":"what you did on the job","earn":number} — put in work and earn money (needs a job or take one via intention).`,
+    `  {"type":"spend","amount":number,"on":"what you bought"} — spend money.`,
     `  {"type":"say","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you show (a selfie, your art, a meme, the view…); describe it concretely","photoOfMe":true|false (true when YOU appear in it)` : ""}} — speak aloud in your own space (answers the Visitor if they wrote)`,
     noodleActions +
       `  {"type":"message","toCharacterId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you attach (a selfie, your art, a meme, what you're seeing…)","photoOfMe":true|false` : ""}} — DM someone (one text)
@@ -693,6 +730,11 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     ctx.openPlans.length
       ? `YOUR OPEN PLANS (id · plan):\n${ctx.openPlans.map((plan) => `${plan.eventId} · ${plan.line}`).join("\n")}\n`
       : ``,
+    `WHERE YOU ARE: ${ctx.city.hereLine}`,
+    ctx.city.peopleHere.length ? `HERE WITH YOU RIGHT NOW: ${ctx.city.peopleHere.join(", ")}` : `You're alone here.`,
+    `YOUR WALLET: ${ctx.city.wallet}${ctx.city.job ? ` · JOB: ${ctx.city.job}` : " · (no job yet)"}`,
+    ctx.city.knownPlaces.length ? `PLACES IN THE CITY (id · name):\n${ctx.city.knownPlaces.join("\n")}` : `The city map is blank so far — anywhere you "go" puts a new place on it.`,
+    ``,
     ctx.recentAboutMe.length ? `RECENTLY IN YOUR LIFE:\n${ctx.recentAboutMe.join("\n")}\n` : ``,
     ctx.visionImages.length
       ? `ATTACHED IMAGES (you can actually see these; they're attached in this order):\n${ctx.visionImages
@@ -824,6 +866,99 @@ async function executeDo(
     summary: `${ctx.name} — ${text}`,
     characterIds: [ctx.selfId],
     detail: { chatId: ctx.lifeChatId, messageId: saved.id, activity: text },
+  });
+}
+
+async function executeGo(
+  db: DB,
+  nameById: Map<string, string>,
+  selfId: string,
+  action: WorldAction,
+): Promise<WorldEventRecord | null> {
+  const world = createWorldStorage(db);
+  const placeName = shortText(action.place, 80);
+  if (!placeName) return null;
+  const { place, created } = await world.ensurePlace({
+    name: placeName,
+    kind: shortText(action.kind, 40) || undefined,
+    discoveredBy: selfId,
+  });
+  await world.enrichPlace(place.id, { incrementVisit: true });
+  await world.upsertMind(selfId, { placeId: place.id });
+  const selfName = nameById.get(selfId) ?? "someone";
+  const others = (await world.listMinds())
+    .filter((m) => m.id !== selfId && m.placeId === place.id && nameById.has(m.id))
+    .map((m) => nameById.get(m.id));
+  const withWhom = others.length ? ` — ${others.join(", ")} ${others.length === 1 ? "is" : "are"} here` : "";
+  return world.appendEvent({
+    kind: created ? "discovered" : "moved",
+    summary: created
+      ? `${selfName} discovered ${place.name} (${place.kind})`
+      : `${selfName} went to ${place.name}${withWhom}`,
+    characterIds: [selfId],
+    detail: { placeId: place.id, placeName: place.name, why: shortText(action.why, 120) },
+  });
+}
+
+async function executeDescribePlace(
+  db: DB,
+  nameById: Map<string, string>,
+  selfId: string,
+  detail: string,
+): Promise<WorldEventRecord | null> {
+  const world = createWorldStorage(db);
+  const mind = await world.getMind(selfId);
+  const text = shortText(detail, 300);
+  if (!mind?.placeId || !text) return null;
+  const place = await world.getPlace(mind.placeId);
+  if (!place) return null;
+  await world.enrichPlace(place.id, { addition: text });
+  return world.appendEvent({
+    kind: "place_detail",
+    summary: `${nameById.get(selfId) ?? "someone"} noticed at ${place.name}: ${shortText(text, 110)}`,
+    characterIds: [selfId],
+    detail: { placeId: place.id },
+  });
+}
+
+async function executeWork(
+  db: DB,
+  nameById: Map<string, string>,
+  selfId: string,
+  action: WorldAction,
+): Promise<WorldEventRecord | null> {
+  const world = createWorldStorage(db);
+  const mind = await world.getMind(selfId);
+  const content = shortText(action.content, 300);
+  if (!content) return null;
+  const earn = Math.max(0, Math.min(100_000, Math.round(Number(action.earn) || 0)));
+  await world.upsertMind(selfId, { money: (mind?.money ?? 0) + earn });
+  return world.appendEvent({
+    kind: "worked",
+    summary: `${nameById.get(selfId) ?? "someone"} worked: ${shortText(content, 100)}${earn ? ` (+${earn})` : ""}`,
+    characterIds: [selfId],
+    detail: { earn },
+  });
+}
+
+async function executeSpend(
+  db: DB,
+  nameById: Map<string, string>,
+  selfId: string,
+  action: WorldAction,
+): Promise<WorldEventRecord | null> {
+  const world = createWorldStorage(db);
+  const mind = await world.getMind(selfId);
+  const on = shortText(action.on, 200);
+  const amount = Math.max(0, Math.min(100_000, Math.round(Number(action.amount) || 0)));
+  if (!on || amount <= 0) return null;
+  const nextMoney = Math.max(0, (mind?.money ?? 0) - amount);
+  await world.upsertMind(selfId, { money: nextMoney });
+  return world.appendEvent({
+    kind: "spent",
+    summary: `${nameById.get(selfId) ?? "someone"} spent ${amount} on ${shortText(on, 90)}`,
+    characterIds: [selfId],
+    detail: { amount },
   });
 }
 
@@ -1080,6 +1215,14 @@ export async function wakeCharacterMind(
             String(rawAction.activity ?? rawAction.content ?? ""),
           );
           if (event) doActivity = String(event.detail.activity ?? "");
+        } else if (rawAction.type === "go") {
+          event = await executeGo(db, nameById, characterId, rawAction);
+        } else if (rawAction.type === "describe_place") {
+          event = await executeDescribePlace(db, nameById, characterId, String(rawAction.detail ?? rawAction.content ?? ""));
+        } else if (rawAction.type === "work") {
+          event = await executeWork(db, nameById, characterId, rawAction);
+        } else if (rawAction.type === "spend") {
+          event = await executeSpend(db, nameById, characterId, rawAction);
         } else if (rawAction.type === "say") {
           event = await executeSay(
             db,
@@ -1263,6 +1406,76 @@ export interface MindsCycleResult {
 
 /** How many ping-response wakes may run per cycle (active conversations flow). */
 const MAX_PING_WAKES_PER_CYCLE = 4;
+
+/** A scene counts as "live" if it had a message within this window. */
+const ACTIVE_SCENE_WINDOW_MS = 25 * 60_000;
+/** Stop driving a scene once it's traded this many turns without the user. */
+const MAX_DRIVEN_SCENE_TURNS = 12;
+
+/**
+ * Turn-based continuity for live scenes. Each cycle, finds recently-active
+ * world threads (DMs, hangouts, groups) where the last speaker left someone
+ * else on-deck, and pulls that person's wake in so the exchange alternates
+ * cleanly — independent of their loose life-wake clock. Hangouts (in person)
+ * are driven fast; texts at a natural texting pace. A scene that goes quiet or
+ * runs long simply stops being driven, so nothing loops forever.
+ */
+export async function advanceActiveScenes(db: DB): Promise<{ driven: number }> {
+  const config = await loadWorldEngineConfig(db);
+  if (!config.enabled) return { driven: 0 };
+  const chats = createChatsStorage(db);
+  const world = createWorldStorage(db);
+  const nameById = await buildNameMap(db, config);
+  const nowMs = Date.now();
+  let driven = 0;
+
+  const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown; updatedAt?: string }>;
+  for (const chat of allChats) {
+    const meta = parseJson(chat.metadata);
+    const isDm = meta.worldDmThread === true && Array.isArray(meta.worldPair);
+    const isGroup = meta.worldGroupThread === true && Array.isArray(meta.worldMembers);
+    if (!isDm && !isGroup) continue;
+    const memberIds = (isDm ? (meta.worldPair as string[]) : (meta.worldMembers as string[])).filter((id) =>
+      nameById.has(id),
+    );
+    if (memberIds.length < 2) continue;
+
+    const messages = (await chats.listMessages(chat.id)) as Array<{
+      role: string;
+      characterId?: string | null;
+      content: string;
+      createdAt: string;
+    }>;
+    const last = messages[messages.length - 1];
+    if (!last) continue;
+    const lastMs = new Date(last.createdAt).getTime();
+    if (!Number.isFinite(lastMs) || nowMs - lastMs > ACTIVE_SCENE_WINDOW_MS) continue; // gone quiet
+
+    // Count turns in this active burst; stop driving marathon scenes.
+    let burstTurns = 0;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (nowMs - new Date(messages[i]!.createdAt).getTime() > ACTIVE_SCENE_WINDOW_MS) break;
+      burstTurns += 1;
+    }
+    if (burstTurns >= MAX_DRIVEN_SCENE_TURNS) continue;
+
+    // On-deck = members who didn't send the last message (their turn to react).
+    const lastSpeaker = last.role === "user" ? "user" : (last.characterId ?? null);
+    const onDeck = memberIds.filter((id) => id !== lastSpeaker);
+    if (!onDeck.length) continue;
+
+    const isHangout = meta.worldHangout === true;
+    const presence = await resolvePresenceMap(db, onDeck);
+    for (const id of onDeck) {
+      const delay = isHangout
+        ? 1 + Math.random() * 3
+        : Math.max(2, noticeDelayMinutes(presence.get(id)?.status ?? "online") * 0.5);
+      await world.bumpMindWake(id, new Date(nowMs + delay * 60_000).toISOString());
+      driven += 1;
+    }
+  }
+  return { driven };
+}
 
 /** Scheduled wakes per cycle scale with the roster so everyone gets turns. */
 export function scheduledWakesPerCycle(memberCount: number): number {

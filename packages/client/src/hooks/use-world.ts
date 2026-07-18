@@ -17,7 +17,34 @@ export const worldKeys = {
   feed: (characterId: string | null) => [...worldKeys.all, "feed", characterId ?? "all"] as const,
   relationships: () => [...worldKeys.all, "relationships"] as const,
   pair: (aId: string, bId: string) => [...worldKeys.all, "pair", aId, bId] as const,
+  city: () => [...worldKeys.all, "city"] as const,
 };
+
+export interface WorldPlace {
+  id: string;
+  name: string;
+  kind: string;
+  description: string;
+  detail: number;
+  tags: string[];
+  discoveredBy: string | null;
+  visitCount: number;
+}
+
+export interface WorldResident {
+  characterId: string;
+  name: string;
+  placeId: string | null;
+  money: number;
+  job: string;
+}
+
+export interface WorldCityResponse {
+  places: WorldPlace[];
+  residents: WorldResident[];
+  peopleByPlace: Record<string, string[]>;
+  names: Record<string, string>;
+}
 
 export interface WorldStatusResponse {
   config: WorldEngineConfig;
@@ -87,6 +114,16 @@ export function useWorldRelationships() {
     queryKey: worldKeys.relationships(),
     queryFn: () => api.get<WorldRelationshipsResponse>("/world/relationships"),
     refetchInterval: visible ? 30_000 : false,
+    staleTime: 5_000,
+  });
+}
+
+export function useWorldCity() {
+  const visible = useWorldPanelVisible();
+  return useQuery({
+    queryKey: worldKeys.city(),
+    queryFn: () => api.get<WorldCityResponse>("/world/city"),
+    refetchInterval: visible ? 20_000 : false,
     staleTime: 5_000,
   });
 }

@@ -51,6 +51,29 @@ export async function worldRoutes(app: FastifyInstance) {
     return { events, names: await buildNameMap() };
   });
 
+  // ── City: places + who's where + wallets/jobs ──
+  app.get("/city", async () => {
+    const places = await world.listPlaces();
+    const minds = await world.listMinds();
+    const names = await buildNameMap();
+    const peopleByPlace: Record<string, string[]> = {};
+    const residents = minds
+      .filter((mind) => names[mind.id])
+      .map((mind) => ({
+        characterId: mind.id,
+        name: names[mind.id] ?? "Unknown",
+        placeId: mind.placeId,
+        money: mind.money,
+        job: mind.job,
+      }));
+    for (const resident of residents) {
+      if (resident.placeId) {
+        (peopleByPlace[resident.placeId] ??= []).push(resident.name);
+      }
+    }
+    return { places, residents, peopleByPlace, names };
+  });
+
   // ── Relationships ──
   app.get<{ Querystring: { characterId?: string } }>("/relationships", async (req) => {
     const relationships = await world.listRelationships(req.query.characterId || undefined);
