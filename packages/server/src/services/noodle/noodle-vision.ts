@@ -100,7 +100,7 @@ async function optimizeNoodleVisionImage(buffer: Buffer, expectedExt?: string): 
   }
 }
 
-async function readNoodleVisionImage(imageUrl: string): Promise<string | null> {
+export async function readNoodleVisionImage(imageUrl: string): Promise<string | null> {
   const dataUrlImage = decodeImageDataUrl(imageUrl);
   if (dataUrlImage) return optimizeNoodleVisionImage(dataUrlImage.buffer, dataUrlImage.expectedExt);
 

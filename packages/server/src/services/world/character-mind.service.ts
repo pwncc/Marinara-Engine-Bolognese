@@ -36,6 +36,7 @@ import { createChatsStorage } from "../storage/chats.storage.js";
 import { createNoodleStorage } from "../storage/noodle.storage.js";
 import { createWorldStorage, type CharacterMindRow } from "../storage/world.storage.js";
 import { generateWorldPhoto, hasWorldImageConnection } from "./world-photo.service.js";
+import { isUnsupportedNoodleVisionInputError, readNoodleVisionImage } from "../noodle/noodle-vision.js";
 import type { ChatMessage } from "../llm/base-provider.js";
 import {
   buildNameMap,
@@ -238,6 +239,8 @@ interface MindContext {
   hasNoodle: boolean;
   noodleImagesEnabled: boolean;
   photosEnabled: boolean;
+  /** Images the character can currently see (their feed, their threads), as data URLs. */
+  visionImages: Array<{ dataUrl: string; label: string }>;
   relationships: string[];
   memories: string[];
   feed: string[];
@@ -283,11 +286,25 @@ async function buildMindContext(
     characterId?: string | null;
     content: string;
     createdAt: string;
+    extra?: unknown;
   }>;
+  const imageAttachmentsOf = (extra: unknown): string[] => {
+    const attachments = parseJson(extra).attachments;
+    if (!Array.isArray(attachments)) return [];
+    return attachments
+      .map((attachment) => parseJson(attachment))
+      .filter((attachment) => attachment.type === "image" && typeof attachment.url === "string")
+      .map((attachment) => String(attachment.url));
+  };
+  const visionCandidates: Array<{ url: string; label: string; createdAt: string }> = [];
   const lifeTail = lifeMessages.slice(-MAX_LIFE_TAIL).map((msg) => {
     const who = msg.role === "user" ? "Visitor" : "you";
     const fresh = msg.role === "user" && msg.createdAt > seenDmsAt ? ", new" : "";
-    return `${who} (${ago(msg.createdAt)}${fresh}): ${shortText(msg.content, 200)}`;
+    const pics = msg.characterId !== characterId ? imageAttachmentsOf(msg.extra) : [];
+    for (const url of pics) {
+      visionCandidates.push({ url, label: `sent by the Visitor in your space`, createdAt: msg.createdAt });
+    }
+    return `${who} (${ago(msg.createdAt)}${fresh}): ${shortText(msg.content, 200)}${pics.length ? " [sent an image — attached]" : ""}`;
   });
   const lastMessage = lifeMessages[lifeMessages.length - 1];
   const hasUnansweredVisitor = !!lastMessage && lastMessage.role === "user";
@@ -324,7 +341,17 @@ async function buildMindContext(
     for (const post of posts) {
       const authorName = shortText(parseJson(post.authorSnapshot).displayName, 40) || "someone";
       if (post.authorAccountId !== myAccountId && post.createdAt > sinceIso && feed.length < MAX_FEED_ITEMS) {
-        feed.push(`${post.id} · ${authorName} (${ago(post.createdAt)}): ${shortText(post.content, 140)}`);
+        const hasPic = typeof post.imageUrl === "string" && post.imageUrl;
+        feed.push(
+          `${post.id} · ${authorName} (${ago(post.createdAt)}): ${shortText(post.content, 140)}${hasPic ? " [has an image — attached]" : ""}`,
+        );
+        if (hasPic) {
+          visionCandidates.push({
+            url: post.imageUrl!,
+            label: `${authorName}'s noodle post ${post.id} ("${shortText(post.content, 50)}")`,
+            createdAt: post.createdAt,
+          });
+        }
       }
     }
     const myPosts = posts.filter((post) => post.authorAccountId === myAccountId).slice(0, 5);
@@ -374,15 +401,17 @@ async function buildMindContext(
       characterId?: string | null;
       content: string;
       createdAt: string;
+      extra?: unknown;
     }>;
     const tail = messages.slice(-6);
     const hasNew = tail.some((msg) => msg.characterId !== characterId && msg.createdAt > seenDmsAt);
+    const threadLabel = isGroup
+      ? `group with ${memberIds.map((id) => nameById.get(id) ?? "someone").join(", ")}`
+      : `${memberIds[0] ?? ""} · ${nameById.get(memberIds[0] ?? "") ?? "someone"}`;
     threads.push({
       chatId: chat.id,
       kind: isGroup ? "group" : "dm",
-      label: isGroup
-        ? `group with ${memberIds.map((id) => nameById.get(id) ?? "someone").join(", ")}`
-        : `${memberIds[0] ?? ""} · ${nameById.get(memberIds[0] ?? "") ?? "someone"}`,
+      label: threadLabel,
       hasNew,
       memberIds,
       lines: tail.map((msg) => {
@@ -393,7 +422,11 @@ async function buildMindContext(
               ? "you"
               : (nameById.get(msg.characterId ?? "") ?? "them");
         const fresh = msg.characterId !== characterId && msg.createdAt > seenDmsAt ? ", new" : "";
-        return `${who} (${ago(msg.createdAt)}${fresh}): ${shortText(msg.content, 150)}`;
+        const pics = msg.characterId !== characterId ? imageAttachmentsOf(msg.extra) : [];
+        for (const url of pics) {
+          visionCandidates.push({ url, label: `sent by ${who} in your ${isGroup ? "group" : "DM"} thread`, createdAt: msg.createdAt });
+        }
+        return `${who} (${ago(msg.createdAt)}${fresh}): ${shortText(msg.content, 150)}${pics.length ? " [sent an image — attached]" : ""}`;
       }),
     });
   }
@@ -409,6 +442,19 @@ async function buildMindContext(
     .map((event) => `(${ago(event.createdAt)}) ${event.summary}`)
     .reverse();
 
+  // Load the freshest few images they can see as real vision inputs.
+  const visionImages: MindContext["visionImages"] = [];
+  for (const candidate of visionCandidates
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 4)) {
+    try {
+      const dataUrl = await readNoodleVisionImage(candidate.url);
+      if (dataUrl) visionImages.push({ dataUrl, label: candidate.label });
+    } catch {
+      /* a missing file is just a picture they can't load */
+    }
+  }
+
   return {
     self: { id: characterId, name, persona },
     mind,
@@ -419,6 +465,7 @@ async function buildMindContext(
     hasNoodle,
     noodleImagesEnabled,
     photosEnabled,
+    visionImages,
     relationships,
     memories,
     feed,
@@ -457,10 +504,10 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `  "nextCheckInMinutes": ${Math.round(minCheckinMinutes(config))}-${config.wakeIntervalMinutes * 4} — when you'd naturally check in again,`,
     `  "actions": [ 0-${MAX_ACTIONS_PER_WAKE} of:`,
     `  {"type":"do","activity":"…"} — live: what you're doing now (off to work, making dinner, gym, gaming…). Narrated in your space and becomes your current intention.`,
-    `  {"type":"say","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — a photo you show; describe it concretely"` : ""}} — speak aloud in your own space (answers the Visitor if they wrote)`,
+    `  {"type":"say","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you show (a selfie, your art, a meme, the view…); describe it concretely","photoOfMe":true|false (true when YOU appear in it)` : ""}} — speak aloud in your own space (answers the Visitor if they wrote)`,
     noodleActions +
-      `  {"type":"message","toCharacterId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — a photo you attach (a selfie, what you're seeing…); describe it concretely"` : ""}} — DM someone (one text)
-  {"type":"group_message","chatId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional photo"` : ""}} — reply in one of your group threads
+      `  {"type":"message","toCharacterId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you attach (a selfie, your art, a meme, what you're seeing…)","photoOfMe":true|false` : ""}} — DM someone (one text)
+  {"type":"group_message","chatId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional image","photoOfMe":true|false` : ""}} — reply in one of your group threads
   {"type":"start_group","withCharacterIds":["…","…"],"name":"…","content":"first message"} — pull 2+ people into a group thread
   {"type":"make_plan","withCharacterIds":["…"],"title":"…","detail":"…","dueInHours":24}
   {"type":"resolve_plan","planEventId":"…","outcome":"what actually happened"}
@@ -503,6 +550,11 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
       ? `YOUR OPEN PLANS (id · plan):\n${ctx.openPlans.map((plan) => `${plan.eventId} · ${plan.line}`).join("\n")}\n`
       : ``,
     ctx.recentAboutMe.length ? `RECENTLY IN YOUR LIFE:\n${ctx.recentAboutMe.join("\n")}\n` : ``,
+    ctx.visionImages.length
+      ? `ATTACHED IMAGES (you can actually see these; they're attached in this order):\n${ctx.visionImages
+          .map((image, index) => `image ${index + 1}: ${image.label}`)
+          .join("\n")}\n`
+      : ``,
     `Take your moment.`,
   ]
     .filter((line) => line !== ``)
@@ -510,7 +562,11 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
 
   return [
     { role: "system", content: system },
-    { role: "user", content: user },
+    {
+      role: "user",
+      content: user,
+      ...(ctx.visionImages.length ? { images: ctx.visionImages.map((image) => image.dataUrl) } : {}),
+    },
   ];
 }
 
@@ -568,7 +624,9 @@ export function toEngineAction(selfId: string, action: WorldAction): WorldAction
         type: "dm",
         fromCharacterId: selfId,
         toCharacterId: action.toCharacterId,
-        messages: [{ from: selfId, content: action.content, photoPrompt: action.photoPrompt }],
+        messages: [
+          { from: selfId, content: action.content, photoPrompt: action.photoPrompt, photoOfMe: action.photoOfMe },
+        ],
       };
     case "make_plan": {
       const withIds = Array.isArray(action.withCharacterIds) ? action.withCharacterIds.map(String) : [];
@@ -630,6 +688,7 @@ async function executeSay(
   ctx: { selfId: string; name: string; lifeChatId: string },
   content: string,
   photoPrompt?: string,
+  photoOfMe?: boolean,
 ): Promise<WorldEventRecord | null> {
   const text = shortText(content, 800);
   if (!text) return null;
@@ -644,7 +703,13 @@ async function executeSay(
   if (!saved?.id) return null;
   const photo = shortText(photoPrompt, 1200);
   if (photo) {
-    void generateWorldPhoto(db, { chatId: ctx.lifeChatId, messageId: saved.id, characterId: ctx.selfId, prompt: photo });
+    void generateWorldPhoto(db, {
+      chatId: ctx.lifeChatId,
+      messageId: saved.id,
+      characterId: ctx.selfId,
+      prompt: photo,
+      includeSelf: photoOfMe,
+    });
   }
   return world.appendEvent({
     kind: "say",
@@ -730,7 +795,13 @@ async function executeGroupAction(
   if (!saved?.id) return { event: null, pingedIds: [] };
   const photo = shortText(action.photoPrompt, 1200);
   if (photo) {
-    void generateWorldPhoto(db, { chatId: chatId!, messageId: saved.id, characterId: selfId, prompt: photo });
+    void generateWorldPhoto(db, {
+      chatId: chatId!,
+      messageId: saved.id,
+      characterId: selfId,
+      prompt: photo,
+      includeSelf: action.photoOfMe === true,
+    });
   }
   const others = memberIds.filter((id) => id !== selfId);
   const event = await world.appendEvent({
@@ -794,13 +865,26 @@ export async function wakeCharacterMind(
       return result;
     }
 
-    const completion = await resolved.provider.chatComplete(buildMindMessages(ctx, config, nowDate), {
+    const wakeMessages = buildMindMessages(ctx, config, nowDate);
+    const completionOptions = {
       model: resolved.model,
       temperature: config.temperature,
       maxTokens: 1024,
-      stream: false,
+      stream: false as const,
       responseFormat: { type: "json_object" },
-    });
+    };
+    let completion;
+    try {
+      completion = await resolved.provider.chatComplete(wakeMessages, completionOptions);
+    } catch (error) {
+      // Non-vision model with images attached: retry text-only (labels remain).
+      if (!ctx.visionImages.length || !isUnsupportedNoodleVisionInputError(error)) throw error;
+      logger.debug("[world/mind] Model rejected image input; retrying %s's wake text-only", ctx.self.name);
+      completion = await resolved.provider.chatComplete(
+        wakeMessages.map(({ images: _images, ...message }) => message),
+        completionOptions,
+      );
+    }
     const output = parseMindResponse(completion.content ?? "");
     result.thought = output.thought || null;
 
@@ -844,6 +928,7 @@ export async function wakeCharacterMind(
             { selfId: characterId, name: ctx.self.name, lifeChatId: ctx.lifeChatId },
             String(rawAction.content ?? ""),
             typeof rawAction.photoPrompt === "string" ? rawAction.photoPrompt : undefined,
+            rawAction.photoOfMe === true,
           );
         } else if (rawAction.type === "group_message" || rawAction.type === "start_group") {
           const groupResult = await executeGroupAction(db, config, nameById, characterId, rawAction);

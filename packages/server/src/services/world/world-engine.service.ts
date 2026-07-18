@@ -654,9 +654,13 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
           const from = String(record.from ?? "");
           const content = shortText(record.content, 600);
           const photoPrompt = shortText(record.photoPrompt, 1200) || null;
-          return (from === fromId || from === toId) && content ? { from, content, photoPrompt } : null;
+          const photoOfMe = record.photoOfMe === true;
+          return (from === fromId || from === toId) && content ? { from, content, photoPrompt, photoOfMe } : null;
         })
-        .filter((msg): msg is { from: string; content: string; photoPrompt: string | null } => msg !== null);
+        .filter(
+          (msg): msg is { from: string; content: string; photoPrompt: string | null; photoOfMe: boolean } =>
+            msg !== null,
+        );
       if (!messages.length) return null;
 
       const [a, b] = orderPair(fromId, toId);
@@ -707,6 +711,7 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
               messageId: saved.id,
               characterId: msg.from,
               prompt: msg.photoPrompt,
+              includeSelf: msg.photoOfMe,
             });
           }
         }

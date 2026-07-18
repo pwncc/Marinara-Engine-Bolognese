@@ -59,7 +59,14 @@ export async function hasWorldImageConnection(db: DB): Promise<boolean> {
  */
 export async function generateWorldPhoto(
   db: DB,
-  input: { chatId: string; messageId: string; characterId: string; prompt: string },
+  input: {
+    chatId: string;
+    messageId: string;
+    characterId: string;
+    prompt: string;
+    /** When the character appears in the image, blend in their appearance for likeness. */
+    includeSelf?: boolean;
+  },
 ): Promise<boolean> {
   try {
     const conn = await resolveWorldImageConnection(db);
@@ -81,7 +88,10 @@ export async function generateWorldPhoto(
           ? charData.description.trim().slice(0, 400)
           : "";
 
-    const basePrompt = appearance ? `${input.prompt}\n\n${charName}'s appearance: ${appearance}` : input.prompt;
+    // Characters can generate ANYTHING — their art, memes, the view, a photo
+    // of someone else. Appearance only blends in when they're in the shot.
+    const basePrompt =
+      input.includeSelf && appearance ? `${input.prompt}\n\n${charName}'s appearance: ${appearance}` : input.prompt;
 
     const imgModel = conn.model || "";
     const imgBaseUrl = conn.baseUrl || "https://image.pollinations.ai";
@@ -91,7 +101,7 @@ export async function generateWorldPhoto(
     const imageDefaults = resolveConnectionImageDefaults(conn);
     const imageSettings = await loadImageGenerationUserSettings(db);
     const compiled = compileImagePrompt({
-      kind: "selfie",
+      kind: input.includeSelf ? "selfie" : "illustration",
       prompt: basePrompt,
       styleProfiles: imageSettings.styleProfiles,
       styleProfileId: imageSettings.styleProfiles.defaultProfileId,
