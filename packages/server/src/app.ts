@@ -39,6 +39,7 @@ import { corsDelegate } from "./config/cors-config.js";
 import { sidecarProcessService } from "./services/sidecar/sidecar-process.service.js";
 import { startServerAutonomousScheduler } from "./services/conversation/server-autonomous-scheduler.service.js";
 import { startNoodleRefreshScheduler } from "./services/noodle/noodle-refresh-scheduler.service.js";
+import { startWorldEngineScheduler } from "./services/world/world-engine-scheduler.service.js";
 import { serverExtensionRuntime } from "./services/extensions/server-extension-runtime.js";
 import { runWithGenerationFallbackNotifier } from "./services/generation/fallback-notification.js";
 import { createReplyFallbackNotifier } from "./routes/generate/fallback-notification.js";
@@ -216,6 +217,9 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
 
   // ── Automatic Noodle timeline refresh scheduler ──
   startNoodleRefreshScheduler(app);
+
+  // ── Living World engine (character↔character life simulation) ──
+  startWorldEngineScheduler(app);
 
   // ── Sidecar bootstrap (background, skipped in lite mode) ──
   if (!isLite) {

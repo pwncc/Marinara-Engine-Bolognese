@@ -210,6 +210,8 @@ export const FILE_BACKED_TABLES = [
   "chat_presets",
   "prompt_overrides",
   "installed_extensions",
+  "world_events",
+  "character_relationships",
 ] as const;
 
 type FileBackedTable = (typeof FILE_BACKED_TABLES)[number];

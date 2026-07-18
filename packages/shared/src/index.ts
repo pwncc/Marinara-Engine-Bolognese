@@ -34,6 +34,7 @@ export * from "./types/noodle.js";
 export * from "./types/spatial-context.js";
 export * from "./types/capability-runtime.js";
 export * from "./types/convo-character-status.js";
+export * from "./types/world.js";
 
 // Schemas
 export * from "./schemas/chat.schema.js";
