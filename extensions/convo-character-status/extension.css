@@ -1,0 +1,133 @@
+.marinara-convo-status-root {
+  position: absolute;
+  top: 3.25rem;
+  right: 0.75rem;
+  z-index: 15;
+  width: min(17rem, calc(100vw - 1.5rem));
+  max-height: min(70vh, 32rem);
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+
+.marinara-convo-status-root * {
+  pointer-events: auto;
+}
+
+.marinara-convo-status-panel {
+  background: color-mix(in srgb, var(--card, #111) 88%, transparent);
+  border: 1px solid var(--border, #333);
+  border-radius: 0.625rem;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+  font-size: 0.6875rem;
+  color: var(--foreground, #eee);
+}
+
+.marinara-convo-status-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.4rem 0.55rem;
+  border-bottom: 1px solid var(--border, #333);
+  cursor: pointer;
+  user-select: none;
+}
+
+.marinara-convo-status-header strong {
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.marinara-convo-status-toggle {
+  border: none;
+  background: transparent;
+  color: var(--muted-foreground, #999);
+  cursor: pointer;
+  padding: 0.1rem 0.25rem;
+  font-size: 0.65rem;
+}
+
+.marinara-convo-status-body {
+  overflow-y: auto;
+  max-height: min(62vh, 28rem);
+  padding: 0.45rem 0.55rem 0.55rem;
+}
+
+.marinara-convo-status-char {
+  margin-bottom: 0.65rem;
+}
+
+.marinara-convo-status-char:last-child {
+  margin-bottom: 0;
+}
+
+.marinara-convo-status-char-name {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  color: var(--primary, #a78bfa);
+}
+
+.marinara-convo-status-row {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.2rem;
+  line-height: 1.35;
+}
+
+.marinara-convo-status-label {
+  color: var(--muted-foreground, #999);
+  min-width: 4.5rem;
+  flex-shrink: 0;
+}
+
+.marinara-convo-status-bar-wrap {
+  margin: 0.15rem 0 0.35rem;
+}
+
+.marinara-convo-status-bar-label {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.1rem;
+  text-transform: capitalize;
+}
+
+.marinara-convo-status-bar-track {
+  height: 0.35rem;
+  border-radius: 999px;
+  background: var(--secondary, #222);
+  overflow: hidden;
+}
+
+.marinara-convo-status-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--primary, #7c6bff), #c084fc);
+  transition: width 0.25s ease;
+}
+
+.marinara-convo-status-empty {
+  color: var(--muted-foreground, #888);
+  font-style: italic;
+  padding: 0.25rem 0;
+}
+
+.marinara-convo-status-hint {
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed var(--border, #333);
+  color: var(--muted-foreground, #888);
+  font-size: 0.6rem;
+  line-height: 1.4;
+}
+
+@media (max-width: 768px) {
+  .marinara-convo-status-root {
+    top: auto;
+    bottom: 5.5rem;
+    right: 0.5rem;
+    width: min(16rem, calc(100vw - 1rem));
+  }
+}
