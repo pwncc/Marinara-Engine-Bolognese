@@ -28,6 +28,7 @@ export interface WorldPlace {
   detail: number;
   tags: string[];
   discoveredBy: string | null;
+  ownerId: string | null;
   visitCount: number;
 }
 

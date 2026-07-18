@@ -112,6 +112,7 @@ export interface WorldPlaceRow {
   detail: number;
   tags: string[];
   discoveredBy: string | null;
+  ownerId: string | null;
   visitCount: number;
   createdAt: string;
   updatedAt: string;
@@ -126,6 +127,7 @@ function toPlaceRow(row: Record<string, unknown>): WorldPlaceRow {
     detail: Number.isFinite(Number(row.detail)) ? Number(row.detail) : 0,
     tags: parseJsonArray<string>(row.tags),
     discoveredBy: typeof row.discoveredBy === "string" && row.discoveredBy ? row.discoveredBy : null,
+    ownerId: typeof row.ownerId === "string" && row.ownerId ? row.ownerId : null,
     visitCount: Number.isFinite(Number(row.visitCount)) ? Number(row.visitCount) : 0,
     createdAt: String(row.createdAt ?? ""),
     updatedAt: String(row.updatedAt ?? ""),
@@ -278,6 +280,11 @@ export function createWorldStorage(db: DB) {
       return rows[0] ? toPlaceRow(rows[0]) : null;
     },
 
+    async getHomePlace(ownerId: string): Promise<WorldPlaceRow | null> {
+      const rows = await db.select().from(worldPlaces).where(eq(worldPlaces.ownerId, ownerId));
+      return rows[0] ? toPlaceRow(rows[0]) : null;
+    },
+
     /** Find an existing place by fuzzy name, or create it (discovery). */
     async ensurePlace(input: {
       name: string;
@@ -285,6 +292,7 @@ export function createWorldStorage(db: DB) {
       description?: string;
       tags?: string[];
       discoveredBy?: string | null;
+      ownerId?: string | null;
     }): Promise<{ place: WorldPlaceRow; created: boolean }> {
       const wanted = normalizeTextForMatch(input.name);
       const all = await db.select().from(worldPlaces);
@@ -299,12 +307,20 @@ export function createWorldStorage(db: DB) {
         detail: input.description ? "1" : "0",
         tags: JSON.stringify((input.tags ?? []).slice(0, 12)),
         discoveredBy: input.discoveredBy ?? null,
+        ownerId: input.ownerId ?? null,
         visitCount: "0",
         createdAt: timestamp,
         updatedAt: timestamp,
       };
       await db.insert(worldPlaces).values(row);
       return { place: toPlaceRow(row), created: true };
+    },
+
+    async renameHomePlace(id: string, name: string, kind: string): Promise<void> {
+      await db
+        .update(worldPlaces)
+        .set({ name: name.trim().slice(0, 80), kind: kind.trim().slice(0, 40) || "home", updatedAt: now() })
+        .where(eq(worldPlaces.id, id));
     },
 
     /** Add detail to a place — append to its description, bump its detail level. */

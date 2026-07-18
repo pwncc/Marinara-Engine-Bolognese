@@ -614,9 +614,13 @@ function CityView() {
         return (
           <div key={place.id} className="rounded-lg border border-[var(--border)]/50 bg-[var(--card)]/50 px-2.5 py-2">
             <div className="flex items-center gap-1.5">
-              <MapPin size="0.75rem" className="shrink-0 text-teal-400" />
+              {place.ownerId ? (
+                <Building2 size="0.75rem" className="shrink-0 text-indigo-400" />
+              ) : (
+                <MapPin size="0.75rem" className="shrink-0 text-teal-400" />
+              )}
               <span className="text-xs font-medium">{place.name}</span>
-              <span className="text-[0.6rem] text-[var(--muted-foreground)]">{place.kind}</span>
+              <span className="text-[0.6rem] text-[var(--muted-foreground)]">{place.ownerId ? "home" : place.kind}</span>
               {place.detail > 0 ? (
                 <span className="ml-auto text-[0.55rem] text-[var(--muted-foreground)]">detail {place.detail}</span>
               ) : null}

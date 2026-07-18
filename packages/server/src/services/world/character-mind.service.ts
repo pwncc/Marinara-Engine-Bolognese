@@ -22,6 +22,7 @@
 // thing that IS natural.
 import {
   getEffectiveCurrentStatus,
+  normalizeTextForMatch,
   type WeekSchedule,
   type WorldEngineConfig,
   type WorldEventRecord,
@@ -355,9 +356,12 @@ interface MindContext {
   photosEnabled: boolean;
   /** Everyone else who lives in this world — so anyone can be reached. */
   roster: string[];
+  /** A live conversation demanding attention right now (precedence), or null. */
+  activeScene: string | null;
   /** City: where they are, who's co-located, places they know, wallet/job. */
   city: {
     hereLine: string;
+    placeName: string | null;
     peopleHere: string[];
     knownPlaces: string[];
     wallet: number;
@@ -460,12 +464,22 @@ async function buildMindContext(
       return `${otherId} · ${other}: ${label} (${rel.score}${rel.romance ? ", romantic" : ""})${rel.summary ? ` — ${rel.summary}` : ""}`;
     });
 
-  const memories = (Array.isArray(parseJson(data.extensions).characterMemories)
+  // Memories: place-tagged ones formed where you are now surface first
+  // (walking into a place brings back what happened there), then recent ones.
+  const currentPlaceForMemory = mind.placeId ? await world.getPlace(mind.placeId) : null;
+  const allMemories = Array.isArray(parseJson(data.extensions).characterMemories)
     ? (parseJson(data.extensions).characterMemories as Array<Record<string, unknown>>)
-    : []
-  )
-    .slice(-8)
-    .map((memory) => `About ${shortText(memory.from, 40) || "someone"}: ${shortText(memory.summary, 160)}`);
+    : [];
+  const herePlaceName = currentPlaceForMemory ? normalizeTextForMatch(currentPlaceForMemory.name) : null;
+  const memoryLine = (memory: Record<string, unknown>) => {
+    const place = typeof memory.place === "string" && memory.place ? ` (at ${memory.place})` : "";
+    return `About ${shortText(memory.from, 40) || "someone"}${place}: ${shortText(memory.summary, 160)}`;
+  };
+  const hereMemories = herePlaceName
+    ? allMemories.filter((m) => typeof m.place === "string" && normalizeTextForMatch(m.place) === herePlaceName)
+    : [];
+  const otherMemories = allMemories.filter((m) => !hereMemories.includes(m)).slice(-8);
+  const memories = [...hereMemories.slice(-4), ...otherMemories].slice(-10).map(memoryLine);
 
   // Noodle: what's new in my feed + reactions to my posts.
   const feed: string[] = [];
@@ -526,18 +540,31 @@ async function buildMindContext(
     })
     .sort((a, b) => String(b.chat.updatedAt ?? "").localeCompare(String(a.chat.updatedAt ?? "")))
     .slice(0, MAX_THREADS);
+  const arrivedAt = typeof mind.cursors.arrivedAt === "string" ? mind.cursors.arrivedAt : null;
   for (const { chat, meta } of myThreads) {
     const isGroup = meta.worldGroupThread === true;
+    const isHangoutThread = meta.worldHangout === true;
     const memberIds = (isGroup ? (meta.worldMembers as string[]) : (meta.worldPair as string[])).filter(
       (id) => id !== characterId,
     );
-    const messages = (await chats.listMessages(chat.id)) as Array<{
+    let messages = (await chats.listMessages(chat.id)) as Array<{
       role: string;
       characterId?: string | null;
       content: string;
       createdAt: string;
       extra?: unknown;
     }>;
+    // Arrival scoping: at an in-person scene you only overhear what's happened
+    // since you walked in — an hour of prior conversation between others who've
+    // been here is not yours to have heard. (Place memories still surface.)
+    if (isHangoutThread && arrivedAt) {
+      const iSpokeHere = messages.some((msg) => msg.characterId === characterId);
+      if (!iSpokeHere) {
+        const sinceArrival = messages.filter((msg) => msg.createdAt >= arrivedAt);
+        // Always keep at least the latest beat so you know what's happening as you enter.
+        messages = sinceArrival.length ? sinceArrival : messages.slice(-1);
+      }
+    }
     // Active conversations get a deeper tail so continuity stays accurate.
     const hasNewProbe = messages
       .slice(-8)
@@ -572,6 +599,21 @@ async function buildMindContext(
       }),
     });
   }
+
+  // Precedence: is there a live conversation demanding attention right now?
+  // (A thread whose latest message is fresh, from someone else, unanswered.)
+  const nowMs = Date.now();
+  const liveThread = threads.find((thread) => {
+    if (!thread.hasNew) return false;
+    const lastLine = thread.lines[thread.lines.length - 1];
+    return lastLine ? !lastLine.startsWith("you (") : false;
+  });
+  const activeScene = liveThread
+    ? liveThread.kind === "group" && liveThread.label.startsWith("IN PERSON")
+      ? `You're mid-hangout — ${liveThread.label.replace(/ — you're.*$/, "")}. ${liveThread.lines[liveThread.lines.length - 1]}`
+      : `You're mid-conversation with ${liveThread.label.split(" · ").pop()?.split(" —")[0] ?? "someone"}. Their latest: ${liveThread.lines[liveThread.lines.length - 1]}`
+    : null;
+  void nowMs;
 
   const openPlans = (await world.listEvents({ kind: "plan", limit: 60 }))
     .filter((event) => event.detail.done !== true && event.characterIds.includes(characterId))
@@ -624,8 +666,10 @@ async function buildMindContext(
     noodleImagesEnabled,
     photosEnabled,
     roster,
+    activeScene,
     city: {
       hereLine,
+      placeName: currentPlace?.name ?? null,
       peopleHere,
       knownPlaces,
       wallet: mind.money,
@@ -663,8 +707,10 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `- Your phone is REAL. Texting = the "message" action (lands in your actual DM thread); posting = "post". If you pick up your phone, use the tool — don't just describe texting. Each thread is its own real place; what's said in one isn't automatically known in another.`,
     `- Noodle: the FEED is the public timeline; react only with EXACT postIds copied from what you see (never invent one).`,
     `- People: PEOPLE IN YOUR WORLD lists everyone; you can reach any of them by id. Meeting in person is the "hangout" action (you're then physically together — write it as lived prose, actions and dialogue).`,
-    `- The CITY is real and shared. "go" takes you somewhere (name a place that exists, or a NEW one you're discovering — that puts it on the map for everyone). If someone else is AT YOUR PLACE right now, you're face to face — you can just start a "hangout" with them. Places gain detail as people describe them.`,
-    `- You have a wallet and can have a job. "work" earns money; "spend" uses it. Let real life — rent, coffee, wanting more — motivate you like it would anyone.`,
+    `- Your HOME is your own place (shown under WHERE YOU ARE). Rooms in it — kitchen, bedroom, bathroom — are part of your home, not separate public spots: just narrate them with "do" ("in the kitchen making coffee"). Use "set_home" once to make your home yours (an apartment, a loft, a house…).`,
+    `- The CITY is the shared PUBLIC world outside your home. "go" is for going OUT — to a real public place that exists, or a NEW public place you're discovering (a cafe, park, bar — NOT a private room). "go home" returns you home. If someone is AT YOUR PLACE right now, you're face to face and can start a "hangout" with them; places gain detail as people describe them.`,
+    `- You have a wallet and can have a job. "work" earns money; "spend" uses it. Let real life — rent, coffee, wanting more — motivate you.`,
+    `- ONE life at a time. You are in exactly one place, doing one thing. If you're mid-conversation with someone (a fresh unanswered message, or an in-person hangout), THAT takes precedence — finish or bow out of it before wandering off; you can't be talking here and posting from across town in the same breath. Posting on Noodle and going somewhere are deliberate choices, never idle filler.`,
     `- Every item shows how long ago it happened. A minutes-old message is live; an hours-old one you're catching up on; something days old may have moved on. A conversation is allowed to simply end.`,
     `- A Visitor may speak into your private space; you can answer them plainly with "say".`,
     config.userDirective ? `\nThe one who hosts this world asks:\n${config.userDirective}` : ``,
@@ -677,8 +723,9 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `  "nextCheckInMinutes": ${Math.round(minCheckinMinutes(config))}-${config.wakeIntervalMinutes * 4} — when you'd naturally check in again,`,
     `  "actions": [ 0-${MAX_ACTIONS_PER_WAKE} of:`,
     `  {"type":"do","activity":"…"} — live: what you're doing now (cooking, gaming, resting…). Narrated in your space and becomes your current intention.`,
-    `  {"type":"go","place":"place name (existing or new)","kind":"cafe|park|bar|gym|apartment|shop|street|…","why":"optional"} — physically move there. A new name discovers a place for the whole city.`,
-    `  {"type":"describe_place","detail":"a concrete detail about where you are right now"} — flesh out your current place for everyone.`,
+    `  {"type":"go","place":"a PUBLIC place name (existing or new), or \\"home\\"","kind":"cafe|park|bar|gym|shop|street|…","why":"optional"} — go OUT somewhere public (or home). Don't name private rooms here.`,
+    `  {"type":"set_home","kind":"apartment|loft|house|villa|studio|…"} — set what kind of home is yours (once). Becomes "Your Name's <kind>".`,
+    `  {"type":"describe_place","detail":"a concrete detail about where you are right now"} — flesh out your current place.`,
     `  {"type":"work","content":"what you did on the job","earn":number} — put in work and earn money (needs a job or take one via intention).`,
     `  {"type":"spend","amount":number,"on":"what you bought"} — spend money.`,
     `  {"type":"say","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you show (a selfie, your art, a meme, the view…); describe it concretely","photoOfMe":true|false (true when YOU appear in it)` : ""}} — speak aloud in your own space (answers the Visitor if they wrote)`,
@@ -698,6 +745,9 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     .join("\n");
 
   const user = [
+    ctx.activeScene
+      ? `>>> RIGHT NOW: ${ctx.activeScene}\nThis is happening live and it's on you — respond to it first. Don't drift off to post or go elsewhere while you're in it (leaving is fine, but do it on purpose, in words).\n`
+      : ``,
     `It's ${localClock(now)}.`,
     ctx.mind.lastWakeAt ? `You last checked in ${ago(ctx.mind.lastWakeAt, now)}.` : `This is your first check-in here.`,
     `Your schedule right now: ${ctx.presence.status}${ctx.presence.activity ? ` — ${ctx.presence.activity}` : ""}.`,
@@ -869,6 +919,27 @@ async function executeDo(
   });
 }
 
+/** Private rooms belong to a home — they must never become public city places. */
+const HOME_ROOM_RE =
+  /^(home|my (place|home|room|apartment|house|flat)|the )?(kitchen|bedroom|bathroom|living ?room|bed|couch|shower|balcony|study|office|hallway|closet|garage|backyard|porch)$/i;
+
+async function ensureHomePlace(
+  db: DB,
+  characterId: string,
+  name: string,
+): Promise<{ id: string; name: string }> {
+  const world = createWorldStorage(db);
+  const existing = await world.getHomePlace(characterId);
+  if (existing) return { id: existing.id, name: existing.name };
+  const { place } = await world.ensurePlace({
+    name: `${name}'s place`,
+    kind: "home",
+    discoveredBy: characterId,
+    ownerId: characterId,
+  });
+  return { id: place.id, name: place.name };
+}
+
 async function executeGo(
   db: DB,
   nameById: Map<string, string>,
@@ -876,27 +947,67 @@ async function executeGo(
   action: WorldAction,
 ): Promise<WorldEventRecord | null> {
   const world = createWorldStorage(db);
-  const placeName = shortText(action.place, 80);
-  if (!placeName) return null;
-  const { place, created } = await world.ensurePlace({
-    name: placeName,
-    kind: shortText(action.kind, 40) || undefined,
-    discoveredBy: selfId,
-  });
-  await world.enrichPlace(place.id, { incrementVisit: true });
-  await world.upsertMind(selfId, { placeId: place.id });
   const selfName = nameById.get(selfId) ?? "someone";
+  const rawName = shortText(action.place, 80);
+  if (!rawName) return null;
+  const nowIso = new Date().toISOString();
+
+  // "home" or a private room → their own home place, never a public one.
+  let placeId: string;
+  let placeName: string;
+  let created = false;
+  if (/^home$/i.test(rawName) || HOME_ROOM_RE.test(rawName)) {
+    const home = await ensureHomePlace(db, selfId, selfName);
+    placeId = home.id;
+    placeName = home.name;
+    await world.enrichPlace(placeId, { incrementVisit: true });
+  } else {
+    const result = await world.ensurePlace({
+      name: rawName,
+      kind: shortText(action.kind, 40) || undefined,
+      discoveredBy: selfId,
+    });
+    placeId = result.place.id;
+    placeName = result.place.name;
+    created = result.created;
+    await world.enrichPlace(placeId, { incrementVisit: true });
+  }
+  // arrivedAt scopes what they'll see at the new place (10-min arrival rule).
+  const mind = await world.getMind(selfId);
+  await world.upsertMind(selfId, {
+    placeId,
+    cursors: { ...(mind?.cursors ?? {}), arrivedAt: nowIso },
+  });
+
   const others = (await world.listMinds())
-    .filter((m) => m.id !== selfId && m.placeId === place.id && nameById.has(m.id))
+    .filter((m) => m.id !== selfId && m.placeId === placeId && nameById.has(m.id))
     .map((m) => nameById.get(m.id));
   const withWhom = others.length ? ` — ${others.join(", ")} ${others.length === 1 ? "is" : "are"} here` : "";
   return world.appendEvent({
     kind: created ? "discovered" : "moved",
-    summary: created
-      ? `${selfName} discovered ${place.name} (${place.kind})`
-      : `${selfName} went to ${place.name}${withWhom}`,
+    summary: created ? `${selfName} discovered ${placeName}` : `${selfName} went to ${placeName}${withWhom}`,
     characterIds: [selfId],
-    detail: { placeId: place.id, placeName: place.name, why: shortText(action.why, 120) },
+    detail: { placeId, placeName, why: shortText(action.why, 120) },
+  });
+}
+
+async function executeSetHome(
+  db: DB,
+  nameById: Map<string, string>,
+  selfId: string,
+  kind: string,
+): Promise<WorldEventRecord | null> {
+  const world = createWorldStorage(db);
+  const selfName = nameById.get(selfId) ?? "someone";
+  const cleanKind = shortText(kind, 30).toLowerCase() || "home";
+  const home = await ensureHomePlace(db, selfId, selfName);
+  const properName = `${selfName}'s ${cleanKind.charAt(0).toUpperCase()}${cleanKind.slice(1)}`;
+  await world.renameHomePlace(home.id, properName, cleanKind);
+  return world.appendEvent({
+    kind: "place_detail",
+    summary: `${selfName} settled into ${properName}`,
+    characterIds: [selfId],
+    detail: { placeId: home.id, home: true },
   });
 }
 
@@ -1217,6 +1328,8 @@ export async function wakeCharacterMind(
           if (event) doActivity = String(event.detail.activity ?? "");
         } else if (rawAction.type === "go") {
           event = await executeGo(db, nameById, characterId, rawAction);
+        } else if (rawAction.type === "set_home") {
+          event = await executeSetHome(db, nameById, characterId, String(rawAction.kind ?? rawAction.content ?? ""));
         } else if (rawAction.type === "describe_place") {
           event = await executeDescribePlace(db, nameById, characterId, String(rawAction.detail ?? rawAction.content ?? ""));
         } else if (rawAction.type === "work") {
@@ -1245,6 +1358,10 @@ export async function wakeCharacterMind(
         } else {
           const engineAction = toEngineAction(characterId, rawAction);
           if (!engineAction) continue;
+          // Tag memories with where they're being formed, so place recall works.
+          if (engineAction.type === "memory" && ctx.city.hereLine) {
+            engineAction.place = ctx.city.placeName ?? undefined;
+          }
           event = await executeWorldAction({ db, world, nameById, config, app: options.app }, engineAction);
           if (event && engineAction.type === "dm" && typeof engineAction.toCharacterId === "string") {
             pinged.add(engineAction.toCharacterId);
@@ -1300,13 +1417,20 @@ export async function wakeCharacterMind(
       gap = Math.max(gap, config.wakeIntervalMinutes * (1.5 + Math.random() * 1.5));
     }
     const nowIso = nowDate.toISOString();
+    // Re-read: a "go" this wake may have just set placeId/arrivedAt; preserve it.
+    const latestMind = await world.getMind(characterId);
     await world.upsertMind(characterId, {
       mood: output.mood ?? undefined,
       // A "do" is a lived intention — it wins unless they stated a newer one.
       intention: output.intention ?? doActivity ?? undefined,
       lastWakeAt: nowIso,
       nextWakeAt: new Date(nowDate.getTime() + gap * 60_000).toISOString(),
-      cursors: { seenPostsAt: nowIso, seenDmsAt: nowIso, wakeReason: "self" },
+      cursors: {
+        seenPostsAt: nowIso,
+        seenDmsAt: nowIso,
+        wakeReason: "self",
+        arrivedAt: latestMind?.cursors.arrivedAt ?? ctx.mind.cursors.arrivedAt ?? nowIso,
+      },
     });
 
     logger.info(
@@ -1383,12 +1507,26 @@ export async function ensureMindsInitialized(db: DB, config: WorldEngineConfig):
         await noodle.updateAccount(account.id, { invited: true });
       }
     }
-    if (existing.has(characterId)) continue;
+    // Everyone gets a home place (their own living space) and starts there.
+    const home = await ensureHomePlace(db, characterId, name);
+    if (existing.has(characterId)) {
+      // Existing mind with no place lands home rather than floating nowhere.
+      const current = await world.getMind(characterId);
+      if (current && !current.placeId) {
+        await world.upsertMind(characterId, {
+          placeId: home.id,
+          cursors: { ...current.cursors, arrivedAt: new Date().toISOString() },
+        });
+      }
+      continue;
+    }
     // First wakes spread across the interval at offset times — everyone gets a
     // turn within roughly one window of enabling.
     const stagger = (0.05 + Math.random() * 0.95) * config.wakeIntervalMinutes;
     await world.upsertMind(characterId, {
+      placeId: home.id,
       nextWakeAt: new Date(Date.now() + stagger * 60_000).toISOString(),
+      cursors: { arrivedAt: new Date().toISOString() },
     });
   }
 }

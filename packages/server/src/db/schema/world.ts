@@ -83,6 +83,8 @@ export const worldPlaces = fileTable("world_places", {
   tags: text("tags").notNull().default("[]"),
   /** Character id who first discovered/created it. */
   discoveredBy: text("discovered_by"),
+  /** Character id who OWNS this as their home/living space (null = public). */
+  ownerId: text("owner_id"),
   visitCount: text("visit_count").notNull().default("0"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),

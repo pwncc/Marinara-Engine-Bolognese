@@ -833,11 +833,13 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       const data = parseJson(target.data);
       const extensions: Record<string, any> = { ...parseJson(data.extensions) };
       const memories = Array.isArray(extensions.characterMemories) ? [...extensions.characterMemories] : [];
+      const memoryPlace = shortText(action.place, 80) || undefined;
       memories.push({
         from: nameById.get(aboutCharacterId),
         fromCharId: aboutCharacterId,
         summary,
         createdAt: new Date().toISOString(),
+        ...(memoryPlace ? { place: memoryPlace } : {}),
       });
       extensions.characterMemories = memories.slice(-100);
       // The stored extensions record is partial user data; the storage layer
