@@ -136,6 +136,7 @@ import {
   type CharacterCommand,
   type DirectMessageCommand,
 } from "../services/conversation/character-commands.js";
+import { readNoodleVisionImage } from "../services/noodle/noodle-vision.js";
 import {
   applyConvoCharacterStatusPatches,
   buildRoleplayCharacterStatusCommandsReminder,
@@ -1268,6 +1269,42 @@ export async function generateRoutes(app: FastifyInstance) {
       const mappedMessages: GenerationPromptMessage[] = [];
       for (const message of chatMessages) {
         mappedMessages.push(await mapChatHistoryMessageForPrompt(message));
+      }
+
+      // ── Vision everywhere: recent GENERATED images (selfies, world photos,
+      // illustrations) become real image inputs too, so vision-capable models
+      // see the pictures characters sent instead of ignoring them. Applies when
+      // captioning is off (same condition user uploads already ride under);
+      // capped to the newest few images so token cost stays bounded.
+      if (!imageCaptioningRuntime.enabled) {
+        let visionBudget = 6;
+        for (let i = mappedMessages.length - 1; i >= 0 && visionBudget > 0; i--) {
+          const source = chatMessages[i];
+          const messageAttachments = normalizePromptAttachments(source?.extra) ?? [];
+          const generated = messageAttachments.filter(
+            (attachment) => attachment.type === "image" && typeof attachment.url === "string" && attachment.url,
+          );
+          if (!generated.length) continue;
+          const loaded: string[] = [];
+          for (const attachment of generated.slice(-2)) {
+            if (visionBudget <= 0) break;
+            try {
+              const dataUrl = await readNoodleVisionImage(String(attachment.url));
+              if (dataUrl) {
+                loaded.push(dataUrl);
+                visionBudget -= 1;
+              }
+            } catch {
+              /* unreadable file — the text context still stands on its own */
+            }
+          }
+          if (loaded.length) {
+            mappedMessages[i] = {
+              ...mappedMessages[i]!,
+              images: [...(mappedMessages[i]!.images ?? []), ...loaded],
+            };
+          }
+        }
       }
 
       // Attach current request's provider inputs to the last user message (they're already saved in extra,
