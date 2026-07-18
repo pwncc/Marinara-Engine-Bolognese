@@ -229,12 +229,22 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   // ── Serve client build in production ──
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const clientDist = resolve(__dirname, "..", "..", "client", "dist");
+
+  // API routes (galleries, sprites, emojis) rely on the reply.sendFile
+  // decoration even when no client build exists, so register the plugin
+  // decoration-only first. Every sendFile call site passes its own root dir.
+  await app.register(fastifyStatic, {
+    root: __dirname,
+    serve: false,
+  });
+
   if (existsSync(clientDist)) {
     await app.register(fastifyStatic, {
       root: clientDist,
       prefix: "/",
       wildcard: false,
       maxAge: 0,
+      decorateReply: false,
       setHeaders(res, filePath) {
         const fileName = basename(filePath);
 
