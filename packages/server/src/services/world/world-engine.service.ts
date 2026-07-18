@@ -912,7 +912,7 @@ export async function runWorldTick(db: DB, options: { manual?: boolean } = {}): 
   if (config.mode === "minds") {
     // Imported lazily: character-mind.service imports from this module.
     const { wakeDueCharacterMinds } = await import("./character-mind.service.js");
-    const cycle = await wakeDueCharacterMinds(db, { limit: 2, force: options.manual });
+    const cycle = await wakeDueCharacterMinds(db, { limit: 1, force: options.manual });
     const events = cycle.woke.flatMap((wake) => wake.events);
     const failed = cycle.woke.find((wake) => !wake.ok);
     const firstThought = cycle.woke.find((wake) => wake.thought);
@@ -922,7 +922,7 @@ export async function runWorldTick(db: DB, options: { manual?: boolean } = {}): 
       narration: firstThought ? `${firstThought.name}: ${firstThought.thought}` : null,
       actionsPlanned: cycle.woke.length,
       queued: 0,
-      skippedReason: cycle.woke.length ? null : "no minds due (or no members/provider)",
+      skippedReason: cycle.woke.length ? null : (cycle.skippedReason ?? "no minds due"),
       error: failed?.error ?? null,
       executedNow: cycle.woke.reduce((sum, wake) => sum + wake.actionsExecuted, 0),
       events,

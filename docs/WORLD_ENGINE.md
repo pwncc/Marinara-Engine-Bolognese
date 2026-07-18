@@ -6,9 +6,15 @@ The Living World engine makes characters live *between* your sessions — contin
 
 **No narrator. Every world member is its own agent** with a persistent mind: a private journal, a current intention and mood, read-cursors into the world, and their own wake clock.
 
-On their own schedule — pulled earlier by events (receiving a DM bumps the recipient's next check-in by a presence-based delay: minutes if they're online, hours if offline) — a character **wakes in a private first-person context**: their card, their journal, their relationships *as they see them*, their memories, and only what's new **to them**: their Noodle feed since they last looked, replies and likes on their own posts, their DM threads with unread markers. They journal a thought (visible in the world timeline as their inner life), and freely choose up to a few small actions — post, reply, text someone, make or resolve a plan, let a feeling shift, keep a memory — **or nothing, which the prompt explicitly frames as honest living**. They also choose when they'd naturally check in again.
+Every mind owns a **permanent life chat** (`Alice's life`) — a real conversation session where their inner life accumulates forever: thoughts (saved as *italic* messages), things they say aloud, and anything you write to them. **You can intrude on any of it**: open a life chat, DM thread, or group thread from the world timeline and type — your message pulls that character's next check-in earlier (presence-shaped, minutes when they're around), they find it in their space, and they answer you there, with the entire context kept.
+
+On their own schedule — pulled earlier by pings (a DM, a group message, your intrusion) — a character **wakes in a private first-person context**: their card, their life chat tail, their relationships *as they see them*, their memories, and only what's new **to them**: their Noodle feed since they last looked, replies and likes on their own posts, their DM and group threads with unread markers. They journal a thought, and freely choose a few small actions — post, reply, text someone, speak in their space, start or answer a **group thread** (2+ others, persistent, intrudable), make or resolve a plan, let a feeling shift, keep a memory — **or nothing, which the prompt explicitly frames as honest living**. They also choose when they'd naturally check in again.
 
 Interaction is emergent by construction: Alice's message is just something Bob finds, in his own head, when he next checks his phone. Nobody ever writes both sides of a conversation.
+
+**Pacing:** the world trickles. Scheduled wakes keep a global minimum gap scaled to the roster (one wake per cycle; fresh worlds stagger first wakes across a wide window), so life unfolds over hours instead of bursts — only direct pings pull someone in fast, because answering a text quickly is the one thing that *is* natural.
+
+**Memory across surfaces:** mind memories (`remember`) and world relationships inject into normal conversation prompts too — recent memories in full plus a carried tail of older ones — so when two characters meet again in one of *your* chats or group roleplays, they arrive already knowing their history.
 
 ## Director (cheap fallback — authored)
 

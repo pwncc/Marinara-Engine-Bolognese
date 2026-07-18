@@ -2,13 +2,24 @@
 // Character Minds — every character is its own agent
 // ──────────────────────────────────────────────
 // No narrator. Each world member has a persistent mind (intention, mood,
-// journal, read-cursors, wake clock). On their own schedule — pulled earlier
-// by events like receiving a DM — they wake in a PRIVATE first-person context:
-// their card, their journal, their relationships, and only what's new TO THEM
-// (their noodle feed, reactions to their posts, their DM threads). They think
-// (journaled as a world event), and freely choose small actions or nothing.
-// Interaction emerges: Alice's message is just something Bob finds, in his own
-// head, when he next checks his phone.
+// read-cursors, wake clock) and a PERMANENT LIFE CHAT: a real conversation
+// session where their inner life accumulates as messages — thoughts, things
+// they say into their space, and anything the user writes to them (intrusion:
+// the user's message pulls their next wake earlier, and they answer in that
+// same chat, with the entire context kept forever).
+//
+// On their own schedule — pulled earlier by pings (DMs, group messages, user
+// intrusions) — a character wakes in a PRIVATE first-person context: their
+// card, their life chat tail, relationships from their side, memories, and
+// only what's new TO THEM (their noodle feed, reactions to their posts, their
+// DM and group threads). They think, and freely choose small actions or
+// nothing. Interaction emerges across separate private contexts — nobody
+// writes both sides.
+//
+// Pacing: the world trickles. At most one scheduled wake per cycle, with a
+// global gap scaled to the roster, so life unfolds over hours — only direct
+// pings can pull someone in fast, because answering a text quickly is the one
+// thing that IS natural.
 import {
   getEffectiveCurrentStatus,
   type WeekSchedule,
@@ -36,9 +47,9 @@ import {
 } from "./world-engine.service.js";
 
 const MAX_ACTIONS_PER_WAKE = 3;
-const MAX_JOURNAL_LINES = 8;
+const MAX_LIFE_TAIL = 12;
 const MAX_FEED_ITEMS = 10;
-const MAX_DM_THREADS = 4;
+const MAX_THREADS = 5;
 const MIN_CHECKIN_MINUTES = 15;
 
 function parseJson(raw: unknown): Record<string, unknown> {
@@ -55,6 +66,13 @@ function parseJson(raw: unknown): Record<string, unknown> {
 function shortText(value: unknown, max: number): string {
   const text = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function sameMembers(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return sortedA.every((id, index) => id === sortedB[index]);
 }
 
 // ── Presence ──
@@ -106,19 +124,91 @@ export function noticeDelayMinutes(presence: string): number {
   }
 }
 
+// ── Life chat (their permanent session) ──
+
+export async function ensureLifeChat(db: DB, characterId: string, name: string): Promise<string> {
+  const chats = createChatsStorage(db);
+  const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
+  const existing = allChats.find((chat) => {
+    const meta = parseJson(chat.metadata);
+    return meta.worldLifeChat === true && meta.worldCharacterId === characterId;
+  });
+  if (existing) return existing.id;
+  const created = await chats.create({
+    name: `${name}'s life`,
+    mode: "conversation",
+    characterIds: [characterId],
+    groupId: null,
+    personaId: null,
+    promptPresetId: null,
+    connectionId: null,
+  });
+  if (!created?.id) throw new Error(`Failed to create life chat for ${name}`);
+  await chats.patchMetadata(created.id, {
+    worldLifeChat: true,
+    worldCharacterId: characterId,
+    autonomousMessages: false,
+    characterCommands: false,
+  });
+  return created.id;
+}
+
+/**
+ * The user wrote into a world chat (life chat, DM thread, or group thread):
+ * pull every member character's next wake in close — they've been addressed.
+ */
+export async function bumpMindsForUserMessage(db: DB, chatId: string): Promise<void> {
+  const chats = createChatsStorage(db);
+  const chat = await chats.getById(chatId);
+  if (!chat) return;
+  const meta = parseJson((chat as { metadata?: unknown }).metadata);
+  let targetIds: string[] = [];
+  if (meta.worldLifeChat === true && typeof meta.worldCharacterId === "string") {
+    targetIds = [meta.worldCharacterId];
+  } else if (meta.worldDmThread === true && Array.isArray(meta.worldPair)) {
+    targetIds = (meta.worldPair as unknown[]).filter((id): id is string => typeof id === "string");
+  } else if (meta.worldGroupThread === true && Array.isArray(meta.worldMembers)) {
+    targetIds = (meta.worldMembers as unknown[]).filter((id): id is string => typeof id === "string");
+  }
+  if (!targetIds.length) return;
+
+  const config = await loadWorldEngineConfig(db);
+  if (!config.enabled) return;
+  const world = createWorldStorage(db);
+  const presence = await resolvePresenceMap(db, targetIds);
+  const now = Date.now();
+  for (const characterId of targetIds) {
+    if (!isWorldMember(config, characterId)) continue;
+    // Being directly addressed: notice fast (still presence-shaped, min 1m).
+    const delay = Math.max(1, noticeDelayMinutes(presence.get(characterId)?.status ?? "online") / 2);
+    await world.bumpMindWake(characterId, new Date(now + delay * 60_000).toISOString());
+  }
+}
+
 // ── Wake context ──
+
+interface ThreadContext {
+  chatId: string;
+  kind: "dm" | "group";
+  label: string;
+  lines: string[];
+  hasNew: boolean;
+  memberIds: string[];
+}
 
 interface MindContext {
   self: { id: string; name: string; persona: string };
   mind: CharacterMindRow;
+  lifeChatId: string;
+  lifeTail: string[];
+  hasUnansweredVisitor: boolean;
   presence: { status: string; activity: string };
   hasNoodle: boolean;
   relationships: string[];
   memories: string[];
-  journal: string[];
   feed: string[];
   reactions: string[];
-  dmThreads: Array<{ chatId: string; withId: string; withName: string; lines: string[]; hasNew: boolean }>;
+  threads: ThreadContext[];
   openPlans: Array<{ eventId: string; line: string }>;
   recentAboutMe: string[];
 }
@@ -140,22 +230,37 @@ async function buildMindContext(
   const name = nameById.get(characterId) ?? (shortText(data.name, 60) || "Unnamed");
   const persona = [shortText(data.description, 400), shortText(data.personality, 300)].filter(Boolean).join("\n");
 
-  const mind =
-    (await world.getMind(characterId)) ?? (await world.upsertMind(characterId, { nextWakeAt: null }));
+  const mind = (await world.getMind(characterId)) ?? (await world.upsertMind(characterId, { nextWakeAt: null }));
   const sinceIso =
     (typeof mind.cursors.seenPostsAt === "string" ? mind.cursors.seenPostsAt : null) ??
     mind.lastWakeAt ??
     new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+  const seenDmsAt = typeof mind.cursors.seenDmsAt === "string" ? mind.cursors.seenDmsAt : sinceIso;
 
   const presence = (await resolvePresenceMap(db, [characterId])).get(characterId) ?? {
     status: "unknown",
     activity: "",
   };
 
+  // Their permanent life chat: thoughts, things said, and visitor messages.
+  const lifeChatId = await ensureLifeChat(db, characterId, name);
+  const lifeMessages = (await chats.listMessages(lifeChatId)) as Array<{
+    role: string;
+    characterId?: string | null;
+    content: string;
+    createdAt: string;
+  }>;
+  const lifeTail = lifeMessages.slice(-MAX_LIFE_TAIL).map((msg) => {
+    const who = msg.role === "user" ? "Visitor" : "you";
+    const fresh = msg.role === "user" && msg.createdAt > seenDmsAt ? " (new)" : "";
+    return `${who}${fresh}: ${shortText(msg.content, 200)}`;
+  });
+  const lastMessage = lifeMessages[lifeMessages.length - 1];
+  const hasUnansweredVisitor = !!lastMessage && lastMessage.role === "user";
+
   const account = await noodle.getAccountByEntity("character", characterId);
   const hasNoodle = !!account?.invited;
 
-  // Relationships from my side of the table.
   const relationships = (await world.listRelationships(characterId))
     .filter((rel) => isWorldMember(config, rel.aCharacterId) && isWorldMember(config, rel.bCharacterId))
     .slice(0, 20)
@@ -173,10 +278,6 @@ async function buildMindContext(
     .slice(-8)
     .map((memory) => `About ${shortText(memory.from, 40) || "someone"}: ${shortText(memory.summary, 160)}`);
 
-  const journal = (await world.listEvents({ kind: "thought", characterId, limit: MAX_JOURNAL_LINES }))
-    .map((event) => `[${event.createdAt.slice(5, 16)}] ${String(event.detail.text ?? event.summary)}`)
-    .reverse();
-
   // Noodle: what's new in my feed + reactions to my posts.
   const feed: string[] = [];
   const reactions: string[] = [];
@@ -189,13 +290,13 @@ async function buildMindContext(
         feed.push(`${post.id} · ${authorName}: ${shortText(post.content, 140)}`);
       }
     }
-    const myPostIds = posts.filter((post) => post.authorAccountId === myAccountId).slice(0, 5);
-    if (myPostIds.length) {
-      const interactions = await noodle.listInteractions(myPostIds.map((post) => post.id));
+    const myPosts = posts.filter((post) => post.authorAccountId === myAccountId).slice(0, 5);
+    if (myPosts.length) {
+      const interactions = await noodle.listInteractions(myPosts.map((post) => post.id));
       for (const interaction of interactions) {
         if (interaction.actorAccountId === myAccountId || interaction.createdAt <= sinceIso) continue;
         const actor = shortText(parseJson(interaction.actorSnapshot).displayName, 40) || "someone";
-        const myPost = myPostIds.find((post) => post.id === interaction.postId);
+        const myPost = myPosts.find((post) => post.id === interaction.postId);
         const postRef = shortText(myPost?.content, 60);
         if (interaction.type === "reply") {
           reactions.push(`${actor} replied to your post ("${postRef}"): ${shortText(interaction.content, 120)}`);
@@ -206,40 +307,55 @@ async function buildMindContext(
     }
   }
 
-  // My world DM threads (tail + unread flag).
-  const dmThreads: MindContext["dmThreads"] = [];
-  const seenDmsAt = typeof mind.cursors.seenDmsAt === "string" ? mind.cursors.seenDmsAt : sinceIso;
+  // My DM + group threads (tail + unread flag).
+  const threads: ThreadContext[] = [];
   const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown; updatedAt?: string }>;
   const myThreads = allChats
-    .filter((chat) => {
-      const meta = parseJson(chat.metadata);
-      if (meta.worldDmThread !== true) return false;
-      const pair = Array.isArray(meta.worldPair) ? (meta.worldPair as string[]) : [];
-      return pair.includes(characterId) && pair.every((id) => isWorldMember(config, id));
+    .map((chat) => ({ chat, meta: parseJson(chat.metadata) }))
+    .filter(({ meta }) => {
+      if (meta.worldDmThread === true && Array.isArray(meta.worldPair)) {
+        const pair = meta.worldPair as string[];
+        return pair.includes(characterId) && pair.every((id) => isWorldMember(config, id));
+      }
+      if (meta.worldGroupThread === true && Array.isArray(meta.worldMembers)) {
+        const members = meta.worldMembers as string[];
+        return members.includes(characterId) && members.every((id) => isWorldMember(config, id));
+      }
+      return false;
     })
-    .sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")))
-    .slice(0, MAX_DM_THREADS);
-  for (const thread of myThreads) {
-    const pair = (parseJson(thread.metadata).worldPair as string[]) ?? [];
-    const withId = pair.find((id) => id !== characterId) ?? "";
-    const messages = (await chats.listMessages(thread.id)) as Array<{
+    .sort((a, b) => String(b.chat.updatedAt ?? "").localeCompare(String(a.chat.updatedAt ?? "")))
+    .slice(0, MAX_THREADS);
+  for (const { chat, meta } of myThreads) {
+    const isGroup = meta.worldGroupThread === true;
+    const memberIds = (isGroup ? (meta.worldMembers as string[]) : (meta.worldPair as string[])).filter(
+      (id) => id !== characterId,
+    );
+    const messages = (await chats.listMessages(chat.id)) as Array<{
+      role: string;
       characterId?: string | null;
       content: string;
       createdAt: string;
     }>;
     const tail = messages.slice(-6);
     const hasNew = tail.some((msg) => msg.characterId !== characterId && msg.createdAt > seenDmsAt);
-    dmThreads.push({
-      chatId: thread.id,
-      withId,
-      withName: nameById.get(withId) ?? "someone",
+    threads.push({
+      chatId: chat.id,
+      kind: isGroup ? "group" : "dm",
+      label: isGroup
+        ? `group with ${memberIds.map((id) => nameById.get(id) ?? "someone").join(", ")}`
+        : `${memberIds[0] ?? ""} · ${nameById.get(memberIds[0] ?? "") ?? "someone"}`,
       hasNew,
-      lines: tail.map(
-        (msg) =>
-          `${msg.characterId === characterId ? "you" : (nameById.get(msg.characterId ?? "") ?? "them")}${
-            msg.characterId !== characterId && msg.createdAt > seenDmsAt ? " (new)" : ""
-          }: ${shortText(msg.content, 150)}`,
-      ),
+      memberIds,
+      lines: tail.map((msg) => {
+        const who =
+          msg.role === "user"
+            ? "Visitor"
+            : msg.characterId === characterId
+              ? "you"
+              : (nameById.get(msg.characterId ?? "") ?? "them");
+        const fresh = msg.characterId !== characterId && msg.createdAt > seenDmsAt ? " (new)" : "";
+        return `${who}${fresh}: ${shortText(msg.content, 150)}`;
+      }),
     });
   }
 
@@ -248,8 +364,8 @@ async function buildMindContext(
     .slice(0, 6)
     .map((event) => ({ eventId: event.id, line: event.summary }));
 
-  const recentAboutMe = (await world.listEvents({ characterId, limit: 12 }))
-    .filter((event) => event.kind !== "thought")
+  const recentAboutMe = (await world.listEvents({ characterId, limit: 14 }))
+    .filter((event) => event.kind !== "thought" && event.kind !== "say")
     .slice(0, 6)
     .map((event) => `[${event.createdAt.slice(5, 16)}] ${event.summary}`)
     .reverse();
@@ -257,14 +373,16 @@ async function buildMindContext(
   return {
     self: { id: characterId, name, persona },
     mind,
+    lifeChatId,
+    lifeTail,
+    hasUnansweredVisitor,
     presence,
     hasNoodle,
     relationships,
     memories,
-    journal,
     feed,
     reactions,
-    dmThreads,
+    threads,
     openPlans,
     recentAboutMe,
   };
@@ -285,7 +403,8 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     ctx.self.persona,
     ``,
     `This is not a story and nobody is watching. It's simply your life, continuing. You just found a quiet moment to think and maybe check your phone.`,
-    `Be yourself. Feelings move slowly. Most check-ins are uneventful: a thought, maybe one small action, often nothing at all — that's honest living, not laziness. Reply to people only when YOU would. You may reach out, make plans, let things slide, hold grudges, catch feelings — whatever is true to you.`,
+    `Be yourself. Feelings move slowly. Most check-ins are uneventful: a thought, maybe ONE small action, often nothing at all — that's honest living, not laziness. Reply to people only when YOU would. You may reach out, make plans, let things slide, hold grudges, catch feelings — whatever is true to you.`,
+    `Sometimes a Visitor speaks into your private space — a presence you can talk to plainly. If they said something new, it's polite to answer with "say", in your own voice.`,
     config.userDirective ? `\nWorld ground rules (from the person hosting this world):\n${config.userDirective}` : ``,
     ``,
     `Respond with STRICT JSON only (no fences, no commentary):`,
@@ -295,8 +414,11 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `  "intention": "what you're up to / meaning to do next (optional, replaces the old one)",`,
     `  "nextCheckInMinutes": ${MIN_CHECKIN_MINUTES}-${config.wakeIntervalMinutes * 4} — when you'd naturally check in again,`,
     `  "actions": [ 0-${MAX_ACTIONS_PER_WAKE} of:`,
+    `  {"type":"say","content":"…"} — speak aloud in your own space (answers the Visitor if they wrote)`,
     noodleActions +
-      `  {"type":"message","toCharacterId":"…","content":"…"} — DM someone (one text; you can send a second with another action)
+      `  {"type":"message","toCharacterId":"…","content":"…"} — DM someone (one text)
+  {"type":"group_message","chatId":"…","content":"…"} — reply in one of your group threads
+  {"type":"start_group","withCharacterIds":["…","…"],"name":"…","content":"first message"} — pull 2+ people into a group thread
   {"type":"make_plan","withCharacterIds":["…"],"title":"…","detail":"…","dueInHours":24}
   {"type":"resolve_plan","planEventId":"…","outcome":"what actually happened"}
   {"type":"feel","aboutCharacterId":"…","delta":-20..20,"romance":true|false,"summary":"how things stand between you now","milestone":{"title":"…","description":"…"} (milestone only for real firsts)}
@@ -313,20 +435,23 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     ctx.mind.mood ? `Your mood lately: ${ctx.mind.mood}.` : ``,
     ctx.mind.intention ? `You had meant to: ${ctx.mind.intention}` : ``,
     ``,
+    `YOUR PRIVATE SPACE (your life chat — thoughts, things you've said, and the Visitor):`,
+    ctx.lifeTail.join("\n") || "(quiet so far)",
+    ctx.hasUnansweredVisitor ? `The Visitor's last message is still unanswered.` : ``,
+    ``,
     `PEOPLE IN YOUR LIFE (id · name: where you stand):`,
     ctx.relationships.join("\n") || "(you don't really know anyone yet)",
     ``,
     ctx.memories.length ? `THINGS YOU REMEMBER:\n${ctx.memories.join("\n")}\n` : ``,
-    ctx.journal.length ? `YOUR RECENT JOURNAL:\n${ctx.journal.join("\n")}\n` : ``,
     ctx.hasNoodle
       ? `NEW ON YOUR NOODLE FEED (id · author: content):\n${ctx.feed.join("\n") || "(nothing new)"}\n`
       : `(You don't have a Noodle account.)\n`,
     ctx.reactions.length ? `ON YOUR POSTS:\n${ctx.reactions.join("\n")}\n` : ``,
-    ctx.dmThreads.length
-      ? `YOUR DMS:\n${ctx.dmThreads
+    ctx.threads.length
+      ? `YOUR THREADS:\n${ctx.threads
           .map(
             (thread) =>
-              `— with ${thread.withId} · ${thread.withName}${thread.hasNew ? " (NEW)" : ""}:\n${thread.lines.map((line) => `   ${line}`).join("\n")}`,
+              `— [${thread.chatId}] ${thread.kind === "group" ? thread.label : `with ${thread.label}`}${thread.hasNew ? " (NEW)" : ""}:\n${thread.lines.map((line) => `   ${line}`).join("\n")}`,
           )
           .join("\n")}\n`
       : ``,
@@ -430,6 +555,115 @@ export function toEngineAction(selfId: string, action: WorldAction): WorldAction
   }
 }
 
+// ── Mind-local executors (life chat + group threads) ──
+
+async function executeSay(
+  db: DB,
+  ctx: { selfId: string; name: string; lifeChatId: string },
+  content: string,
+): Promise<WorldEventRecord | null> {
+  const text = shortText(content, 800);
+  if (!text) return null;
+  const chats = createChatsStorage(db);
+  const world = createWorldStorage(db);
+  const saved = await chats.createMessage({
+    chatId: ctx.lifeChatId,
+    role: "assistant",
+    characterId: ctx.selfId,
+    content: text,
+  });
+  if (!saved?.id) return null;
+  return world.appendEvent({
+    kind: "say",
+    summary: `${ctx.name}: "${shortText(text, 120)}"`,
+    characterIds: [ctx.selfId],
+    detail: { chatId: ctx.lifeChatId, messageId: saved.id, text },
+  });
+}
+
+async function executeGroupAction(
+  db: DB,
+  config: WorldEngineConfig,
+  nameById: Map<string, string>,
+  selfId: string,
+  action: WorldAction,
+): Promise<{ event: WorldEventRecord | null; pingedIds: string[] }> {
+  const chats = createChatsStorage(db);
+  const world = createWorldStorage(db);
+  const content = shortText(action.content, 600);
+  if (!content) return { event: null, pingedIds: [] };
+  const selfName = nameById.get(selfId) ?? "someone";
+
+  let chatId: string | null = null;
+  let memberIds: string[] = [];
+
+  if (action.type === "group_message") {
+    const target = await chats.getById(String(action.chatId ?? ""));
+    const meta = parseJson((target as { metadata?: unknown } | null)?.metadata);
+    if (
+      !target ||
+      meta.worldGroupThread !== true ||
+      !Array.isArray(meta.worldMembers) ||
+      !(meta.worldMembers as string[]).includes(selfId)
+    ) {
+      return { event: null, pingedIds: [] };
+    }
+    chatId = (target as { id: string }).id;
+    memberIds = (meta.worldMembers as string[]).filter((id) => nameById.has(id));
+  } else {
+    // start_group
+    const withIds = (Array.isArray(action.withCharacterIds) ? action.withCharacterIds.map(String) : []).filter(
+      (id) => id !== selfId && nameById.has(id),
+    );
+    const members = [...new Set([selfId, ...withIds])];
+    if (members.length < 3) return { event: null, pingedIds: [] };
+    const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
+    const existing = allChats.find((chat) => {
+      const meta = parseJson(chat.metadata);
+      return (
+        meta.worldGroupThread === true &&
+        Array.isArray(meta.worldMembers) &&
+        sameMembers(meta.worldMembers as string[], members)
+      );
+    });
+    if (existing) {
+      chatId = existing.id;
+    } else {
+      const groupName =
+        shortText(action.name, 60) || members.map((id) => nameById.get(id) ?? "?").join(", ");
+      const created = await chats.create({
+        name: groupName,
+        mode: "conversation",
+        characterIds: members,
+        groupId: null,
+        personaId: null,
+        promptPresetId: null,
+        connectionId: null,
+      });
+      if (!created?.id) return { event: null, pingedIds: [] };
+      await chats.patchMetadata(created.id, {
+        worldGroupThread: true,
+        worldMembers: members,
+        autonomousMessages: false,
+        characterCommands: false,
+      });
+      chatId = created.id;
+    }
+    memberIds = members;
+  }
+
+  const saved = await chats.createMessage({ chatId: chatId!, role: "assistant", characterId: selfId, content });
+  if (!saved?.id) return { event: null, pingedIds: [] };
+  const others = memberIds.filter((id) => id !== selfId);
+  const event = await world.appendEvent({
+    kind: "group",
+    summary: `${selfName} in a group with ${others.map((id) => nameById.get(id) ?? "?").join(", ")}: "${shortText(content, 90)}"`,
+    characterIds: memberIds,
+    detail: { chatId, messageId: saved.id, preview: shortText(content, 120) },
+  });
+  return { event, pingedIds: others };
+}
+
 // ── Wake execution ──
 
 export interface MindWakeResult {
@@ -449,6 +683,7 @@ export async function wakeCharacterMind(
 ): Promise<MindWakeResult> {
   const config = await loadWorldEngineConfig(db);
   const world = createWorldStorage(db);
+  const chats = createChatsStorage(db);
   const nameById = await buildNameMap(db, config);
   const result: MindWakeResult = {
     characterId,
@@ -491,34 +726,50 @@ export async function wakeCharacterMind(
     const output = parseMindResponse(completion.content ?? "");
     result.thought = output.thought || null;
 
-    // Journal the thought (free — observability, not an action).
+    // The thought lives in their permanent life chat; the event mirrors it so
+    // the world timeline can deep-link into the session.
     if (output.thought) {
+      const savedThought = await chats.createMessage({
+        chatId: ctx.lifeChatId,
+        role: "assistant",
+        characterId,
+        content: `*${output.thought}*`,
+      });
       const thoughtEvent = await world.appendEvent({
         kind: "thought",
-        summary: `${ctx.self.name}: “${shortText(output.thought, 140)}”`,
+        summary: `${ctx.self.name}: "${shortText(output.thought, 140)}"`,
         characterIds: [characterId],
-        detail: { text: output.thought },
+        detail: { chatId: ctx.lifeChatId, messageId: savedThought?.id ?? null, text: output.thought },
       });
       result.events.push(thoughtEvent);
     }
 
-    // Execute chosen actions (budget-gated), bumping DM recipients' wakes.
+    // Execute chosen actions (budget-gated), collecting who got pinged.
     const state = await loadWorldEngineState(db);
     let budgetLeft = Math.max(0, config.dailyActionCap - state.dailyCount);
-    const dmRecipients = new Set<string>();
+    const pinged = new Set<string>();
     for (const rawAction of output.actions) {
       if (budgetLeft <= 0) break;
-      const engineAction = toEngineAction(characterId, rawAction);
-      if (!engineAction) continue;
       try {
-        const event = await executeWorldAction({ db, world, nameById, config }, engineAction);
+        let event: WorldEventRecord | null = null;
+        if (rawAction.type === "say") {
+          event = await executeSay(db, { selfId: characterId, name: ctx.self.name, lifeChatId: ctx.lifeChatId }, String(rawAction.content ?? ""));
+        } else if (rawAction.type === "group_message" || rawAction.type === "start_group") {
+          const groupResult = await executeGroupAction(db, config, nameById, characterId, rawAction);
+          event = groupResult.event;
+          for (const id of groupResult.pingedIds) pinged.add(id);
+        } else {
+          const engineAction = toEngineAction(characterId, rawAction);
+          if (!engineAction) continue;
+          event = await executeWorldAction({ db, world, nameById, config }, engineAction);
+          if (event && engineAction.type === "dm" && typeof engineAction.toCharacterId === "string") {
+            pinged.add(engineAction.toCharacterId);
+          }
+        }
         if (event) {
           result.events.push(event);
           result.actionsExecuted += 1;
           budgetLeft -= 1;
-          if (engineAction.type === "dm" && typeof engineAction.toCharacterId === "string") {
-            dmRecipients.add(engineAction.toCharacterId);
-          }
         }
       } catch (error) {
         logger.warn(error, "[world/mind] %s failed a %s action", ctx.self.name, String(rawAction.type));
@@ -530,10 +781,10 @@ export async function wakeCharacterMind(
       });
     }
 
-    // They noticed a text: pull the recipient's next check-in earlier.
-    if (dmRecipients.size) {
-      const presence = await resolvePresenceMap(db, [...dmRecipients]);
-      for (const recipientId of dmRecipients) {
+    // They pinged someone: pull the recipients' next check-in earlier.
+    if (pinged.size) {
+      const presence = await resolvePresenceMap(db, [...pinged]);
+      for (const recipientId of pinged) {
         if (!nameById.has(recipientId)) continue;
         const delay = noticeDelayMinutes(presence.get(recipientId)?.status ?? "unknown");
         await world.bumpMindWake(recipientId, new Date(nowDate.getTime() + delay * 60_000).toISOString());
@@ -561,7 +812,7 @@ export async function wakeCharacterMind(
       "[world/mind] %s woke: %d action(s)%s — next check-in ~%dm",
       ctx.self.name,
       result.actionsExecuted,
-      result.thought ? ` — “${shortText(result.thought, 80)}”` : "",
+      result.thought ? ` — "${shortText(result.thought, 80)}"` : "",
       Math.round(gap),
     );
     return result;
@@ -587,48 +838,76 @@ export async function ensureMindsInitialized(db: DB, config: WorldEngineConfig):
   const existing = new Set((await world.listMinds()).map((mind) => mind.id));
   for (const characterId of nameById.keys()) {
     if (existing.has(characterId)) continue;
-    const stagger = Math.random() * config.wakeIntervalMinutes;
+    // First wakes spread across a generous window so a fresh world starts as a
+    // trickle, not a stampede.
+    const stagger = (0.1 + Math.random() * 1.4) * config.wakeIntervalMinutes;
     await world.upsertMind(characterId, {
       nextWakeAt: new Date(Date.now() + stagger * 60_000).toISOString(),
     });
   }
 }
 
-export interface MindsCycleResult {
-  woke: MindWakeResult[];
+/** Minimum real-time gap between scheduled wakes, scaled to the roster. */
+export function worldPaceGapMinutes(config: WorldEngineConfig, memberCount: number): number {
+  const base = config.wakeIntervalMinutes / Math.max(2, memberCount * 2);
+  return Math.max(3, Math.min(20, base));
 }
 
-/** Wake the due minds (up to limit). force=true wakes the most overdue regardless. */
+export interface MindsCycleResult {
+  woke: MindWakeResult[];
+  skippedReason: string | null;
+}
+
+/** Wake due minds (default: at most ONE per cycle, respecting the world pace). */
 export async function wakeDueCharacterMinds(
   db: DB,
   options: { limit?: number; force?: boolean } = {},
 ): Promise<MindsCycleResult> {
   const config = await loadWorldEngineConfig(db);
-  const limit = Math.max(1, options.limit ?? 2);
-  const result: MindsCycleResult = { woke: [] };
+  const limit = Math.max(1, options.limit ?? 1);
+  const result: MindsCycleResult = { woke: [], skippedReason: null };
 
   const state = await loadWorldEngineState(db);
-  if (state.dailyCount >= config.dailyActionCap && !options.force) return result;
+  if (state.dailyCount >= config.dailyActionCap && !options.force) {
+    result.skippedReason = "daily action cap reached";
+    return result;
+  }
 
   await ensureMindsInitialized(db, config);
   const world = createWorldStorage(db);
   const nameById = await buildNameMap(db, config);
+
+  // Global pace: the world trickles — scheduled wakes keep a minimum gap.
+  if (!options.force && state.lastRunAt) {
+    const gapMs = worldPaceGapMinutes(config, nameById.size) * 60_000 * (0.7 + Math.random() * 0.6);
+    if (Date.now() < new Date(state.lastRunAt).getTime() + gapMs) {
+      result.skippedReason = "keeping the world's pace";
+      return result;
+    }
+  }
+
   const nowIso = new Date().toISOString();
   const due = (await world.listMinds())
     .filter((mind) => nameById.has(mind.id))
     .filter((mind) => options.force || !mind.nextWakeAt || mind.nextWakeAt <= nowIso)
     .sort((a, b) => String(a.nextWakeAt ?? "").localeCompare(String(b.nextWakeAt ?? "")))
     .slice(0, limit);
-  if (!due.length) return result;
+  if (!due.length) {
+    result.skippedReason = "no minds due";
+    return result;
+  }
 
   const resolved = await resolveWorldProvider(db, config);
   if ("error" in resolved) {
-    logger.debug("[world/mind] No provider: %s", resolved.error);
+    result.skippedReason = resolved.error;
     return result;
   }
 
   for (const mind of due) {
     result.woke.push(await wakeCharacterMind(db, mind.id, { provider: resolved }));
+    await saveWorldEngineStatePatch(db, (current) => {
+      current.lastRunAt = new Date().toISOString();
+    });
   }
   return result;
 }

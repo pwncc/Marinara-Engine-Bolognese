@@ -2832,6 +2832,7 @@ export async function generateRoutes(app: FastifyInstance) {
             characterIds,
             awarenessBlock: convoAwarenessBlock,
             timeZone: promptTimeZone,
+            db: app.db,
           });
         }
 

@@ -1657,6 +1657,11 @@ export async function chatsRoutes(app: FastifyInstance) {
       }),
     );
     if (created?.id && input.role === "user") {
+      // Living World intrusion: a user message into a life chat / world thread
+      // pulls the member characters' next check-in earlier so they answer soon.
+      void import("../services/world/character-mind.service.js")
+        .then(({ bumpMindsForUserMessage }) => bumpMindsForUserMessage(app.db, req.params.id))
+        .catch((error) => logger.debug(error, "[chats] World mind bump skipped"));
       const chat = await storage.getById(req.params.id);
       const personaSnapshot = await buildPersonaSnapshotForChat(app, chat);
       if (personaSnapshot) {

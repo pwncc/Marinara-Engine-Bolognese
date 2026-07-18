@@ -23,6 +23,7 @@ import {
   Settings2,
   Sparkles,
   UserPlus,
+  UsersRound,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { WorldEngineConfig, WorldEventRecord } from "@marinara-engine/shared";
@@ -70,6 +71,10 @@ function eventIcon(kind: string) {
   switch (kind) {
     case "thought":
       return <Lightbulb size="0.8rem" className="text-amber-300" />;
+    case "say":
+      return <MessageCircle size="0.8rem" className="text-amber-400" />;
+    case "group":
+      return <UsersRound size="0.8rem" className="text-sky-400" />;
     case "dm":
       return <MessageCircle size="0.8rem" className="text-sky-400" />;
     case "noodle_post":
@@ -95,7 +100,7 @@ function eventIcon(kind: string) {
   }
 }
 
-function openDmChat(event: WorldEventRecord) {
+function openWorldChat(event: WorldEventRecord) {
   const chatId = typeof event.detail.chatId === "string" ? event.detail.chatId : null;
   if (!chatId) return;
   useUIStore.getState().closeNoodle();
@@ -106,17 +111,23 @@ function openDmChat(event: WorldEventRecord) {
 // ── Event row ──
 
 function EventRow({ event }: { event: WorldEventRecord }) {
-  const clickable = event.kind === "dm" && typeof event.detail.chatId === "string";
+  const clickable = typeof event.detail.chatId === "string";
+  const openLabel =
+    event.kind === "thought" || event.kind === "say"
+      ? "Open their life chat — you can write to them there"
+      : event.kind === "group"
+        ? "Open this group thread"
+        : "Open this DM thread";
   return (
     <button
       type="button"
       disabled={!clickable}
-      onClick={() => openDmChat(event)}
+      onClick={() => openWorldChat(event)}
       className={cn(
         "flex w-full items-start gap-2 rounded-lg border border-[var(--border)]/50 bg-[var(--card)]/50 px-2.5 py-2 text-left",
         clickable && "transition-colors hover:border-[var(--primary)]/50 hover:bg-[var(--accent)]/30",
       )}
-      title={clickable ? "Open this DM thread" : undefined}
+      title={clickable ? openLabel : undefined}
     >
       <span className="mt-0.5 shrink-0">{eventIcon(event.kind)}</span>
       <span className="min-w-0 flex-1">
