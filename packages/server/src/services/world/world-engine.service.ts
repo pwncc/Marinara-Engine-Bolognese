@@ -91,6 +91,7 @@ export function normalizeWorldEngineConfig(raw: unknown): WorldEngineConfig {
     ),
     temperature: num(data.temperature, DEFAULT_WORLD_ENGINE_CONFIG.temperature, 0, 2),
     userDirective: typeof data.userDirective === "string" ? data.userDirective.slice(0, 2000) : "",
+    weatherLocation: typeof data.weatherLocation === "string" ? data.weatherLocation.slice(0, 80) : "",
     memberCharacterIds: Array.isArray(data.memberCharacterIds)
       ? [...new Set(data.memberCharacterIds.filter((id): id is string => typeof id === "string" && id.length > 0))]
       : null,

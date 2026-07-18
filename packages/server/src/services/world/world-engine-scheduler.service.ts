@@ -13,6 +13,9 @@ import {
   runWorldDirector,
 } from "./world-engine.service.js";
 import { advanceActiveScenes, wakeDueCharacterMinds } from "./character-mind.service.js";
+import { refreshWeather } from "./world-atmosphere.service.js";
+
+let lastWeatherRefreshMs = 0;
 
 const POLL_MS = 45_000;
 const INITIAL_DELAY_MS = 30_000;
@@ -30,6 +33,13 @@ export function startWorldEngineScheduler(app: FastifyInstance): void {
       if (!config.enabled) return;
 
       if (config.mode === "minds") {
+        // Refresh the shared weather at most hourly (non-blocking, best-effort).
+        if (config.weatherLocation.trim() && Date.now() - lastWeatherRefreshMs >= 60 * 60_000) {
+          lastWeatherRefreshMs = Date.now();
+          void refreshWeather(app.db, config.weatherLocation).catch((error) =>
+            logger.debug(error, "[world] Weather refresh failed"),
+          );
+        }
         // Keep live scenes (DMs, hangouts) alternating cleanly, then wake
         // whoever's life-clock is due (capacity scales with the roster).
         await advanceActiveScenes(app.db);

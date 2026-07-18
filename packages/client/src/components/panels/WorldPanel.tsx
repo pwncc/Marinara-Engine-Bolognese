@@ -22,6 +22,7 @@ import {
   Loader2,
   MapPin,
   MessageCircle,
+  PartyPopper,
   PenSquare,
   Play,
   Reply,
@@ -70,6 +71,7 @@ const KIND_FILTERS: Array<{ key: string; label: string; kinds: string[] | null }
   { key: "noodle", label: "Noodle", kinds: ["noodle_post", "noodle_reply", "noodle_like", "noodle_follow"] },
   { key: "messages", label: "Messages", kinds: ["dm", "group", "scene"] },
   { key: "city", label: "City", kinds: ["moved", "discovered", "place_detail", "worked", "spent"] },
+  { key: "events", label: "Events", kinds: ["event"] },
   { key: "bonds", label: "Bonds", kinds: ["relationship", "milestone"] },
   { key: "memories", label: "Memories", kinds: ["memory"] },
   { key: "plans", label: "Plans", kinds: ["plan", "plan_completed"] },
@@ -106,6 +108,8 @@ function eventIcon(kind: string) {
       return <Wrench size="0.8rem" className="text-lime-400" />;
     case "spent":
       return <Coins size="0.8rem" className="text-yellow-400" />;
+    case "event":
+      return <PartyPopper size="0.8rem" className="text-pink-400" />;
     case "group":
       return <UsersRound size="0.8rem" className="text-sky-400" />;
     case "dm":
@@ -544,6 +548,18 @@ function WorldConfigForm({
 
       <label className="block space-y-0.5">
         <span className="text-[0.65rem] text-[var(--muted-foreground)]">
+          Weather city (optional — real weather from this city colors the whole world)
+        </span>
+        <input
+          className={inputClass}
+          value={draft.weatherLocation}
+          onChange={(e) => setDraft({ ...draft, weatherLocation: e.target.value })}
+          placeholder="e.g. Tokyo, Reykjavik, Austin…"
+        />
+      </label>
+
+      <label className="block space-y-0.5">
+        <span className="text-[0.65rem] text-[var(--muted-foreground)]">
           Standing directive (optional — e.g. &quot;slow-burn romances only&quot;)
         </span>
         <textarea
@@ -752,9 +768,14 @@ function CityView() {
             {city.residents.map((resident) => (
               <div key={resident.characterId} className="flex items-center gap-1.5 text-[0.68rem]">
                 <span className="font-medium">{resident.name}</span>
-                {resident.job ? <span className="text-[var(--muted-foreground)]">· {resident.job}</span> : null}
-                <span className="ml-auto flex items-center gap-0.5 text-[var(--muted-foreground)]">
-                  <Coins size="0.6rem" /> {resident.money}
+                {resident.job ? <span className="truncate text-[var(--muted-foreground)]">· {resident.job}</span> : null}
+                <span className="ml-auto flex items-center gap-1.5 text-[var(--muted-foreground)]">
+                  <span title="energy">⚡{resident.needs.energy}</span>
+                  <span title="hunger">🍽{resident.needs.hunger}</span>
+                  <span title="social">💬{resident.needs.social}</span>
+                  <span className="flex items-center gap-0.5">
+                    <Coins size="0.6rem" /> {resident.money}
+                  </span>
                 </span>
               </div>
             ))}
@@ -840,6 +861,9 @@ export function WorldPanel() {
             {status?.provider.ok ? status.provider.label : "no connection"}
           </span>
         </div>
+        {status?.atmosphere?.summary ? (
+          <p className="text-[0.68rem] leading-snug text-[var(--foreground)]/80">🌤 {status.atmosphere.summary}</p>
+        ) : null}
         {status?.state.lastNarration ? (
           <p className="text-[0.7rem] italic leading-snug text-[var(--muted-foreground)]">
             “{status.state.lastNarration}”

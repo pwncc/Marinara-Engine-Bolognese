@@ -62,6 +62,8 @@ export const characterMinds = fileTable("character_minds", {
   money: text("money").notNull().default("0"),
   /** Their job, in their own words (e.g. "barista at The Grind"). */
   job: text("job").notNull().default(""),
+  /** JSON drives: { energy, hunger, social } (0-100), decay over time. */
+  needs: text("needs").notNull().default("{}"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

@@ -8,6 +8,7 @@ import { createCharactersStorage } from "../services/storage/characters.storage.
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createNoodleStorage } from "../services/storage/noodle.storage.js";
 import { createChatFoldersStorage } from "../services/storage/chat-folders.storage.js";
+import { getAtmosphere } from "../services/world/world-atmosphere.service.js";
 import {
   loadWorldEngineConfig,
   loadWorldEngineState,
@@ -76,6 +77,7 @@ export async function worldRoutes(app: FastifyInstance) {
         placeId: mind.placeId,
         money: mind.money,
         job: mind.job,
+        needs: mind.needs,
       }));
     for (const resident of residents) {
       if (resident.placeId) {
@@ -115,11 +117,17 @@ export async function worldRoutes(app: FastifyInstance) {
     return saved;
   });
 
+  app.get("/atmosphere", async () => {
+    const config = await loadWorldEngineConfig(app.db);
+    return getAtmosphere(app.db, config.weatherLocation);
+  });
+
   app.get("/status", async () => {
     const config = await loadWorldEngineConfig(app.db);
     const state = await loadWorldEngineState(app.db);
     const provider = await resolveWorldProvider(app.db, config);
     const timeline = await world.pendingActionStats();
+    const atmosphere = await getAtmosphere(app.db, config.weatherLocation);
     const mindRows = (await world.listMinds()).filter(
       (mind) => config.memberCharacterIds === null || config.memberCharacterIds.includes(mind.id),
     );
@@ -131,6 +139,7 @@ export async function worldRoutes(app: FastifyInstance) {
       config,
       state,
       timeline,
+      atmosphere,
       minds: { count: mindRows.length, nextWakeAt: nextWakes[0] ?? null },
       provider: "error" in provider ? { ok: false, error: provider.error } : { ok: true, label: provider.label },
     };

@@ -39,6 +39,7 @@ export interface WorldResident {
   placeId: string | null;
   money: number;
   job: string;
+  needs: { energy: number; hunger: number; social: number };
 }
 
 export interface WorldCityResponse {
@@ -48,10 +49,22 @@ export interface WorldCityResponse {
   names: Record<string, string>;
 }
 
+export interface WorldAtmosphere {
+  dayPart: string;
+  weekday: string;
+  phase: string;
+  season: string;
+  dateLabel: string;
+  holiday: string | null;
+  weather: { tempC: number; condition: string; isDay: boolean; location: string } | null;
+  summary: string;
+}
+
 export interface WorldStatusResponse {
   config: WorldEngineConfig;
   state: WorldEngineState;
   timeline: { count: number; nextRunAt: string | null };
+  atmosphere: WorldAtmosphere;
   minds: { count: number; nextWakeAt: string | null };
   provider: { ok: boolean; label?: string; error?: string };
 }

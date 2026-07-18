@@ -84,11 +84,18 @@ export interface CharacterMindRow {
   placeId: string | null;
   money: number;
   job: string;
+  needs: { energy: number; hunger: number; social: number };
   createdAt: string;
   updatedAt: string;
 }
 
+function clampNeed(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : fallback;
+}
+
 function toMindRow(row: Record<string, unknown>): CharacterMindRow {
+  const rawNeeds = parseJsonRecord(row.needs);
   return {
     id: String(row.id),
     intention: String(row.intention ?? ""),
@@ -99,6 +106,11 @@ function toMindRow(row: Record<string, unknown>): CharacterMindRow {
     placeId: typeof row.placeId === "string" && row.placeId ? row.placeId : null,
     money: Number.isFinite(Number(row.money)) ? Number(row.money) : 0,
     job: String(row.job ?? ""),
+    needs: {
+      energy: clampNeed(rawNeeds.energy, 80),
+      hunger: clampNeed(rawNeeds.hunger, 20),
+      social: clampNeed(rawNeeds.social, 60),
+    },
     createdAt: String(row.createdAt ?? ""),
     updatedAt: String(row.updatedAt ?? ""),
   };
@@ -257,6 +269,9 @@ export function createWorldStorage(db: DB) {
         placeId: patch.placeId !== undefined ? patch.placeId : (existing?.placeId ?? null),
         money: String(patch.money !== undefined ? patch.money : (existing?.money ?? 0)),
         job: (patch.job ?? existing?.job ?? "").slice(0, 160),
+        needs: JSON.stringify(
+          patch.needs ?? existing?.needs ?? { energy: 80, hunger: 20, social: 60 },
+        ),
         updatedAt: timestamp,
       };
       if (existing) {

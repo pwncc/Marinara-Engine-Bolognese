@@ -36,6 +36,14 @@ The world is *place-based*, not just people-based:
 - **The WORLD tab** — a dedicated sidebar tab (orbit icon) alongside CONVO/RP/GM. Every world chat — life spaces, DMs, groups, and place scenes — lives here and is pulled out of the RP/CONVO tabs, so the autonomous world has its own home.
 - **The Map** — a Map tab in the World panel lays out places spatially with the characters currently at each; clicking a place opens its scene. Homes and public places are visually distinct.
 
+## Living atmosphere, needs, and events
+
+Three layers that make the world feel self-sustaining:
+
+- **Shared atmosphere** — one sky over everyone: the real clock and day/night phase, the season, the date and any holiday, and — when a **weather city** is configured — real current weather from Open-Meteo (free, keyless, cached hourly). Injected into every wake ("It's summer, Tuesday evening — raining, 12°C in Reykjavik") and shown in the panel status card. It's the same rainy night for the whole cast.
+- **Needs & drives** — every mind carries `energy`, `hunger`, and `social`. They decay between wakes (hunger climbs, energy drains by day and recovers at night, social ebbs) and are restored by matching actions (resting, eating, socializing; working tires you out). Surfaced in the wake ("you're getting hungry and a bit drained") so behavior becomes *motivated* — broke and hungry → go work, then eat — not arbitrary. Shown per-resident in the City tab (⚡🍽💬).
+- **World events** — the `host_event` action throws a timed gathering at a place (party, open mic, market). Everyone sees upcoming events in their context and can choose to show up, so movement clusters into crowds. Events appear on the timeline under an **Events** chip.
+
 ## Turn-based scene continuity
 
 Live DMs and in-person hangouts need clean alternation, which the loose per-character wake clock alone can't guarantee. Each scheduler cycle, `advanceActiveScenes` finds world threads with a message in the last ~25 minutes, works out who's **on-deck** (didn't send the last message), and pulls their wake in — fast for hangouts (they're physically together), at texting pace for DMs. A scene that goes quiet or trades more than ~12 turns simply stops being driven, so exchanges flow *and* end naturally instead of stalling or looping.

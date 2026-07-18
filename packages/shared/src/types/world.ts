@@ -42,6 +42,8 @@ export interface WorldEngineConfig {
   temperature: number;
   /** Extra standing instructions appended to the simulator prompt. */
   userDirective: string;
+  /** City for the world's real weather (Open-Meteo). Empty = clock/season only. */
+  weatherLocation: string;
   /**
    * Who lives in the world: null = every character, otherwise only these ids
    * (noodle-invite style). An empty list pauses the world (nobody to simulate).
@@ -62,6 +64,7 @@ export const DEFAULT_WORLD_ENGINE_CONFIG: WorldEngineConfig = {
   allowMemories: true,
   temperature: 0.9,
   userDirective: "",
+  weatherLocation: "",
   memberCharacterIds: null,
 };
 

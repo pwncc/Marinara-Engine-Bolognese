@@ -37,6 +37,7 @@ import { createChatsStorage } from "../storage/chats.storage.js";
 import { createNoodleStorage } from "../storage/noodle.storage.js";
 import { createWorldStorage, orderPair, type CharacterMindRow } from "../storage/world.storage.js";
 import { generateWorldPhoto, hasWorldImageConnection } from "./world-photo.service.js";
+import { getAtmosphere } from "./world-atmosphere.service.js";
 import { isUnsupportedNoodleVisionInputError, readNoodleVisionImage } from "../noodle/noodle-vision.js";
 import type { ChatMessage } from "../llm/base-provider.js";
 import {
@@ -62,6 +63,49 @@ const MAX_THREADS = 5;
 /** Everything pace-related scales with the configured check-in interval. */
 function minCheckinMinutes(config: WorldEngineConfig): number {
   return Math.max(1, Math.min(15, config.wakeIntervalMinutes * 0.4));
+}
+
+/** How an action nudges needs — the loop that makes behavior purposeful. */
+function needEffectFor(actionType: string, activity: string): Partial<Record<"energy" | "hunger" | "social", number>> {
+  const text = activity.toLowerCase();
+  if (actionType === "work") return { energy: -12 };
+  if (actionType === "scene" || actionType === "hangout" || actionType === "message" || actionType === "group_message")
+    return { social: +14 };
+  if (actionType === "do") {
+    if (/\b(sleep|slept|nap|rest|resting|lie down|lay down|bed|dozed)\b/.test(text)) return { energy: +30 };
+    if (/\b(eat|ate|eating|dinner|lunch|breakfast|meal|snack|cook|food|coffee|drink)\b/.test(text))
+      return { hunger: -35 };
+    if (/\b(gym|run|running|workout|exercise|jog)\b/.test(text)) return { energy: -8, hunger: +6 };
+  }
+  if (actionType === "spend" && /\b(food|meal|dinner|lunch|coffee|snack|groceries)\b/.test(text)) return { hunger: -25 };
+  return {};
+}
+
+/** Passive decay + phase modifier since the last wake. */
+function decayNeeds(
+  needs: { energy: number; hunger: number; social: number },
+  minutesElapsed: number,
+  phase: string,
+): { energy: number; hunger: number; social: number } {
+  const hours = Math.max(0, Math.min(24, minutesElapsed / 60));
+  // Night restores energy passively (you sleep); day drains it.
+  const energyRate = phase === "night" ? +4 : -3;
+  return {
+    energy: Math.max(0, Math.min(100, Math.round(needs.energy + energyRate * hours))),
+    hunger: Math.max(0, Math.min(100, Math.round(needs.hunger + 5 * hours))),
+    social: Math.max(0, Math.min(100, Math.round(needs.social - 2.5 * hours))),
+  };
+}
+
+function needsPrompt(needs: { energy: number; hunger: number; social: number }): string {
+  const notes: string[] = [];
+  if (needs.energy <= 25) notes.push("exhausted");
+  else if (needs.energy <= 45) notes.push("tired");
+  if (needs.hunger >= 75) notes.push("very hungry");
+  else if (needs.hunger >= 55) notes.push("getting hungry");
+  if (needs.social <= 20) notes.push("lonely, craving company");
+  else if (needs.social <= 40) notes.push("could use some company");
+  return notes.length ? notes.join(", ") : "physically fine";
 }
 
 function parseJson(raw: unknown): Record<string, unknown> {
@@ -371,6 +415,12 @@ interface MindContext {
   roster: string[];
   /** A live conversation demanding attention right now (precedence), or null. */
   activeScene: string | null;
+  /** The shared sky: clock, season, weather, holiday. */
+  atmosphere: string;
+  /** How this character physically feels (energy/hunger/social). */
+  needsNote: string;
+  /** Upcoming gatherings they could show up to. */
+  upcomingEvents: string[];
   /** City: where they are, who's co-located, places they know, wallet/job. */
   city: {
     hereLine: string;
@@ -649,6 +699,23 @@ async function buildMindContext(
     .slice(0, 6)
     .map((event) => ({ eventId: event.id, line: event.summary }));
 
+  // Upcoming events (gatherings) still to come — beacons anyone can attend.
+  const nowIso = new Date().toISOString();
+  const upcomingEvents = (await world.listEvents({ kind: "event", limit: 40 }))
+    .filter((event) => typeof event.detail.startsAt === "string" && (event.detail.startsAt as string) >= nowIso)
+    .sort((a, b) => String(a.detail.startsAt).localeCompare(String(b.detail.startsAt)))
+    .slice(0, 6)
+    .map((event) => {
+      const startsAt = String(event.detail.startsAt);
+      const when = new Date(startsAt).getTime() - Date.now();
+      const inMin = Math.round(when / 60_000);
+      const rel = inMin < 60 ? `in ${Math.max(1, inMin)}m` : `in ${Math.round(inMin / 60)}h`;
+      return `${event.summary} (${rel}${event.detail.placeName ? ` @ ${event.detail.placeName}` : ""})`;
+    });
+
+  const atmosphere = (await getAtmosphere(db, config.weatherLocation)).summary;
+  const needsNote = needsPrompt(mind.needs);
+
   const recentAboutMe = (await world.listEvents({ characterId, limit: 14 }))
     .filter((event) => event.kind !== "thought" && event.kind !== "say")
     .slice(0, 6)
@@ -696,6 +763,9 @@ async function buildMindContext(
     photosEnabled,
     roster,
     activeScene,
+    atmosphere,
+    needsNote,
+    upcomingEvents,
     city: {
       hereLine,
       placeName: currentPlace?.name ?? null,
@@ -764,6 +834,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
   {"type":"group_message","chatId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional image","photoOfMe":true|false` : ""}} — reply in one of your group threads
   {"type":"start_group","withCharacterIds":["…","…"],"name":"…","content":"first message"} — pull 2+ people into a group text thread
   {"type":"scene","content":"what you do/say out loud where you are, in lived prose (*actions*, dialogue)"${ctx.photosEnabled ? `,"photoPrompt":"optional image","photoOfMe":true|false` : ""}} — act in person AT YOUR CURRENT PLACE; everyone here shares this scene. Use this to talk to people who are HERE WITH YOU.
+  {"type":"host_event","title":"…","place":"a public place","startInHours":number,"detail":"what it is"} — throw/announce a gathering everyone can see and show up to (party, open mic, market…)
   {"type":"make_plan","withCharacterIds":["…"],"title":"…","detail":"…","dueInHours":24}
   {"type":"resolve_plan","planEventId":"…","outcome":"what actually happened"}
   {"type":"feel","aboutCharacterId":"…","delta":-20..20,"romance":true|false,"summary":"how things stand between you now","milestone":{"title":"…","description":"…"} (milestone only for real firsts)}
@@ -778,11 +849,13 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     ctx.activeScene
       ? `>>> RIGHT NOW: ${ctx.activeScene}\nThis is happening live and it's on you — respond to it first. Don't drift off to post or go elsewhere while you're in it (leaving is fine, but do it on purpose, in words).\n`
       : ``,
-    `It's ${localClock(now)}.`,
+    `It's ${localClock(now)}. ${ctx.atmosphere}.`,
     ctx.mind.lastWakeAt ? `You last checked in ${ago(ctx.mind.lastWakeAt, now)}.` : `This is your first check-in here.`,
     `Your schedule right now: ${ctx.presence.status}${ctx.presence.activity ? ` — ${ctx.presence.activity}` : ""}.`,
+    `Your body: ${ctx.needsNote}.`,
     ctx.mind.mood ? `Your mood lately: ${ctx.mind.mood}.` : ``,
     ctx.mind.intention ? `You had meant to: ${ctx.mind.intention}` : ``,
+    ctx.upcomingEvents.length ? `\nHAPPENING SOON (you could show up):\n${ctx.upcomingEvents.join("\n")}` : ``,
     ``,
     `YOUR PRIVATE SPACE (your life chat — thoughts, things you've said, and the Visitor):`,
     ctx.lifeTail.join("\n") || "(quiet so far)",
@@ -1106,6 +1179,30 @@ async function executeScene(
     detail: { chatId: sceneChatId, messageId: saved.id, placeId: place.id, placeName: place.name },
   });
   return { event, pingedIds: othersHere };
+}
+
+async function executeHostEvent(
+  db: DB,
+  nameById: Map<string, string>,
+  selfId: string,
+  action: WorldAction,
+): Promise<WorldEventRecord | null> {
+  const world = createWorldStorage(db);
+  const title = shortText(action.title, 100);
+  const placeName = shortText(action.place, 80);
+  if (!title || !placeName) return null;
+  const { place } = await world.ensurePlace({ name: placeName, kind: shortText(action.kind, 40) || undefined, discoveredBy: selfId });
+  const startInHours = Number.isFinite(action.startInHours as number)
+    ? Math.max(0.25, Math.min(24 * 7, action.startInHours as number))
+    : 2;
+  const startsAt = new Date(Date.now() + startInHours * 3_600_000).toISOString();
+  const selfName = nameById.get(selfId) ?? "someone";
+  return world.appendEvent({
+    kind: "event",
+    summary: `${selfName} is hosting "${title}" at ${place.name}`,
+    characterIds: [selfId],
+    detail: { title, placeId: place.id, placeName: place.name, startsAt, text: shortText(action.detail, 300), hostId: selfId },
+  });
 }
 
 async function executeSetHome(
@@ -1432,6 +1529,12 @@ export async function wakeCharacterMind(
     const pinged = new Set<string>();
     const urgentPinged = new Set<string>();
     let doActivity: string | null = null;
+    // Decay needs for the time slept/awake since last wake, then let this wake's
+    // actions restore them — the loop that makes behavior purposeful.
+    const minutesSinceWake = ctx.mind.lastWakeAt
+      ? Math.max(0, (nowDate.getTime() - new Date(ctx.mind.lastWakeAt).getTime()) / 60_000)
+      : 0;
+    const workingNeeds = decayNeeds(ctx.mind.needs, minutesSinceWake, ctx.presence.status === "offline" ? "night" : "day");
     for (const rawAction of output.actions) {
       if (budgetLeft <= 0) break;
       try {
@@ -1447,6 +1550,8 @@ export async function wakeCharacterMind(
           event = await executeGo(db, nameById, characterId, rawAction);
         } else if (rawAction.type === "set_home") {
           event = await executeSetHome(db, nameById, characterId, String(rawAction.kind ?? rawAction.content ?? ""));
+        } else if (rawAction.type === "host_event") {
+          event = await executeHostEvent(db, nameById, characterId, rawAction);
         } else if (rawAction.type === "describe_place") {
           event = await executeDescribePlace(db, nameById, characterId, String(rawAction.detail ?? rawAction.content ?? ""));
         } else if (rawAction.type === "work") {
@@ -1495,6 +1600,12 @@ export async function wakeCharacterMind(
           result.events.push(event);
           result.actionsExecuted += 1;
           budgetLeft -= 1;
+          // This action nudges their drives (working tires, eating fills…).
+          const effect = needEffectFor(rawAction.type, String(rawAction.activity ?? rawAction.content ?? ""));
+          for (const [key, delta] of Object.entries(effect)) {
+            const k = key as "energy" | "hunger" | "social";
+            workingNeeds[k] = Math.max(0, Math.min(100, workingNeeds[k] + (delta ?? 0)));
+          }
         }
       } catch (error) {
         logger.warn(error, "[world/mind] %s failed a %s action", ctx.self.name, String(rawAction.type));
@@ -1549,6 +1660,7 @@ export async function wakeCharacterMind(
       intention: output.intention ?? doActivity ?? undefined,
       lastWakeAt: nowIso,
       nextWakeAt: new Date(nowDate.getTime() + gap * 60_000).toISOString(),
+      needs: workingNeeds,
       cursors: {
         seenPostsAt: nowIso,
         seenDmsAt: nowIso,
