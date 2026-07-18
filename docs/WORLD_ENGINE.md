@@ -27,6 +27,15 @@ The world is spatial and economic, not just social. Every mind has a **location*
 - **Economy.** `work` earns money (tied to a job they hold via intention), `spend` uses it (never below zero). Rent, coffee, wanting more — ordinary motivations that pull characters into the world.
 - The **City tab** in the panel shows every place with its description, tags, and who's there right now, plus a residents list with jobs and wallets. Timeline gains `moved` / `discovered` / `place_detail` / `worked` / `spent` events under a **City** filter chip.
 
+## Place scenes and the World surface
+
+The world is *place-based*, not just people-based:
+
+- **Homes** — every character owns a named living space (`Bob's Loft`), so private rooms (kitchen, bedroom) stay inside their home and never leak onto the shared map. `set_home` names it; `go home` returns.
+- **Place scenes** — each public place has ONE shared scene chat with dynamic membership (whoever's physically there). The `scene` action acts in-person at your current place; anyone else there is drawn in and reacts fast. This is how co-located characters actually talk — face to face in the place, not by texting.
+- **The WORLD tab** — a dedicated sidebar tab (orbit icon) alongside CONVO/RP/GM. Every world chat — life spaces, DMs, groups, and place scenes — lives here and is pulled out of the RP/CONVO tabs, so the autonomous world has its own home.
+- **The Map** — a Map tab in the World panel lays out places spatially with the characters currently at each; clicking a place opens its scene. Homes and public places are visually distinct.
+
 ## Turn-based scene continuity
 
 Live DMs and in-person hangouts need clean alternation, which the loose per-character wake clock alone can't guarantee. Each scheduler cycle, `advanceActiveScenes` finds world threads with a message in the last ~25 minutes, works out who's **on-deck** (didn't send the last message), and pulls their wake in — fast for hangouts (they're physically together), at texting pace for DMs. A scene that goes quiet or trades more than ~12 turns simply stops being driven, so exchanges flow *and* end naturally instead of stalling or looping.

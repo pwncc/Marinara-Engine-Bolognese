@@ -56,6 +56,17 @@ export async function worldRoutes(app: FastifyInstance) {
     const places = await world.listPlaces();
     const minds = await world.listMinds();
     const names = await buildNameMap();
+    // Map each place to its scene chat (if one exists) so the UI can open it.
+    const chats = createChatsStorage(app.db);
+    const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
+    const sceneChatByPlace: Record<string, string> = {};
+    for (const chat of allChats) {
+      const meta = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
+      if (meta?.worldPlaceScene === true && typeof meta.worldPlaceId === "string") {
+        sceneChatByPlace[meta.worldPlaceId] = chat.id;
+      }
+    }
+    const placesWithScene = places.map((place) => ({ ...place, sceneChatId: sceneChatByPlace[place.id] ?? null }));
     const peopleByPlace: Record<string, string[]> = {};
     const residents = minds
       .filter((mind) => names[mind.id])
@@ -71,7 +82,7 @@ export async function worldRoutes(app: FastifyInstance) {
         (peopleByPlace[resident.placeId] ??= []).push(resident.name);
       }
     }
-    return { places, residents, peopleByPlace, names };
+    return { places: placesWithScene, residents, peopleByPlace, names };
   });
 
   // ── Relationships ──
@@ -143,7 +154,12 @@ export async function worldRoutes(app: FastifyInstance) {
     let removedChats = 0;
     for (const chat of allChats) {
       const meta = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
-      if (meta?.worldLifeChat === true || meta?.worldDmThread === true || meta?.worldGroupThread === true) {
+      if (
+        meta?.worldLifeChat === true ||
+        meta?.worldDmThread === true ||
+        meta?.worldGroupThread === true ||
+        meta?.worldPlaceScene === true
+      ) {
         await chats.remove(chat.id);
         removedChats += 1;
       }

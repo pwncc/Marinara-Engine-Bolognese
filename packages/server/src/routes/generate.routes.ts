@@ -1496,11 +1496,13 @@ export async function generateRoutes(app: FastifyInstance) {
         const worldSpaceKind =
           chatMeta.worldLifeChat === true
             ? ("life" as const)
-            : chatMeta.worldDmThread === true
-              ? ("dm" as const)
-              : chatMeta.worldGroupThread === true
-                ? ("group" as const)
-                : null;
+            : chatMeta.worldPlaceScene === true
+              ? ("place" as const)
+              : chatMeta.worldDmThread === true
+                ? ("dm" as const)
+                : chatMeta.worldGroupThread === true
+                  ? ("group" as const)
+                  : null;
         let temperature: number | undefined = 1;
         let maxTokens = 4096;
         let topP: number | undefined = 1;
@@ -2992,15 +2994,20 @@ export async function generateRoutes(app: FastifyInstance) {
                   `There is no scenario or script. Continuity comes only from this chat's history, their memories, their relationships, and what has actually happened in their world.`,
                   `Messages in *asterisks* are their inner thoughts and lived moments accumulating over time. The human writing here is a Visitor stepping into their space — respond as yourself, mid-life, aware of what you were just doing.`,
                 ]
-              : worldSpaceKind === "dm"
+              : worldSpaceKind === "place"
                 ? [
-                    `This chat is a real, ongoing private DM thread between ${spaceCharNames} in their day-to-day lives — not a roleplay scene.`,
-                    `No scenario applies. Continuity comes from this thread's history, their memories, and their relationship. Time passes between messages; mind the gaps.`,
+                    `This is a real PLACE in an ongoing world — whoever is physically here shares this scene. Not a fresh roleplay: it's a continuous location in these characters' lives.`,
+                    `No scenario or script. Play only the character(s) actually present; act in lived prose (*actions*, dialogue). Continuity comes from what's happened here and each character's memories of this place.`,
                   ]
-                : [
-                    `This chat is a real, ongoing group thread between ${spaceCharNames} — their own hangout space in their day-to-day lives, not a roleplay scene.`,
-                    `No scenario applies unless the group is gathering for a concrete plan they made. Continuity comes from this thread's history, their memories, and their relationships.`,
-                  ];
+                : worldSpaceKind === "dm"
+                  ? [
+                      `This chat is a real, ongoing private DM thread between ${spaceCharNames} in their day-to-day lives — not a roleplay scene.`,
+                      `No scenario applies. Continuity comes from this thread's history, their memories, and their relationship. Time passes between messages; mind the gaps.`,
+                    ]
+                  : [
+                      `This chat is a real, ongoing group thread between ${spaceCharNames} — their own hangout space in their day-to-day lives, not a roleplay scene.`,
+                      `No scenario applies unless the group is gathering for a concrete plan they made. Continuity comes from this thread's history, their memories, and their relationships.`,
+                    ];
           // Cross-thread continuity: what the same people just said/did in
           // their other world threads (hangout ↔ DMs ↔ life) rides along.
           let crossThreadRecap: string | null = null;

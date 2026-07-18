@@ -26,7 +26,19 @@ import {
   Square as SquareIcon,
   ArrowUpDown,
   Tag,
+  Orbit,
 } from "lucide-react";
+
+/** True for any Living World chat (life space, DM, group, or place scene). */
+function isWorldChat(chat: { metadata?: Record<string, unknown> | null }): boolean {
+  const meta = chat.metadata ?? {};
+  return (
+    meta.worldLifeChat === true ||
+    meta.worldDmThread === true ||
+    meta.worldGroupThread === true ||
+    meta.worldPlaceScene === true
+  );
+}
 import { useBulkExportChats, useChats, useCreateChat, useDeleteChat, useDeleteChatGroup } from "../../hooks/use-chats";
 import { useChatPresets, useApplyChatPreset } from "../../hooks/use-chat-presets";
 import { useConnections } from "../../hooks/use-connections";
@@ -190,6 +202,13 @@ const MODE_CONFIG: Record<
     description: "AI-managed singleplayer RPG with a Game Master, party, dice, maps, and quests.",
     logoModeClass: "mari-chat-logo-mode--game",
   },
+  world: {
+    icon: <Orbit size="0.875rem" />,
+    label: "Living World",
+    shortLabel: "WORLD",
+    description: "The autonomous world: characters' life spaces, DMs, group threads, and place scenes.",
+    logoModeClass: "mari-chat-logo-mode--roleplay",
+  },
 };
 
 function ChatSidebarTitleIcon() {
@@ -235,7 +254,7 @@ export function ChatSidebar() {
   const [sort, setSort] = useState<ChatSortOption>("newest");
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [tagsExpanded, setTagsExpanded] = useState(false);
-  const [activeTab, setActiveTab] = useState<"conversation" | "roleplay" | "game">("conversation");
+  const [activeTab, setActiveTab] = useState<"conversation" | "roleplay" | "game" | "world">("conversation");
   const [visibleChatLimit, setVisibleChatLimit] = useState(CHAT_LIST_PAGE_SIZE);
   const [deleteTarget, setDeleteTarget] = useState<{
     chatId: string;
@@ -296,11 +315,15 @@ export function ChatSidebar() {
 
   const modeChats = useMemo(
     () =>
-      (chats ?? []).filter(
-        (chat) =>
+      (chats ?? []).filter((chat) => {
+        // World chats live under their own WORLD tab, never RP/CONVO/GM.
+        if (activeTab === "world") return isWorldChat(chat);
+        if (isWorldChat(chat)) return false;
+        return (
           (chat.mode === activeTab || (activeTab === "roleplay" && chat.mode === "visual_novel")) &&
-          !(chat.mode === "conversation" && chat.metadata?.gameId),
-      ),
+          !(chat.mode === "conversation" && chat.metadata?.gameId)
+        );
+      }),
     [chats, activeTab],
   );
   const sidebarCharacterIds = useMemo(() => {
@@ -437,8 +460,17 @@ export function ChatSidebar() {
   // ── Folder grouping ──
   const modeFolders = useMemo(() => {
     if (!folders) return [] as ChatFolder[];
+    // The WORLD tab shows the Living World folders (which are per-mode); other
+    // tabs show their own mode's folders, minus the Living World ones.
+    if (activeTab === "world") {
+      return folders.filter((f) => f.name === "Living World").sort((a, b) => a.sortOrder - b.sortOrder);
+    }
     return folders
-      .filter((f) => f.mode === activeTab || (activeTab === "roleplay" && f.mode === "visual_novel"))
+      .filter(
+        (f) =>
+          f.name !== "Living World" &&
+          (f.mode === activeTab || (activeTab === "roleplay" && f.mode === "visual_novel")),
+      )
       .sort((a, b) => a.sortOrder - b.sortOrder);
   }, [folders, activeTab]);
 
@@ -540,7 +572,9 @@ export function ChatSidebar() {
     // 1. Tab sync — once per chat switch
     if (!s.tabSynced) {
       const chatMode = chat.mode === "visual_novel" ? "roleplay" : chat.mode;
-      if (chatMode === "conversation" || chatMode === "roleplay" || chatMode === "game") {
+      if (isWorldChat(chat)) {
+        setActiveTab("world");
+      } else if (chatMode === "conversation" || chatMode === "roleplay" || chatMode === "game") {
         setActiveTab(chatMode);
       }
       // Clear search so the active chat isn't hidden by a stale filter.
@@ -644,7 +678,8 @@ export function ChatSidebar() {
   );
 
   const handleNewChatFromTab = useCallback(() => {
-    handleNewChat(activeTab);
+    // The world builds its own chats; manual "new chat" defaults to roleplay.
+    handleNewChat(activeTab === "world" ? "roleplay" : activeTab);
   }, [handleNewChat, activeTab]);
 
   const handleImportChatFile = useCallback(
@@ -687,7 +722,10 @@ export function ChatSidebar() {
 
   // ── Folder handlers ──
   const handleCreateFolder = useCallback(() => {
-    createFolderMut.mutate({ name: getNextUnnamedFolderName(modeFolders), mode: activeTab });
+    createFolderMut.mutate({
+      name: getNextUnnamedFolderName(modeFolders),
+      mode: activeTab === "world" ? "roleplay" : activeTab,
+    });
   }, [activeTab, createFolderMut, modeFolders]);
 
   const handleToggleCollapse = useCallback(
@@ -1136,12 +1174,16 @@ export function ChatSidebar() {
       {/* Tabs */}
       <div className="px-3 pt-3">
         <div className="mari-chrome-segmented">
-          {(["conversation", "roleplay", "game"] as const).map((tab) => {
+          {(["conversation", "roleplay", "game", "world"] as const).map((tab) => {
             const cfg = MODE_CONFIG[tab];
             const isActive = activeTab === tab;
             const tabUnread =
               chats
-                ?.filter((c) => c.mode === tab || (tab === "roleplay" && c.mode === "visual_novel"))
+                ?.filter((c) =>
+                  tab === "world"
+                    ? isWorldChat(c)
+                    : !isWorldChat(c) && (c.mode === tab || (tab === "roleplay" && c.mode === "visual_novel")),
+                )
                 .reduce((sum, c) => sum + (unreadCounts.get(c.id) || 0), 0) ?? 0;
             return (
               <button

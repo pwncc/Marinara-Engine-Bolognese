@@ -68,7 +68,7 @@ const KIND_FILTERS: Array<{ key: string; label: string; kinds: string[] | null }
   { key: "thoughts", label: "Thoughts", kinds: ["thought", "say"] },
   { key: "living", label: "Living", kinds: ["activity", "hangout"] },
   { key: "noodle", label: "Noodle", kinds: ["noodle_post", "noodle_reply", "noodle_like", "noodle_follow"] },
-  { key: "messages", label: "Messages", kinds: ["dm", "group"] },
+  { key: "messages", label: "Messages", kinds: ["dm", "group", "scene"] },
   { key: "city", label: "City", kinds: ["moved", "discovered", "place_detail", "worked", "spent"] },
   { key: "bonds", label: "Bonds", kinds: ["relationship", "milestone"] },
   { key: "memories", label: "Memories", kinds: ["memory"] },
@@ -94,6 +94,7 @@ function eventIcon(kind: string) {
     case "say":
       return <MessageCircle size="0.8rem" className="text-amber-400" />;
     case "hangout":
+    case "scene":
       return <MapPin size="0.8rem" className="text-emerald-400" />;
     case "moved":
       return <Footprints size="0.8rem" className="text-teal-400" />;
@@ -586,6 +587,92 @@ function WorldConfigForm({
   );
 }
 
+// ── City map ──
+
+/** Deterministic 0..1 position from a place id — stable across renders. */
+function hashPosition(id: string): { x: number; y: number } {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const a = (h >>> 0) / 4294967295;
+  const b = (Math.imul(h ^ 0x9e3779b9, 2654435761) >>> 0) / 4294967295;
+  return { x: 0.1 + a * 0.8, y: 0.12 + b * 0.76 };
+}
+
+function openWorldChatById(chatId: string) {
+  useUIStore.getState().closeNoodle();
+  useChatStore.getState().setActiveChatId(chatId);
+  useUIStore.getState().closeRightPanel();
+}
+
+function CityMap() {
+  const { data: city, isLoading } = useWorldCity();
+  const nodes = useMemo(() => {
+    const places = city?.places ?? [];
+    // Homes ring the edge, public places cluster toward the middle.
+    return places.map((place) => {
+      const base = hashPosition(place.id);
+      const here = city?.peopleByPlace[place.id] ?? [];
+      return { place, pos: base, here };
+    });
+  }, [city]);
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-6">
+        <Loader2 size="1rem" className="animate-spin text-[var(--muted-foreground)]" />
+      </div>
+    );
+  }
+  if (!nodes.length) {
+    return (
+      <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-4 text-center text-[0.7rem] leading-relaxed text-[var(--muted-foreground)]">
+        No map yet. As characters set up homes and head out, the city takes shape here.
+      </p>
+    );
+  }
+  return (
+    <div className="relative h-[22rem] w-full overflow-hidden rounded-lg border border-[var(--border)]/60 bg-[radial-gradient(circle_at_50%_40%,var(--secondary)_0%,var(--background)_100%)]">
+      {nodes.map(({ place, pos, here }) => (
+        <button
+          key={place.id}
+          type="button"
+          disabled={!place.sceneChatId}
+          onClick={() => place.sceneChatId && openWorldChatById(place.sceneChatId)}
+          className={cn(
+            "absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-0.5",
+            place.sceneChatId ? "cursor-pointer" : "cursor-default",
+          )}
+          style={{ left: `${pos.x * 100}%`, top: `${pos.y * 100}%` }}
+          title={place.description || place.name}
+        >
+          <span
+            className={cn(
+              "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[0.6rem] font-medium shadow-sm backdrop-blur-sm transition-colors",
+              here.length
+                ? "border-emerald-400/60 bg-emerald-400/15"
+                : "border-[var(--border)] bg-[var(--card)]/80",
+              place.sceneChatId && "hover:border-[var(--primary)]/70",
+            )}
+          >
+            {place.ownerId ? (
+              <Building2 size="0.6rem" className="text-indigo-400" />
+            ) : (
+              <MapPin size="0.6rem" className="text-teal-400" />
+            )}
+            {place.name}
+          </span>
+          {here.length ? (
+            <span className="max-w-[8rem] truncate text-[0.55rem] text-emerald-400">{here.join(", ")}</span>
+          ) : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // ── City ──
 
 function CityView() {
@@ -612,7 +699,17 @@ function CityView() {
       {city.places.map((place) => {
         const here = city.peopleByPlace[place.id] ?? [];
         return (
-          <div key={place.id} className="rounded-lg border border-[var(--border)]/50 bg-[var(--card)]/50 px-2.5 py-2">
+          <button
+            key={place.id}
+            type="button"
+            disabled={!place.sceneChatId}
+            onClick={() => place.sceneChatId && openWorldChatById(place.sceneChatId)}
+            className={cn(
+              "block w-full rounded-lg border border-[var(--border)]/50 bg-[var(--card)]/50 px-2.5 py-2 text-left",
+              place.sceneChatId && "transition-colors hover:border-[var(--primary)]/50 hover:bg-[var(--accent)]/30",
+            )}
+            title={place.sceneChatId ? "Open this place's scene" : place.description || place.name}
+          >
             <div className="flex items-center gap-1.5">
               {place.ownerId ? (
                 <Building2 size="0.75rem" className="shrink-0 text-indigo-400" />
@@ -642,7 +739,7 @@ function CityView() {
                 <UsersRound size="0.65rem" /> {here.join(", ")}
               </div>
             ) : null}
-          </div>
+          </button>
         );
       })}
 
@@ -679,7 +776,7 @@ function CityView() {
 export function WorldPanel() {
   const { data: status } = useWorldStatus();
   const runTick = useRunWorldTick();
-  const [tab, setTab] = useState<"timeline" | "city" | "bonds">("timeline");
+  const [tab, setTab] = useState<"timeline" | "map" | "city" | "bonds">("timeline");
   const [configOpen, setConfigOpen] = useState(false);
   const [filterCharacterId, setFilterCharacterId] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState("all");
@@ -800,6 +897,7 @@ export function WorldPanel() {
         {(
           [
             ["timeline", "Timeline"],
+            ["map", "Map"],
             ["city", "City"],
             ["bonds", "Bonds"],
           ] as const
@@ -818,7 +916,9 @@ export function WorldPanel() {
         ))}
       </div>
 
-      {tab === "city" ? (
+      {tab === "map" ? (
+        <CityMap />
+      ) : tab === "city" ? (
         <CityView />
       ) : tab === "timeline" ? (
         <div className="space-y-1.5">

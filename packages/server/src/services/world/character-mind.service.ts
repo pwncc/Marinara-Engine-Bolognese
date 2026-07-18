@@ -80,6 +80,17 @@ function shortText(value: unknown, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+function parseCharacterIdList(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === "string");
+  if (typeof raw !== "string") return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 /** "just now" / "4m ago" / "2h ago" / "3d ago" — so minds feel elapsed time. */
 export function ago(iso: string | null | undefined, now: Date = new Date()): string {
   if (!iso) return "";
@@ -204,6 +215,8 @@ export async function bumpMindsForUserMessage(db: DB, chatId: string): Promise<v
     targetIds = (meta.worldPair as unknown[]).filter((id): id is string => typeof id === "string");
   } else if (meta.worldGroupThread === true && Array.isArray(meta.worldMembers)) {
     targetIds = (meta.worldMembers as unknown[]).filter((id): id is string => typeof id === "string");
+  } else if (meta.worldPlaceScene === true) {
+    targetIds = parseCharacterIdList((chat as { characterIds?: unknown }).characterIds);
   }
   if (!targetIds.length) return;
 
@@ -524,7 +537,13 @@ async function buildMindContext(
 
   // My DM + group threads (tail + unread flag).
   const threads: ThreadContext[] = [];
-  const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown; updatedAt?: string }>;
+  const allChats = (await chats.list()) as Array<{
+    id: string;
+    name?: string;
+    characterIds?: unknown;
+    metadata?: unknown;
+    updatedAt?: string;
+  }>;
   const myThreads = allChats
     .map((chat) => ({ chat, meta: parseJson(chat.metadata) }))
     .filter(({ meta }) => {
@@ -536,17 +555,25 @@ async function buildMindContext(
         const members = meta.worldMembers as string[];
         return members.includes(characterId) && members.every((id) => isWorldMember(config, id));
       }
+      // The scene at the place you're physically standing in right now.
+      if (meta.worldPlaceScene === true && typeof meta.worldPlaceId === "string") {
+        return meta.worldPlaceId === mind.placeId;
+      }
       return false;
     })
     .sort((a, b) => String(b.chat.updatedAt ?? "").localeCompare(String(a.chat.updatedAt ?? "")))
     .slice(0, MAX_THREADS);
   const arrivedAt = typeof mind.cursors.arrivedAt === "string" ? mind.cursors.arrivedAt : null;
   for (const { chat, meta } of myThreads) {
-    const isGroup = meta.worldGroupThread === true;
-    const isHangoutThread = meta.worldHangout === true;
-    const memberIds = (isGroup ? (meta.worldMembers as string[]) : (meta.worldPair as string[])).filter(
-      (id) => id !== characterId,
-    );
+    const isPlaceScene = meta.worldPlaceScene === true;
+    const isGroup = meta.worldGroupThread === true || isPlaceScene;
+    const isHangoutThread = meta.worldHangout === true || isPlaceScene;
+    const sceneMemberSource = isPlaceScene
+      ? parseCharacterIdList((chat as { characterIds?: unknown }).characterIds)
+      : isGroup
+        ? (meta.worldMembers as string[])
+        : (meta.worldPair as string[]);
+    const memberIds = sceneMemberSource.filter((id) => id !== characterId);
     let messages = (await chats.listMessages(chat.id)) as Array<{
       role: string;
       characterId?: string | null;
@@ -571,12 +598,14 @@ async function buildMindContext(
       .some((msg) => msg.characterId !== characterId && msg.createdAt > seenDmsAt);
     const tail = messages.slice(hasNewProbe ? -8 : -5);
     const hasNew = tail.some((msg) => msg.characterId !== characterId && msg.createdAt > seenDmsAt);
-    const otherNamesLabel = memberIds.map((id) => nameById.get(id) ?? "someone").join(", ");
-    const threadLabel = isGroup
-      ? meta.worldHangout === true
-        ? `IN PERSON with ${otherNamesLabel}${typeof meta.worldPlace === "string" && meta.worldPlace ? ` @ ${meta.worldPlace}` : ""} — you're physically together; write prose, not texts`
-        : `group with ${otherNamesLabel}`
-      : `${memberIds[0] ?? ""} · ${nameById.get(memberIds[0] ?? "") ?? "someone"}`;
+    const otherNamesLabel = memberIds.map((id) => nameById.get(id) ?? "someone").join(", ") || "no one else yet";
+    const threadLabel = isPlaceScene
+      ? `HERE at ${chat.name ?? "this place"}${memberIds.length ? ` with ${otherNamesLabel}` : ""} — you're physically here; act with "scene" (prose, not texts)`
+      : isGroup
+        ? meta.worldHangout === true
+          ? `IN PERSON with ${otherNamesLabel}${typeof meta.worldPlace === "string" && meta.worldPlace ? ` @ ${meta.worldPlace}` : ""} — you're physically together; write prose, not texts`
+          : `group with ${otherNamesLabel}`
+        : `${memberIds[0] ?? ""} · ${nameById.get(memberIds[0] ?? "") ?? "someone"}`;
     threads.push({
       chatId: chat.id,
       kind: isGroup ? "group" : "dm",
@@ -708,7 +737,8 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `- Noodle: the FEED is the public timeline; react only with EXACT postIds copied from what you see (never invent one).`,
     `- People: PEOPLE IN YOUR WORLD lists everyone; you can reach any of them by id. Meeting in person is the "hangout" action (you're then physically together — write it as lived prose, actions and dialogue).`,
     `- Your HOME is your own place (shown under WHERE YOU ARE). Rooms in it — kitchen, bedroom, bathroom — are part of your home, not separate public spots: just narrate them with "do" ("in the kitchen making coffee"). Use "set_home" once to make your home yours (an apartment, a loft, a house…).`,
-    `- The CITY is the shared PUBLIC world outside your home. "go" is for going OUT — to a real public place that exists, or a NEW public place you're discovering (a cafe, park, bar — NOT a private room). "go home" returns you home. If someone is AT YOUR PLACE right now, you're face to face and can start a "hangout" with them; places gain detail as people describe them.`,
+    `- The CITY is the shared PUBLIC world outside your home. "go" is for going OUT — to a real public place that exists, or a NEW public place you're discovering (a cafe, park, bar — NOT a private room). "go home" returns you home.`,
+    `- Being somewhere is a real shared SCENE. Everyone at your place shares one ongoing scene; when people are HERE WITH YOU, talk to them face-to-face with "scene" (lived prose — actions and dialogue), not by texting. Places gain detail as people describe them.`,
     `- You have a wallet and can have a job. "work" earns money; "spend" uses it. Let real life — rent, coffee, wanting more — motivate you.`,
     `- ONE life at a time. You are in exactly one place, doing one thing. If you're mid-conversation with someone (a fresh unanswered message, or an in-person hangout), THAT takes precedence — finish or bow out of it before wandering off; you can't be talking here and posting from across town in the same breath. Posting on Noodle and going somewhere are deliberate choices, never idle filler.`,
     `- Every item shows how long ago it happened. A minutes-old message is live; an hours-old one you're catching up on; something days old may have moved on. A conversation is allowed to simply end.`,
@@ -733,7 +763,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
       `  {"type":"message","toCharacterId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you attach (a selfie, your art, a meme, what you're seeing…)","photoOfMe":true|false` : ""}} — DM someone (one text)
   {"type":"group_message","chatId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional image","photoOfMe":true|false` : ""}} — reply in one of your group threads
   {"type":"start_group","withCharacterIds":["…","…"],"name":"…","content":"first message"} — pull 2+ people into a group text thread
-  {"type":"hangout","withCharacterIds":["…"],"place":"where you meet","content":"the opening moment in lived prose (*actions*, dialogue)"} — physically meet 1+ people IRL; continues in a persistent in-person thread
+  {"type":"scene","content":"what you do/say out loud where you are, in lived prose (*actions*, dialogue)"${ctx.photosEnabled ? `,"photoPrompt":"optional image","photoOfMe":true|false` : ""}} — act in person AT YOUR CURRENT PLACE; everyone here shares this scene. Use this to talk to people who are HERE WITH YOU.
   {"type":"make_plan","withCharacterIds":["…"],"title":"…","detail":"…","dueInHours":24}
   {"type":"resolve_plan","planEventId":"…","outcome":"what actually happened"}
   {"type":"feel","aboutCharacterId":"…","delta":-20..20,"romance":true|false,"summary":"how things stand between you now","milestone":{"title":"…","description":"…"} (milestone only for real firsts)}
@@ -989,6 +1019,93 @@ async function executeGo(
     characterIds: [selfId],
     detail: { placeId, placeName, why: shortText(action.why, 120) },
   });
+}
+
+/** Get or create the single shared scene chat for a place. */
+export async function ensurePlaceSceneChat(
+  db: DB,
+  place: { id: string; name: string },
+): Promise<string> {
+  const chats = createChatsStorage(db);
+  const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
+  const existing = allChats.find((chat) => parseJson(chat.metadata).worldPlaceId === place.id);
+  if (existing) return existing.id;
+  const world = createWorldStorage(db);
+  const members = (await world.listMinds())
+    .filter((m) => m.placeId === place.id)
+    .map((m) => m.id);
+  const created = await chats.create({
+    name: place.name,
+    mode: "roleplay",
+    characterIds: members.length ? members : [],
+    groupId: null,
+    personaId: null,
+    promptPresetId: null,
+    connectionId: null,
+  });
+  if (!created?.id) throw new Error(`Failed to create scene chat for ${place.name}`);
+  await chats.patchMetadata(created.id, {
+    worldPlaceScene: true,
+    worldPlaceId: place.id,
+    autonomousMessages: false,
+    characterCommands: false,
+    groupChatMode: "individual",
+  });
+  await fileWorldChat(db, created.id);
+  return created.id;
+}
+
+/** Act/speak in-person at your current place — lands in the place's shared scene. */
+async function executeScene(
+  db: DB,
+  nameById: Map<string, string>,
+  selfId: string,
+  action: WorldAction,
+): Promise<{ event: WorldEventRecord | null; pingedIds: string[] }> {
+  const world = createWorldStorage(db);
+  const chats = createChatsStorage(db);
+  const content = shortText(action.content, 1200);
+  const mind = await world.getMind(selfId);
+  if (!content || !mind?.placeId) return { event: null, pingedIds: [] };
+  const place = await world.getPlace(mind.placeId);
+  if (!place) return { event: null, pingedIds: [] };
+
+  const sceneChatId = await ensurePlaceSceneChat(db, place);
+  // Ensure the actor is a member of the scene (they're physically here).
+  const sceneChat = await chats.getById(sceneChatId);
+  const currentIds = parseCharacterIdList((sceneChat as { characterIds?: unknown } | null)?.characterIds);
+  if (!currentIds.includes(selfId)) {
+    await chats.update(sceneChatId, { characterIds: [...currentIds, selfId] });
+  }
+  const saved = await chats.createMessage({
+    chatId: sceneChatId,
+    role: "assistant",
+    characterId: selfId,
+    content,
+  });
+  if (!saved?.id) return { event: null, pingedIds: [] };
+  const photo = shortText(action.photoPrompt, 1200);
+  if (photo) {
+    void generateWorldPhoto(db, {
+      chatId: sceneChatId,
+      messageId: saved.id,
+      characterId: selfId,
+      prompt: photo,
+      includeSelf: action.photoOfMe === true,
+    });
+  }
+  // Everyone else here is drawn into the moment (urgent — they're present).
+  const othersHere = (await world.listMinds())
+    .filter((m) => m.id !== selfId && m.placeId === place.id && nameById.has(m.id))
+    .map((m) => m.id);
+  const selfName = nameById.get(selfId) ?? "someone";
+  const event = await world.appendEvent({
+    kind: "scene",
+    summary: `${selfName} at ${place.name}: "${shortText(content, 90)}"${photo ? " (with a photo)" : ""}`,
+    characterIds: [selfId, ...othersHere],
+    detail: { chatId: sceneChatId, messageId: saved.id, placeId: place.id, placeName: place.name },
+  });
+  return { event, pingedIds: othersHere };
 }
 
 async function executeSetHome(
@@ -1344,6 +1461,13 @@ export async function wakeCharacterMind(
             typeof rawAction.photoPrompt === "string" ? rawAction.photoPrompt : undefined,
             rawAction.photoOfMe === true,
           );
+        } else if (rawAction.type === "scene") {
+          const sceneResult = await executeScene(db, nameById, characterId, rawAction);
+          event = sceneResult.event;
+          for (const id of sceneResult.pingedIds) {
+            pinged.add(id);
+            urgentPinged.add(id); // people physically present react fast
+          }
         } else if (
           rawAction.type === "group_message" ||
           rawAction.type === "start_group" ||
@@ -1480,11 +1604,18 @@ export async function ensureMindsInitialized(db: DB, config: WorldEngineConfig):
   }>;
   for (const chat of allChats) {
     const meta = parseJson(chat.metadata);
-    const isWorldChat = meta.worldLifeChat === true || meta.worldDmThread === true || meta.worldGroupThread === true;
+    const isWorldChat =
+      meta.worldLifeChat === true ||
+      meta.worldDmThread === true ||
+      meta.worldGroupThread === true ||
+      meta.worldPlaceScene === true;
     if (!isWorldChat) continue;
-    // Life chats and in-person hangouts are roleplay (prose scenes); DMs and
-    // text groups are conversation (two characters texting).
-    const wantMode = meta.worldLifeChat === true || meta.worldHangout === true ? "roleplay" : "conversation";
+    // Life chats, hangouts, and place scenes are roleplay (prose scenes); DMs
+    // and text groups are conversation (two characters texting).
+    const wantMode =
+      meta.worldLifeChat === true || meta.worldHangout === true || meta.worldPlaceScene === true
+        ? "roleplay"
+        : "conversation";
     if (chat.mode !== wantMode) {
       await chats.update(chat.id, { mode: wantMode });
     }
@@ -1572,10 +1703,14 @@ export async function advanceActiveScenes(db: DB): Promise<{ driven: number }> {
     const meta = parseJson(chat.metadata);
     const isDm = meta.worldDmThread === true && Array.isArray(meta.worldPair);
     const isGroup = meta.worldGroupThread === true && Array.isArray(meta.worldMembers);
-    if (!isDm && !isGroup) continue;
-    const memberIds = (isDm ? (meta.worldPair as string[]) : (meta.worldMembers as string[])).filter((id) =>
-      nameById.has(id),
-    );
+    const isPlaceScene = meta.worldPlaceScene === true;
+    if (!isDm && !isGroup && !isPlaceScene) continue;
+    const memberSource = isDm
+      ? (meta.worldPair as string[])
+      : isGroup
+        ? (meta.worldMembers as string[])
+        : parseCharacterIdList((chat as { characterIds?: unknown }).characterIds);
+    const memberIds = memberSource.filter((id) => nameById.has(id));
     if (memberIds.length < 2) continue;
 
     const messages = (await chats.listMessages(chat.id)) as Array<{
@@ -1602,10 +1737,10 @@ export async function advanceActiveScenes(db: DB): Promise<{ driven: number }> {
     const onDeck = memberIds.filter((id) => id !== lastSpeaker);
     if (!onDeck.length) continue;
 
-    const isHangout = meta.worldHangout === true;
+    const inPerson = meta.worldHangout === true || isPlaceScene;
     const presence = await resolvePresenceMap(db, onDeck);
     for (const id of onDeck) {
-      const delay = isHangout
+      const delay = inPerson
         ? 1 + Math.random() * 3
         : Math.max(2, noticeDelayMinutes(presence.get(id)?.status ?? "online") * 0.5);
       await world.bumpMindWake(id, new Date(nowMs + delay * 60_000).toISOString());

@@ -30,6 +30,7 @@ export interface WorldPlace {
   discoveredBy: string | null;
   ownerId: string | null;
   visitCount: number;
+  sceneChatId: string | null;
 }
 
 export interface WorldResident {
