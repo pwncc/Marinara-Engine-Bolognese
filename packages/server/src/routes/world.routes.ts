@@ -66,7 +66,16 @@ export async function worldRoutes(app: FastifyInstance) {
 
   app.put("/config", async (req) => {
     const config = normalizeWorldEngineConfig(req.body);
-    return saveWorldEngineConfig(app.db, config);
+    const saved = await saveWorldEngineConfig(app.db, config);
+    // Provision immediately (mind rows + invited Noodle accounts) so newly
+    // added members are findable on Noodle without waiting for a cycle.
+    if (saved.mode === "minds") {
+      const { ensureMindsInitialized } = await import("../services/world/character-mind.service.js");
+      await ensureMindsInitialized(app.db, saved).catch((error) =>
+        app.log.warn(error, "[world] Member provisioning after config save failed"),
+      );
+    }
+    return saved;
   });
 
   app.get("/status", async () => {
@@ -92,5 +101,5 @@ export async function worldRoutes(app: FastifyInstance) {
 
   // ── Manual "advance the world now" (plans a window + plays the first due moments;
   //    works while the engine is disabled — great for testing) ──
-  app.post("/tick", async () => runWorldTick(app.db, { manual: true }));
+  app.post("/tick", async () => runWorldTick(app.db, { manual: true, app }));
 }

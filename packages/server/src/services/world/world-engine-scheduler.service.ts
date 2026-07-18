@@ -32,7 +32,7 @@ export function startWorldEngineScheduler(app: FastifyInstance): void {
       if (config.mode === "minds") {
         // Each character keeps their own clock; wake whoever's moment arrived
         // (per-cycle capacity scales with the roster so everyone gets turns).
-        await wakeDueCharacterMinds(app.db);
+        await wakeDueCharacterMinds(app.db, { app });
         return;
       }
 

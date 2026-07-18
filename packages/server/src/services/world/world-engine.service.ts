@@ -28,6 +28,8 @@ import {
   type WorldEventRecord,
 } from "@marinara-engine/shared";
 
+import type { FastifyInstance } from "fastify";
+
 import type { DB } from "../../db/connection.js";
 import { logger } from "../../lib/logger.js";
 import { newId } from "../../utils/id-generator.js";
@@ -36,6 +38,7 @@ import { getLocalSidecarProvider } from "../llm/local-sidecar.js";
 import type { BaseLLMProvider, ChatMessage } from "../llm/base-provider.js";
 import { createAppSettingsStorage } from "../storage/app-settings.storage.js";
 import { createCharactersStorage } from "../storage/characters.storage.js";
+import { createChatFoldersStorage } from "../storage/chat-folders.storage.js";
 import { createChatsStorage } from "../storage/chats.storage.js";
 import { createConnectionsStorage } from "../storage/connections.storage.js";
 import { createNoodleStorage } from "../storage/noodle.storage.js";
@@ -97,6 +100,40 @@ export function normalizeWorldEngineConfig(raw: unknown): WorldEngineConfig {
 /** True when the character lives in the world under this config. */
 export function isWorldMember(config: WorldEngineConfig, characterId: string): boolean {
   return config.memberCharacterIds === null || config.memberCharacterIds.includes(characterId);
+}
+
+const WORLD_FOLDER_NAME = "Living World";
+
+/**
+ * World chats (life spaces, DM/group threads) file into their own sidebar
+ * folder instead of cluttering the user's personal conversation list.
+ */
+export async function ensureWorldChatFolder(db: DB): Promise<string | null> {
+  try {
+    const folders = createChatFoldersStorage(db);
+    const existing = (await folders.list()).find(
+      (folder) => folder.name === WORLD_FOLDER_NAME && folder.mode === "conversation",
+    );
+    if (existing) return String(existing.id);
+    const created = await folders.create({ name: WORLD_FOLDER_NAME, mode: "conversation" } as Parameters<
+      typeof folders.create
+    >[0]);
+    return created ? String(created.id) : null;
+  } catch (error) {
+    logger.warn(error, "[world] Could not ensure the Living World chat folder");
+    return null;
+  }
+}
+
+/** File a world chat into the Living World folder (best-effort). */
+export async function fileWorldChat(db: DB, chatId: string): Promise<void> {
+  const folderId = await ensureWorldChatFolder(db);
+  if (!folderId) return;
+  try {
+    await createChatsStorage(db).setFolderForChat(chatId, folderId);
+  } catch (error) {
+    logger.debug(error, "[world] Could not file chat %s into the world folder", chatId);
+  }
 }
 
 export async function loadWorldEngineConfig(db: DB): Promise<WorldEngineConfig> {
@@ -483,6 +520,8 @@ export interface ExecuteDeps {
   world: WorldStorage;
   nameById: Map<string, string>;
   config: WorldEngineConfig;
+  /** When present, image-capable actions can invoke app routes (noodle image gen). */
+  app?: FastifyInstance;
 }
 
 export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction): Promise<WorldEventRecord | null> {
@@ -504,18 +543,37 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       if (!nameById.has(characterId)) return null;
       const accountId = await invitedAccountId(characterId);
       if (!accountId || !content) return null;
+      const imagePrompt = shortText(action.imagePrompt, 1200) || null;
       const post = await noodle.createPost({
         authorAccountId: accountId,
         content,
+        imagePrompt: imagePrompt ?? undefined,
         source: "generated",
         metadata: { worldEngine: true },
       });
       if (!post) return null;
+      // Render the attached image through Noodle's own pipeline (its settings,
+      // its connection) without blocking the wake.
+      if (imagePrompt && deps.app) {
+        const app = deps.app;
+        void app
+          .inject({
+            method: "POST",
+            url: "/api/noodle/refresh/images",
+            payload: { prompts: [{ id: post.id, prompt: imagePrompt }] },
+          })
+          .then((response) => {
+            if (response.statusCode >= 400) {
+              logger.debug("[world] Noodle image generation declined (%d) for post %s", response.statusCode, post.id);
+            }
+          })
+          .catch((error) => logger.warn(error, "[world] Noodle image generation failed for post %s", post.id));
+      }
       return world.appendEvent({
         kind: "noodle_post",
-        summary: `${name(characterId)} posted on noodle: "${shortText(content, 100)}"`,
+        summary: `${name(characterId)} posted on noodle: "${shortText(content, 100)}"${imagePrompt ? " (with a photo)" : ""}`,
         characterIds: [characterId],
-        detail: { postId: post.id },
+        detail: { postId: post.id, hasImage: !!imagePrompt },
       });
     }
     case "noodle_reply": {
@@ -626,6 +684,7 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
           autonomousMessages: false,
           characterCommands: false,
         });
+        await fileWorldChat(db, created.id);
         dmChatId = created.id;
       }
       const messageIds: string[] = [];
@@ -907,12 +966,15 @@ export interface WorldTickResult extends WorldDirectorResult {
   events: WorldEventRecord[];
 }
 
-export async function runWorldTick(db: DB, options: { manual?: boolean } = {}): Promise<WorldTickResult> {
+export async function runWorldTick(
+  db: DB,
+  options: { manual?: boolean; app?: FastifyInstance } = {},
+): Promise<WorldTickResult> {
   const config = await loadWorldEngineConfig(db);
   if (config.mode === "minds") {
     // Imported lazily: character-mind.service imports from this module.
     const { wakeDueCharacterMinds } = await import("./character-mind.service.js");
-    const cycle = await wakeDueCharacterMinds(db, { limit: 3, force: options.manual });
+    const cycle = await wakeDueCharacterMinds(db, { limit: 3, force: options.manual, app: options.app });
     const events = cycle.woke.flatMap((wake) => wake.events);
     const failed = cycle.woke.find((wake) => !wake.ok);
     const firstThought = cycle.woke.find((wake) => wake.thought);

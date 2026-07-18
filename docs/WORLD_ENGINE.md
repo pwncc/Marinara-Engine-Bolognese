@@ -12,6 +12,8 @@ On their own schedule — pulled earlier by pings (a DM, a group message, your i
 
 Interaction is emergent by construction: Alice's message is just something Bob finds, in his own head, when he next checks his phone. Nobody ever writes both sides of a conversation.
 
+**Living, not just chatting:** minds narrate their day with `do` actions (work, errands, fun) — lived moments that become their current intention and accumulate in their life chat. Noodle posts can attach a generated photo/meme (`imagePrompt`, rendered through Noodle's own image settings and connection). World members are auto-provisioned with invited Noodle accounts (immediately on config save), and every world chat files into a **"Living World" sidebar folder** so your personal DM list stays clean. When you talk in a world chat through the normal pipeline, the character card's roleplay `scenario` is suppressed and a life-space framing is injected instead — their life has no script; continuity comes from history and memory.
+
 **Pacing:** the world trickles. Scheduled wakes keep a global minimum gap scaled to the roster (one wake per cycle; fresh worlds stagger first wakes across a wide window), so life unfolds over hours instead of bursts — only direct pings pull someone in fast, because answering a text quickly is the one thing that *is* natural.
 
 **Memory across surfaces:** mind memories (`remember`) and world relationships inject into normal conversation prompts too — recent memories in full plus a carried tail of older ones — so when two characters meet again in one of *your* chats or group roleplays, they arrive already knowing their history.

@@ -1454,6 +1454,16 @@ export async function generateRoutes(app: FastifyInstance) {
         const conversationCommandsEnabled = chatMode === "conversation" && chatMeta.characterCommands !== false;
         // Body/mood ledger: prompt injection + <character_status> tag parsing.
         const characterStatusEnabled = !input.impersonate && isCharacterStatusEnabled(chatMode, chatMeta);
+        // Living World spaces (life chats, DM/group threads) are real ongoing
+        // lives, not scenario-driven roleplay sessions.
+        const worldSpaceKind =
+          chatMeta.worldLifeChat === true
+            ? ("life" as const)
+            : chatMeta.worldDmThread === true
+              ? ("dm" as const)
+              : chatMeta.worldGroupThread === true
+                ? ("group" as const)
+                : null;
         let temperature: number | undefined = 1;
         let maxTokens = 4096;
         let topP: number | undefined = 1;
@@ -2212,6 +2222,28 @@ export async function generateRoutes(app: FastifyInstance) {
             conversationSystemPrompt += "\n\n" + preparedHistory.importantMemoryBlock;
           }
 
+          // ── Living World space framing: this is their life, not a scene ──
+          if (worldSpaceKind) {
+            const charNameList2 = convoCharNames.join(", ") || "the character";
+            const spaceLines =
+              worldSpaceKind === "life"
+                ? [
+                    `This chat is ${charNameList2}'s own private LIFE SPACE — their real, ongoing life, not a roleplay scene and not a fresh meeting.`,
+                    `There is no scenario or script. Continuity comes only from this chat's history, their memories, their relationships, and what has actually happened in their world.`,
+                    `Messages in *asterisks* are their inner thoughts and lived moments accumulating over time. The human writing here is a Visitor stepping into their space — respond as yourself, mid-life, aware of what you were just doing.`,
+                  ]
+                : worldSpaceKind === "dm"
+                  ? [
+                      `This chat is a real, ongoing private DM thread between ${charNameList2} in their day-to-day lives — not a roleplay scene.`,
+                      `No scenario applies. Continuity comes from this thread's history, their memories, and their relationship. Time passes between messages; mind the gaps.`,
+                    ]
+                  : [
+                      `This chat is a real, ongoing group thread between ${charNameList2} — their own hangout space in their day-to-day lives, not a roleplay scene.`,
+                      `No scenario applies unless the group is gathering for a concrete plan they made. Continuity comes from this thread's history, their memories, and their relationships.`,
+                    ];
+            conversationSystemPrompt += "\n\n" + wrapContent(spaceLines.join("\n"), "life_space", wrapFormat);
+          }
+
           conversationSystemPrompt = resolvePromptMacros(conversationSystemPrompt);
 
           // Convo behavior + about-me are already macro-resolved in the helper, so
@@ -2560,7 +2592,9 @@ export async function generateRoutes(app: FastifyInstance) {
             resolveHistoryMessageMacros([{ content: value, characterId: character.id }])[0]?.content ?? value;
           character.description = resolveCharacterPromptText(character.description);
           character.personality = resolveCharacterPromptText(character.personality);
-          character.scenario = resolveCharacterPromptText(character.scenario);
+          // World life spaces have no scripted premise — the card's scenario
+          // belongs to fresh roleplay sessions, not their ongoing real life.
+          character.scenario = worldSpaceKind ? "" : resolveCharacterPromptText(character.scenario);
           character.creatorNotes = resolveCharacterPromptText(character.creatorNotes);
           character.systemPrompt = resolveCharacterPromptText(character.systemPrompt);
           character.backstory = resolveCharacterPromptText(character.backstory);

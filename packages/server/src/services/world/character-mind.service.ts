@@ -27,6 +27,8 @@ import {
   type WorldEventRecord,
 } from "@marinara-engine/shared";
 
+import type { FastifyInstance } from "fastify";
+
 import type { DB } from "../../db/connection.js";
 import { logger } from "../../lib/logger.js";
 import { createCharactersStorage } from "../storage/characters.storage.js";
@@ -37,6 +39,7 @@ import type { ChatMessage } from "../llm/base-provider.js";
 import {
   buildNameMap,
   executeWorldAction,
+  fileWorldChat,
   isWorldMember,
   loadWorldEngineConfig,
   loadWorldEngineState,
@@ -176,6 +179,7 @@ export async function ensureLifeChat(db: DB, characterId: string, name: string):
     autonomousMessages: false,
     characterCommands: false,
   });
+  await fileWorldChat(db, created.id);
   return created.id;
 }
 
@@ -230,6 +234,7 @@ interface MindContext {
   hasUnansweredVisitor: boolean;
   presence: { status: string; activity: string };
   hasNoodle: boolean;
+  noodleImagesEnabled: boolean;
   relationships: string[];
   memories: string[];
   feed: string[];
@@ -286,6 +291,8 @@ async function buildMindContext(
 
   const account = await noodle.getAccountByEntity("character", characterId);
   const hasNoodle = !!account?.invited;
+  const noodleSettings = hasNoodle ? await noodle.getSettings() : null;
+  const noodleImagesEnabled = !!noodleSettings?.enableImagePrompts;
 
   const relationships = (await world.listRelationships(characterId))
     .filter((rel) => isWorldMember(config, rel.aCharacterId) && isWorldMember(config, rel.bCharacterId))
@@ -406,6 +413,7 @@ async function buildMindContext(
     hasUnansweredVisitor,
     presence,
     hasNoodle,
+    noodleImagesEnabled,
     relationships,
     memories,
     feed,
@@ -420,7 +428,7 @@ async function buildMindContext(
 
 function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Date): ChatMessage[] {
   const noodleActions = ctx.hasNoodle
-    ? `  {"type":"post","content":"…"} — post on Noodle
+    ? `  {"type":"post","content":"…"${ctx.noodleImagesEnabled ? `,"imagePrompt":"optional — a photo or meme you'd attach; describe it concretely (your appearance, the scene, or the meme format)"` : ``}} — post on Noodle
   {"type":"reply","postId":"…","content":"…"} — reply to a feed post
   {"type":"like","postId":"…"}
   {"type":"follow","characterId":"…"} — follow someone on Noodle\n`
@@ -430,8 +438,8 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `You are ${ctx.self.name}.`,
     ctx.self.persona,
     ``,
-    `This is not a story and nobody is watching. It's simply your life, continuing. You just found a quiet moment to think and maybe check your phone.`,
-    `Be yourself. Feelings move slowly. Most check-ins are uneventful: a thought, maybe ONE small action, often nothing at all — that's honest living, not laziness. Reply to people only when YOU would. You may reach out, make plans, let things slide, hold grudges, catch feelings — whatever is true to you.`,
+    `This is not a story and nobody is watching. It's simply your life, continuing. Your PRIVATE SPACE below is exactly that — your own life's log, not a chat with anyone. You LIVE there: narrate what you're doing with "do" (heading to work, cooking, gaming, going out), and when you decide to check Noodle or text someone, follow through with the matching actions THIS check-in.`,
+    `Be yourself. Feelings move slowly. Most check-ins are uneventful: a thought, a "do", maybe ONE small action, often nothing at all — that's honest living, not laziness. Work, have fun, run errands, rest. Reply to people only when YOU would. You may reach out, make plans, let things slide, hold grudges, catch feelings — whatever is true to you.`,
     `MIND THE CLOCK. Every item shows how long ago it happened — let that shape you: a message from 3 minutes ago is a live conversation (answer like you're both there); one from 6 hours ago deserves a "sorry, just saw this"; days-old things may have quietly resolved themselves. Reference time naturally ("this morning", "last night") and notice when it's late or early for you.`,
     `Sometimes a Visitor speaks into your private space — a presence you can talk to plainly. If they said something new, it's polite to answer with "say", in your own voice.`,
     config.userDirective ? `\nWorld ground rules (from the person hosting this world):\n${config.userDirective}` : ``,
@@ -443,6 +451,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `  "intention": "what you're up to / meaning to do next (optional, replaces the old one)",`,
     `  "nextCheckInMinutes": ${Math.round(minCheckinMinutes(config))}-${config.wakeIntervalMinutes * 4} — when you'd naturally check in again,`,
     `  "actions": [ 0-${MAX_ACTIONS_PER_WAKE} of:`,
+    `  {"type":"do","activity":"…"} — live: what you're doing now (off to work, making dinner, gym, gaming…). Narrated in your space and becomes your current intention.`,
     `  {"type":"say","content":"…"} — speak aloud in your own space (answers the Visitor if they wrote)`,
     noodleActions +
       `  {"type":"message","toCharacterId":"…","content":"…"} — DM someone (one text)
@@ -542,7 +551,7 @@ export function parseMindResponse(raw: string): MindOutput {
 export function toEngineAction(selfId: string, action: WorldAction): WorldAction | null {
   switch (action.type) {
     case "post":
-      return { type: "noodle_post", characterId: selfId, content: action.content };
+      return { type: "noodle_post", characterId: selfId, content: action.content, imagePrompt: action.imagePrompt };
     case "reply":
       return { type: "noodle_reply", characterId: selfId, postId: action.postId, content: action.content };
     case "like":
@@ -586,6 +595,30 @@ export function toEngineAction(selfId: string, action: WorldAction): WorldAction
 }
 
 // ── Mind-local executors (life chat + group threads) ──
+
+async function executeDo(
+  db: DB,
+  ctx: { selfId: string; name: string; lifeChatId: string },
+  activity: string,
+): Promise<WorldEventRecord | null> {
+  const text = shortText(activity, 200);
+  if (!text) return null;
+  const chats = createChatsStorage(db);
+  const world = createWorldStorage(db);
+  const saved = await chats.createMessage({
+    chatId: ctx.lifeChatId,
+    role: "assistant",
+    characterId: ctx.selfId,
+    content: `*${text}*`,
+  });
+  if (!saved?.id) return null;
+  return world.appendEvent({
+    kind: "activity",
+    summary: `${ctx.name} — ${text}`,
+    characterIds: [ctx.selfId],
+    detail: { chatId: ctx.lifeChatId, messageId: saved.id, activity: text },
+  });
+}
 
 async function executeSay(
   db: DB,
@@ -677,6 +710,7 @@ async function executeGroupAction(
         autonomousMessages: false,
         characterCommands: false,
       });
+      await fileWorldChat(db, created.id);
       chatId = created.id;
     }
     memberIds = members;
@@ -709,7 +743,7 @@ export interface MindWakeResult {
 export async function wakeCharacterMind(
   db: DB,
   characterId: string,
-  options: { provider?: ResolvedWorldProvider } = {},
+  options: { provider?: ResolvedWorldProvider; app?: FastifyInstance } = {},
 ): Promise<MindWakeResult> {
   const config = await loadWorldEngineConfig(db);
   const world = createWorldStorage(db);
@@ -778,11 +812,19 @@ export async function wakeCharacterMind(
     const state = await loadWorldEngineState(db);
     let budgetLeft = Math.max(0, config.dailyActionCap - state.dailyCount);
     const pinged = new Set<string>();
+    let doActivity: string | null = null;
     for (const rawAction of output.actions) {
       if (budgetLeft <= 0) break;
       try {
         let event: WorldEventRecord | null = null;
-        if (rawAction.type === "say") {
+        if (rawAction.type === "do") {
+          event = await executeDo(
+            db,
+            { selfId: characterId, name: ctx.self.name, lifeChatId: ctx.lifeChatId },
+            String(rawAction.activity ?? rawAction.content ?? ""),
+          );
+          if (event) doActivity = String(event.detail.activity ?? "");
+        } else if (rawAction.type === "say") {
           event = await executeSay(db, { selfId: characterId, name: ctx.self.name, lifeChatId: ctx.lifeChatId }, String(rawAction.content ?? ""));
         } else if (rawAction.type === "group_message" || rawAction.type === "start_group") {
           const groupResult = await executeGroupAction(db, config, nameById, characterId, rawAction);
@@ -791,7 +833,7 @@ export async function wakeCharacterMind(
         } else {
           const engineAction = toEngineAction(characterId, rawAction);
           if (!engineAction) continue;
-          event = await executeWorldAction({ db, world, nameById, config }, engineAction);
+          event = await executeWorldAction({ db, world, nameById, config, app: options.app }, engineAction);
           if (event && engineAction.type === "dm" && typeof engineAction.toCharacterId === "string") {
             pinged.add(engineAction.toCharacterId);
           }
@@ -837,7 +879,8 @@ export async function wakeCharacterMind(
     const nowIso = nowDate.toISOString();
     await world.upsertMind(characterId, {
       mood: output.mood ?? undefined,
-      intention: output.intention ?? undefined,
+      // A "do" is a lived intention — it wins unless they stated a newer one.
+      intention: output.intention ?? doActivity ?? undefined,
       lastWakeAt: nowIso,
       nextWakeAt: new Date(nowDate.getTime() + gap * 60_000).toISOString(),
       cursors: { seenPostsAt: nowIso, seenDmsAt: nowIso, wakeReason: "self" },
@@ -874,8 +917,19 @@ export async function wakeCharacterMind(
 export async function ensureMindsInitialized(db: DB, config: WorldEngineConfig): Promise<void> {
   const world = createWorldStorage(db);
   const noodle = createNoodleStorage(db);
+  const chats = createChatsStorage(db);
   const nameById = await buildNameMap(db, config);
   const existing = new Set((await world.listMinds()).map((mind) => mind.id));
+
+  // Migration sweep: world chats created before folders existed get filed.
+  const allChats = (await chats.list()) as Array<{ id: string; folderId?: string | null; metadata?: unknown }>;
+  for (const chat of allChats) {
+    const meta = parseJson(chat.metadata);
+    const isWorldChat = meta.worldLifeChat === true || meta.worldDmThread === true || meta.worldGroupThread === true;
+    if (isWorldChat && !chat.folderId) {
+      await fileWorldChat(db, chat.id);
+    }
+  }
   for (const [characterId, name] of nameById) {
     if (config.allowNoodle) {
       const account = await noodle.getAccountByEntity("character", characterId);
@@ -938,7 +992,7 @@ export function selectDueMinds(
 /** Wake due minds: ping-responses flow freely, spontaneous wakes keep the pace. */
 export async function wakeDueCharacterMinds(
   db: DB,
-  options: { limit?: number; force?: boolean } = {},
+  options: { limit?: number; force?: boolean; app?: FastifyInstance } = {},
 ): Promise<MindsCycleResult> {
   const config = await loadWorldEngineConfig(db);
   const result: MindsCycleResult = { woke: [], skippedReason: null };
@@ -989,7 +1043,7 @@ export async function wakeDueCharacterMinds(
 
   for (const mind of due) {
     const wasPing = mind.cursors.wakeReason === "ping";
-    result.woke.push(await wakeCharacterMind(db, mind.id, { provider: resolved }));
+    result.woke.push(await wakeCharacterMind(db, mind.id, { provider: resolved, app: options.app }));
     // Only spontaneous wakes advance the pace clock — a flowing conversation
     // shouldn't starve everyone else's check-ins.
     if (!wasPing) {
