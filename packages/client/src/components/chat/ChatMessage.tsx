@@ -41,7 +41,13 @@ import {
   EyeOff,
   Shield,
 } from "lucide-react";
-import { decodeEncodedSpeakerTags, formatTextQuotes, type Message, type QuoteFormat } from "@marinara-engine/shared";
+import {
+  decodeEncodedSpeakerTags,
+  formatTextQuotes,
+  stripCharacterStatusTagsForDisplay,
+  type Message,
+  type QuoteFormat,
+} from "@marinara-engine/shared";
 import { memo, useState, useMemo, useRef, useEffect, useLayoutEffect, useCallback, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
@@ -1520,7 +1526,9 @@ export const ChatMessage = memo(function ChatMessage({
     const text =
       isUser || isSystem
         ? message.content
-        : applyToAIOutput(message.content, {
+        : // Hidden <character_status> ledger tags are stripped server-side at save
+          // time; strip again here so stray tags (older saves, streaming) never render.
+          applyToAIOutput(stripCharacterStatusTagsForDisplay(message.content), {
             depth: messageDepth,
             resolveMacros: resolveDisplayMacros,
             scopedMode: scopedRegexMode,

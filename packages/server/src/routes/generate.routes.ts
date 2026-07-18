@@ -137,6 +137,17 @@ import {
   type DirectMessageCommand,
 } from "../services/conversation/character-commands.js";
 import {
+  applyConvoCharacterStatusPatches,
+  buildRoleplayCharacterStatusCommandsReminder,
+  formatConvoCharacterStatusContextBlock,
+  isCharacterStatusEnabled,
+  parseCharacterStatusTags,
+  parseCharacterStatusTagsBySpeaker,
+  readConvoCharacterStatusMap,
+  resolveConvoCharacterStatusFromTranscript,
+  syncChatConvoCharacterStatusFromTranscript,
+} from "../services/conversation/character-status.service.js";
+import {
   isNovelAiImageConnection,
   mergeIllustratorNegativePrompt,
   resolveIllustratorCharacterReferences,
@@ -1441,6 +1452,8 @@ export async function generateRoutes(app: FastifyInstance) {
         let conversationReplyRulesBlockValue = "";
         const identityFallbackPromptTemplateSources: string[] = [];
         const conversationCommandsEnabled = chatMode === "conversation" && chatMeta.characterCommands !== false;
+        // Body/mood ledger: prompt injection + <character_status> tag parsing.
+        const characterStatusEnabled = !input.impersonate && isCharacterStatusEnabled(chatMode, chatMeta);
         let temperature: number | undefined = 1;
         let maxTokens = 4096;
         let topP: number | undefined = 1;
@@ -2887,6 +2900,38 @@ export async function generateRoutes(app: FastifyInstance) {
             },
             promptMacroContext,
           );
+        }
+
+        // ── Body/mood ledger context (before <commands> so the directive precedes the tag spec) ──
+        if (characterStatusEnabled) {
+          const statusPromptMap = input.regenerateMessageId
+            ? resolveConvoCharacterStatusFromTranscript(await chats.listMessages(input.chatId), {
+                beforeMessageId: input.regenerateMessageId,
+              })
+            : readConvoCharacterStatusMap(chatMeta);
+          const statusCharacterIds = charInfo.map((character) => character.id);
+          const statusIdToName = new Map(charInfo.map((character) => [character.id, character.name]));
+          const statusBlock = formatConvoCharacterStatusContextBlock(
+            statusPromptMap,
+            statusCharacterIds,
+            statusIdToName,
+            { isGroupChat: statusCharacterIds.length > 1 },
+          );
+          if (chatMode === "conversation") {
+            finalMessages.push({ role: "user" as const, content: statusBlock });
+          } else {
+            // Roleplay/VN has no shared commands reminder — append the ledger plus
+            // its own <commands> block to the last user message (DM-reminder pattern).
+            const statusReminder = `${statusBlock}\n\n${buildRoleplayCharacterStatusCommandsReminder()}`;
+            const lastUserIdx = findLastIndex(finalMessages, "user");
+            if (lastUserIdx >= 0) {
+              const target = finalMessages[lastUserIdx]!;
+              finalMessages[lastUserIdx] = { ...target, content: `${target.content}\n\n${statusReminder}` };
+            } else {
+              finalMessages.push({ role: "user" as const, content: statusReminder });
+            }
+          }
+          logger.debug("[generate] Injected character status ledger (%d chars)", statusBlock.length);
         }
 
         if (
@@ -5394,6 +5439,7 @@ export async function generateRoutes(app: FastifyInstance) {
           let parsedCommandCharacterIds: (string | null)[] | null = null;
           let parsedRawCommandCount = 0;
           let conversationCommandContent: string | null = null;
+          let characterStatusPatches: ReturnType<typeof parseCharacterStatusTagsBySpeaker>["patches"] = [];
           let contentReplaced = false;
           if (tailMessages.assistantPrefillInjected && assistantPrefill && fullResponse.startsWith(assistantPrefill)) {
             const responseAfterPrefill = fullResponse.slice(assistantPrefill.length);
@@ -5527,6 +5573,34 @@ export async function generateRoutes(app: FastifyInstance) {
               for (const target of skippedTargets) {
                 logger.warn('[generate] Skipped roleplay DM command for cardless target "%s"', target);
               }
+            }
+          }
+
+          // ── Parse and strip hidden <character_status> ledger patches ──
+          if (characterStatusEnabled) {
+            const useStatusSpeakerAttribution =
+              isGroupChat && groupChatMode === "merged" && chatMode === "conversation";
+            if (useStatusSpeakerAttribution) {
+              const statusParse = parseCharacterStatusTagsBySpeaker(fullResponse, charInfo, targetCharId);
+              characterStatusPatches = statusParse.patches;
+              if (statusParse.cleanContent !== fullResponse) {
+                fullResponse = statusParse.cleanContent;
+                contentReplaced = true;
+              }
+            } else {
+              const statusParse = parseCharacterStatusTags(fullResponse);
+              characterStatusPatches = statusParse.patches.map((patch) => ({ characterId: targetCharId, patch }));
+              if (statusParse.cleanContent !== fullResponse) {
+                fullResponse = statusParse.cleanContent;
+                contentReplaced = true;
+              }
+            }
+            if (characterStatusPatches.length > 0) {
+              logger.info(
+                "[generate] Parsed %d character status patch(es) for chat %s",
+                characterStatusPatches.length,
+                input.chatId,
+              );
             }
           }
 
@@ -5857,6 +5931,26 @@ export async function generateRoutes(app: FastifyInstance) {
             extraUpdate.chatSummaryFingerprint = fingerprintChatSummary(chatMeta.summary);
             const persistentAttachments = resolveUserRegenerationPersistentAttachments(regenMsg ?? {});
             if (persistentAttachments) extraUpdate.attachments = persistentAttachments;
+            // ── Body/mood ledger: merge patches and snapshot the full map onto this swipe ──
+            let updatedConvoStatusMap: ReturnType<typeof readConvoCharacterStatusMap> | null = null;
+            if (characterStatusEnabled && characterStatusPatches.length > 0) {
+              const attributedStatusPatches = characterStatusPatches
+                .map(({ characterId, patch }) => ({ characterId: characterId ?? targetCharId ?? "", patch }))
+                .filter((entry) => entry.characterId);
+              if (attributedStatusPatches.length > 0) {
+                const freshStatusChat = await chats.getById(input.chatId);
+                const freshStatusMeta = freshStatusChat
+                  ? (parseExtra(freshStatusChat.metadata) as Record<string, unknown>)
+                  : chatMeta;
+                const statusBaseMap = input.regenerateMessageId
+                  ? resolveConvoCharacterStatusFromTranscript(await chats.listMessages(input.chatId), {
+                      beforeMessageId: input.regenerateMessageId,
+                    })
+                  : readConvoCharacterStatusMap(freshStatusMeta);
+                updatedConvoStatusMap = applyConvoCharacterStatusPatches(statusBaseMap, attributedStatusPatches);
+                extraUpdate.convoCharacterStatus = updatedConvoStatusMap;
+              }
+            }
             const refreshedMsg =
               savedSwipeIndex !== null
                 ? await chats.updateMessageExtraForSwipe(savedMsg.id, savedSwipeIndex, extraUpdate)
@@ -5880,6 +5974,20 @@ export async function generateRoutes(app: FastifyInstance) {
               type: "message_saved",
               data: savedMessagePayload,
             });
+
+            // ── Body/mood ledger: persist the live map + notify the client ──
+            if (characterStatusEnabled) {
+              if (updatedConvoStatusMap) {
+                await chats.patchMetadata(input.chatId, { convoCharacterStatus: updatedConvoStatusMap });
+              } else if (input.regenerateMessageId) {
+                // Regenerated swipe carried no patch: the previous swipe's effects
+                // no longer apply, so rebuild the live map from the transcript.
+                updatedConvoStatusMap = await syncChatConvoCharacterStatusFromTranscript(chats, input.chatId);
+              }
+              if (updatedConvoStatusMap) {
+                sendSseEvent(reply, { type: "character_status_update", data: updatedConvoStatusMap });
+              }
+            }
 
             if (chatMode === "game" && !input.impersonate) {
               const mapUpdates = parseMapUpdateCommands(fullResponse);

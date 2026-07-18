@@ -15,6 +15,7 @@ import {
 } from "react";
 import { isMessageShadowedByLiveStream } from "../../lib/generation-stream-policy";
 import {
+  stripCharacterStatusTagsForDisplay,
   type ChatSummaryEntry,
   type MarkerConfig,
   type PromptGroup,
@@ -24,6 +25,7 @@ import {
   type SpriteSide,
 } from "@marinara-engine/shared";
 import {
+  Activity,
   BookOpen,
   FileText,
   Image,
@@ -334,7 +336,7 @@ function StreamingIndicator({
           chatId: activeChatId,
           role: "assistant",
           characterId: streamingCharacterId ?? chatCharIds[0] ?? null,
-          content: streamBuffer || (thinkingBuffer ? "Thinking..." : ""),
+          content: stripCharacterStatusTagsForDisplay(streamBuffer) || (thinkingBuffer ? "Thinking..." : ""),
           activeSwipeIndex: 0,
           extra: {
             displayText: null,
@@ -371,7 +373,11 @@ function RegeneratingMessageContent({
   const cleanExtra = { ...parsedExtra, attachments: null, thinking: thinkingBuffer || parsedExtra.thinking };
   return (
     <ChatMessage
-      message={{ ...msg, extra: cleanExtra, content: streamBuffer || (thinkingBuffer ? "Thinking..." : "") }}
+      message={{
+        ...msg,
+        extra: cleanExtra,
+        content: stripCharacterStatusTagsForDisplay(streamBuffer) || (thinkingBuffer ? "Thinking..." : ""),
+      }}
       isStreaming
       {...rest}
     />
@@ -1624,6 +1630,19 @@ export function ChatRoleplaySurface({
                       renderPanel={!compactToolbarOwnsAuthorNotes}
                       mobilePanel={false}
                     />
+                    {chatMeta.characterStatus === true && chat?.id && (
+                      <ChatToolbarButton
+                        icon={<Activity size="0.875rem" />}
+                        title="Character status"
+                        onClick={() =>
+                          useUIStore.getState().openModal("character-status", {
+                            chatId: chat.id,
+                            initialCharacterId: null,
+                            messages: messages ?? [],
+                          })
+                        }
+                      />
+                    )}
                     <ChatToolbarButton icon={<Image size="0.875rem" />} title="Gallery" onClick={onOpenGallery} />
                     {chat?.connectedChatId && (
                       <ChatToolbarButton

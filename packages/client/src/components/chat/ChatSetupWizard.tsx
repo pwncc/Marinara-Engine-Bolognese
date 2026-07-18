@@ -160,6 +160,11 @@ const CONVERSATION_COMMAND_TOGGLE_OPTIONS: Array<{
   label: string;
   description: string;
 }> = [
+  {
+    id: "character_status",
+    label: "Body & Mood Status",
+    description: "Track a hidden per-character body/mood ledger the AI reads and updates every turn.",
+  },
   { id: "schedule_update", label: "Schedule Updates", description: "Let characters change their current status." },
   { id: "cross_post", label: "Cross-Post", description: "Let characters redirect a message into another chat." },
   { id: "selfie", label: "Selfies", description: "Let characters request generated selfies." },

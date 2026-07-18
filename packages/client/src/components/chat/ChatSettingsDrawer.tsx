@@ -606,6 +606,11 @@ const CONVERSATION_COMMAND_TOGGLE_OPTIONS: Array<{
   description: string;
 }> = [
   {
+    id: "character_status",
+    label: "Body & Mood Status",
+    description: "Track a hidden per-character body/mood ledger the AI reads and updates every turn.",
+  },
+  {
     id: "schedule_update",
     label: "Schedule Updates",
     description: "Let characters change their current status and activity.",
@@ -6189,6 +6194,21 @@ export function ChatSettingsDrawer({
                       enabled={metadata.manualTrackers === true}
                       surface="secondary"
                       onToggle={() => updateMeta.mutate({ id: chat.id, manualTrackers: !metadata.manualTrackers })}
+                    />
+                  )}
+                  {isRoleplayMode && (
+                    <AgentSettingsToggle
+                      label="Body & Mood Status"
+                      description={
+                        metadata.characterStatus === true
+                          ? "Characters keep a hidden body/mood ledger; edit it via the pulse icon in the top toolbar."
+                          : "Track a hidden per-character body/mood ledger the AI reads and updates every turn."
+                      }
+                      enabled={metadata.characterStatus === true}
+                      surface="secondary"
+                      onToggle={() =>
+                        updateMeta.mutate({ id: chat.id, characterStatus: metadata.characterStatus !== true })
+                      }
                     />
                   )}
                   {metadata.enableAgents && isRoleplayMode && activeTrackerAgents.length > 0 && (

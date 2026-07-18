@@ -4,7 +4,7 @@
 import { lazy, Suspense } from "react";
 import type { AvatarCropValue } from "../../lib/utils";
 import { useUIStore } from "../../stores/ui.store";
-import type { LorebookCategory, LorebookScope, ScenePromptPreferences } from "@marinara-engine/shared";
+import type { LorebookCategory, LorebookScope, Message, ScenePromptPreferences } from "@marinara-engine/shared";
 
 const CreateCharacterModal = lazy(() =>
   import("../modals/CreateCharacterModal").then((module) => ({ default: module.CreateCharacterModal })),
@@ -55,6 +55,9 @@ const ScenePromptPreferencesModal = lazy(() =>
   import("../modals/ScenePromptPreferencesModal").then((module) => ({
     default: module.ScenePromptPreferencesModal,
   })),
+);
+const CharacterStatusModal = lazy(() =>
+  import("../modals/CharacterStatusModal").then((module) => ({ default: module.CharacterStatusModal })),
 );
 
 export function ModalRenderer() {
@@ -113,6 +116,17 @@ export function ModalRenderer() {
       break;
     case "agent-write-approval":
       content = <AgentWriteApprovalModal open onClose={closeModal} />;
+      break;
+    case "character-status":
+      content = (
+        <CharacterStatusModal
+          open
+          onClose={closeModal}
+          chatId={(modal?.props?.chatId as string) ?? ""}
+          initialCharacterId={(modal?.props?.initialCharacterId as string | null | undefined) ?? null}
+          messages={(modal?.props?.messages as Message[] | undefined) ?? undefined}
+        />
+      );
       break;
     case "docs-viewer":
       content = (

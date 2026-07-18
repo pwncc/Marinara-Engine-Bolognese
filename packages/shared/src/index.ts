@@ -33,6 +33,7 @@ export * from "./types/conversation-call.js";
 export * from "./types/noodle.js";
 export * from "./types/spatial-context.js";
 export * from "./types/capability-runtime.js";
+export * from "./types/convo-character-status.js";
 
 // Schemas
 export * from "./schemas/chat.schema.js";
@@ -121,3 +122,5 @@ export * from "./utils/noodle-mentions.js";
 export * from "./utils/noodle-polls.js";
 export * from "./utils/noodle-interactions.js";
 export * from "./utils/spatial-context.js";
+export * from "./utils/convo-character-status-bars.js";
+export * from "./utils/convo-character-status-display.js";

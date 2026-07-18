@@ -998,6 +998,8 @@ export function useDeleteMessage(chatId: string | null) {
         qc.invalidateQueries({ queryKey: chatKeys.messageCount(chatId) });
         qc.invalidateQueries({ queryKey: chatKeys.list() });
         qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
+        // Server resyncs the body/mood ledger (and other derived metadata) after deletes.
+        qc.invalidateQueries({ queryKey: chatKeys.detail(chatId) });
       }
     },
   });
@@ -1013,6 +1015,8 @@ export function useDeleteMessages(chatId: string | null) {
         qc.invalidateQueries({ queryKey: chatKeys.messageCount(chatId) });
         qc.invalidateQueries({ queryKey: chatKeys.list() });
         qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
+        // Server resyncs the body/mood ledger (and other derived metadata) after deletes.
+        qc.invalidateQueries({ queryKey: chatKeys.detail(chatId) });
       }
     },
   });
@@ -1419,6 +1423,8 @@ export function useSetActiveSwipe(chatId: string | null) {
     },
     onSuccess: (updated, { messageId }) => {
       if (!chatId) return;
+      // Server resyncs the body/mood ledger from the newly-active swipe's snapshots.
+      qc.invalidateQueries({ queryKey: chatKeys.detail(chatId) });
       if (!updated) {
         qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
         qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
@@ -1448,6 +1454,8 @@ export function useDeleteSwipe(chatId: string | null) {
       qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
       qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
       qc.invalidateQueries({ queryKey: [...chatKeys.all, "swipes", messageId] });
+      // Server resyncs the body/mood ledger after swipe deletion.
+      qc.invalidateQueries({ queryKey: chatKeys.detail(chatId) });
     },
   });
 }

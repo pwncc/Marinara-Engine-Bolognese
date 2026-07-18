@@ -45,9 +45,11 @@ import type { CharacterMap, MessageSelectionToggle, PersonaInfo } from "./chat-a
 import {
   normalizeTextForMatch,
   parseGroupedSpeakerSegments,
+  stripCharacterStatusTagsForDisplay,
   stripLeadingMessageTimestamps,
   type Message,
 } from "@marinara-engine/shared";
+import { ConvoCharacterStatusStrip } from "./ConvoCharacterStatusStrip";
 import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
 import { CapabilityElement } from "../capabilities/CapabilityElement";
 import { TURN_GAME_BOT_REQUEST_EVENT } from "../../lib/capability-turn-game-events";
@@ -754,7 +756,12 @@ export function ConversationView({
       const bubbleGroupPosition = grouped ? (nextGrouped ? "middle" : "last") : nextGrouped ? "first" : "single";
 
       const knownNames = getKnownChatMemberNames(characterMap, chatCharIds);
-      const groupingContent = msg.role === "assistant" && msg.content ? stripTimestamps(msg.content) : msg.content;
+      // Insurance: strip any <character_status> tags that survived in stored
+      // content (e.g. messages saved while the feature was disconnected).
+      const statusStrippedContent =
+        msg.role === "assistant" && msg.content ? stripCharacterStatusTagsForDisplay(msg.content) : msg.content;
+      const groupingContent =
+        msg.role === "assistant" && statusStrippedContent ? stripTimestamps(statusStrippedContent) : statusStrippedContent;
       const groupSegmentCount =
         msg.role === "assistant" && groupingContent ? getGroupedSegmentCount(groupingContent, knownNames) : 0;
       const hasGroupFormat =
@@ -763,7 +770,7 @@ export function ConversationView({
         hasNamePrefixFormat(groupingContent, knownNames);
       let contentParts: string[] | undefined;
       if (conversationMessageStyle === "classic" && msg.role === "assistant" && msg.content && !hasGroupFormat) {
-        const cleaned = stripTimestamps(msg.content);
+        const cleaned = stripTimestamps(statusStrippedContent);
         // Strip lines that are just the character's name (LLM prefixing in group individual mode)
         const charName = msg.characterId ? characterMap.get(msg.characterId)?.name : null;
         const lines = splitAssistantContentLines(cleaned, charName);
@@ -773,7 +780,8 @@ export function ConversationView({
       }
 
       // For assistant messages, also strip timestamps and character name prefix
-      let displayContent = msg.role === "assistant" && msg.content ? stripTimestamps(msg.content) : msg.content;
+      let displayContent =
+        msg.role === "assistant" && msg.content ? stripTimestamps(statusStrippedContent) : msg.content;
       if (msg.role === "assistant" && msg.characterId) {
         const cName = characterMap.get(msg.characterId)?.name;
         if (cName) {
@@ -815,7 +823,7 @@ export function ConversationView({
       chatId,
       role: "assistant",
       characterId: liveStreamCharacterId,
-      content: conversationMessageStyle === "bubble" ? "" : streamBuffer,
+      content: conversationMessageStyle === "bubble" ? "" : stripCharacterStatusTagsForDisplay(streamBuffer),
       activeSwipeIndex: 0,
       swipeCount: 0,
       createdAt: new Date().toISOString(),
@@ -839,7 +847,7 @@ export function ConversationView({
   const buildStreamingBubblePreview = useCallback(
     (content: string, characterId: string | null) => {
       if (conversationMessageStyle !== "bubble" || !content.trim()) return "";
-      const cleaned = content
+      const cleaned = stripCharacterStatusTagsForDisplay(content)
         .replace(/^(\s*\[\d{1,2}[:.]\d{2}\]\s*)+/gm, "")
         .replace(/^(\s*\[\d{1,2}\.\d{1,2}\.\d{4}\]\s*)+/gm, "")
         .trimStart();
@@ -1200,7 +1208,9 @@ export function ConversationView({
                   const parsed = typeof msg.extra === "string" ? JSON.parse(msg.extra) : (msg.extra ?? {});
                   return {
                     ...msg,
-                    content: streamBuffer || (thinkingBuffer ? "Thinking..." : msg.content),
+                    content:
+                      stripCharacterStatusTagsForDisplay(streamBuffer) ||
+                      (thinkingBuffer ? "Thinking..." : msg.content),
                     extra: { ...parsed, attachments: null, thinking: thinkingBuffer || parsed.thinking },
                   };
                 })()
@@ -1424,6 +1434,18 @@ export function ConversationView({
           capabilityProps={{ chatId, open: true, onClose: closeGameSetup }}
         />
       )}
+
+      {/* ── Character body/mood status strip (above input) ── */}
+      {chatMeta.characterCommands !== false &&
+        (chatMeta.conversationCommandToggles as Record<string, boolean> | undefined)?.character_status !== false && (
+          <ConvoCharacterStatusStrip
+            chatId={chatId}
+            chatCharIds={chatCharIds}
+            characterMap={characterMap}
+            statusMap={chatMeta.convoCharacterStatus}
+            messages={messages}
+          />
+        )}
 
       {/* ── Input area ── */}
       <ConversationInput

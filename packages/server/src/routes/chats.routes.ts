@@ -44,6 +44,7 @@ import type {
   WorldCustomField,
 } from "@marinara-engine/shared";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
+import { maybeSyncChatConvoCharacterStatusFromTranscript } from "../services/conversation/character-status.service.js";
 import { createAppSettingsStorage } from "../services/storage/app-settings.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
@@ -426,6 +427,23 @@ function resolveEntryStateOverrides(value: unknown): EntryStateOverrides | undef
 export async function chatsRoutes(app: FastifyInstance) {
   const storage = createChatsStorage(app.db);
   const appSettings = createAppSettingsStorage(app.db);
+
+  // Deletes and swipe changes alter which per-message status snapshot is the
+  // latest, so rebuild the live body/mood ledger from the transcript afterwards.
+  const resyncConvoCharacterStatus = async (chatId: string) => {
+    try {
+      const chat = await storage.getById(chatId);
+      if (!chat) return;
+      await maybeSyncChatConvoCharacterStatusFromTranscript(
+        storage,
+        chatId,
+        chat.mode ?? "",
+        parseChatMetadata(chat.metadata),
+      );
+    } catch (err) {
+      logger.warn(err, "[chats] Convo character status resync failed");
+    }
+  };
 
   const cleanupEmptyRoleplayDmChats = async () => {
     const allChats = await storage.list();
@@ -1651,6 +1669,7 @@ export async function chatsRoutes(app: FastifyInstance) {
   // Delete message
   app.delete<{ Params: { chatId: string; messageId: string } }>("/:chatId/messages/:messageId", async (req, reply) => {
     await storage.removeMessage(req.params.messageId);
+    await resyncConvoCharacterStatus(req.params.chatId);
     return reply.status(204).send();
   });
 
@@ -1661,6 +1680,7 @@ export async function chatsRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "messageIds array is required" });
     }
     await storage.removeMessages(messageIds, req.params.chatId);
+    await resyncConvoCharacterStatus(req.params.chatId);
     return reply.status(204).send();
   });
 
@@ -2830,6 +2850,7 @@ export async function chatsRoutes(app: FastifyInstance) {
         return reply.status(404).send({ error: "Message not found" });
       }
 
+      await resyncConvoCharacterStatus(req.params.chatId);
       return updated;
     },
   );
@@ -2839,7 +2860,9 @@ export async function chatsRoutes(app: FastifyInstance) {
     "/:chatId/messages/:messageId/active-swipe",
     async (req) => {
       const { index } = req.body as { index: number };
-      return storage.setActiveSwipe(req.params.messageId, index);
+      const result = await storage.setActiveSwipe(req.params.messageId, index);
+      await resyncConvoCharacterStatus(req.params.chatId);
+      return result;
     },
   );
 
