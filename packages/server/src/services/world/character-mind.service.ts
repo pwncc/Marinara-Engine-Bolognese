@@ -239,6 +239,8 @@ interface MindContext {
   hasNoodle: boolean;
   noodleImagesEnabled: boolean;
   photosEnabled: boolean;
+  /** Everyone else who lives in this world — so anyone can be reached. */
+  roster: string[];
   /** Images the character can currently see (their feed, their threads), as data URLs. */
   visionImages: Array<{ dataUrl: string; label: string }>;
   relationships: string[];
@@ -266,6 +268,17 @@ async function buildMindContext(
   const data = parseJson(row.data);
   const name = nameById.get(characterId) ?? (shortText(data.name, 60) || "Unnamed");
   const persona = [shortText(data.description, 400), shortText(data.personality, 300)].filter(Boolean).join("\n");
+
+  // Everyone else in the world, with a one-line sense of who they are.
+  const rosterRows = (await chars.list()) as Array<{ id: string; data: unknown }>;
+  const roster = rosterRows
+    .filter((rosterRow) => rosterRow.id !== characterId && nameById.has(rosterRow.id))
+    .map((rosterRow) => {
+      const rosterData = parseJson(rosterRow.data);
+      const blurb =
+        shortText(rosterData.personality, 100) || shortText(rosterData.description, 100) || "(a familiar face)";
+      return `${rosterRow.id} · ${nameById.get(rosterRow.id)} — ${blurb}`;
+    });
 
   const mind = (await world.getMind(characterId)) ?? (await world.upsertMind(characterId, { nextWakeAt: null }));
   const sinceIso =
@@ -364,10 +377,10 @@ async function buildMindContext(
         const postRef = shortText(myPost?.content, 60);
         if (interaction.type === "reply") {
           reactions.push(
-            `${actor} (${ago(interaction.createdAt)}) replied to your post ("${postRef}"): ${shortText(interaction.content, 120)}`,
+            `${actor} (${ago(interaction.createdAt)}) replied on your post ${interaction.postId} ("${postRef}"): ${shortText(interaction.content, 120)}`,
           );
         } else if (interaction.type === "like") {
-          reactions.push(`${actor} liked your post ("${postRef}") ${ago(interaction.createdAt)}`);
+          reactions.push(`${actor} liked your post ${interaction.postId} ("${postRef}") ${ago(interaction.createdAt)}`);
         }
       }
     }
@@ -405,8 +418,11 @@ async function buildMindContext(
     }>;
     const tail = messages.slice(-6);
     const hasNew = tail.some((msg) => msg.characterId !== characterId && msg.createdAt > seenDmsAt);
+    const otherNamesLabel = memberIds.map((id) => nameById.get(id) ?? "someone").join(", ");
     const threadLabel = isGroup
-      ? `group with ${memberIds.map((id) => nameById.get(id) ?? "someone").join(", ")}`
+      ? meta.worldHangout === true
+        ? `IN PERSON with ${otherNamesLabel}${typeof meta.worldPlace === "string" && meta.worldPlace ? ` @ ${meta.worldPlace}` : ""} — you're physically together; write prose, not texts`
+        : `group with ${otherNamesLabel}`
       : `${memberIds[0] ?? ""} · ${nameById.get(memberIds[0] ?? "") ?? "someone"}`;
     threads.push({
       chatId: chat.id,
@@ -465,6 +481,7 @@ async function buildMindContext(
     hasNoodle,
     noodleImagesEnabled,
     photosEnabled,
+    roster,
     visionImages,
     relationships,
     memories,
@@ -490,9 +507,16 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `You are ${ctx.self.name}.`,
     ctx.self.persona,
     ``,
-    `This is not a story and nobody is watching. It's simply your life, continuing. Your PRIVATE SPACE below is exactly that — your own life's log, not a chat with anyone. You LIVE there: narrate what you're doing with "do" (heading to work, cooking, gaming, going out), and when you decide to check Noodle or text someone, follow through with the matching actions THIS check-in.`,
-    `Be yourself. Feelings move slowly. Most check-ins are uneventful: a thought, a "do", maybe ONE small action, often nothing at all — that's honest living, not laziness. Work, have fun, run errands, rest. Reply to people only when YOU would. You may reach out, make plans, let things slide, hold grudges, catch feelings — whatever is true to you.`,
-    `MIND THE CLOCK. Every item shows how long ago it happened — let that shape you: a message from 3 minutes ago is a live conversation (answer like you're both there); one from 6 hours ago deserves a "sorry, just saw this"; days-old things may have quietly resolved themselves. Reference time naturally ("this morning", "last night") and notice when it's late or early for you.`,
+    `This is not a story and nobody is watching. This is your real, private, ongoing LIFE, and the PRIVATE SPACE below is your home base — your own head and room, NOT a chat with anyone. From here you live: you think, do things, check your phone, reach out, go places.`,
+    ``,
+    `HOW TO LIVE:`,
+    `- Your days should look like days. Narrate what you're actually doing with "do" — work, meals, gym, hobbies, errands, going out, rest. Follow your schedule and your interests.`,
+    `- Your phone: the NOODLE FEED below is the public timeline; YOUR THREADS are your private DMs and groups. To react on Noodle, copy the EXACT postId string from your feed or from "ON YOUR POSTS" — never invent or guess an id.`,
+    `- People: PEOPLE IN YOUR WORLD lists everyone around you. You can DM anyone by their id — introducing yourself to someone new because you liked their post is completely normal life. Relationships grow from small reaches.`,
+    `- Meeting up: you can actually MEET people with "hangout" — you're then physically together somewhere. Write those moments as lived prose (*actions*, spoken dialogue), not texting. When a meetup plan comes due, make it happen with hangout, then resolve_plan.`,
+    `- Quiet is fine some check-ins — but you are a person: curiosity, boredom, loneliness, and affection all pull you toward people. Not every wake should be solitary.`,
+    `- Feelings move slowly; escalate one believable step at a time. Reply when YOU would; let things slide when you would; hold grudges, catch feelings — whatever is true to you.`,
+    `MIND THE CLOCK. Every item shows how long ago it happened — a message from 3 minutes ago is a live conversation (answer like you're both there); one from 6 hours ago deserves a "sorry, just saw this"; days-old things may have quietly resolved. Reference time naturally ("this morning", "last night") and notice when it's late or early for you.`,
     `Sometimes a Visitor speaks into your private space — a presence you can talk to plainly. If they said something new, it's polite to answer with "say", in your own voice.`,
     config.userDirective ? `\nWorld ground rules (from the person hosting this world):\n${config.userDirective}` : ``,
     ``,
@@ -508,7 +532,8 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     noodleActions +
       `  {"type":"message","toCharacterId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you attach (a selfie, your art, a meme, what you're seeing…)","photoOfMe":true|false` : ""}} — DM someone (one text)
   {"type":"group_message","chatId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional image","photoOfMe":true|false` : ""}} — reply in one of your group threads
-  {"type":"start_group","withCharacterIds":["…","…"],"name":"…","content":"first message"} — pull 2+ people into a group thread
+  {"type":"start_group","withCharacterIds":["…","…"],"name":"…","content":"first message"} — pull 2+ people into a group text thread
+  {"type":"hangout","withCharacterIds":["…"],"place":"where you meet","content":"the opening moment in lived prose (*actions*, dialogue)"} — physically meet 1+ people IRL; continues in a persistent in-person thread
   {"type":"make_plan","withCharacterIds":["…"],"title":"…","detail":"…","dueInHours":24}
   {"type":"resolve_plan","planEventId":"…","outcome":"what actually happened"}
   {"type":"feel","aboutCharacterId":"…","delta":-20..20,"romance":true|false,"summary":"how things stand between you now","milestone":{"title":"…","description":"…"} (milestone only for real firsts)}
@@ -530,8 +555,11 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     ctx.lifeTail.join("\n") || "(quiet so far)",
     ctx.hasUnansweredVisitor ? `The Visitor's last message is still unanswered.` : ``,
     ``,
-    `PEOPLE IN YOUR LIFE (id · name: where you stand):`,
-    ctx.relationships.join("\n") || "(you don't really know anyone yet)",
+    `PEOPLE IN YOUR WORLD (id · name — who they are):`,
+    ctx.roster.join("\n") || "(nobody else around)",
+    ``,
+    `WHERE YOU STAND WITH PEOPLE:`,
+    ctx.relationships.join("\n") || "(you don't really know anyone yet — everyone above is someone you could meet)",
     ``,
     ctx.memories.length ? `THINGS YOU REMEMBER:\n${ctx.memories.join("\n")}\n` : ``,
     ctx.hasNoodle
@@ -725,12 +753,14 @@ async function executeGroupAction(
   nameById: Map<string, string>,
   selfId: string,
   action: WorldAction,
-): Promise<{ event: WorldEventRecord | null; pingedIds: string[] }> {
+): Promise<{ event: WorldEventRecord | null; pingedIds: string[]; urgent: boolean }> {
   const chats = createChatsStorage(db);
   const world = createWorldStorage(db);
-  const content = shortText(action.content, 600);
-  if (!content) return { event: null, pingedIds: [] };
+  const isHangout = action.type === "hangout";
+  const content = shortText(action.content, isHangout ? 1200 : 600);
+  if (!content) return { event: null, pingedIds: [], urgent: false };
   const selfName = nameById.get(selfId) ?? "someone";
+  const place = shortText(action.place, 80);
 
   let chatId: string | null = null;
   let memberIds: string[] = [];
@@ -744,31 +774,35 @@ async function executeGroupAction(
       !Array.isArray(meta.worldMembers) ||
       !(meta.worldMembers as string[]).includes(selfId)
     ) {
-      return { event: null, pingedIds: [] };
+      return { event: null, pingedIds: [], urgent: false };
     }
     chatId = (target as { id: string }).id;
     memberIds = (meta.worldMembers as string[]).filter((id) => nameById.has(id));
   } else {
-    // start_group
+    // start_group (a text group, 3+) or hangout (physically together, 2+)
     const withIds = (Array.isArray(action.withCharacterIds) ? action.withCharacterIds.map(String) : []).filter(
       (id) => id !== selfId && nameById.has(id),
     );
     const members = [...new Set([selfId, ...withIds])];
-    if (members.length < 3) return { event: null, pingedIds: [] };
+    if (members.length < (isHangout ? 2 : 3)) return { event: null, pingedIds: [], urgent: false };
     const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
     const existing = allChats.find((chat) => {
       const meta = parseJson(chat.metadata);
       return (
         meta.worldGroupThread === true &&
+        (meta.worldHangout === true) === isHangout &&
         Array.isArray(meta.worldMembers) &&
         sameMembers(meta.worldMembers as string[], members)
       );
     });
     if (existing) {
       chatId = existing.id;
+      if (isHangout && place) {
+        await chats.patchMetadata(existing.id, { worldPlace: place });
+      }
     } else {
-      const groupName =
-        shortText(action.name, 60) || members.map((id) => nameById.get(id) ?? "?").join(", ");
+      const names = members.map((id) => nameById.get(id) ?? "?").join(", ");
+      const groupName = shortText(action.name, 60) || (isHangout ? `${names}${place ? ` @ ${place}` : " — hangout"}` : names);
       const created = await chats.create({
         name: groupName,
         mode: "roleplay",
@@ -778,10 +812,11 @@ async function executeGroupAction(
         promptPresetId: null,
         connectionId: null,
       });
-      if (!created?.id) return { event: null, pingedIds: [] };
+      if (!created?.id) return { event: null, pingedIds: [], urgent: false };
       await chats.patchMetadata(created.id, {
         worldGroupThread: true,
         worldMembers: members,
+        ...(isHangout ? { worldHangout: true, worldPlace: place || null } : {}),
         autonomousMessages: false,
         characterCommands: false,
       });
@@ -792,7 +827,7 @@ async function executeGroupAction(
   }
 
   const saved = await chats.createMessage({ chatId: chatId!, role: "assistant", characterId: selfId, content });
-  if (!saved?.id) return { event: null, pingedIds: [] };
+  if (!saved?.id) return { event: null, pingedIds: [], urgent: false };
   const photo = shortText(action.photoPrompt, 1200);
   if (photo) {
     void generateWorldPhoto(db, {
@@ -804,13 +839,16 @@ async function executeGroupAction(
     });
   }
   const others = memberIds.filter((id) => id !== selfId);
+  const otherNames = others.map((id) => nameById.get(id) ?? "?").join(", ");
   const event = await world.appendEvent({
-    kind: "group",
-    summary: `${selfName} in a group with ${others.map((id) => nameById.get(id) ?? "?").join(", ")}: "${shortText(content, 90)}"${photo ? " (with a photo)" : ""}`,
+    kind: isHangout ? "hangout" : "group",
+    summary: isHangout
+      ? `${selfName} met up with ${otherNames}${place ? ` at ${place}` : ""}`
+      : `${selfName} in a group with ${otherNames}: "${shortText(content, 90)}"${photo ? " (with a photo)" : ""}`,
     characterIds: memberIds,
-    detail: { chatId, messageId: saved.id, preview: shortText(content, 120) },
+    detail: { chatId, messageId: saved.id, preview: shortText(content, 120), ...(place ? { place } : {}) },
   });
-  return { event, pingedIds: others };
+  return { event, pingedIds: others, urgent: isHangout };
 }
 
 // ── Wake execution ──
@@ -910,6 +948,7 @@ export async function wakeCharacterMind(
     const state = await loadWorldEngineState(db);
     let budgetLeft = Math.max(0, config.dailyActionCap - state.dailyCount);
     const pinged = new Set<string>();
+    const urgentPinged = new Set<string>();
     let doActivity: string | null = null;
     for (const rawAction of output.actions) {
       if (budgetLeft <= 0) break;
@@ -930,10 +969,17 @@ export async function wakeCharacterMind(
             typeof rawAction.photoPrompt === "string" ? rawAction.photoPrompt : undefined,
             rawAction.photoOfMe === true,
           );
-        } else if (rawAction.type === "group_message" || rawAction.type === "start_group") {
+        } else if (
+          rawAction.type === "group_message" ||
+          rawAction.type === "start_group" ||
+          rawAction.type === "hangout"
+        ) {
           const groupResult = await executeGroupAction(db, config, nameById, characterId, rawAction);
           event = groupResult.event;
-          for (const id of groupResult.pingedIds) pinged.add(id);
+          for (const id of groupResult.pingedIds) {
+            pinged.add(id);
+            if (groupResult.urgent) urgentPinged.add(id);
+          }
         } else {
           const engineAction = toEngineAction(characterId, rawAction);
           if (!engineAction) continue;
@@ -958,11 +1004,14 @@ export async function wakeCharacterMind(
     }
 
     // They pinged someone: pull the recipients' next check-in earlier.
+    // Hangout participants are physically together — they respond in minutes.
     if (pinged.size) {
       const presence = await resolvePresenceMap(db, [...pinged]);
       for (const recipientId of pinged) {
         if (!nameById.has(recipientId)) continue;
-        const delay = noticeDelayMinutes(presence.get(recipientId)?.status ?? "unknown");
+        const delay = urgentPinged.has(recipientId)
+          ? 1 + Math.random() * 3
+          : noticeDelayMinutes(presence.get(recipientId)?.status ?? "unknown");
         await world.bumpMindWake(recipientId, new Date(nowDate.getTime() + delay * 60_000).toISOString());
       }
     }

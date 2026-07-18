@@ -16,6 +16,7 @@ import {
   HeartHandshake,
   Lightbulb,
   Loader2,
+  MapPin,
   MessageCircle,
   PenSquare,
   Play,
@@ -55,6 +56,17 @@ function parseCharacterRowName(data: unknown): string {
   }
 }
 
+const KIND_FILTERS: Array<{ key: string; label: string; kinds: string[] | null }> = [
+  { key: "all", label: "All", kinds: null },
+  { key: "thoughts", label: "Thoughts", kinds: ["thought", "say"] },
+  { key: "living", label: "Living", kinds: ["activity", "hangout"] },
+  { key: "noodle", label: "Noodle", kinds: ["noodle_post", "noodle_reply", "noodle_like", "noodle_follow"] },
+  { key: "messages", label: "Messages", kinds: ["dm", "group"] },
+  { key: "bonds", label: "Bonds", kinds: ["relationship", "milestone"] },
+  { key: "memories", label: "Memories", kinds: ["memory"] },
+  { key: "plans", label: "Plans", kinds: ["plan", "plan_completed"] },
+];
+
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
   if (!Number.isFinite(then)) return "";
@@ -73,6 +85,8 @@ function eventIcon(kind: string) {
       return <Lightbulb size="0.8rem" className="text-amber-300" />;
     case "say":
       return <MessageCircle size="0.8rem" className="text-amber-400" />;
+    case "hangout":
+      return <MapPin size="0.8rem" className="text-emerald-400" />;
     case "group":
       return <UsersRound size="0.8rem" className="text-sky-400" />;
     case "dm":
@@ -540,8 +554,14 @@ export function WorldPanel() {
   const [tab, setTab] = useState<"timeline" | "bonds">("timeline");
   const [configOpen, setConfigOpen] = useState(false);
   const [filterCharacterId, setFilterCharacterId] = useState<string | null>(null);
+  const [kindFilter, setKindFilter] = useState("all");
 
   const { data: feed, isLoading: feedLoading } = useWorldFeed(filterCharacterId);
+  const filteredEvents = useMemo(() => {
+    const kinds = KIND_FILTERS.find((filter) => filter.key === kindFilter)?.kinds ?? null;
+    const events = feed?.events ?? [];
+    return kinds ? events.filter((event) => kinds.includes(event.kind)) : events;
+  }, [feed?.events, kindFilter]);
   const { data: bonds, isLoading: bondsLoading } = useWorldRelationships();
 
   const needsSetup = !!status && (!status.config.connectionId || !status.config.enabled);
@@ -670,6 +690,23 @@ export function WorldPanel() {
 
       {tab === "timeline" ? (
         <div className="space-y-1.5">
+          <div className="flex gap-1 overflow-x-auto pb-0.5 [scrollbar-width:thin]">
+            {KIND_FILTERS.map((filter) => (
+              <button
+                key={filter.key}
+                type="button"
+                onClick={() => setKindFilter(filter.key)}
+                className={cn(
+                  "shrink-0 rounded-full border px-2 py-0.5 text-[0.65rem] transition-colors",
+                  kindFilter === filter.key
+                    ? "border-[var(--primary)]/70 bg-[var(--primary)]/15 font-medium"
+                    : "border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
+                )}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
           {characterOptions.length > 1 ? (
             <select
               className={inputClass}
@@ -689,8 +726,8 @@ export function WorldPanel() {
             <div className="flex justify-center py-6">
               <Loader2 size="1rem" className="animate-spin text-[var(--muted-foreground)]" />
             </div>
-          ) : feed?.events.length ? (
-            feed.events.map((event) => <EventRow key={event.id} event={event} />)
+          ) : filteredEvents.length ? (
+            filteredEvents.map((event) => <EventRow key={event.id} event={event} />)
           ) : (
             <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-4 text-center text-[0.7rem] leading-relaxed text-[var(--muted-foreground)]">
               Nothing has happened yet. Enable the world (or tap Advance) and life will start trickling in —
