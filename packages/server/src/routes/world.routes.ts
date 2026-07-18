@@ -125,7 +125,7 @@ export async function worldRoutes(app: FastifyInstance) {
         removedChats += 1;
       }
     }
-    // Remove the (now-empty) Living World folder.
+    // Remove the (now-empty) Living World folders (one per sidebar tab).
     for (const folder of await folders.list()) {
       if (folder.name === "Living World") await folders.remove(folder.id);
     }

@@ -114,16 +114,17 @@ const WORLD_FOLDER_NAME = "Living World";
  * World chats (life spaces, DM/group threads) file into their own sidebar
  * folder instead of cluttering the user's personal conversation list.
  */
-export async function ensureWorldChatFolder(db: DB): Promise<string | null> {
+export async function ensureWorldChatFolder(db: DB, mode: "conversation" | "roleplay"): Promise<string | null> {
   try {
     const folders = createChatFoldersStorage(db);
+    // Folders belong to a sidebar tab (mode), so DMs (conversation) and life
+    // spaces/hangouts (roleplay) each need their own Living World folder or the
+    // chat won't appear under its tab.
     const existing = (await folders.list()).find(
-      (folder) => folder.name === WORLD_FOLDER_NAME && folder.mode === "roleplay",
+      (folder) => folder.name === WORLD_FOLDER_NAME && folder.mode === mode,
     );
     if (existing) return String(existing.id);
-    const created = await folders.create({ name: WORLD_FOLDER_NAME, mode: "roleplay" } as Parameters<
-      typeof folders.create
-    >[0]);
+    const created = await folders.create({ name: WORLD_FOLDER_NAME, mode } as Parameters<typeof folders.create>[0]);
     return created ? String(created.id) : null;
   } catch (error) {
     logger.warn(error, "[world] Could not ensure the Living World chat folder");
@@ -131,12 +132,15 @@ export async function ensureWorldChatFolder(db: DB): Promise<string | null> {
   }
 }
 
-/** File a world chat into the Living World folder (best-effort). */
+/** File a world chat into the Living World folder matching its own mode. */
 export async function fileWorldChat(db: DB, chatId: string): Promise<void> {
-  const folderId = await ensureWorldChatFolder(db);
+  const chats = createChatsStorage(db);
+  const chat = await chats.getById(chatId);
+  const mode = (chat as { mode?: string } | null)?.mode === "conversation" ? "conversation" : "roleplay";
+  const folderId = await ensureWorldChatFolder(db, mode);
   if (!folderId) return;
   try {
-    await createChatsStorage(db).setFolderForChat(chatId, folderId);
+    await chats.setFolderForChat(chatId, folderId);
   } catch (error) {
     logger.debug(error, "[world] Could not file chat %s into the world folder", chatId);
   }
@@ -724,6 +728,7 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
           worldPair: [a, b],
           autonomousMessages: false,
           characterCommands: false,
+          groupChatMode: "individual",
         });
         await fileWorldChat(db, created.id);
         dmChatId = created.id;

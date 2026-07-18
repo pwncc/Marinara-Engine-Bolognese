@@ -936,6 +936,8 @@ async function executeGroupAction(
         ...(isHangout ? { worldHangout: true, worldPlace: place || null } : {}),
         autonomousMessages: false,
         characterCommands: false,
+        // Each character speaks as themselves, not merged into one narrator.
+        groupChatMode: "individual",
       });
       await fileWorldChat(db, created.id);
       chatId = created.id;
@@ -1199,9 +1201,10 @@ export async function ensureMindsInitialized(db: DB, config: WorldEngineConfig):
   const nameById = await buildNameMap(db, config);
   const existing = new Set((await world.listMinds()).map((mind) => mind.id));
 
-  // Migration sweep: world chats live under the RP tab in the Living World
-  // folder — convert stragglers created as conversation chats or left unfiled.
-  const worldFolderId = await ensureWorldChatFolder(db);
+  // Migration sweep: normalize every world chat's mode, folder (per-mode), and
+  // group generation so each character speaks as themselves (not one narrator).
+  const rpFolderId = await ensureWorldChatFolder(db, "roleplay");
+  const convoFolderId = await ensureWorldChatFolder(db, "conversation");
   const allChats = (await chats.list()) as Array<{
     id: string;
     mode?: string | null;
@@ -1218,7 +1221,13 @@ export async function ensureMindsInitialized(db: DB, config: WorldEngineConfig):
     if (chat.mode !== wantMode) {
       await chats.update(chat.id, { mode: wantMode });
     }
-    if (!chat.folderId || (worldFolderId && chat.folderId !== worldFolderId)) {
+    // Multi-character world chats speak individually, never merged/narrator.
+    const isMulti = meta.worldDmThread === true || meta.worldGroupThread === true;
+    if (isMulti && meta.groupChatMode !== "individual") {
+      await chats.patchMetadata(chat.id, { groupChatMode: "individual" });
+    }
+    const wantFolderId = wantMode === "conversation" ? convoFolderId : rpFolderId;
+    if (wantFolderId && chat.folderId !== wantFolderId) {
       await fileWorldChat(db, chat.id);
     }
   }
