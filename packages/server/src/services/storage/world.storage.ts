@@ -213,15 +213,18 @@ export function createWorldStorage(db: DB) {
       return toMindRow(row);
     },
 
-    /** Pull a character's wake earlier (e.g. they received a DM), never later. */
+    /**
+     * Pull a character's wake earlier (they were pinged — DM, group message,
+     * user intrusion), never later. Ping-wakes bypass the world's global pace:
+     * answering promptly is the one fast thing real people do.
+     */
     async bumpMindWake(characterId: string, notLaterThanIso: string): Promise<void> {
       const existing = await this.getMind(characterId);
-      if (!existing) {
-        await this.upsertMind(characterId, { nextWakeAt: notLaterThanIso });
-        return;
-      }
-      if (!existing.nextWakeAt || existing.nextWakeAt > notLaterThanIso) {
-        await this.upsertMind(characterId, { nextWakeAt: notLaterThanIso });
+      const cursors = { ...(existing?.cursors ?? {}), wakeReason: "ping" };
+      if (!existing || !existing.nextWakeAt || existing.nextWakeAt > notLaterThanIso) {
+        await this.upsertMind(characterId, { nextWakeAt: notLaterThanIso, cursors });
+      } else {
+        await this.upsertMind(characterId, { cursors });
       }
     },
 

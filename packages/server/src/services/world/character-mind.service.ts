@@ -68,6 +68,28 @@ function shortText(value: unknown, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+/** "just now" / "4m ago" / "2h ago" / "3d ago" — so minds feel elapsed time. */
+export function ago(iso: string | null | undefined, now: Date = new Date()): string {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const mins = Math.round((now.getTime() - then) / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 60 * 24) return `${Math.round(mins / 60)}h ago`;
+  return `${Math.round(mins / (60 * 24))}d ago`;
+}
+
+function localClock(now: Date): string {
+  return now.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function sameMembers(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const sortedA = [...a].sort();
@@ -252,8 +274,8 @@ async function buildMindContext(
   }>;
   const lifeTail = lifeMessages.slice(-MAX_LIFE_TAIL).map((msg) => {
     const who = msg.role === "user" ? "Visitor" : "you";
-    const fresh = msg.role === "user" && msg.createdAt > seenDmsAt ? " (new)" : "";
-    return `${who}${fresh}: ${shortText(msg.content, 200)}`;
+    const fresh = msg.role === "user" && msg.createdAt > seenDmsAt ? ", new" : "";
+    return `${who} (${ago(msg.createdAt)}${fresh}): ${shortText(msg.content, 200)}`;
   });
   const lastMessage = lifeMessages[lifeMessages.length - 1];
   const hasUnansweredVisitor = !!lastMessage && lastMessage.role === "user";
@@ -287,7 +309,7 @@ async function buildMindContext(
     for (const post of posts) {
       const authorName = shortText(parseJson(post.authorSnapshot).displayName, 40) || "someone";
       if (post.authorAccountId !== myAccountId && post.createdAt > sinceIso && feed.length < MAX_FEED_ITEMS) {
-        feed.push(`${post.id} · ${authorName}: ${shortText(post.content, 140)}`);
+        feed.push(`${post.id} · ${authorName} (${ago(post.createdAt)}): ${shortText(post.content, 140)}`);
       }
     }
     const myPosts = posts.filter((post) => post.authorAccountId === myAccountId).slice(0, 5);
@@ -299,9 +321,11 @@ async function buildMindContext(
         const myPost = myPosts.find((post) => post.id === interaction.postId);
         const postRef = shortText(myPost?.content, 60);
         if (interaction.type === "reply") {
-          reactions.push(`${actor} replied to your post ("${postRef}"): ${shortText(interaction.content, 120)}`);
+          reactions.push(
+            `${actor} (${ago(interaction.createdAt)}) replied to your post ("${postRef}"): ${shortText(interaction.content, 120)}`,
+          );
         } else if (interaction.type === "like") {
-          reactions.push(`${actor} liked your post ("${postRef}")`);
+          reactions.push(`${actor} liked your post ("${postRef}") ${ago(interaction.createdAt)}`);
         }
       }
     }
@@ -353,8 +377,8 @@ async function buildMindContext(
             : msg.characterId === characterId
               ? "you"
               : (nameById.get(msg.characterId ?? "") ?? "them");
-        const fresh = msg.characterId !== characterId && msg.createdAt > seenDmsAt ? " (new)" : "";
-        return `${who}${fresh}: ${shortText(msg.content, 150)}`;
+        const fresh = msg.characterId !== characterId && msg.createdAt > seenDmsAt ? ", new" : "";
+        return `${who} (${ago(msg.createdAt)}${fresh}): ${shortText(msg.content, 150)}`;
       }),
     });
   }
@@ -367,7 +391,7 @@ async function buildMindContext(
   const recentAboutMe = (await world.listEvents({ characterId, limit: 14 }))
     .filter((event) => event.kind !== "thought" && event.kind !== "say")
     .slice(0, 6)
-    .map((event) => `[${event.createdAt.slice(5, 16)}] ${event.summary}`)
+    .map((event) => `(${ago(event.createdAt)}) ${event.summary}`)
     .reverse();
 
   return {
@@ -404,6 +428,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     ``,
     `This is not a story and nobody is watching. It's simply your life, continuing. You just found a quiet moment to think and maybe check your phone.`,
     `Be yourself. Feelings move slowly. Most check-ins are uneventful: a thought, maybe ONE small action, often nothing at all — that's honest living, not laziness. Reply to people only when YOU would. You may reach out, make plans, let things slide, hold grudges, catch feelings — whatever is true to you.`,
+    `MIND THE CLOCK. Every item shows how long ago it happened — let that shape you: a message from 3 minutes ago is a live conversation (answer like you're both there); one from 6 hours ago deserves a "sorry, just saw this"; days-old things may have quietly resolved themselves. Reference time naturally ("this morning", "last night") and notice when it's late or early for you.`,
     `Sometimes a Visitor speaks into your private space — a presence you can talk to plainly. If they said something new, it's polite to answer with "say", in your own voice.`,
     config.userDirective ? `\nWorld ground rules (from the person hosting this world):\n${config.userDirective}` : ``,
     ``,
@@ -430,7 +455,8 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     .join("\n");
 
   const user = [
-    `It's ${now.toISOString()} (${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][now.getDay()]}).`,
+    `It's ${localClock(now)}.`,
+    ctx.mind.lastWakeAt ? `You last checked in ${ago(ctx.mind.lastWakeAt, now)}.` : `This is your first check-in here.`,
     `Your schedule right now: ${ctx.presence.status}${ctx.presence.activity ? ` — ${ctx.presence.activity}` : ""}.`,
     ctx.mind.mood ? `Your mood lately: ${ctx.mind.mood}.` : ``,
     ctx.mind.intention ? `You had meant to: ${ctx.mind.intention}` : ``,
@@ -805,7 +831,7 @@ export async function wakeCharacterMind(
       intention: output.intention ?? undefined,
       lastWakeAt: nowIso,
       nextWakeAt: new Date(nowDate.getTime() + gap * 60_000).toISOString(),
-      cursors: { seenPostsAt: nowIso, seenDmsAt: nowIso },
+      cursors: { seenPostsAt: nowIso, seenDmsAt: nowIso, wakeReason: "self" },
     });
 
     logger.info(
@@ -858,13 +884,37 @@ export interface MindsCycleResult {
   skippedReason: string | null;
 }
 
-/** Wake due minds (default: at most ONE per cycle, respecting the world pace). */
+/** How many ping-response wakes may run per cycle (active conversations flow). */
+const MAX_PING_WAKES_PER_CYCLE = 3;
+
+/**
+ * Split due minds into two lanes: ping-responses (someone addressed them —
+ * these flow at texting speed and ignore the global pace) and spontaneous
+ * check-ins (one at a time, keeping the world's slow trickle).
+ */
+export function selectDueMinds(
+  minds: CharacterMindRow[],
+  nowIso: string,
+  options: { force?: boolean; paceOpen: boolean; scheduledLimit: number },
+): CharacterMindRow[] {
+  const due = minds
+    .filter((mind) => options.force || !mind.nextWakeAt || mind.nextWakeAt <= nowIso)
+    .sort((a, b) => String(a.nextWakeAt ?? "").localeCompare(String(b.nextWakeAt ?? "")));
+  if (options.force) return due.slice(0, Math.max(1, options.scheduledLimit));
+  const pinged = due.filter((mind) => mind.cursors.wakeReason === "ping").slice(0, MAX_PING_WAKES_PER_CYCLE);
+  const scheduled = options.paceOpen
+    ? due.filter((mind) => mind.cursors.wakeReason !== "ping").slice(0, options.scheduledLimit)
+    : [];
+  return [...pinged, ...scheduled];
+}
+
+/** Wake due minds: ping-responses flow freely, spontaneous wakes keep the pace. */
 export async function wakeDueCharacterMinds(
   db: DB,
   options: { limit?: number; force?: boolean } = {},
 ): Promise<MindsCycleResult> {
   const config = await loadWorldEngineConfig(db);
-  const limit = Math.max(1, options.limit ?? 1);
+  const scheduledLimit = Math.max(1, options.limit ?? 1);
   const result: MindsCycleResult = { woke: [], skippedReason: null };
 
   const state = await loadWorldEngineState(db);
@@ -877,23 +927,18 @@ export async function wakeDueCharacterMinds(
   const world = createWorldStorage(db);
   const nameById = await buildNameMap(db, config);
 
-  // Global pace: the world trickles — scheduled wakes keep a minimum gap.
+  // Global pace gates only SPONTANEOUS wakes — conversations keep flowing.
+  let paceOpen = true;
   if (!options.force && state.lastRunAt) {
     const gapMs = worldPaceGapMinutes(config, nameById.size) * 60_000 * (0.7 + Math.random() * 0.6);
-    if (Date.now() < new Date(state.lastRunAt).getTime() + gapMs) {
-      result.skippedReason = "keeping the world's pace";
-      return result;
-    }
+    paceOpen = Date.now() >= new Date(state.lastRunAt).getTime() + gapMs;
   }
 
   const nowIso = new Date().toISOString();
-  const due = (await world.listMinds())
-    .filter((mind) => nameById.has(mind.id))
-    .filter((mind) => options.force || !mind.nextWakeAt || mind.nextWakeAt <= nowIso)
-    .sort((a, b) => String(a.nextWakeAt ?? "").localeCompare(String(b.nextWakeAt ?? "")))
-    .slice(0, limit);
+  const memberMinds = (await world.listMinds()).filter((mind) => nameById.has(mind.id));
+  const due = selectDueMinds(memberMinds, nowIso, { force: options.force, paceOpen, scheduledLimit });
   if (!due.length) {
-    result.skippedReason = "no minds due";
+    result.skippedReason = paceOpen ? "no minds due" : "keeping the world's pace";
     return result;
   }
 
@@ -904,10 +949,15 @@ export async function wakeDueCharacterMinds(
   }
 
   for (const mind of due) {
+    const wasPing = mind.cursors.wakeReason === "ping";
     result.woke.push(await wakeCharacterMind(db, mind.id, { provider: resolved }));
-    await saveWorldEngineStatePatch(db, (current) => {
-      current.lastRunAt = new Date().toISOString();
-    });
+    // Only spontaneous wakes advance the pace clock — a flowing conversation
+    // shouldn't starve everyone else's check-ins.
+    if (!wasPing) {
+      await saveWorldEngineStatePatch(db, (current) => {
+        current.lastRunAt = new Date().toISOString();
+      });
+    }
   }
   return result;
 }
