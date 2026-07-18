@@ -334,6 +334,30 @@ function WorldConfigForm({
         </select>
       </label>
 
+      {draft.mode === "minds" ? (
+        <label className="block space-y-0.5">
+          <span className="text-[0.65rem] text-[var(--muted-foreground)]">World pace</span>
+          <select
+            className={inputClass}
+            value={String(
+              [2, 5, 15, 45, 90].includes(draft.wakeIntervalMinutes) ? draft.wakeIntervalMinutes : "custom",
+            )}
+            onChange={(e) => {
+              if (e.target.value !== "custom") {
+                setDraft({ ...draft, wakeIntervalMinutes: Number.parseInt(e.target.value, 10) });
+              }
+            }}
+          >
+            <option value="2">Bustling — everyone acts every couple of minutes</option>
+            <option value="5">Lively — turns every ~5 minutes</option>
+            <option value="15">Casual — turns every ~15 minutes</option>
+            <option value="45">Relaxed — a slower day-to-day drift</option>
+            <option value="90">Slow life — hours between check-ins</option>
+            <option value="custom">Custom (set below)</option>
+          </select>
+        </label>
+      ) : null}
+
       <label className="block space-y-0.5">
         <span className="text-[0.65rem] text-[var(--muted-foreground)]">
           Connection ({draft.mode === "minds" ? "each mind thinks with this" : "the director plans with this"})
@@ -359,7 +383,7 @@ function WorldConfigForm({
             <span className="text-[0.65rem] text-[var(--muted-foreground)]">Check-in avg (min)</span>
             <input
               type="number"
-              min={15}
+              min={1}
               max={1440}
               className={inputClass}
               value={draft.wakeIntervalMinutes}
@@ -410,12 +434,18 @@ function WorldConfigForm({
       </div>
       {draft.mode === "minds" ? (
         <p className="text-[0.6rem] leading-snug text-[var(--muted-foreground)]">
-          Each character wakes on their own clock (schedule &amp; events shift it — a DM pulls the recipient&apos;s
-          check-in earlier), thinks privately, and freely chooses to act or not. Roughly {""}
+          Everyone gets a turn roughly every {Math.max(1, draft.wakeIntervalMinutes)} min, at offset times — pings
+          (DMs, your messages) answer faster. Budget honesty:{" "}
           <span className="text-[var(--foreground)]">
-            {Math.max(1, Math.round((24 * 60) / Math.max(15, draft.wakeIntervalMinutes)))} wakes/day/character
-          </span>
-          .
+            {(everyone ? characterRows.length : memberSet.size) || 0} characters ×{" "}
+            {Math.max(1, Math.round((24 * 60) / Math.max(1, draft.wakeIntervalMinutes)))} check-ins/day ≈{" "}
+            {(
+              ((everyone ? characterRows.length : memberSet.size) || 0) *
+              Math.max(1, Math.round((24 * 60) / Math.max(1, draft.wakeIntervalMinutes)))
+            ).toLocaleString()}{" "}
+            model calls/day
+          </span>{" "}
+          (daily cap still applies).
         </p>
       ) : null}
 

@@ -84,7 +84,7 @@ export function normalizeWorldEngineConfig(raw: unknown): WorldEngineConfig {
     allowMemories: data.allowMemories !== false,
     mode: data.mode === "director" ? "director" : "minds",
     wakeIntervalMinutes: Math.round(
-      num(data.wakeIntervalMinutes, DEFAULT_WORLD_ENGINE_CONFIG.wakeIntervalMinutes, 15, 24 * 60),
+      num(data.wakeIntervalMinutes, DEFAULT_WORLD_ENGINE_CONFIG.wakeIntervalMinutes, 1, 24 * 60),
     ),
     temperature: num(data.temperature, DEFAULT_WORLD_ENGINE_CONFIG.temperature, 0, 2),
     userDirective: typeof data.userDirective === "string" ? data.userDirective.slice(0, 2000) : "",
@@ -912,7 +912,7 @@ export async function runWorldTick(db: DB, options: { manual?: boolean } = {}): 
   if (config.mode === "minds") {
     // Imported lazily: character-mind.service imports from this module.
     const { wakeDueCharacterMinds } = await import("./character-mind.service.js");
-    const cycle = await wakeDueCharacterMinds(db, { limit: 1, force: options.manual });
+    const cycle = await wakeDueCharacterMinds(db, { limit: 3, force: options.manual });
     const events = cycle.woke.flatMap((wake) => wake.events);
     const failed = cycle.woke.find((wake) => !wake.ok);
     const firstThought = cycle.woke.find((wake) => wake.thought);

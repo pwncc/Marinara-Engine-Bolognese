@@ -50,7 +50,11 @@ const MAX_ACTIONS_PER_WAKE = 3;
 const MAX_LIFE_TAIL = 12;
 const MAX_FEED_ITEMS = 10;
 const MAX_THREADS = 5;
-const MIN_CHECKIN_MINUTES = 15;
+
+/** Everything pace-related scales with the configured check-in interval. */
+function minCheckinMinutes(config: WorldEngineConfig): number {
+  return Math.max(1, Math.min(15, config.wakeIntervalMinutes * 0.4));
+}
 
 function parseJson(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>;
@@ -437,7 +441,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `  "thought": "your private journal line for this moment (always; first person)",`,
     `  "mood": "1-4 words (optional)",`,
     `  "intention": "what you're up to / meaning to do next (optional, replaces the old one)",`,
-    `  "nextCheckInMinutes": ${MIN_CHECKIN_MINUTES}-${config.wakeIntervalMinutes * 4} — when you'd naturally check in again,`,
+    `  "nextCheckInMinutes": ${Math.round(minCheckinMinutes(config))}-${config.wakeIntervalMinutes * 4} — when you'd naturally check in again,`,
     `  "actions": [ 0-${MAX_ACTIONS_PER_WAKE} of:`,
     `  {"type":"say","content":"…"} — speak aloud in your own space (answers the Visitor if they wrote)`,
     noodleActions +
@@ -821,10 +825,15 @@ export async function wakeCharacterMind(
     const requested = output.nextCheckInMinutes;
     const maxGap = config.wakeIntervalMinutes * 4;
     let gap = Number.isFinite(requested as number)
-      ? Math.max(MIN_CHECKIN_MINUTES, Math.min(maxGap, requested as number))
+      ? Math.max(minCheckinMinutes(config), Math.min(maxGap, requested as number))
       : config.wakeIntervalMinutes * (0.6 + Math.random() * 0.8);
-    if (ctx.presence.status === "offline") gap = Math.max(gap, 90 + Math.random() * 120);
-    else if (ctx.presence.status === "dnd") gap = Math.max(gap, 60 + Math.random() * 60);
+    // Presence floors scale with the configured pace: at a slow-life pace an
+    // offline character sleeps for hours; at a bustling pace, minutes.
+    if (ctx.presence.status === "offline") {
+      gap = Math.max(gap, config.wakeIntervalMinutes * (3 + Math.random() * 3));
+    } else if (ctx.presence.status === "dnd") {
+      gap = Math.max(gap, config.wakeIntervalMinutes * (1.5 + Math.random() * 1.5));
+    }
     const nowIso = nowDate.toISOString();
     await world.upsertMind(characterId, {
       mood: output.mood ?? undefined,
@@ -857,26 +866,39 @@ export async function wakeCharacterMind(
 
 // ── Scheduling ──
 
-/** Ensure every member has a mind row; stagger brand-new minds' first wakes. */
+/**
+ * Ensure every member has a mind row (first wakes staggered at offset times)
+ * and — when noodle is allowed — an invited Noodle account, so world members
+ * can actually post without a manual invite step.
+ */
 export async function ensureMindsInitialized(db: DB, config: WorldEngineConfig): Promise<void> {
   const world = createWorldStorage(db);
+  const noodle = createNoodleStorage(db);
   const nameById = await buildNameMap(db, config);
   const existing = new Set((await world.listMinds()).map((mind) => mind.id));
-  for (const characterId of nameById.keys()) {
+  for (const [characterId, name] of nameById) {
+    if (config.allowNoodle) {
+      const account = await noodle.getAccountByEntity("character", characterId);
+      if (!account) {
+        await noodle.upsertAccountFromProfile({ kind: "character", entityId: characterId, displayName: name, invited: true });
+      } else if (!account.invited) {
+        await noodle.updateAccount(account.id, { invited: true });
+      }
+    }
     if (existing.has(characterId)) continue;
-    // First wakes spread across a generous window so a fresh world starts as a
-    // trickle, not a stampede.
-    const stagger = (0.1 + Math.random() * 1.4) * config.wakeIntervalMinutes;
+    // First wakes spread across the interval at offset times — everyone gets a
+    // turn within roughly one window of enabling.
+    const stagger = (0.05 + Math.random() * 0.95) * config.wakeIntervalMinutes;
     await world.upsertMind(characterId, {
       nextWakeAt: new Date(Date.now() + stagger * 60_000).toISOString(),
     });
   }
 }
 
-/** Minimum real-time gap between scheduled wakes, scaled to the roster. */
+/** Minimum real-time gap between spontaneous wakes, scaled to pace and roster. */
 export function worldPaceGapMinutes(config: WorldEngineConfig, memberCount: number): number {
-  const base = config.wakeIntervalMinutes / Math.max(2, memberCount * 2);
-  return Math.max(3, Math.min(20, base));
+  const base = config.wakeIntervalMinutes / Math.max(2, memberCount);
+  return Math.max(0.25, Math.min(20, base));
 }
 
 export interface MindsCycleResult {
@@ -885,7 +907,12 @@ export interface MindsCycleResult {
 }
 
 /** How many ping-response wakes may run per cycle (active conversations flow). */
-const MAX_PING_WAKES_PER_CYCLE = 3;
+const MAX_PING_WAKES_PER_CYCLE = 4;
+
+/** Scheduled wakes per cycle scale with the roster so everyone gets turns. */
+export function scheduledWakesPerCycle(memberCount: number): number {
+  return Math.max(1, Math.min(4, Math.ceil(memberCount / 4)));
+}
 
 /**
  * Split due minds into two lanes: ping-responses (someone addressed them —
@@ -914,7 +941,6 @@ export async function wakeDueCharacterMinds(
   options: { limit?: number; force?: boolean } = {},
 ): Promise<MindsCycleResult> {
   const config = await loadWorldEngineConfig(db);
-  const scheduledLimit = Math.max(1, options.limit ?? 1);
   const result: MindsCycleResult = { woke: [], skippedReason: null };
 
   const state = await loadWorldEngineState(db);
@@ -926,6 +952,7 @@ export async function wakeDueCharacterMinds(
   await ensureMindsInitialized(db, config);
   const world = createWorldStorage(db);
   const nameById = await buildNameMap(db, config);
+  const scheduledLimit = Math.max(1, options.limit ?? scheduledWakesPerCycle(nameById.size));
 
   // Global pace gates only SPONTANEOUS wakes — conversations keep flowing.
   let paceOpen = true;
@@ -936,6 +963,18 @@ export async function wakeDueCharacterMinds(
 
   const nowIso = new Date().toISOString();
   const memberMinds = (await world.listMinds()).filter((mind) => nameById.has(mind.id));
+
+  // A pace change (e.g. slow-life → bustling) applies immediately: minds still
+  // scheduled far out under the old pace get re-staggered into the new window.
+  const reStaggerBeyond = new Date(Date.now() + config.wakeIntervalMinutes * 2 * 60_000).toISOString();
+  for (const mind of memberMinds) {
+    if (mind.nextWakeAt && mind.nextWakeAt > reStaggerBeyond && mind.cursors.wakeReason !== "ping") {
+      const stagger = (0.05 + Math.random() * 0.95) * config.wakeIntervalMinutes;
+      mind.nextWakeAt = new Date(Date.now() + stagger * 60_000).toISOString();
+      await world.upsertMind(mind.id, { nextWakeAt: mind.nextWakeAt });
+    }
+  }
+
   const due = selectDueMinds(memberMinds, nowIso, { force: options.force, paceOpen, scheduledLimit });
   if (!due.length) {
     result.skippedReason = paceOpen ? "no minds due" : "keeping the world's pace";
