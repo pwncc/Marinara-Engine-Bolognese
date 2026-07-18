@@ -212,6 +212,7 @@ export const FILE_BACKED_TABLES = [
   "installed_extensions",
   "world_events",
   "character_relationships",
+  "world_actions",
 ] as const;
 
 type FileBackedTable = (typeof FILE_BACKED_TABLES)[number];

@@ -1,14 +1,21 @@
 // ──────────────────────────────────────────────
 // Living World scheduler — keeps the world simmering
 // ──────────────────────────────────────────────
+// Every poll: execute any queued moments whose time has arrived (drip).
+// On cadence: run the director to plan the next window's timeline.
 import type { FastifyInstance } from "fastify";
 
 import { logger } from "../../lib/logger.js";
-import { loadWorldEngineConfig, loadWorldEngineState, runWorldTick } from "./world-engine.service.js";
+import {
+  drainDueWorldActions,
+  loadWorldEngineConfig,
+  loadWorldEngineState,
+  runWorldDirector,
+} from "./world-engine.service.js";
 
-const POLL_MS = 60_000;
+const POLL_MS = 45_000;
 const INITIAL_DELAY_MS = 30_000;
-/** Failure backoff: cadence × 2^failures, capped at 6h. */
+/** Director failure backoff: cadence × 2^failures, capped at 6h. */
 const MAX_BACKOFF_MS = 6 * 60 * 60_000;
 
 let running = false;
@@ -20,16 +27,19 @@ export function startWorldEngineScheduler(app: FastifyInstance): void {
     try {
       const config = await loadWorldEngineConfig(app.db);
       if (!config.enabled) return;
-      const state = await loadWorldEngineState(app.db);
 
+      // Drip first: moments land on time even when the director isn't due.
+      await drainDueWorldActions(app.db);
+
+      const state = await loadWorldEngineState(app.db);
       const cadenceMs = config.cadenceMinutes * 60_000;
       const backoffMs = Math.min(cadenceMs * 2 ** state.consecutiveFailures, MAX_BACKOFF_MS);
       const dueAt = state.lastRunAt ? new Date(state.lastRunAt).getTime() + backoffMs : 0;
-      if (Date.now() < dueAt) return;
-
-      await runWorldTick(app.db);
+      if (Date.now() >= dueAt) {
+        await runWorldDirector(app.db);
+      }
     } catch (error) {
-      logger.error(error, "[world] Scheduler tick crashed");
+      logger.error(error, "[world] Scheduler cycle crashed");
     } finally {
       running = false;
     }
@@ -42,5 +52,5 @@ export function startWorldEngineScheduler(app: FastifyInstance): void {
   }, INITIAL_DELAY_MS);
   start.unref?.();
 
-  logger.info("[world] Living World scheduler armed (polling every %ds)", POLL_MS / 1000);
+  logger.info("[world] Living World scheduler armed (drip every %ds)", POLL_MS / 1000);
 }

@@ -2,7 +2,7 @@
 // Layout: Right Panel (polished with panel transitions)
 // ──────────────────────────────────────────────
 import { lazy, Suspense, type ComponentType, type LazyExoticComponent, type ReactNode } from "react";
-import { X, Users, BookOpen, FileText, Link, Sparkles, Settings, User, Bot } from "lucide-react";
+import { X, Users, BookOpen, FileText, Link, Sparkles, Settings, User, Bot, Orbit } from "lucide-react";
 import { useUIStore } from "../../stores/ui.store";
 import { cn } from "../../lib/utils";
 
@@ -26,6 +26,7 @@ const SettingsPanel = lazy(() =>
 const BotBrowserPanel = lazy(() =>
   import("../panels/BotBrowserPanel").then((module) => ({ default: module.BotBrowserPanel })),
 );
+const WorldPanel = lazy(() => import("../panels/WorldPanel").then((module) => ({ default: module.WorldPanel })));
 
 const PANEL_CONFIG: Record<string, { title: string; icon: ReactNode; gradient?: string; gradientClass?: string }> = {
   "bot-browser": {
@@ -48,6 +49,11 @@ const PANEL_CONFIG: Record<string, { title: string; icon: ReactNode; gradient?: 
   agents: { title: "Agents", icon: <Sparkles size="0.875rem" />, gradient: "from-violet-400 to-purple-500" },
   personas: { title: "Personas", icon: <User size="0.875rem" />, gradient: "from-emerald-400 to-teal-500" },
   settings: { title: "Settings", icon: <Settings size="0.875rem" />, gradient: "from-gray-400 to-gray-500" },
+  world: {
+    title: "Living World",
+    icon: <Orbit size="0.875rem" />,
+    gradientClass: "mari-panel-gradient-surface mari-panel-gradient--world",
+  },
 };
 
 const PANELS: Record<string, LazyExoticComponent<ComponentType>> = {
@@ -59,6 +65,7 @@ const PANELS: Record<string, LazyExoticComponent<ComponentType>> = {
   agents: AgentsPanel,
   personas: PersonasPanel,
   settings: SettingsPanel,
+  world: WorldPanel,
 };
 
 // Module-level set survives component remounts (e.g. mobile AnimatePresence unmount/remount)

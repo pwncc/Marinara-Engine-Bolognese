@@ -1,13 +1,21 @@
 // ──────────────────────────────────────────────
 // Living World engine — the simulator behind character life
 // ──────────────────────────────────────────────
-// Each "beat" (tick) snapshots the world — roster + presence, pairwise
-// relationships, recent events, recent noodle activity, open plans — and asks
-// an LLM to advance it by a handful of actions: public noodle activity,
-// private character↔character DM threads, plans, relationship shifts, and
-// memories. Executed actions become real rows (noodle posts, chat messages,
-// character memories) plus append-only world_events, so every arc is
-// observable after the fact.
+// Two halves, so the world feels continuous instead of bursty:
+//
+//  1. DIRECTOR (LLM, infrequent): snapshots the world — roster + presence,
+//     relationships, recent events, noodle activity, open plans — and plans
+//     the next stretch of time as a TIMELINE: each action carries a time
+//     offset ("Bob replies in 12 minutes", "their DM continues in 40").
+//     Planned actions are queued, not executed.
+//
+//  2. DRIP (no LLM, every poll): executes queued actions when their moment
+//     arrives. A post appears at 14:03, the reply at 14:11, a DM at 14:26 —
+//     the world accretes in real time, with quiet stretches, like life.
+//
+// Executed actions become real rows (noodle posts, chat messages, character
+// memories, relationship updates) plus append-only world_events, so every
+// arc is observable after the fact.
 import {
   DEFAULT_WORLD_ENGINE_CONFIG,
   PROVIDERS,
@@ -22,6 +30,7 @@ import {
 
 import type { DB } from "../../db/connection.js";
 import { logger } from "../../lib/logger.js";
+import { newId } from "../../utils/id-generator.js";
 import { createLLMProvider } from "../llm/provider-registry.js";
 import { getLocalSidecarProvider } from "../llm/local-sidecar.js";
 import type { BaseLLMProvider, ChatMessage } from "../llm/base-provider.js";
@@ -35,10 +44,14 @@ import { createWorldStorage, orderPair, type WorldStorage } from "../storage/wor
 const CONFIG_KEY = "worldEngine";
 const STATE_KEY = "worldEngineState";
 const LOCAL_SIDECAR_MODEL = "local-sidecar";
-const MAX_DM_MESSAGES = 6;
+const MAX_DM_MESSAGES_PER_ACTION = 3;
 const MAX_SNAPSHOT_EVENTS = 30;
 const MAX_SNAPSHOT_POSTS = 15;
 const MAX_OPEN_PLANS = 10;
+/** Per drip cycle, execute at most this many due actions (safety valve). */
+const MAX_EXECUTIONS_PER_DRAIN = 4;
+/** Due actions older than this are stale (missed window) and get skipped. */
+const STALE_ACTION_MS = 6 * 60 * 60_000;
 
 // ── Config & state ──
 
@@ -128,7 +141,7 @@ export async function resolveWorldProvider(
   config: WorldEngineConfig,
 ): Promise<ResolvedWorldProvider | { error: string }> {
   if (!config.connectionId) {
-    return { error: "No world connection configured. Set connectionId to an API connection id or \"local\"." };
+    return { error: "No world connection configured. Pick an API connection or the local sidecar." };
   }
   if (config.connectionId === "local") {
     return { provider: getLocalSidecarProvider(), model: LOCAL_SIDECAR_MODEL, label: "Local sidecar" };
@@ -179,13 +192,20 @@ export interface WorldSnapshot {
   openPlans: Array<{ eventId: string; line: string }>;
 }
 
-function parseCharacterData(raw: unknown): Record<string, unknown> {
-  return parseJson(raw);
-}
-
 function shortText(value: unknown, max: number): string {
   const text = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+async function buildNameMap(db: DB): Promise<Map<string, string>> {
+  const chars = createCharactersStorage(db);
+  const rows = (await chars.list()) as Array<{ id: string; data: unknown }>;
+  const nameById = new Map<string, string>();
+  for (const row of rows) {
+    const data = parseJson(row.data);
+    nameById.set(row.id, shortText(data.name, 60) || "Unnamed");
+  }
+  return nameById;
 }
 
 export async function buildWorldSnapshot(db: DB): Promise<{ snapshot: WorldSnapshot; nameById: Map<string, string> }> {
@@ -198,7 +218,7 @@ export async function buildWorldSnapshot(db: DB): Promise<{ snapshot: WorldSnaps
   const nameById = new Map<string, string>();
   const personaById = new Map<string, string>();
   for (const row of characterRows) {
-    const data = parseCharacterData(row.data);
+    const data = parseJson(row.data);
     const name = shortText(data.name, 60) || "Unnamed";
     nameById.set(row.id, name);
     personaById.set(
@@ -242,7 +262,7 @@ export async function buildWorldSnapshot(db: DB): Promise<{ snapshot: WorldSnaps
         presence = status?.status ?? "unknown";
         activity = shortText(status?.activity, 60);
       } catch {
-        /* schedules are user data — never let a malformed one kill a tick */
+        /* schedules are user data — never let a malformed one kill a run */
       }
     }
     const account = accountByEntity.get(row.id);
@@ -287,41 +307,49 @@ export async function buildWorldSnapshot(db: DB): Promise<{ snapshot: WorldSnaps
   return { snapshot: { roster, relationships, recentEvents, recentPosts, openPlans }, nameById };
 }
 
-// ── Prompt ──
+// ── Director prompt ──
 
-function buildWorldTickMessages(snapshot: WorldSnapshot, config: WorldEngineConfig, now: Date): ChatMessage[] {
+function buildDirectorMessages(snapshot: WorldSnapshot, config: WorldEngineConfig, now: Date): ChatMessage[] {
+  const windowMinutes = config.cadenceMinutes;
   const capabilities = [
     config.allowNoodle
-      ? `- noodle_post {characterId, content} — public post on the Noodle timeline (only characters WITH a handle)\n- noodle_reply {characterId, postId, content} — public reply to a listed post\n- noodle_like {characterId, postId}\n- noodle_follow {characterId, targetCharacterId}`
+      ? `- noodle_post {characterId, content, inMinutes} — public post on the Noodle timeline (only characters WITH a handle)\n- noodle_reply {characterId, postId, content, inMinutes} — public reply to a listed post\n- noodle_like {characterId, postId, inMinutes}\n- noodle_follow {characterId, targetCharacterId, inMinutes}`
       : null,
     config.allowDms
-      ? `- dm {fromCharacterId, toCharacterId, messages: [{from: characterId, content}, …]} — a private DM exchange between two characters (1-${MAX_DM_MESSAGES} short messages, both voices allowed)`
+      ? `- dm {fromCharacterId, toCharacterId, messages: [{from: characterId, content}, …], inMinutes} — a private DM moment between two characters (1-${MAX_DM_MESSAGES_PER_ACTION} short messages). For a longer conversation, plan SEVERAL dm actions for the same pair at different times — replies take minutes or hours, like real texting.`
       : null,
-    `- plan {characterIds, title, detail, dueInHours?} — record an intention (meetup, date, collab, confrontation…) to follow up on in later beats\n- plan_done {planEventId, outcome} — resolve an open plan with what actually happened`,
-    `- relationship {aCharacterId, bCharacterId, delta (-20..20), romance?, label?, summary, milestone?: {title, description}} — evolve how two characters stand; use milestones for firsts (first meeting, first fight, confession…)`,
+    `- plan {characterIds, title, detail, dueInHours?, inMinutes} — record an intention (meetup, date, collab, confrontation…) to follow up on later\n- plan_done {planEventId, outcome, inMinutes} — resolve an open plan with what actually happened`,
+    `- relationship {aCharacterId, bCharacterId, delta (-20..20), romance?, label?, summary, milestone?: {title, description}, inMinutes} — evolve how two characters stand; use milestones for firsts (first meeting, first fight, confession…)`,
     config.allowMemories
-      ? `- memory {characterId, aboutCharacterId, summary} — something characterId will remember about the other`
+      ? `- memory {characterId, aboutCharacterId, summary, inMinutes} — something characterId will remember about the other`
       : null,
   ]
     .filter(Boolean)
     .join("\n");
 
   const system = [
-    `You are the invisible life simulator behind a world of fictional characters. Between user sessions, their lives continue: they post publicly, message each other privately, make and keep plans, drift together or apart, fall in and out of love, hold grudges, and remember.`,
+    `You are the invisible life director behind a world of fictional characters. Their lives run continuously: they post publicly, message each other privately, make and keep plans, drift together or apart, fall in and out of love, hold grudges, and remember.`,
     ``,
-    `Rules:`,
-    `- Advance the world by ONE small beat: choose 1-${config.maxActionsPerTick} actions total.`,
-    `- CONTINUITY IS EVERYTHING. Build on recent events, open plans, and relationship summaries. Do not reset or contradict them.`,
-    `- Move arcs SLOWLY. Strangers don't confess love; escalate one believable step at a time. Not every beat needs drama — small mundane beats make the world feel alive.`,
-    `- Respect presence: characters who are offline or dnd should rarely act; characters whose activity fits (e.g. "at the gym") should act in character with it.`,
+    `You are planning the next ${windowMinutes} minutes as a TIMELINE. Every action carries "inMinutes" (0-${windowMinutes}, decimals fine): when that moment happens in real time.`,
+    ``,
+    `PACING RULES — this is what makes the world feel real:`,
+    `- Spread moments across the window with natural gaps. NEVER stack everything at minute 0.`,
+    `- Cluster only when it's genuinely reactive (a quick reply 2-8 minutes after a post; a text answered in 5-15).`,
+    `- Quiet is realistic. If little should happen this window, plan only 1-2 small moments — or none.`,
+    `- Conversations unfold across multiple dm actions with gaps, not one dump.`,
+    `- Respect presence AND timing: offline/dnd characters rarely act; someone "at the gym" posts after, not during; a character whose schedule says they get home at 18:00 texts back then.`,
+    ``,
+    `WORLD RULES:`,
+    `- CONTINUITY IS EVERYTHING. Build on recent events, open plans, and relationship summaries. Never reset or contradict them.`,
+    `- Move arcs SLOWLY. Strangers don't confess love; escalate one believable step at a time. Small mundane moments make the world feel alive.`,
     `- Voices must match each character's persona notes.`,
     `- When two characters interact meaningfully, usually include a relationship action reflecting it, and a memory when it's worth remembering.`,
-    `- Anything can happen that fits these characters — friendships, romance, rivalries, group plans, creative projects, fallings-out, reconciliations. Surprise within plausibility.`,
+    `- Anything can happen that fits these characters — friendships, romance, rivalries, group plans, projects, fallings-out, reconciliations. Surprise within plausibility.`,
     ``,
-    `Available actions:`,
+    `Available actions (max ${config.maxActionsPerTick} total this window):`,
     capabilities,
     ``,
-    `Output STRICT JSON only: {"narration": "one-line summary of this beat", "actions": [ … ]}. No markdown fences, no commentary.`,
+    `Output STRICT JSON only: {"narration": "one-line summary of this stretch", "actions": [ … ]}. No markdown fences, no commentary.`,
     config.userDirective ? `\nStanding directive from the user:\n${config.userDirective}` : ``,
   ]
     .filter((line) => line !== ``)
@@ -352,7 +380,7 @@ function buildWorldTickMessages(snapshot: WorldSnapshot, config: WorldEngineConf
     `OPEN PLANS:`,
     snapshot.openPlans.map((plan) => plan.line).join("\n") || "(none)",
     ``,
-    `Advance the world by one beat now.`,
+    `Plan the timeline for the next ${windowMinutes} minutes now.`,
   ].join("\n");
 
   return [
@@ -361,7 +389,7 @@ function buildWorldTickMessages(snapshot: WorldSnapshot, config: WorldEngineConf
   ];
 }
 
-// ── Action parsing & execution ──
+// ── Action parsing ──
 
 export type WorldAction = Record<string, unknown> & { type: string };
 
@@ -372,7 +400,7 @@ export function parseWorldTickResponse(raw: string): { narration: string; action
     .replace(/\s*```$/i, "");
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
-  if (start === -1 || end <= start) throw new Error("World tick response contained no JSON object");
+  if (start === -1 || end <= start) throw new Error("World director response contained no JSON object");
   const parsed = JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>;
   const actions = Array.isArray(parsed.actions)
     ? parsed.actions.filter(
@@ -383,31 +411,71 @@ export function parseWorldTickResponse(raw: string): { narration: string; action
   return { narration: shortText(parsed.narration, 300), actions };
 }
 
+/**
+ * Turn planned actions into queue entries with concrete runAt timestamps.
+ * Model-provided inMinutes wins (clamped to the window); missing timings are
+ * spread across the window with jitter so nothing ever lands as one burst.
+ */
+export function scheduleActionTimeline(
+  actions: WorldAction[],
+  windowMinutes: number,
+  now: Date = new Date(),
+): Array<{ runAt: string; action: WorldAction }> {
+  const count = actions.length;
+  return actions
+    .map((action, index) => {
+      const raw = action.inMinutes;
+      const parsed = typeof raw === "string" ? Number.parseFloat(raw) : (raw as number);
+      let minutes: number;
+      if (Number.isFinite(parsed)) {
+        minutes = Math.max(0, Math.min(windowMinutes, parsed));
+      } else {
+        // Even spread with ±30% jitter across the window.
+        const slot = ((index + 0.5) / count) * windowMinutes;
+        minutes = Math.max(0.5, slot * (0.7 + Math.random() * 0.6));
+      }
+      // Keep a touch of organic jitter even on model-provided timings, and
+      // never fire the very first moment instantly.
+      const jitterSeconds = 15 + Math.random() * 45;
+      const runAt = new Date(now.getTime() + minutes * 60_000 + jitterSeconds * 1000).toISOString();
+      return { runAt, action };
+    })
+    .sort((a, b) => a.runAt.localeCompare(b.runAt));
+}
+
+// ── Executors (queue-time: resolve everything fresh, not from the snapshot) ──
+
 export interface ExecuteDeps {
   db: DB;
   world: WorldStorage;
   nameById: Map<string, string>;
-  snapshot: WorldSnapshot;
   config: WorldEngineConfig;
 }
 
 export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction): Promise<WorldEventRecord | null> {
-  const { db, world, nameById, snapshot, config } = deps;
+  const { db, world, nameById, config } = deps;
   const noodle = createNoodleStorage(db);
   const chats = createChatsStorage(db);
   const chars = createCharactersStorage(db);
   const name = (id: unknown) => (typeof id === "string" ? (nameById.get(id) ?? null) : null);
-  const accountFor = (characterId: unknown) =>
-    snapshot.roster.find((entry) => entry.id === characterId)?.noodleAccountId ?? null;
+  const invitedAccountId = async (characterId: string): Promise<string | null> => {
+    const account = await noodle.getAccountByEntity("character", characterId);
+    return account?.invited ? account.id : null;
+  };
 
   switch (action.type) {
     case "noodle_post": {
       if (!config.allowNoodle) return null;
       const characterId = String(action.characterId ?? "");
       const content = shortText(action.content, 500);
-      const accountId = accountFor(characterId);
+      const accountId = await invitedAccountId(characterId);
       if (!accountId || !content) return null;
-      const post = await noodle.createPost({ authorAccountId: accountId, content, source: "generated", metadata: { worldEngine: true } });
+      const post = await noodle.createPost({
+        authorAccountId: accountId,
+        content,
+        source: "generated",
+        metadata: { worldEngine: true },
+      });
       if (!post) return null;
       return world.appendEvent({
         kind: "noodle_post",
@@ -421,8 +489,9 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       const characterId = String(action.characterId ?? "");
       const postId = String(action.postId ?? "");
       const content = shortText(action.content, 400);
-      const accountId = accountFor(characterId);
-      if (!accountId || !content || !snapshot.recentPosts.some((post) => post.id === postId)) return null;
+      const accountId = await invitedAccountId(characterId);
+      if (!accountId || !content || !postId) return null;
+      // createInteraction validates the post still exists.
       const interaction = await noodle.createInteraction(postId, { actorAccountId: accountId, type: "reply", content });
       if (!interaction) return null;
       return world.appendEvent({
@@ -436,8 +505,8 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       if (!config.allowNoodle) return null;
       const characterId = String(action.characterId ?? "");
       const postId = String(action.postId ?? "");
-      const accountId = accountFor(characterId);
-      if (!accountId || !snapshot.recentPosts.some((post) => post.id === postId)) return null;
+      const accountId = await invitedAccountId(characterId);
+      if (!accountId || !postId) return null;
       const interaction = await noodle.createInteraction(postId, { actorAccountId: accountId, type: "like" });
       if (!interaction) return null;
       return world.appendEvent({
@@ -451,8 +520,8 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       if (!config.allowNoodle) return null;
       const characterId = String(action.characterId ?? "");
       const targetCharacterId = String(action.targetCharacterId ?? "");
-      const accountId = accountFor(characterId);
-      const targetAccountId = accountFor(targetCharacterId);
+      const accountId = await invitedAccountId(characterId);
+      const targetAccountId = await invitedAccountId(targetCharacterId);
       if (!accountId || !targetAccountId || accountId === targetAccountId) return null;
       const actorAccount = await noodle.getAccountByEntity("character", characterId);
       if (!actorAccount) return null;
@@ -483,7 +552,7 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       const fromId = String(action.fromCharacterId ?? "");
       const toId = String(action.toCharacterId ?? "");
       if (!nameById.has(fromId) || !nameById.has(toId) || fromId === toId) return null;
-      const rawMessages = Array.isArray(action.messages) ? action.messages.slice(0, MAX_DM_MESSAGES) : [];
+      const rawMessages = Array.isArray(action.messages) ? action.messages.slice(0, MAX_DM_MESSAGES_PER_ACTION) : [];
       const messages = rawMessages
         .map((msg) => {
           const record = parseJson(msg);
@@ -495,7 +564,7 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       if (!messages.length) return null;
 
       const [a, b] = orderPair(fromId, toId);
-      const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown; characterIds?: unknown }>;
+      const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
       let dmChatId =
         allChats.find((chat) => {
           const meta = parseJson(chat.metadata);
@@ -534,7 +603,7 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       }
       return world.appendEvent({
         kind: "dm",
-        summary: `${name(fromId)} and ${name(toId)} exchanged DMs (${messages.length} messages)`,
+        summary: `${name(fromId)} messaged ${name(toId)}: "${shortText(messages[0]!.content, 90)}"`,
         characterIds: [fromId, toId],
         detail: { chatId: dmChatId, messageIds, preview: shortText(messages[0]!.content, 120) },
       });
@@ -545,7 +614,9 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
         .filter((id) => nameById.has(id));
       const title = shortText(action.title, 120);
       if (characterIds.length < 1 || !title) return null;
-      const dueInHours = Number.isFinite(action.dueInHours as number) ? Math.max(1, Math.min(24 * 14, action.dueInHours as number)) : null;
+      const dueInHours = Number.isFinite(action.dueInHours as number)
+        ? Math.max(1, Math.min(24 * 14, action.dueInHours as number))
+        : null;
       const dueAt = dueInHours ? new Date(Date.now() + dueInHours * 3_600_000).toISOString() : null;
       const names = characterIds.map((id) => nameById.get(id)).join(", ");
       return world.appendEvent({
@@ -557,16 +628,14 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
     }
     case "plan_done": {
       const planEventId = String(action.planEventId ?? "");
-      const plan = snapshot.openPlans.find((entry) => entry.eventId === planEventId);
-      if (!plan) return null;
+      const planEvent = await world.getEvent(planEventId);
+      if (!planEvent || planEvent.kind !== "plan" || planEvent.detail.done === true) return null;
       const outcome = shortText(action.outcome, 300) || "It happened.";
       await world.updateEventDetail(planEventId, { done: true, outcome });
-      const planEvents = await world.listEvents({ kind: "plan", limit: 200 });
-      const planEvent = planEvents.find((event) => event.id === planEventId);
       return world.appendEvent({
         kind: "plan_completed",
-        summary: `Plan resolved: ${shortText(planEvent?.summary.replace(/^Plan: /, ""), 100)} — ${outcome}`,
-        characterIds: planEvent?.characterIds ?? [],
+        summary: `Plan resolved: ${shortText(planEvent.summary.replace(/^Plan: /, ""), 100)} — ${outcome}`,
+        characterIds: planEvent.characterIds,
         detail: { planEventId, outcome },
       });
     }
@@ -575,9 +644,10 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       const bId = String(action.bCharacterId ?? "");
       if (!nameById.has(aId) || !nameById.has(bId) || aId === bId) return null;
       const milestoneRaw = parseJson(action.milestone);
-      const milestone = typeof milestoneRaw.title === "string" && milestoneRaw.title.trim()
-        ? { title: shortText(milestoneRaw.title, 120), description: shortText(milestoneRaw.description, 400) }
-        : undefined;
+      const milestone =
+        typeof milestoneRaw.title === "string" && milestoneRaw.title.trim()
+          ? { title: shortText(milestoneRaw.title, 120), description: shortText(milestoneRaw.description, 400) }
+          : undefined;
       const rel = await world.upsertRelationship(aId, bId, {
         delta: Number.isFinite(action.delta as number) ? (action.delta as number) : 0,
         romance: typeof action.romance === "boolean" ? action.romance : undefined,
@@ -630,36 +700,44 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
   }
 }
 
-// ── Tick orchestration ──
+// ── Director (plan the next window) ──
 
-export interface WorldTickResult {
+export interface WorldDirectorResult {
   ok: boolean;
   ran: boolean;
   narration: string | null;
-  actionsProposed: number;
-  actionsExecuted: number;
-  events: WorldEventRecord[];
+  actionsPlanned: number;
+  queued: number;
+  skippedReason: string | null;
   error: string | null;
 }
 
-export async function runWorldTick(db: DB, options: { manual?: boolean } = {}): Promise<WorldTickResult> {
+export async function runWorldDirector(db: DB, options: { manual?: boolean } = {}): Promise<WorldDirectorResult> {
   const config = await loadWorldEngineConfig(db);
   const state = await loadWorldEngineState(db);
-  const result: WorldTickResult = {
+  const world = createWorldStorage(db);
+  const result: WorldDirectorResult = {
     ok: true,
     ran: false,
     narration: null,
-    actionsProposed: 0,
-    actionsExecuted: 0,
-    events: [],
+    actionsPlanned: 0,
+    queued: 0,
+    skippedReason: null,
     error: null,
   };
 
   if (!config.enabled && !options.manual) {
+    result.skippedReason = "disabled";
     return result;
   }
   if (state.dailyCount >= config.dailyActionCap) {
-    result.error = "Daily world action cap reached";
+    result.skippedReason = "daily action cap reached";
+    return result;
+  }
+  const pending = await world.pendingActionStats();
+  if (!options.manual && pending.count >= config.maxActionsPerTick) {
+    // A full window is still unplayed — let it drip before planning more.
+    result.skippedReason = `timeline backlog (${pending.count} pending)`;
     return result;
   }
 
@@ -671,14 +749,13 @@ export async function runWorldTick(db: DB, options: { manual?: boolean } = {}): 
   }
 
   try {
-    const world = createWorldStorage(db);
     const { snapshot, nameById } = await buildWorldSnapshot(db);
     if (nameById.size < 2) {
-      result.error = "The world needs at least two characters";
+      result.skippedReason = "the world needs at least two characters";
       return result;
     }
 
-    const messages = buildWorldTickMessages(snapshot, config, new Date());
+    const messages = buildDirectorMessages(snapshot, config, new Date());
     const completion = await resolved.provider.chatComplete(messages, {
       model: resolved.model,
       temperature: config.temperature,
@@ -689,34 +766,26 @@ export async function runWorldTick(db: DB, options: { manual?: boolean } = {}): 
     const { narration, actions } = parseWorldTickResponse(completion.content ?? "");
     result.ran = true;
     result.narration = narration || null;
-    result.actionsProposed = actions.length;
+    result.actionsPlanned = actions.length;
 
-    const budgetLeft = Math.max(0, config.dailyActionCap - state.dailyCount);
-    const runnable = actions.slice(0, Math.min(config.maxActionsPerTick, budgetLeft));
-    for (const action of runnable) {
-      try {
-        const event = await executeWorldAction({ db, world, nameById, snapshot, config }, action);
-        if (event) {
-          result.events.push(event);
-          result.actionsExecuted += 1;
-        }
-      } catch (error) {
-        logger.warn(error, "[world] Failed to execute %s action", action.type);
-      }
-    }
+    const capped = actions.slice(0, config.maxActionsPerTick);
+    const timeline = scheduleActionTimeline(capped, config.cadenceMinutes);
+    const directorRunId = newId();
+    result.queued = await world.enqueueActions(
+      timeline.map((entry) => ({ runAt: entry.runAt, action: entry.action, directorRunId })),
+    );
 
     state.lastRunAt = new Date().toISOString();
-    state.dailyCount += result.actionsExecuted;
     state.consecutiveFailures = 0;
     state.lastError = null;
     state.lastNarration = result.narration;
     await saveWorldEngineState(db, state);
 
     logger.info(
-      "[world] Beat complete via %s: %d/%d action(s) executed%s",
+      "[world] Director planned %d moment(s) over the next %d min via %s%s",
+      result.queued,
+      config.cadenceMinutes,
       resolved.label,
-      result.actionsExecuted,
-      result.actionsProposed,
       result.narration ? ` — ${result.narration}` : "",
     );
     return result;
@@ -725,9 +794,82 @@ export async function runWorldTick(db: DB, options: { manual?: boolean } = {}): 
     state.consecutiveFailures += 1;
     state.lastError = error instanceof Error ? error.message : String(error);
     await saveWorldEngineState(db, state);
-    logger.error(error, "[world] World tick failed");
+    logger.error(error, "[world] Director run failed");
     result.ok = false;
     result.error = state.lastError;
     return result;
   }
+}
+
+// ── Drip (execute due moments) ──
+
+export interface WorldDrainResult {
+  executed: number;
+  skippedStale: number;
+  events: WorldEventRecord[];
+}
+
+export async function drainDueWorldActions(db: DB, options: { force?: boolean } = {}): Promise<WorldDrainResult> {
+  const config = await loadWorldEngineConfig(db);
+  const result: WorldDrainResult = { executed: 0, skippedStale: 0, events: [] };
+  if (!config.enabled && !options.force) return result;
+
+  const world = createWorldStorage(db);
+  const state = await loadWorldEngineState(db);
+  const budgetLeft = Math.max(0, config.dailyActionCap - state.dailyCount);
+  if (budgetLeft <= 0) return result;
+
+  const nowIso = new Date().toISOString();
+  const due = await world.listDueActions(nowIso, Math.min(MAX_EXECUTIONS_PER_DRAIN, budgetLeft));
+  if (!due.length) return result;
+
+  const nameById = await buildNameMap(db);
+  const staleBefore = new Date(Date.now() - STALE_ACTION_MS).toISOString();
+
+  for (const entry of due) {
+    if (entry.runAt < staleBefore) {
+      await world.markAction(entry.id, "skipped");
+      result.skippedStale += 1;
+      continue;
+    }
+    try {
+      const event = await executeWorldAction(
+        { db, world, nameById, config },
+        entry.action as WorldAction,
+      );
+      if (event) {
+        result.events.push(event);
+        result.executed += 1;
+        await world.markAction(entry.id, "done");
+      } else {
+        await world.markAction(entry.id, "skipped");
+      }
+    } catch (error) {
+      await world.markAction(entry.id, "failed");
+      logger.warn(error, "[world] Failed to execute queued %s action", String(entry.action.type ?? "unknown"));
+    }
+  }
+
+  if (result.executed > 0) {
+    state.dailyCount += result.executed;
+    await saveWorldEngineState(db, state);
+    await world.pruneFinishedActions();
+    for (const event of result.events) {
+      logger.info("[world] %s", event.summary);
+    }
+  }
+  return result;
+}
+
+// ── Manual "advance the world now" (director + immediate first sip) ──
+
+export interface WorldTickResult extends WorldDirectorResult {
+  executedNow: number;
+  events: WorldEventRecord[];
+}
+
+export async function runWorldTick(db: DB, options: { manual?: boolean } = {}): Promise<WorldTickResult> {
+  const director = await runWorldDirector(db, options);
+  const drained = await drainDueWorldActions(db, { force: options.manual });
+  return { ...director, executedNow: drained.executed, events: drained.events };
 }

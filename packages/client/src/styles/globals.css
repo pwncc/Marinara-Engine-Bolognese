@@ -881,6 +881,12 @@
   --mari-panel-gradient-text: #f9fafb;
 }
 
+.mari-panel-gradient--world {
+  --mari-panel-gradient-start: #fb7185;
+  --mari-panel-gradient-end: #a78bfa;
+  --mari-panel-gradient-text: #fff1f2;
+}
+
 .mari-suggestion-chips {
   display: flex;
   flex-wrap: wrap;

@@ -73,13 +73,16 @@ export async function worldRoutes(app: FastifyInstance) {
     const config = await loadWorldEngineConfig(app.db);
     const state = await loadWorldEngineState(app.db);
     const provider = await resolveWorldProvider(app.db, config);
+    const timeline = await world.pendingActionStats();
     return {
       config,
       state,
+      timeline,
       provider: "error" in provider ? { ok: false, error: provider.error } : { ok: true, label: provider.label },
     };
   });
 
-  // ── Manual beat (also works while the engine is disabled — great for testing) ──
+  // ── Manual "advance the world now" (plans a window + plays the first due moments;
+  //    works while the engine is disabled — great for testing) ──
   app.post("/tick", async () => runWorldTick(app.db, { manual: true }));
 }

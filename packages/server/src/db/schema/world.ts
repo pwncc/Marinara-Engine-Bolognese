@@ -22,6 +22,25 @@ export const worldEvents = fileTable("world_events", {
 });
 
 /**
+ * The upcoming timeline: actions the director has planned but that haven't
+ * happened yet. A drip executor runs each one when its runAt arrives, so the
+ * world accretes continuously instead of in bursts.
+ */
+export const worldActions = fileTable("world_actions", {
+  id: text("id").primaryKey(),
+  /** ISO timestamp this action should happen at. */
+  runAt: text("run_at").notNull(),
+  /** JSON action payload (same vocabulary the executors consume). */
+  action: text("action").notNull().default("{}"),
+  /** pending | done | failed | skipped */
+  status: text("status").notNull().default("pending"),
+  /** Director narration batch this action belongs to (for grouping/debug). */
+  directorRunId: text("director_run_id"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/**
  * Pairwise character relationship state. One row per unordered pair
  * (aCharacterId < bCharacterId lexicographically).
  */

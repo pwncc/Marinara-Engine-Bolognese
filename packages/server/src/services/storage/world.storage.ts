@@ -2,7 +2,7 @@
 // Storage: Living World events + character relationships
 // ──────────────────────────────────────────────
 import { and, desc, eq, or } from "../../db/file-query.js";
-import { characterRelationships, worldEvents } from "../../db/schema/index.js";
+import { characterRelationships, worldActions, worldEvents } from "../../db/schema/index.js";
 import type { DB } from "../../db/connection.js";
 import { newId, now } from "../../utils/id-generator.js";
 import {
@@ -95,6 +95,63 @@ export function createWorldStorage(db: DB) {
       };
       await db.insert(worldEvents).values(row);
       return toEventRecord(row);
+    },
+
+    async getEvent(id: string): Promise<WorldEventRecord | null> {
+      const rows = await db.select().from(worldEvents).where(eq(worldEvents.id, id));
+      return rows[0] ? toEventRecord(rows[0]) : null;
+    },
+
+    // ── Upcoming timeline (director-planned, drip-executed) ──
+
+    async enqueueActions(
+      inputs: Array<{ runAt: string; action: Record<string, unknown>; directorRunId?: string }>,
+    ): Promise<number> {
+      const timestamp = now();
+      for (const input of inputs) {
+        await db.insert(worldActions).values({
+          id: newId(),
+          runAt: input.runAt,
+          action: JSON.stringify(input.action),
+          status: "pending",
+          directorRunId: input.directorRunId ?? null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        });
+      }
+      return inputs.length;
+    },
+
+    async listDueActions(nowIso: string, limit = 10): Promise<
+      Array<{ id: string; runAt: string; action: Record<string, unknown> }>
+    > {
+      const rows = await db.select().from(worldActions).where(eq(worldActions.status, "pending"));
+      return rows
+        .map((row) => ({ id: String(row.id), runAt: String(row.runAt), action: parseJsonRecord(row.action) }))
+        .filter((row) => row.runAt <= nowIso)
+        .sort((a, b) => a.runAt.localeCompare(b.runAt))
+        .slice(0, limit);
+    },
+
+    async pendingActionStats(): Promise<{ count: number; nextRunAt: string | null }> {
+      const rows = await db.select().from(worldActions).where(eq(worldActions.status, "pending"));
+      const runAts = rows.map((row) => String(row.runAt)).sort();
+      return { count: rows.length, nextRunAt: runAts[0] ?? null };
+    },
+
+    async markAction(id: string, status: "done" | "failed" | "skipped"): Promise<void> {
+      await db.update(worldActions).set({ status, updatedAt: now() }).where(eq(worldActions.id, id));
+    },
+
+    /** Drop old finished rows so the queue table stays small. */
+    async pruneFinishedActions(keep = 200): Promise<void> {
+      const rows = await db.select().from(worldActions);
+      const finished = rows
+        .filter((row) => row.status !== "pending")
+        .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+      for (const row of finished.slice(keep)) {
+        await db.delete(worldActions).where(eq(worldActions.id, row.id));
+      }
     },
 
     async updateEventDetail(id: string, patch: Record<string, unknown>): Promise<void> {

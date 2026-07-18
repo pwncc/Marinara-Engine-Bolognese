@@ -1,8 +1,13 @@
 # Living World Engine
 
-The Living World engine makes characters live *between* your sessions. On a configurable cadence it snapshots the world — every character with their presence and persona, every pairwise relationship, recent world events, recent Noodle activity, and open plans — and asks an LLM to advance the world by **one small beat**: a few believable actions that become real, observable artifacts.
+The Living World engine makes characters live *between* your sessions — continuously, at the pace of real life, not in bursts.
 
-Nothing is scripted. The simulator gets state and an open action vocabulary; arcs (friendships, romances, rivalries, group plans, fallings-out) emerge from continuity.
+It runs in two halves:
+
+1. **The director** (LLM, infrequent): snapshots the world — every character with their presence and persona, every pairwise relationship, recent world events, recent Noodle activity, and open plans — and plans the next stretch of time as a **timeline**: each moment carries a time offset ("Bob replies in 12 minutes", "their DM continues in 40", "quiet until evening").
+2. **The drip** (no LLM, every ~45s): executes queued moments when their clock arrives. A post appears at 14:03, the reply at 14:11, a DM at 14:26 — with natural gaps and quiet stretches, because the director is explicitly instructed that quiet is realistic and stacking everything at minute zero is not.
+
+Nothing is scripted. The director gets state and an open action vocabulary; arcs (friendships, romances, rivalries, group plans, fallings-out) emerge from continuity. Moments the model doesn't time are auto-spread across the window with jitter; stale moments (missed by more than 6h, e.g. while the app was closed) are skipped rather than dumped in a burst.
 
 ## What a beat can do
 
@@ -45,12 +50,15 @@ Cost control: the daily action cap is hard; the scheduler backs off exponentiall
 ## Architecture
 
 ```
-world-engine-scheduler.service.ts   poll loop (60s) → due? → tick
-world-engine.service.ts             snapshot → prompt → LLM (JSON actions) → executors
-world.storage.ts                    world_events + character_relationships (file-native tables)
+world-engine-scheduler.service.ts   poll loop (45s): drip due moments; director when the window elapses
+world-engine.service.ts             director (snapshot → prompt → timeline) + drip executors
+world.storage.ts                    world_events + character_relationships + world_actions queue
 world.routes.ts                     /api/world/* (feed, relationships, config, status, tick)
 shared/types/world.ts               config, stages, records shared with the client
+components/panels/WorldPanel.tsx    Living World panel (status, config, timeline, bonds)
 ```
+
+The **Living World panel** (orbit icon in the top bar) shows engine status and queued-moment count, the world timeline as it accretes, and the Bonds browser — every pair's stage, score, milestones, and full shared history. DM events open the real chat thread. `POST /api/world/tick` (the panel's "Advance the world" button) plans a window immediately and plays anything already due.
 
 The engine deliberately reuses existing substrate rather than duplicating it: Noodle storage for public activity, `chats.create`/`createMessage` for DM threads (the roleplay-DM pattern), `characterMemories` for memory, `conversation-presence` schedules for who's awake.
 
