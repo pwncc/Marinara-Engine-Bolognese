@@ -35,6 +35,7 @@ import { createCharactersStorage } from "../storage/characters.storage.js";
 import { createChatsStorage } from "../storage/chats.storage.js";
 import { createNoodleStorage } from "../storage/noodle.storage.js";
 import { createWorldStorage, type CharacterMindRow } from "../storage/world.storage.js";
+import { generateWorldPhoto, hasWorldImageConnection } from "./world-photo.service.js";
 import type { ChatMessage } from "../llm/base-provider.js";
 import {
   buildNameMap,
@@ -236,6 +237,7 @@ interface MindContext {
   presence: { status: string; activity: string };
   hasNoodle: boolean;
   noodleImagesEnabled: boolean;
+  photosEnabled: boolean;
   relationships: string[];
   memories: string[];
   feed: string[];
@@ -294,6 +296,7 @@ async function buildMindContext(
   const hasNoodle = !!account?.invited;
   const noodleSettings = hasNoodle ? await noodle.getSettings() : null;
   const noodleImagesEnabled = !!noodleSettings?.enableImagePrompts;
+  const photosEnabled = await hasWorldImageConnection(db);
 
   const relationships = (await world.listRelationships(characterId))
     .filter((rel) => isWorldMember(config, rel.aCharacterId) && isWorldMember(config, rel.bCharacterId))
@@ -415,6 +418,7 @@ async function buildMindContext(
     presence,
     hasNoodle,
     noodleImagesEnabled,
+    photosEnabled,
     relationships,
     memories,
     feed,
@@ -453,10 +457,10 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `  "nextCheckInMinutes": ${Math.round(minCheckinMinutes(config))}-${config.wakeIntervalMinutes * 4} — when you'd naturally check in again,`,
     `  "actions": [ 0-${MAX_ACTIONS_PER_WAKE} of:`,
     `  {"type":"do","activity":"…"} — live: what you're doing now (off to work, making dinner, gym, gaming…). Narrated in your space and becomes your current intention.`,
-    `  {"type":"say","content":"…"} — speak aloud in your own space (answers the Visitor if they wrote)`,
+    `  {"type":"say","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — a photo you show; describe it concretely"` : ""}} — speak aloud in your own space (answers the Visitor if they wrote)`,
     noodleActions +
-      `  {"type":"message","toCharacterId":"…","content":"…"} — DM someone (one text)
-  {"type":"group_message","chatId":"…","content":"…"} — reply in one of your group threads
+      `  {"type":"message","toCharacterId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — a photo you attach (a selfie, what you're seeing…); describe it concretely"` : ""}} — DM someone (one text)
+  {"type":"group_message","chatId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional photo"` : ""}} — reply in one of your group threads
   {"type":"start_group","withCharacterIds":["…","…"],"name":"…","content":"first message"} — pull 2+ people into a group thread
   {"type":"make_plan","withCharacterIds":["…"],"title":"…","detail":"…","dueInHours":24}
   {"type":"resolve_plan","planEventId":"…","outcome":"what actually happened"}
@@ -564,7 +568,7 @@ export function toEngineAction(selfId: string, action: WorldAction): WorldAction
         type: "dm",
         fromCharacterId: selfId,
         toCharacterId: action.toCharacterId,
-        messages: [{ from: selfId, content: action.content }],
+        messages: [{ from: selfId, content: action.content, photoPrompt: action.photoPrompt }],
       };
     case "make_plan": {
       const withIds = Array.isArray(action.withCharacterIds) ? action.withCharacterIds.map(String) : [];
@@ -625,6 +629,7 @@ async function executeSay(
   db: DB,
   ctx: { selfId: string; name: string; lifeChatId: string },
   content: string,
+  photoPrompt?: string,
 ): Promise<WorldEventRecord | null> {
   const text = shortText(content, 800);
   if (!text) return null;
@@ -637,9 +642,13 @@ async function executeSay(
     content: text,
   });
   if (!saved?.id) return null;
+  const photo = shortText(photoPrompt, 1200);
+  if (photo) {
+    void generateWorldPhoto(db, { chatId: ctx.lifeChatId, messageId: saved.id, characterId: ctx.selfId, prompt: photo });
+  }
   return world.appendEvent({
     kind: "say",
-    summary: `${ctx.name}: "${shortText(text, 120)}"`,
+    summary: `${ctx.name}: "${shortText(text, 120)}"${photo ? " (with a photo)" : ""}`,
     characterIds: [ctx.selfId],
     detail: { chatId: ctx.lifeChatId, messageId: saved.id, text },
   });
@@ -719,10 +728,14 @@ async function executeGroupAction(
 
   const saved = await chats.createMessage({ chatId: chatId!, role: "assistant", characterId: selfId, content });
   if (!saved?.id) return { event: null, pingedIds: [] };
+  const photo = shortText(action.photoPrompt, 1200);
+  if (photo) {
+    void generateWorldPhoto(db, { chatId: chatId!, messageId: saved.id, characterId: selfId, prompt: photo });
+  }
   const others = memberIds.filter((id) => id !== selfId);
   const event = await world.appendEvent({
     kind: "group",
-    summary: `${selfName} in a group with ${others.map((id) => nameById.get(id) ?? "?").join(", ")}: "${shortText(content, 90)}"`,
+    summary: `${selfName} in a group with ${others.map((id) => nameById.get(id) ?? "?").join(", ")}: "${shortText(content, 90)}"${photo ? " (with a photo)" : ""}`,
     characterIds: memberIds,
     detail: { chatId, messageId: saved.id, preview: shortText(content, 120) },
   });
@@ -826,7 +839,12 @@ export async function wakeCharacterMind(
           );
           if (event) doActivity = String(event.detail.activity ?? "");
         } else if (rawAction.type === "say") {
-          event = await executeSay(db, { selfId: characterId, name: ctx.self.name, lifeChatId: ctx.lifeChatId }, String(rawAction.content ?? ""));
+          event = await executeSay(
+            db,
+            { selfId: characterId, name: ctx.self.name, lifeChatId: ctx.lifeChatId },
+            String(rawAction.content ?? ""),
+            typeof rawAction.photoPrompt === "string" ? rawAction.photoPrompt : undefined,
+          );
         } else if (rawAction.type === "group_message" || rawAction.type === "start_group") {
           const groupResult = await executeGroupAction(db, config, nameById, characterId, rawAction);
           event = groupResult.event;

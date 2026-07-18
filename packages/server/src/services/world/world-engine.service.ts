@@ -653,9 +653,10 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
           const record = parseJson(msg);
           const from = String(record.from ?? "");
           const content = shortText(record.content, 600);
-          return (from === fromId || from === toId) && content ? { from, content } : null;
+          const photoPrompt = shortText(record.photoPrompt, 1200) || null;
+          return (from === fromId || from === toId) && content ? { from, content, photoPrompt } : null;
         })
-        .filter((msg): msg is { from: string; content: string } => msg !== null);
+        .filter((msg): msg is { from: string; content: string; photoPrompt: string | null } => msg !== null);
       if (!messages.length) return null;
 
       const [a, b] = orderPair(fromId, toId);
@@ -688,6 +689,7 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
         dmChatId = created.id;
       }
       const messageIds: string[] = [];
+      let sentPhoto = false;
       for (const msg of messages) {
         const saved = await chats.createMessage({
           chatId: dmChatId,
@@ -695,11 +697,23 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
           characterId: msg.from,
           content: msg.content,
         });
-        if (saved?.id) messageIds.push(saved.id);
+        if (saved?.id) {
+          messageIds.push(saved.id);
+          if (msg.photoPrompt) {
+            sentPhoto = true;
+            const { generateWorldPhoto } = await import("./world-photo.service.js");
+            void generateWorldPhoto(db, {
+              chatId: dmChatId,
+              messageId: saved.id,
+              characterId: msg.from,
+              prompt: msg.photoPrompt,
+            });
+          }
+        }
       }
       return world.appendEvent({
         kind: "dm",
-        summary: `${name(fromId)} messaged ${name(toId)}: "${shortText(messages[0]!.content, 90)}"`,
+        summary: `${name(fromId)} messaged ${name(toId)}: "${shortText(messages[0]!.content, 90)}"${sentPhoto ? " (with a photo)" : ""}`,
         characterIds: [fromId, toId],
         detail: { chatId: dmChatId, messageIds, preview: shortText(messages[0]!.content, 120) },
       });
