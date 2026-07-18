@@ -35,12 +35,23 @@ import {
   useWorldStatus,
 } from "../../hooks/use-world";
 import { useConnections } from "../../hooks/use-connections";
+import { useCharacters } from "../../hooks/use-characters";
 import { useChatStore } from "../../stores/chat.store";
 import { useUIStore } from "../../stores/ui.store";
 import { cn } from "../../lib/utils";
 
 const inputClass =
   "w-full rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2 py-1.5 text-xs outline-none transition-colors focus:border-[var(--primary)]";
+
+function parseCharacterRowName(data: unknown): string {
+  try {
+    const parsed = typeof data === "string" ? JSON.parse(data) : data;
+    const name = (parsed as { name?: unknown } | null)?.name;
+    return typeof name === "string" && name.trim() ? name.trim() : "Unnamed";
+  } catch {
+    return "Unnamed";
+  }
+}
 
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -232,11 +243,30 @@ function WorldConfigForm({
 }) {
   const [draft, setDraft] = useState<WorldEngineConfig>(config);
   const { data: connections } = useConnections();
+  const { data: characters } = useCharacters();
   const updateConfig = useUpdateWorldConfig();
 
   useEffect(() => {
     setDraft(config);
   }, [config]);
+
+  const characterRows = useMemo(
+    () =>
+      ((characters ?? []) as Array<{ id?: unknown; data?: unknown }>)
+        .filter((row): row is { id: string; data: unknown } => typeof row.id === "string")
+        .map((row) => ({ id: row.id, name: parseCharacterRowName(row.data) }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [characters],
+  );
+  const everyone = draft.memberCharacterIds === null;
+  const memberSet = useMemo(() => new Set(draft.memberCharacterIds ?? []), [draft.memberCharacterIds]);
+
+  const toggleMember = (id: string) => {
+    const next = new Set(memberSet);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setDraft({ ...draft, memberCharacterIds: [...next] });
+  };
 
   const connectionOptions = useMemo(
     () =>
@@ -327,6 +357,45 @@ function WorldConfigForm({
             onChange={(e) => setNum("dailyActionCap", e.target.value, DEFAULT_WORLD_ENGINE_CONFIG.dailyActionCap)}
           />
         </label>
+      </div>
+
+      <div className="space-y-1">
+        <span className="text-[0.65rem] text-[var(--muted-foreground)]">Who lives in this world</span>
+        <label className="flex items-center gap-1.5 text-[0.7rem]">
+          <input
+            type="checkbox"
+            checked={everyone}
+            onChange={(e) =>
+              setDraft({ ...draft, memberCharacterIds: e.target.checked ? null : characterRows.map((row) => row.id) })
+            }
+            className="h-3.5 w-3.5 accent-[var(--primary)]"
+          />
+          Everyone ({characterRows.length} characters)
+        </label>
+        {!everyone ? (
+          <div className="max-h-44 space-y-0.5 overflow-y-auto rounded-md border border-[var(--border)]/60 bg-[var(--card)]/40 p-1.5 [scrollbar-width:thin]">
+            {characterRows.map((row) => (
+              <label
+                key={row.id}
+                className="flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-[0.7rem] transition-colors hover:bg-[var(--accent)]/30"
+              >
+                <input
+                  type="checkbox"
+                  checked={memberSet.has(row.id)}
+                  onChange={() => toggleMember(row.id)}
+                  className="h-3.5 w-3.5 accent-[var(--primary)]"
+                />
+                <span className="truncate">{row.name}</span>
+              </label>
+            ))}
+            {!characterRows.length ? (
+              <p className="px-1 py-0.5 text-[0.65rem] text-[var(--muted-foreground)]">No characters yet.</p>
+            ) : null}
+            <p className="px-1 pt-1 text-[0.6rem] leading-snug text-[var(--muted-foreground)]">
+              {memberSet.size < 2 ? "Pick at least two — a world needs company." : `${memberSet.size} in the world.`}
+            </p>
+          </div>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-1">

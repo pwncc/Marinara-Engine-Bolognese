@@ -84,7 +84,15 @@ export function normalizeWorldEngineConfig(raw: unknown): WorldEngineConfig {
     allowMemories: data.allowMemories !== false,
     temperature: num(data.temperature, DEFAULT_WORLD_ENGINE_CONFIG.temperature, 0, 2),
     userDirective: typeof data.userDirective === "string" ? data.userDirective.slice(0, 2000) : "",
+    memberCharacterIds: Array.isArray(data.memberCharacterIds)
+      ? [...new Set(data.memberCharacterIds.filter((id): id is string => typeof id === "string" && id.length > 0))]
+      : null,
   };
+}
+
+/** True when the character lives in the world under this config. */
+function isWorldMember(config: WorldEngineConfig, characterId: string): boolean {
+  return config.memberCharacterIds === null || config.memberCharacterIds.includes(characterId);
 }
 
 export async function loadWorldEngineConfig(db: DB): Promise<WorldEngineConfig> {
@@ -197,24 +205,31 @@ function shortText(value: unknown, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-async function buildNameMap(db: DB): Promise<Map<string, string>> {
+/** Name map restricted to world members — executor validation rides on `.has()`. */
+async function buildNameMap(db: DB, config: WorldEngineConfig): Promise<Map<string, string>> {
   const chars = createCharactersStorage(db);
   const rows = (await chars.list()) as Array<{ id: string; data: unknown }>;
   const nameById = new Map<string, string>();
   for (const row of rows) {
+    if (!isWorldMember(config, row.id)) continue;
     const data = parseJson(row.data);
     nameById.set(row.id, shortText(data.name, 60) || "Unnamed");
   }
   return nameById;
 }
 
-export async function buildWorldSnapshot(db: DB): Promise<{ snapshot: WorldSnapshot; nameById: Map<string, string> }> {
+export async function buildWorldSnapshot(
+  db: DB,
+  config: WorldEngineConfig,
+): Promise<{ snapshot: WorldSnapshot; nameById: Map<string, string> }> {
   const chars = createCharactersStorage(db);
   const chats = createChatsStorage(db);
   const noodle = createNoodleStorage(db);
   const world = createWorldStorage(db);
 
-  const characterRows = (await chars.list()) as Array<{ id: string; data: unknown }>;
+  const characterRows = ((await chars.list()) as Array<{ id: string; data: unknown }>).filter((row) =>
+    isWorldMember(config, row.id),
+  );
   const nameById = new Map<string, string>();
   const personaById = new Map<string, string>();
   for (const row of characterRows) {
@@ -277,7 +292,10 @@ export async function buildWorldSnapshot(db: DB): Promise<{ snapshot: WorldSnaps
     };
   });
 
-  const relationships = (await world.listRelationships()).slice(0, 60).map((rel) => {
+  const relationships = (await world.listRelationships())
+    .filter((rel) => isWorldMember(config, rel.aCharacterId) && isWorldMember(config, rel.bCharacterId))
+    .slice(0, 60)
+    .map((rel) => {
     const a = nameById.get(rel.aCharacterId) ?? rel.aCharacterId;
     const b = nameById.get(rel.bCharacterId) ?? rel.bCharacterId;
     const label = rel.label ?? rel.stage;
@@ -468,6 +486,7 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       if (!config.allowNoodle) return null;
       const characterId = String(action.characterId ?? "");
       const content = shortText(action.content, 500);
+      if (!nameById.has(characterId)) return null;
       const accountId = await invitedAccountId(characterId);
       if (!accountId || !content) return null;
       const post = await noodle.createPost({
@@ -489,6 +508,7 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       const characterId = String(action.characterId ?? "");
       const postId = String(action.postId ?? "");
       const content = shortText(action.content, 400);
+      if (!nameById.has(characterId)) return null;
       const accountId = await invitedAccountId(characterId);
       if (!accountId || !content || !postId) return null;
       // createInteraction validates the post still exists.
@@ -505,6 +525,7 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       if (!config.allowNoodle) return null;
       const characterId = String(action.characterId ?? "");
       const postId = String(action.postId ?? "");
+      if (!nameById.has(characterId)) return null;
       const accountId = await invitedAccountId(characterId);
       if (!accountId || !postId) return null;
       const interaction = await noodle.createInteraction(postId, { actorAccountId: accountId, type: "like" });
@@ -520,6 +541,7 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       if (!config.allowNoodle) return null;
       const characterId = String(action.characterId ?? "");
       const targetCharacterId = String(action.targetCharacterId ?? "");
+      if (!nameById.has(characterId) || !nameById.has(targetCharacterId)) return null;
       const accountId = await invitedAccountId(characterId);
       const targetAccountId = await invitedAccountId(targetCharacterId);
       if (!accountId || !targetAccountId || accountId === targetAccountId) return null;
@@ -749,9 +771,9 @@ export async function runWorldDirector(db: DB, options: { manual?: boolean } = {
   }
 
   try {
-    const { snapshot, nameById } = await buildWorldSnapshot(db);
+    const { snapshot, nameById } = await buildWorldSnapshot(db, config);
     if (nameById.size < 2) {
-      result.skippedReason = "the world needs at least two characters";
+      result.skippedReason = "the world needs at least two member characters";
       return result;
     }
 
@@ -823,7 +845,7 @@ export async function drainDueWorldActions(db: DB, options: { force?: boolean } 
   const due = await world.listDueActions(nowIso, Math.min(MAX_EXECUTIONS_PER_DRAIN, budgetLeft));
   if (!due.length) return result;
 
-  const nameById = await buildNameMap(db);
+  const nameById = await buildNameMap(db, config);
   const staleBefore = new Date(Date.now() - STALE_ACTION_MS).toISOString();
 
   for (const entry of due) {
