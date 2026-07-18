@@ -435,11 +435,11 @@ function WorldConfigForm({
           </>
         )}
         <label className="block space-y-0.5">
-          <span className="text-[0.65rem] text-[var(--muted-foreground)]">Daily cap</span>
+          <span className="text-[0.65rem] text-[var(--muted-foreground)]">Daily cap (0 = off)</span>
           <input
             type="number"
-            min={1}
-            max={1000}
+            min={0}
+            max={100000}
             className={inputClass}
             value={draft.dailyActionCap}
             onChange={(e) => setNum("dailyActionCap", e.target.value, DEFAULT_WORLD_ENGINE_CONFIG.dailyActionCap)}
@@ -633,7 +633,8 @@ export function WorldPanel() {
             </span>
           )}
           <span>
-            today {status?.state.dailyCount ?? 0}/{status?.config.dailyActionCap ?? 0}
+            today {status?.state.dailyCount ?? 0}/
+            {(status?.config.dailyActionCap ?? 0) > 0 ? status!.config.dailyActionCap : "∞"}
           </span>
           {status?.state.lastError ? <span className="text-rose-400">last error: {status.state.lastError}</span> : null}
         </div>

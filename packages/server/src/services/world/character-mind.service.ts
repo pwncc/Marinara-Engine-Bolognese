@@ -40,6 +40,7 @@ import { isUnsupportedNoodleVisionInputError, readNoodleVisionImage } from "../n
 import type { ChatMessage } from "../llm/base-provider.js";
 import {
   buildNameMap,
+  dailyBudgetLeft,
   ensureWorldChatFolder,
   executeWorldAction,
   fileWorldChat,
@@ -946,7 +947,7 @@ export async function wakeCharacterMind(
 
     // Execute chosen actions (budget-gated), collecting who got pinged.
     const state = await loadWorldEngineState(db);
-    let budgetLeft = Math.max(0, config.dailyActionCap - state.dailyCount);
+    let budgetLeft = dailyBudgetLeft(config, state.dailyCount);
     const pinged = new Set<string>();
     const urgentPinged = new Set<string>();
     let doActivity: string | null = null;
@@ -1162,7 +1163,7 @@ export async function wakeDueCharacterMinds(
   const result: MindsCycleResult = { woke: [], skippedReason: null };
 
   const state = await loadWorldEngineState(db);
-  if (state.dailyCount >= config.dailyActionCap && !options.force) {
+  if (dailyBudgetLeft(config, state.dailyCount) <= 0 && !options.force) {
     result.skippedReason = "daily action cap reached";
     return result;
   }

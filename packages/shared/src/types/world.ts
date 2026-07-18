@@ -30,7 +30,7 @@ export interface WorldEngineConfig {
   cadenceMinutes: number;
   /** Max actions the simulator may take per beat. */
   maxActionsPerTick: number;
-  /** Hard daily cap on executed world actions (budget guard). */
+  /** Hard daily cap on executed world actions (budget guard). 0 = unlimited. */
   dailyActionCap: number;
   /** Allow public noodle activity (posts, replies, likes, follows). */
   allowNoodle: boolean;

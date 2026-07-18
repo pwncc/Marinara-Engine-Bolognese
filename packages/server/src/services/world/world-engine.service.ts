@@ -81,7 +81,7 @@ export function normalizeWorldEngineConfig(raw: unknown): WorldEngineConfig {
     connectionId: typeof data.connectionId === "string" && data.connectionId.trim() ? data.connectionId.trim() : null,
     cadenceMinutes: Math.round(num(data.cadenceMinutes, DEFAULT_WORLD_ENGINE_CONFIG.cadenceMinutes, 5, 24 * 60)),
     maxActionsPerTick: Math.round(num(data.maxActionsPerTick, DEFAULT_WORLD_ENGINE_CONFIG.maxActionsPerTick, 1, 12)),
-    dailyActionCap: Math.round(num(data.dailyActionCap, DEFAULT_WORLD_ENGINE_CONFIG.dailyActionCap, 1, 1000)),
+    dailyActionCap: Math.round(num(data.dailyActionCap, DEFAULT_WORLD_ENGINE_CONFIG.dailyActionCap, 0, 100_000)),
     allowNoodle: data.allowNoodle !== false,
     allowDms: data.allowDms !== false,
     allowMemories: data.allowMemories !== false,
@@ -100,6 +100,12 @@ export function normalizeWorldEngineConfig(raw: unknown): WorldEngineConfig {
 /** True when the character lives in the world under this config. */
 export function isWorldMember(config: WorldEngineConfig, characterId: string): boolean {
   return config.memberCharacterIds === null || config.memberCharacterIds.includes(characterId);
+}
+
+/** Remaining daily action budget (Infinity when the cap is off). */
+export function dailyBudgetLeft(config: WorldEngineConfig, dailyCount: number): number {
+  if (config.dailyActionCap <= 0) return Number.POSITIVE_INFINITY;
+  return Math.max(0, config.dailyActionCap - dailyCount);
 }
 
 const WORLD_FOLDER_NAME = "Living World";
@@ -874,7 +880,7 @@ export async function runWorldDirector(db: DB, options: { manual?: boolean } = {
     result.skippedReason = "disabled";
     return result;
   }
-  if (state.dailyCount >= config.dailyActionCap) {
+  if (dailyBudgetLeft(config, state.dailyCount) <= 0) {
     result.skippedReason = "daily action cap reached";
     return result;
   }
@@ -960,7 +966,7 @@ export async function drainDueWorldActions(db: DB, options: { force?: boolean } 
 
   const world = createWorldStorage(db);
   const state = await loadWorldEngineState(db);
-  const budgetLeft = Math.max(0, config.dailyActionCap - state.dailyCount);
+  const budgetLeft = dailyBudgetLeft(config, state.dailyCount);
   if (budgetLeft <= 0) return result;
 
   const nowIso = new Date().toISOString();
