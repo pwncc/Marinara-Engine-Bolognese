@@ -3001,7 +3001,16 @@ export async function generateRoutes(app: FastifyInstance) {
                     `This chat is a real, ongoing group thread between ${spaceCharNames} — their own hangout space in their day-to-day lives, not a roleplay scene.`,
                     `No scenario applies unless the group is gathering for a concrete plan they made. Continuity comes from this thread's history, their memories, and their relationships.`,
                   ];
-          const lifeSpaceBlock = `<life_space>\n${spaceLines.join("\n")}\n</life_space>`;
+          // Cross-thread continuity: what the same people just said/did in
+          // their other world threads (hangout ↔ DMs ↔ life) rides along.
+          let crossThreadRecap: string | null = null;
+          try {
+            const { buildWorldCrossThreadRecap } = await import("../services/world/character-mind.service.js");
+            crossThreadRecap = await buildWorldCrossThreadRecap(app.db, input.chatId);
+          } catch (error) {
+            logger.debug(error, "[generate] World cross-thread recap skipped");
+          }
+          const lifeSpaceBlock = `<life_space>\n${spaceLines.join("\n")}${crossThreadRecap ? `\n\n${crossThreadRecap}` : ""}\n</life_space>`;
           const lastUserIdxForSpace = findLastIndex(finalMessages, "user");
           if (lastUserIdxForSpace >= 0) {
             const target = finalMessages[lastUserIdxForSpace]!;

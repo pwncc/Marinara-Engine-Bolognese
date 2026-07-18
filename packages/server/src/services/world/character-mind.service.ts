@@ -219,6 +219,86 @@ export async function bumpMindsForUserMessage(db: DB, chatId: string): Promise<v
   }
 }
 
+// ── Cross-thread recap (context preserved between a pair's surfaces) ──
+
+/**
+ * For a world chat (life space, DM, group, hangout), summarize the freshest
+ * recent moments from the SAME people's OTHER world threads, so a DM knows
+ * what just happened at the hangout and vice versa. Used both by mind wakes
+ * (implicitly, via the threads section) and by the normal chat pipeline when
+ * the user talks inside a world chat.
+ */
+export async function buildWorldCrossThreadRecap(db: DB, chatId: string): Promise<string | null> {
+  const chats = createChatsStorage(db);
+  const chat = await chats.getById(chatId);
+  if (!chat) return null;
+  const meta = parseJson((chat as { metadata?: unknown }).metadata);
+  let subjectIds: string[] = [];
+  if (meta.worldLifeChat === true && typeof meta.worldCharacterId === "string") {
+    subjectIds = [meta.worldCharacterId];
+  } else if (meta.worldDmThread === true && Array.isArray(meta.worldPair)) {
+    subjectIds = (meta.worldPair as unknown[]).filter((id): id is string => typeof id === "string");
+  } else if (meta.worldGroupThread === true && Array.isArray(meta.worldMembers)) {
+    subjectIds = (meta.worldMembers as unknown[]).filter((id): id is string => typeof id === "string");
+  }
+  if (!subjectIds.length) return null;
+
+  const config = await loadWorldEngineConfig(db);
+  const nameById = await buildNameMap(db, config);
+  const name = (id: string | null | undefined) => (id ? (nameById.get(id) ?? "someone") : "someone");
+
+  const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown; updatedAt?: string }>;
+  const siblings = allChats
+    .map((candidate) => ({ candidate, candidateMeta: parseJson(candidate.metadata) }))
+    .filter(({ candidate, candidateMeta }) => {
+      if (candidate.id === chatId) return false;
+      const memberIds =
+        candidateMeta.worldLifeChat === true && typeof candidateMeta.worldCharacterId === "string"
+          ? [candidateMeta.worldCharacterId]
+          : candidateMeta.worldDmThread === true && Array.isArray(candidateMeta.worldPair)
+            ? (candidateMeta.worldPair as string[])
+            : candidateMeta.worldGroupThread === true && Array.isArray(candidateMeta.worldMembers)
+              ? (candidateMeta.worldMembers as string[])
+              : null;
+      if (!memberIds) return false;
+      // Sibling = involves every subject of this chat (for life chats: the character).
+      return subjectIds.every((id) => memberIds.includes(id));
+    })
+    .sort((a, b) => String(b.candidate.updatedAt ?? "").localeCompare(String(a.candidate.updatedAt ?? "")))
+    .slice(0, 2);
+  if (!siblings.length) return null;
+
+  const sections: string[] = [];
+  for (const { candidate, candidateMeta } of siblings) {
+    const messages = (await chats.listMessages(candidate.id)) as Array<{
+      role: string;
+      characterId?: string | null;
+      content: string;
+      createdAt: string;
+    }>;
+    const tail = messages.slice(-4);
+    if (!tail.length) continue;
+    const label =
+      candidateMeta.worldLifeChat === true
+        ? `${name(String(candidateMeta.worldCharacterId))}'s life`
+        : candidateMeta.worldHangout === true
+          ? `in person${typeof candidateMeta.worldPlace === "string" && candidateMeta.worldPlace ? ` @ ${candidateMeta.worldPlace}` : ""}`
+          : candidateMeta.worldDmThread === true
+            ? `their DMs`
+            : `their group chat`;
+    const lines = tail.map(
+      (msg) =>
+        `   ${msg.role === "user" ? "Visitor" : name(msg.characterId)} (${ago(msg.createdAt)}): ${shortText(msg.content, 140)}`,
+    );
+    sections.push(`— ${label}:\n${lines.join("\n")}`);
+  }
+  if (!sections.length) return null;
+  return [
+    `MEANWHILE, BETWEEN THE SAME PEOPLE ELSEWHERE (stay consistent with this — texts and in-person talk are separate threads of the same shared life):`,
+    ...sections,
+  ].join("\n");
+}
+
 // ── Wake context ──
 
 interface ThreadContext {
@@ -417,7 +497,11 @@ async function buildMindContext(
       createdAt: string;
       extra?: unknown;
     }>;
-    const tail = messages.slice(-6);
+    // Active conversations get a deeper tail so continuity stays accurate.
+    const hasNewProbe = messages
+      .slice(-8)
+      .some((msg) => msg.characterId !== characterId && msg.createdAt > seenDmsAt);
+    const tail = messages.slice(hasNewProbe ? -8 : -5);
     const hasNew = tail.some((msg) => msg.characterId !== characterId && msg.createdAt > seenDmsAt);
     const otherNamesLabel = memberIds.map((id) => nameById.get(id) ?? "someone").join(", ");
     const threadLabel = isGroup
@@ -512,7 +596,8 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     ``,
     `HOW TO LIVE:`,
     `- Your days should look like days. Narrate what you're actually doing with "do" — work, meals, gym, hobbies, errands, going out, rest. Follow your schedule and your interests.`,
-    `- Your phone: the NOODLE FEED below is the public timeline; YOUR THREADS are your private DMs and groups. To react on Noodle, copy the EXACT postId string from your feed or from "ON YOUR POSTS" — never invent or guess an id.`,
+    `- Your phone is REAL. Texting someone = the "message" action (it lands in your actual DM thread with them); posting = the "post" action. NEVER narrate texting or checking your phone as prose inside a hangout or your space — when your character picks up their phone, DO the matching action in this same wake (you can narrate reaching for it with "do"/"say" AND send the real message). Each thread is a separate real place: what's said in a hangout stays in that hangout; what's texted lives in the DM.`,
+    `- The NOODLE FEED below is the public timeline; YOUR THREADS are your private DMs, groups, and in-person hangouts. To react on Noodle, copy the EXACT postId string from your feed or from "ON YOUR POSTS" — never invent or guess an id.`,
     `- People: PEOPLE IN YOUR WORLD lists everyone around you. You can DM anyone by their id — introducing yourself to someone new because you liked their post is completely normal life. Relationships grow from small reaches.`,
     `- Meeting up: you can actually MEET people with "hangout" — you're then physically together somewhere. Write those moments as lived prose (*actions*, spoken dialogue), not texting. When a meetup plan comes due, make it happen with hangout, then resolve_plan.`,
     `- Quiet is fine some check-ins — but you are a person: curiosity, boredom, loneliness, and affection all pull you toward people. Not every wake should be solitary.`,
