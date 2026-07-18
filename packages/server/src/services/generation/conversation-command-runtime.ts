@@ -200,8 +200,17 @@ export async function buildConversationCommandsReminder(args: {
     }
   }
 
-  // Check if selfie is enabled for this chat (user picked an image gen connection)
-  const hasImageGen = !!chatMeta.imageGenConnectionId;
+  // Selfies work with the chat's own image connection, or fall back to the
+  // Living World photo pipeline (Noodle's connection / the default one).
+  let hasImageGen = !!chatMeta.imageGenConnectionId;
+  if (!hasImageGen && selfieCommandEnabled) {
+    try {
+      const { hasWorldImageConnection } = await import("../world/world-photo.service.js");
+      hasImageGen = await hasWorldImageConnection(args.db as Parameters<typeof hasWorldImageConnection>[0]);
+    } catch {
+      /* fall through — selfie stays unadvertised */
+    }
+  }
   let conversationSpotifyCommandsAvailable = false;
   let conversationYoutubeCommandsAvailable = false;
   if (chatMode === "conversation" && musicCommandEnabled && activeMusicCommandSource === "spotify") {

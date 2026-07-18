@@ -77,7 +77,39 @@ export async function handleConversationSelfieCommand(args: {
 
   const imgConnId = typeof args.chatMeta.imageGenConnectionId === "string" ? args.chatMeta.imageGenConnectionId : "";
   if (!imgConnId) {
-    logger.warn("[commands] Selfie requested but no imageGenConnectionId set on chat metadata");
+    // No chat-level image connection: fall back to the Living World photo
+    // pipeline (Noodle's image connection or the default one), so characters
+    // can send pictures in any chat without per-chat setup.
+    const { generateWorldPhoto, hasWorldImageConnection } = await import("../world/world-photo.service.js");
+    if (args.characterId && args.messageId && (await hasWorldImageConnection(args.db))) {
+      const fallbackCharRow = await args.chars.getById(args.characterId);
+      const fallbackCharData = parseRecord(fallbackCharRow?.data);
+      const fallbackCharName =
+        typeof fallbackCharData?.name === "string" && fallbackCharData.name.trim() ? fallbackCharData.name : "character";
+      args.sendEvent({ type: "typing", characters: [fallbackCharName] });
+      const photo = await generateWorldPhoto(args.db, {
+        chatId: args.chatId,
+        messageId: args.messageId,
+        characterId: args.characterId,
+        prompt: command.context?.trim() || `a casual selfie of ${fallbackCharName}, taken by themselves right now`,
+        includeSelf: true,
+      });
+      if (photo) {
+        args.sendEvent({
+          type: "selfie",
+          data: {
+            characterId: args.characterId,
+            characterName: fallbackCharName,
+            messageId: args.messageId,
+            imageUrl: photo.imageUrl,
+            prompt: photo.prompt,
+            galleryId: photo.galleryId,
+          },
+        });
+        return true;
+      }
+    }
+    logger.warn("[commands] Selfie requested but no image connection is available");
     args.sendEvent({
       type: "selfie_error",
       data: {

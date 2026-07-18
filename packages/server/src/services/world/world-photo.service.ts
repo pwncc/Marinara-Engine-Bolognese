@@ -53,9 +53,15 @@ export async function hasWorldImageConnection(db: DB): Promise<boolean> {
   }
 }
 
+export interface WorldPhotoResult {
+  imageUrl: string;
+  galleryId?: string;
+  prompt: string;
+}
+
 /**
- * Generate a photo for a message a mind already sent. Returns true when an
- * attachment landed. Never throws — a failed photo is just a text message.
+ * Generate a photo for a message already sent and attach it. Returns the
+ * attachment info, or null. Never throws — a failed photo is just a text message.
  */
 export async function generateWorldPhoto(
   db: DB,
@@ -67,12 +73,12 @@ export async function generateWorldPhoto(
     /** When the character appears in the image, blend in their appearance for likeness. */
     includeSelf?: boolean;
   },
-): Promise<boolean> {
+): Promise<WorldPhotoResult | null> {
   try {
     const conn = await resolveWorldImageConnection(db);
     if (!conn) {
       logger.debug("[world/photo] No image connection available; skipping photo");
-      return false;
+      return null;
     }
     const chats = createChatsStorage(db);
     const chars = createCharactersStorage(db);
@@ -146,22 +152,24 @@ export async function generateWorldPhoto(
     });
 
     const filename = filePath.split("/").pop()!;
+    const imageUrl = `/api/gallery/file/${input.chatId}/${encodeURIComponent(filename)}`;
     const attachment = {
       type: "image",
-      url: `/api/gallery/file/${input.chatId}/${encodeURIComponent(filename)}`,
+      url: imageUrl,
       filename: `photo_${charName.toLowerCase().replace(/\s+/g, "_")}.${imageResult.ext}`,
       prompt: compiled.prompt,
       galleryId: galleryEntry?.id,
     };
-    await chats.appendSwipeAttachment(input.messageId, 0, attachment);
     const message = await chats.getMessage(input.messageId);
-    if (message && (message.activeSwipeIndex ?? 0) === 0) {
+    const activeSwipeIndex = message?.activeSwipeIndex ?? 0;
+    await chats.appendSwipeAttachment(input.messageId, activeSwipeIndex, attachment);
+    if (message) {
       await chats.appendMessageAttachment(input.messageId, attachment);
     }
     logger.info("[world/photo] %s attached a photo in chat %s", charName, input.chatId);
-    return true;
+    return { imageUrl, galleryId: galleryEntry?.id, prompt: compiled.prompt };
   } catch (error) {
     logger.warn(error, "[world/photo] Photo generation failed for chat %s", input.chatId);
-    return false;
+    return null;
   }
 }
