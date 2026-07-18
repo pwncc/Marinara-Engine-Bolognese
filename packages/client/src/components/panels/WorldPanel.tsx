@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Heart,
   HeartHandshake,
+  Lightbulb,
   Loader2,
   MessageCircle,
   PenSquare,
@@ -67,6 +68,8 @@ function relativeTime(iso: string): string {
 
 function eventIcon(kind: string) {
   switch (kind) {
+    case "thought":
+      return <Lightbulb size="0.8rem" className="text-amber-300" />;
     case "dm":
       return <MessageCircle size="0.8rem" className="text-sky-400" />;
     case "noodle_post":
@@ -117,7 +120,9 @@ function EventRow({ event }: { event: WorldEventRecord }) {
     >
       <span className="mt-0.5 shrink-0">{eventIcon(event.kind)}</span>
       <span className="min-w-0 flex-1">
-        <span className="block text-xs leading-snug">{event.summary}</span>
+        <span className={cn("block text-xs leading-snug", event.kind === "thought" && "italic text-[var(--muted-foreground)]")}>
+          {event.summary}
+        </span>
         <span className="mt-0.5 block text-[0.65rem] text-[var(--muted-foreground)]">
           {relativeTime(event.createdAt)}
         </span>
@@ -307,7 +312,21 @@ function WorldConfigForm({
       </label>
 
       <label className="block space-y-0.5">
-        <span className="text-[0.65rem] text-[var(--muted-foreground)]">Connection (who directs the world)</span>
+        <span className="text-[0.65rem] text-[var(--muted-foreground)]">Simulation style</span>
+        <select
+          className={inputClass}
+          value={draft.mode}
+          onChange={(e) => setDraft({ ...draft, mode: e.target.value === "director" ? "director" : "minds" })}
+        >
+          <option value="minds">Character minds — every character is its own AI (natural, emergent)</option>
+          <option value="director">Director — one cheap planning call writes a timeline</option>
+        </select>
+      </label>
+
+      <label className="block space-y-0.5">
+        <span className="text-[0.65rem] text-[var(--muted-foreground)]">
+          Connection ({draft.mode === "minds" ? "each mind thinks with this" : "the director plans with this"})
+        </span>
         <select
           className={inputClass}
           value={draft.connectionId ?? ""}
@@ -324,28 +343,48 @@ function WorldConfigForm({
       </label>
 
       <div className="grid grid-cols-3 gap-1.5">
-        <label className="block space-y-0.5">
-          <span className="text-[0.65rem] text-[var(--muted-foreground)]">Window (min)</span>
-          <input
-            type="number"
-            min={5}
-            max={1440}
-            className={inputClass}
-            value={draft.cadenceMinutes}
-            onChange={(e) => setNum("cadenceMinutes", e.target.value, DEFAULT_WORLD_ENGINE_CONFIG.cadenceMinutes)}
-          />
-        </label>
-        <label className="block space-y-0.5">
-          <span className="text-[0.65rem] text-[var(--muted-foreground)]">Moments / window</span>
-          <input
-            type="number"
-            min={1}
-            max={12}
-            className={inputClass}
-            value={draft.maxActionsPerTick}
-            onChange={(e) => setNum("maxActionsPerTick", e.target.value, DEFAULT_WORLD_ENGINE_CONFIG.maxActionsPerTick)}
-          />
-        </label>
+        {draft.mode === "minds" ? (
+          <label className="block space-y-0.5">
+            <span className="text-[0.65rem] text-[var(--muted-foreground)]">Check-in avg (min)</span>
+            <input
+              type="number"
+              min={15}
+              max={1440}
+              className={inputClass}
+              value={draft.wakeIntervalMinutes}
+              onChange={(e) =>
+                setNum("wakeIntervalMinutes", e.target.value, DEFAULT_WORLD_ENGINE_CONFIG.wakeIntervalMinutes)
+              }
+            />
+          </label>
+        ) : (
+          <>
+            <label className="block space-y-0.5">
+              <span className="text-[0.65rem] text-[var(--muted-foreground)]">Window (min)</span>
+              <input
+                type="number"
+                min={5}
+                max={1440}
+                className={inputClass}
+                value={draft.cadenceMinutes}
+                onChange={(e) => setNum("cadenceMinutes", e.target.value, DEFAULT_WORLD_ENGINE_CONFIG.cadenceMinutes)}
+              />
+            </label>
+            <label className="block space-y-0.5">
+              <span className="text-[0.65rem] text-[var(--muted-foreground)]">Moments / window</span>
+              <input
+                type="number"
+                min={1}
+                max={12}
+                className={inputClass}
+                value={draft.maxActionsPerTick}
+                onChange={(e) =>
+                  setNum("maxActionsPerTick", e.target.value, DEFAULT_WORLD_ENGINE_CONFIG.maxActionsPerTick)
+                }
+              />
+            </label>
+          </>
+        )}
         <label className="block space-y-0.5">
           <span className="text-[0.65rem] text-[var(--muted-foreground)]">Daily cap</span>
           <input
@@ -358,6 +397,16 @@ function WorldConfigForm({
           />
         </label>
       </div>
+      {draft.mode === "minds" ? (
+        <p className="text-[0.6rem] leading-snug text-[var(--muted-foreground)]">
+          Each character wakes on their own clock (schedule &amp; events shift it — a DM pulls the recipient&apos;s
+          check-in earlier), thinks privately, and freely chooses to act or not. Roughly {""}
+          <span className="text-[var(--foreground)]">
+            {Math.max(1, Math.round((24 * 60) / Math.max(15, draft.wakeIntervalMinutes)))} wakes/day/character
+          </span>
+          .
+        </p>
+      ) : null}
 
       <div className="space-y-1">
         <span className="text-[0.65rem] text-[var(--muted-foreground)]">Who lives in this world</span>
@@ -470,10 +519,15 @@ export function WorldPanel() {
       if (result.error) {
         toast.error(result.error);
       } else if (result.ran) {
-        const played = result.executedNow > 0 ? ` — ${result.executedNow} already happening` : "";
-        toast.success(
-          `Planned ${result.queued} moment${result.queued === 1 ? "" : "s"} for the next stretch${played}`,
-        );
+        const parts: string[] = [];
+        if (result.queued > 0) parts.push(`${result.queued} moment${result.queued === 1 ? "" : "s"} planned`);
+        if (result.executedNow > 0) parts.push(`${result.executedNow} action${result.executedNow === 1 ? "" : "s"} happened`);
+        const headline = result.narration
+          ? result.narration.length > 90
+            ? `${result.narration.slice(0, 89)}…`
+            : result.narration
+          : "The world moved";
+        toast.success(parts.length ? `${headline} (${parts.join(", ")})` : headline);
       } else {
         toast.info(result.skippedReason ?? "Nothing to do right now");
       }
@@ -506,10 +560,17 @@ export function WorldPanel() {
           </p>
         ) : null}
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[0.65rem] text-[var(--muted-foreground)]">
-          <span>
-            {status?.timeline.count ?? 0} moment{(status?.timeline.count ?? 0) === 1 ? "" : "s"} queued
-            {status?.timeline.nextRunAt ? ` · next ${relativeTime(status.timeline.nextRunAt)}` : ""}
-          </span>
+          {status?.config.mode === "minds" ? (
+            <span>
+              {status.minds.count} mind{status.minds.count === 1 ? "" : "s"}
+              {status.minds.nextWakeAt ? ` · next check-in ${relativeTime(status.minds.nextWakeAt)}` : ""}
+            </span>
+          ) : (
+            <span>
+              {status?.timeline.count ?? 0} moment{(status?.timeline.count ?? 0) === 1 ? "" : "s"} queued
+              {status?.timeline.nextRunAt ? ` · next ${relativeTime(status.timeline.nextRunAt)}` : ""}
+            </span>
+          )}
           <span>
             today {status?.state.dailyCount ?? 0}/{status?.config.dailyActionCap ?? 0}
           </span>

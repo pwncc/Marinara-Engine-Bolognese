@@ -2,10 +2,25 @@
 // Living World engine — config, events, relationships
 // ──────────────────────────────────────────────
 
+/**
+ * How the world advances.
+ * - "minds": every character is its own agent — private context, memory,
+ *   journal, and clock. They wake, think, and freely choose to act. Emergent.
+ * - "director": one cheap planning call per window writes a timeline. Authored.
+ */
+export type WorldEngineMode = "minds" | "director";
+
 /** App-wide Living World engine configuration (app_settings key "worldEngine"). */
 export interface WorldEngineConfig {
   /** Master switch — the world only simmers when this is on. */
   enabled: boolean;
+  /** Simulation style. */
+  mode: WorldEngineMode;
+  /**
+   * Minds mode: how often a character naturally checks in on their life, on
+   * average (their own choices, presence, and events shift the real timing).
+   */
+  wakeIntervalMinutes: number;
   /**
    * LLM used to advance the world: an API connection id, "local" for the
    * local sidecar, or null (engine idle until configured).
@@ -36,6 +51,8 @@ export interface WorldEngineConfig {
 
 export const DEFAULT_WORLD_ENGINE_CONFIG: WorldEngineConfig = {
   enabled: false,
+  mode: "minds",
+  wakeIntervalMinutes: 90,
   connectionId: null,
   cadenceMinutes: 45,
   maxActionsPerTick: 5,

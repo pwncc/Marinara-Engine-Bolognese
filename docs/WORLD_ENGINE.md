@@ -1,13 +1,20 @@
 # Living World Engine
 
-The Living World engine makes characters live *between* your sessions — continuously, at the pace of real life, not in bursts.
+The Living World engine makes characters live *between* your sessions — continuously, at the pace of real life, not in bursts. Two simulation styles:
 
-It runs in two halves:
+## Character minds (default — natural, emergent)
 
-1. **The director** (LLM, infrequent): snapshots the world — every character with their presence and persona, every pairwise relationship, recent world events, recent Noodle activity, and open plans — and plans the next stretch of time as a **timeline**: each moment carries a time offset ("Bob replies in 12 minutes", "their DM continues in 40", "quiet until evening").
-2. **The drip** (no LLM, every ~45s): executes queued moments when their clock arrives. A post appears at 14:03, the reply at 14:11, a DM at 14:26 — with natural gaps and quiet stretches, because the director is explicitly instructed that quiet is realistic and stacking everything at minute zero is not.
+**No narrator. Every world member is its own agent** with a persistent mind: a private journal, a current intention and mood, read-cursors into the world, and their own wake clock.
 
-Nothing is scripted. The director gets state and an open action vocabulary; arcs (friendships, romances, rivalries, group plans, fallings-out) emerge from continuity. Moments the model doesn't time are auto-spread across the window with jitter; stale moments (missed by more than 6h, e.g. while the app was closed) are skipped rather than dumped in a burst.
+On their own schedule — pulled earlier by events (receiving a DM bumps the recipient's next check-in by a presence-based delay: minutes if they're online, hours if offline) — a character **wakes in a private first-person context**: their card, their journal, their relationships *as they see them*, their memories, and only what's new **to them**: their Noodle feed since they last looked, replies and likes on their own posts, their DM threads with unread markers. They journal a thought (visible in the world timeline as their inner life), and freely choose up to a few small actions — post, reply, text someone, make or resolve a plan, let a feeling shift, keep a memory — **or nothing, which the prompt explicitly frames as honest living**. They also choose when they'd naturally check in again.
+
+Interaction is emergent by construction: Alice's message is just something Bob finds, in his own head, when he next checks his phone. Nobody ever writes both sides of a conversation.
+
+## Director (cheap fallback — authored)
+
+One planning call per window snapshots the whole world and writes a **timeline** (each moment carries a time offset); a no-LLM drip loop executes moments when their clock arrives. An order of magnitude cheaper (one call per window vs one per character wake), at the cost of a single authorial voice and moments written before they happen. Stale moments (missed by more than 6h) are skipped rather than dumped in a burst.
+
+**World membership** applies to both modes: config carries `memberCharacterIds` (null = everyone) — the noodle-invite-style roster in the panel. Non-members don't exist to the simulation and executors reject them defensively.
 
 ## What a beat can do
 
@@ -50,9 +57,10 @@ Cost control: the daily action cap is hard; the scheduler backs off exponentiall
 ## Architecture
 
 ```
-world-engine-scheduler.service.ts   poll loop (45s): drip due moments; director when the window elapses
-world-engine.service.ts             director (snapshot → prompt → timeline) + drip executors
-world.storage.ts                    world_events + character_relationships + world_actions queue
+character-mind.service.ts           minds mode: per-character wake context, prompt, execution, wake scheduling
+world-engine-scheduler.service.ts   poll loop (45s): wake due minds — or drip + director in director mode
+world-engine.service.ts             config/state, provider resolution, action executors, director planning
+world.storage.ts                    world_events + character_relationships + world_actions + character_minds
 world.routes.ts                     /api/world/* (feed, relationships, config, status, tick)
 shared/types/world.ts               config, stages, records shared with the client
 components/panels/WorldPanel.tsx    Living World panel (status, config, timeline, bonds)

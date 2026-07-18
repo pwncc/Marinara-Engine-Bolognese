@@ -23,6 +23,7 @@ export interface WorldStatusResponse {
   config: WorldEngineConfig;
   state: WorldEngineState;
   timeline: { count: number; nextRunAt: string | null };
+  minds: { count: number; nextWakeAt: string | null };
   provider: { ok: boolean; label?: string; error?: string };
 }
 

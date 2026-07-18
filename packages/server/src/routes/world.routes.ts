@@ -74,10 +74,18 @@ export async function worldRoutes(app: FastifyInstance) {
     const state = await loadWorldEngineState(app.db);
     const provider = await resolveWorldProvider(app.db, config);
     const timeline = await world.pendingActionStats();
+    const mindRows = (await world.listMinds()).filter(
+      (mind) => config.memberCharacterIds === null || config.memberCharacterIds.includes(mind.id),
+    );
+    const nextWakes = mindRows
+      .map((mind) => mind.nextWakeAt)
+      .filter((at): at is string => typeof at === "string")
+      .sort();
     return {
       config,
       state,
       timeline,
+      minds: { count: mindRows.length, nextWakeAt: nextWakes[0] ?? null },
       provider: "error" in provider ? { ok: false, error: provider.error } : { ok: true, label: provider.label },
     };
   });

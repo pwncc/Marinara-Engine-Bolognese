@@ -82,6 +82,10 @@ export function normalizeWorldEngineConfig(raw: unknown): WorldEngineConfig {
     allowNoodle: data.allowNoodle !== false,
     allowDms: data.allowDms !== false,
     allowMemories: data.allowMemories !== false,
+    mode: data.mode === "director" ? "director" : "minds",
+    wakeIntervalMinutes: Math.round(
+      num(data.wakeIntervalMinutes, DEFAULT_WORLD_ENGINE_CONFIG.wakeIntervalMinutes, 15, 24 * 60),
+    ),
     temperature: num(data.temperature, DEFAULT_WORLD_ENGINE_CONFIG.temperature, 0, 2),
     userDirective: typeof data.userDirective === "string" ? data.userDirective.slice(0, 2000) : "",
     memberCharacterIds: Array.isArray(data.memberCharacterIds)
@@ -91,7 +95,7 @@ export function normalizeWorldEngineConfig(raw: unknown): WorldEngineConfig {
 }
 
 /** True when the character lives in the world under this config. */
-function isWorldMember(config: WorldEngineConfig, characterId: string): boolean {
+export function isWorldMember(config: WorldEngineConfig, characterId: string): boolean {
   return config.memberCharacterIds === null || config.memberCharacterIds.includes(characterId);
 }
 
@@ -134,6 +138,17 @@ export async function loadWorldEngineState(db: DB): Promise<WorldEngineState> {
 async function saveWorldEngineState(db: DB, state: WorldEngineState): Promise<void> {
   const appSettings = createAppSettingsStorage(db);
   await appSettings.set(STATE_KEY, JSON.stringify(state));
+}
+
+/** Read-modify-write so concurrent wakes don't clobber each other's counters. */
+export async function saveWorldEngineStatePatch(
+  db: DB,
+  mutate: (state: WorldEngineState) => void,
+): Promise<WorldEngineState> {
+  const state = await loadWorldEngineState(db);
+  mutate(state);
+  await saveWorldEngineState(db, state);
+  return state;
 }
 
 // ── Provider resolution ──
@@ -206,7 +221,7 @@ function shortText(value: unknown, max: number): string {
 }
 
 /** Name map restricted to world members — executor validation rides on `.has()`. */
-async function buildNameMap(db: DB, config: WorldEngineConfig): Promise<Map<string, string>> {
+export async function buildNameMap(db: DB, config: WorldEngineConfig): Promise<Map<string, string>> {
   const chars = createCharactersStorage(db);
   const rows = (await chars.list()) as Array<{ id: string; data: unknown }>;
   const nameById = new Map<string, string>();
@@ -883,7 +898,9 @@ export async function drainDueWorldActions(db: DB, options: { force?: boolean } 
   return result;
 }
 
-// ── Manual "advance the world now" (director + immediate first sip) ──
+// ── Manual "advance the world now" ──
+// Minds mode: wake the two most-overdue minds right now.
+// Director mode: plan a window + play anything already due.
 
 export interface WorldTickResult extends WorldDirectorResult {
   executedNow: number;
@@ -891,6 +908,26 @@ export interface WorldTickResult extends WorldDirectorResult {
 }
 
 export async function runWorldTick(db: DB, options: { manual?: boolean } = {}): Promise<WorldTickResult> {
+  const config = await loadWorldEngineConfig(db);
+  if (config.mode === "minds") {
+    // Imported lazily: character-mind.service imports from this module.
+    const { wakeDueCharacterMinds } = await import("./character-mind.service.js");
+    const cycle = await wakeDueCharacterMinds(db, { limit: 2, force: options.manual });
+    const events = cycle.woke.flatMap((wake) => wake.events);
+    const failed = cycle.woke.find((wake) => !wake.ok);
+    const firstThought = cycle.woke.find((wake) => wake.thought);
+    return {
+      ok: !failed || cycle.woke.some((wake) => wake.ok),
+      ran: cycle.woke.length > 0,
+      narration: firstThought ? `${firstThought.name}: ${firstThought.thought}` : null,
+      actionsPlanned: cycle.woke.length,
+      queued: 0,
+      skippedReason: cycle.woke.length ? null : "no minds due (or no members/provider)",
+      error: failed?.error ?? null,
+      executedNow: cycle.woke.reduce((sum, wake) => sum + wake.actionsExecuted, 0),
+      events,
+    };
+  }
   const director = await runWorldDirector(db, options);
   const drained = await drainDueWorldActions(db, { force: options.manual });
   return { ...director, executedNow: drained.executed, events: drained.events };

@@ -2,7 +2,7 @@
 // Storage: Living World events + character relationships
 // ──────────────────────────────────────────────
 import { and, desc, eq, or } from "../../db/file-query.js";
-import { characterRelationships, worldActions, worldEvents } from "../../db/schema/index.js";
+import { characterMinds, characterRelationships, worldActions, worldEvents } from "../../db/schema/index.js";
 import type { DB } from "../../db/connection.js";
 import { newId, now } from "../../utils/id-generator.js";
 import {
@@ -65,6 +65,30 @@ function toRelationshipRecord(row: Record<string, unknown>): CharacterRelationsh
 /** Normalize a pair so (a, b) is order-independent. */
 export function orderPair(x: string, y: string): [string, string] {
   return x < y ? [x, y] : [y, x];
+}
+
+export interface CharacterMindRow {
+  id: string;
+  intention: string;
+  mood: string;
+  lastWakeAt: string | null;
+  nextWakeAt: string | null;
+  cursors: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function toMindRow(row: Record<string, unknown>): CharacterMindRow {
+  return {
+    id: String(row.id),
+    intention: String(row.intention ?? ""),
+    mood: String(row.mood ?? ""),
+    lastWakeAt: typeof row.lastWakeAt === "string" ? row.lastWakeAt : null,
+    nextWakeAt: typeof row.nextWakeAt === "string" ? row.nextWakeAt : null,
+    cursors: parseJsonRecord(row.cursors),
+    createdAt: String(row.createdAt ?? ""),
+    updatedAt: String(row.updatedAt ?? ""),
+  };
 }
 
 export interface AppendWorldEventInput {
@@ -151,6 +175,53 @@ export function createWorldStorage(db: DB) {
         .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
       for (const row of finished.slice(keep)) {
         await db.delete(worldActions).where(eq(worldActions.id, row.id));
+      }
+    },
+
+    // ── Character minds (minds mode) ──
+
+    async getMind(characterId: string): Promise<CharacterMindRow | null> {
+      const rows = await db.select().from(characterMinds).where(eq(characterMinds.id, characterId));
+      return rows[0] ? toMindRow(rows[0]) : null;
+    },
+
+    async listMinds(): Promise<CharacterMindRow[]> {
+      const rows = await db.select().from(characterMinds);
+      return rows.map(toMindRow);
+    },
+
+    async upsertMind(
+      characterId: string,
+      patch: Partial<Omit<CharacterMindRow, "id" | "createdAt" | "updatedAt">>,
+    ): Promise<CharacterMindRow> {
+      const existing = await this.getMind(characterId);
+      const timestamp = now();
+      const next = {
+        intention: (patch.intention ?? existing?.intention ?? "").slice(0, 300),
+        mood: (patch.mood ?? existing?.mood ?? "").slice(0, 200),
+        lastWakeAt: patch.lastWakeAt !== undefined ? patch.lastWakeAt : (existing?.lastWakeAt ?? null),
+        nextWakeAt: patch.nextWakeAt !== undefined ? patch.nextWakeAt : (existing?.nextWakeAt ?? null),
+        cursors: JSON.stringify(patch.cursors ?? existing?.cursors ?? {}),
+        updatedAt: timestamp,
+      };
+      if (existing) {
+        await db.update(characterMinds).set(next).where(eq(characterMinds.id, characterId));
+        return (await this.getMind(characterId))!;
+      }
+      const row = { id: characterId, createdAt: timestamp, ...next };
+      await db.insert(characterMinds).values(row);
+      return toMindRow(row);
+    },
+
+    /** Pull a character's wake earlier (e.g. they received a DM), never later. */
+    async bumpMindWake(characterId: string, notLaterThanIso: string): Promise<void> {
+      const existing = await this.getMind(characterId);
+      if (!existing) {
+        await this.upsertMind(characterId, { nextWakeAt: notLaterThanIso });
+        return;
+      }
+      if (!existing.nextWakeAt || existing.nextWakeAt > notLaterThanIso) {
+        await this.upsertMind(characterId, { nextWakeAt: notLaterThanIso });
       }
     },
 

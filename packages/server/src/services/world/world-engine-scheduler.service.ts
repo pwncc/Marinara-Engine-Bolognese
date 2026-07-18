@@ -12,6 +12,7 @@ import {
   loadWorldEngineState,
   runWorldDirector,
 } from "./world-engine.service.js";
+import { wakeDueCharacterMinds } from "./character-mind.service.js";
 
 const POLL_MS = 45_000;
 const INITIAL_DELAY_MS = 30_000;
@@ -28,7 +29,14 @@ export function startWorldEngineScheduler(app: FastifyInstance): void {
       const config = await loadWorldEngineConfig(app.db);
       if (!config.enabled) return;
 
-      // Drip first: moments land on time even when the director isn't due.
+      if (config.mode === "minds") {
+        // Each character keeps their own clock; wake whoever's moment arrived.
+        await wakeDueCharacterMinds(app.db, { limit: 2 });
+        return;
+      }
+
+      // Director mode — drip first: moments land on time even when the
+      // director isn't due.
       await drainDueWorldActions(app.db);
 
       const state = await loadWorldEngineState(app.db);

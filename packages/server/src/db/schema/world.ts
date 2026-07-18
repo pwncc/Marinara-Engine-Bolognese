@@ -41,6 +41,26 @@ export const worldActions = fileTable("world_actions", {
 });
 
 /**
+ * One row per character mind (minds mode): their private continuous state —
+ * current intention, mood, wake clock, and read-cursors into the world.
+ * Journal thoughts live in world_events (kind "thought") keyed to the character.
+ */
+export const characterMinds = fileTable("character_minds", {
+  /** Character id (one mind per character). */
+  id: text("id").primaryKey(),
+  /** What they're currently up to / meaning to do, in their own words. */
+  intention: text("intention").notNull().default(""),
+  /** Their current inner mood, in their own words. */
+  mood: text("mood").notNull().default(""),
+  lastWakeAt: text("last_wake_at"),
+  nextWakeAt: text("next_wake_at"),
+  /** JSON: { seenPostsAt, seenDmsAt } — what they've already caught up on. */
+  cursors: text("cursors").notNull().default("{}"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/**
  * Pairwise character relationship state. One row per unordered pair
  * (aCharacterId < bCharacterId lexicographically).
  */
