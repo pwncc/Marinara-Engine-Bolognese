@@ -63,16 +63,22 @@ export function buildNoodleCarryoverBlock(
   return wrapContent(lines.join("\n"), "Recent Social Media Activity", wrapFormat);
 }
 
+export interface RecentSocialMediaActivity {
+  block: string | null;
+  /** Images on the referenced posts, newest first, so chats can SEE them. */
+  images: Array<{ url: string; label: string }>;
+}
+
 export async function buildRecentSocialMediaActivityBlock(input: {
   db: DB;
   chatMode: ChatMode;
   characterIds: string[];
   personaId: string | null;
   wrapFormat: "xml" | "markdown" | "none";
-}): Promise<string | null> {
+}): Promise<RecentSocialMediaActivity> {
   const noodle = createNoodleStorage(input.db);
   const settings = await noodle.getSettings();
-  if (!modeAllowed(settings.carryoverModes, input.chatMode)) return null;
+  if (!modeAllowed(settings.carryoverModes, input.chatMode)) return { block: null, images: [] };
 
   const accountIds = new Set<string>();
   const characterAccounts = await noodle.getAccountsByEntities("character", input.characterIds);
@@ -84,12 +90,28 @@ export async function buildRecentSocialMediaActivityBlock(input: {
     const personaAccount = await noodle.getAccountByEntity("persona", input.personaId);
     if (personaAccount) accountIds.add(personaAccount.id);
   }
-  if (accountIds.size === 0) return null;
+  if (accountIds.size === 0) return { block: null, images: [] };
 
   const digests = await noodle.listDigests({
     since: sinceHoursIso(settings.carryoverHours),
     limit: Math.max(settings.carryoverMaxItems * 4, 20),
   });
   const relevant = digests.filter((digest) => digest.accountIds.some((id) => accountIds.has(id)));
-  return buildNoodleCarryoverBlock(relevant, settings.carryoverMaxItems, input.wrapFormat);
+  const block = buildNoodleCarryoverBlock(relevant, settings.carryoverMaxItems, input.wrapFormat);
+
+  // Collect images from the posts these digests reference (newest first).
+  const images: RecentSocialMediaActivity["images"] = [];
+  if (block) {
+    const seenPosts = new Set<string>();
+    for (const digest of relevant) {
+      if (images.length >= 3) break;
+      if (!digest.sourcePostId || seenPosts.has(digest.sourcePostId)) continue;
+      seenPosts.add(digest.sourcePostId);
+      const post = await noodle.getPostById(digest.sourcePostId);
+      if (post?.imageUrl) {
+        images.push({ url: post.imageUrl, label: digest.content.trim().slice(0, 120) });
+      }
+    }
+  }
+  return { block, images };
 }

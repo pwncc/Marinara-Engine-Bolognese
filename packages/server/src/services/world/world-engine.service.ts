@@ -552,6 +552,16 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
         metadata: { worldEngine: true },
       });
       if (!post) return null;
+      // Digest so the activity carries into normal chats' noodle awareness.
+      try {
+        await noodle.createDigest({
+          accountIds: [accountId],
+          content: `${name(characterId)} posted on Noodle: "${shortText(content, 200)}"${imagePrompt ? " (with a photo)" : ""}`,
+          sourcePostId: post.id,
+        });
+      } catch (error) {
+        logger.debug(error, "[world] Digest write failed for post %s", post.id);
+      }
       // Render the attached image through Noodle's own pipeline (its settings,
       // its connection) without blocking the wake.
       if (imagePrompt && deps.app) {
@@ -587,6 +597,17 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       // createInteraction validates the post still exists.
       const interaction = await noodle.createInteraction(postId, { actorAccountId: accountId, type: "reply", content });
       if (!interaction) return null;
+      try {
+        const parentPost = await noodle.getPostById(postId);
+        await noodle.createDigest({
+          accountIds: [accountId, ...(parentPost ? [parentPost.authorAccountId] : [])],
+          content: `${name(characterId)} replied on Noodle: "${shortText(content, 200)}"`,
+          sourcePostId: postId,
+          sourceInteractionId: interaction.id,
+        });
+      } catch (error) {
+        logger.debug(error, "[world] Digest write failed for reply %s", interaction.id);
+      }
       return world.appendEvent({
         kind: "noodle_reply",
         summary: `${name(characterId)} replied on noodle: "${shortText(content, 100)}"`,
@@ -634,6 +655,14 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
             followingAccountTimestamps: timestamps,
           },
         });
+      }
+      try {
+        await noodle.createDigest({
+          accountIds: [accountId, targetAccountId],
+          content: `${name(characterId)} followed ${name(targetCharacterId)} on Noodle`,
+        });
+      } catch (error) {
+        logger.debug(error, "[world] Digest write failed for follow");
       }
       return world.appendEvent({
         kind: "noodle_follow",

@@ -2453,19 +2453,49 @@ export async function generateRoutes(app: FastifyInstance) {
           finalMessages,
         });
 
-        const recentSocialMediaActivityBlock = await buildRecentSocialMediaActivityBlock({
+        const recentSocialMediaActivity = await buildRecentSocialMediaActivityBlock({
           db: app.db,
           chatMode,
           characterIds: promptCharacterIds,
           personaId,
           wrapFormat,
         });
-        if (recentSocialMediaActivityBlock) {
+        if (recentSocialMediaActivity.block) {
+          let activityBlock = recentSocialMediaActivity.block;
+          // Vision everywhere: the referenced noodle posts' images ride along as
+          // real inputs (attached to the last user turn — providers accept
+          // images there) when captioning is off.
+          if (!imageCaptioningRuntime.enabled && recentSocialMediaActivity.images.length) {
+            const loadedNoodleImages: string[] = [];
+            const loadedLabels: string[] = [];
+            for (const image of recentSocialMediaActivity.images) {
+              try {
+                const dataUrl = await readNoodleVisionImage(image.url);
+                if (dataUrl) {
+                  loadedNoodleImages.push(dataUrl);
+                  loadedLabels.push(image.label);
+                }
+              } catch {
+                /* unreadable file — text digest still stands */
+              }
+            }
+            if (loadedNoodleImages.length) {
+              activityBlock += `\n[${loadedNoodleImages.length} image(s) from this activity are attached: ${loadedLabels.join(" | ")}]`;
+              const lastUserIdxForNoodle = findLastIndex(finalMessages, "user");
+              if (lastUserIdxForNoodle >= 0) {
+                const target = finalMessages[lastUserIdxForNoodle]!;
+                finalMessages[lastUserIdxForNoodle] = {
+                  ...target,
+                  images: [...(target.images ?? []), ...loadedNoodleImages],
+                };
+              }
+            }
+          }
           const firstUserIdx = finalMessages.findIndex((m) => m.role === "user" || m.role === "assistant");
           const insertAt = firstUserIdx >= 0 ? firstUserIdx : finalMessages.length;
           finalMessages.splice(insertAt, 0, {
             role: "system" as const,
-            content: recentSocialMediaActivityBlock,
+            content: activityBlock,
             contextKind: "injection",
           });
         }
