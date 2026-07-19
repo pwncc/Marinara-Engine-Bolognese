@@ -188,15 +188,43 @@ async function saveWorldEngineState(db: DB, state: WorldEngineState): Promise<vo
   await appSettings.set(STATE_KEY, JSON.stringify(state));
 }
 
-/** Read-modify-write so concurrent wakes don't clobber each other's counters. */
+// Serialize the state read-modify-write. The store serializes each write, but
+// not the read→mutate→write span, so two overlapping callers would both load
+// the same dailyCount and the last save would drop one increment. A promise
+// chain makes each patch atomic with respect to the others.
+let statePatchChain: Promise<unknown> = Promise.resolve();
+
+/** Read-modify-write, serialized so concurrent callers don't clobber counters. */
 export async function saveWorldEngineStatePatch(
   db: DB,
   mutate: (state: WorldEngineState) => void,
 ): Promise<WorldEngineState> {
-  const state = await loadWorldEngineState(db);
-  mutate(state);
-  await saveWorldEngineState(db, state);
-  return state;
+  const run = statePatchChain.then(async () => {
+    const state = await loadWorldEngineState(db);
+    mutate(state);
+    await saveWorldEngineState(db, state);
+    return state;
+  });
+  statePatchChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run as Promise<WorldEngineState>;
+}
+
+// Serialize whole world cycles. The scheduler's own `running` flag stops it
+// from overlapping itself, but a manual POST /world/tick bypasses that guard —
+// so without this a manual "advance now" can wake the same mind (or drain the
+// same queued action) concurrently with the scheduler: double posts, double
+// spend, and racing tail upserts. Both entry points acquire this lock.
+let worldCycleChain: Promise<unknown> = Promise.resolve();
+export function runWorldCycleExclusive<T>(fn: () => Promise<T>): Promise<T> {
+  const run = worldCycleChain.then(fn, fn);
+  worldCycleChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 }
 
 // ── Provider resolution ──
@@ -771,9 +799,11 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
         .filter((id) => nameById.has(id));
       const title = shortText(action.title, 120);
       if (characterIds.length < 1 || !title) return null;
-      const dueInHours = Number.isFinite(action.dueInHours as number)
-        ? Math.max(1, Math.min(24 * 14, action.dueInHours as number))
-        : null;
+      // Coerce string numbers ("24") before the finiteness check — models emit
+      // them often, and rejecting them would silently drop the due date.
+      const dueRaw =
+        typeof action.dueInHours === "string" ? Number.parseFloat(action.dueInHours) : (action.dueInHours as number);
+      const dueInHours = Number.isFinite(dueRaw) ? Math.max(1, Math.min(24 * 14, dueRaw)) : null;
       const dueAt = dueInHours ? new Date(Date.now() + dueInHours * 3_600_000).toISOString() : null;
       const names = characterIds.map((id) => nameById.get(id)).join(", ");
       return world.appendEvent({
@@ -805,8 +835,10 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
         typeof milestoneRaw.title === "string" && milestoneRaw.title.trim()
           ? { title: shortText(milestoneRaw.title, 120), description: shortText(milestoneRaw.description, 400) }
           : undefined;
+      // Coerce string deltas ("15") so a genuine feeling isn't scored as 0.
+      const deltaRaw = typeof action.delta === "string" ? Number.parseFloat(action.delta) : (action.delta as number);
       const rel = await world.upsertRelationship(aId, bId, {
-        delta: Number.isFinite(action.delta as number) ? (action.delta as number) : 0,
+        delta: Number.isFinite(deltaRaw) ? deltaRaw : 0,
         romance: typeof action.romance === "boolean" ? action.romance : undefined,
         label: typeof action.label === "string" ? action.label : undefined,
         summary: typeof action.summary === "string" ? action.summary : undefined,
@@ -934,11 +966,12 @@ export async function runWorldDirector(db: DB, options: { manual?: boolean } = {
       timeline.map((entry) => ({ runAt: entry.runAt, action: entry.action, directorRunId })),
     );
 
-    state.lastRunAt = new Date().toISOString();
-    state.consecutiveFailures = 0;
-    state.lastError = null;
-    state.lastNarration = result.narration;
-    await saveWorldEngineState(db, state);
+    await saveWorldEngineStatePatch(db, (s) => {
+      s.lastRunAt = new Date().toISOString();
+      s.consecutiveFailures = 0;
+      s.lastError = null;
+      s.lastNarration = result.narration;
+    });
 
     logger.info(
       "[world] Director planned %d moment(s) over the next %d min via %s%s",
@@ -949,13 +982,15 @@ export async function runWorldDirector(db: DB, options: { manual?: boolean } = {
     );
     return result;
   } catch (error) {
-    state.lastRunAt = new Date().toISOString();
-    state.consecutiveFailures += 1;
-    state.lastError = error instanceof Error ? error.message : String(error);
-    await saveWorldEngineState(db, state);
+    const lastError = error instanceof Error ? error.message : String(error);
+    await saveWorldEngineStatePatch(db, (s) => {
+      s.lastRunAt = new Date().toISOString();
+      s.consecutiveFailures += 1;
+      s.lastError = lastError;
+    });
     logger.error(error, "[world] Director run failed");
     result.ok = false;
-    result.error = state.lastError;
+    result.error = lastError;
     return result;
   }
 }
@@ -1010,8 +1045,11 @@ export async function drainDueWorldActions(db: DB, options: { force?: boolean } 
   }
 
   if (result.executed > 0) {
-    state.dailyCount += result.executed;
-    await saveWorldEngineState(db, state);
+    // Atomic increment (not the stale `state` read above) so a concurrent mind
+    // wake's budget accounting isn't clobbered.
+    await saveWorldEngineStatePatch(db, (s) => {
+      s.dailyCount += result.executed;
+    });
     await world.pruneFinishedActions();
     for (const event of result.events) {
       logger.info("[world] %s", event.summary);
@@ -1033,27 +1071,30 @@ export async function runWorldTick(
   db: DB,
   options: { manual?: boolean; app?: FastifyInstance } = {},
 ): Promise<WorldTickResult> {
-  const config = await loadWorldEngineConfig(db);
-  if (config.mode === "minds") {
-    // Imported lazily: character-mind.service imports from this module.
-    const { wakeDueCharacterMinds } = await import("./character-mind.service.js");
-    const cycle = await wakeDueCharacterMinds(db, { limit: 3, force: options.manual, app: options.app });
-    const events = cycle.woke.flatMap((wake) => wake.events);
-    const failed = cycle.woke.find((wake) => !wake.ok);
-    const firstThought = cycle.woke.find((wake) => wake.thought);
-    return {
-      ok: !failed || cycle.woke.some((wake) => wake.ok),
-      ran: cycle.woke.length > 0,
-      narration: firstThought ? `${firstThought.name}: ${firstThought.thought}` : null,
-      actionsPlanned: cycle.woke.length,
-      queued: 0,
-      skippedReason: cycle.woke.length ? null : (cycle.skippedReason ?? "no minds due"),
-      error: failed?.error ?? null,
-      executedNow: cycle.woke.reduce((sum, wake) => sum + wake.actionsExecuted, 0),
-      events,
-    };
-  }
-  const director = await runWorldDirector(db, options);
-  const drained = await drainDueWorldActions(db, { force: options.manual });
-  return { ...director, executedNow: drained.executed, events: drained.events };
+  // Exclusive with the scheduler tick so a manual advance can't double-run.
+  return runWorldCycleExclusive(async () => {
+    const config = await loadWorldEngineConfig(db);
+    if (config.mode === "minds") {
+      // Imported lazily: character-mind.service imports from this module.
+      const { wakeDueCharacterMinds } = await import("./character-mind.service.js");
+      const cycle = await wakeDueCharacterMinds(db, { limit: 3, force: options.manual, app: options.app });
+      const events = cycle.woke.flatMap((wake) => wake.events);
+      const failed = cycle.woke.find((wake) => !wake.ok);
+      const firstThought = cycle.woke.find((wake) => wake.thought);
+      return {
+        ok: !failed || cycle.woke.some((wake) => wake.ok),
+        ran: cycle.woke.length > 0,
+        narration: firstThought ? `${firstThought.name}: ${firstThought.thought}` : null,
+        actionsPlanned: cycle.woke.length,
+        queued: 0,
+        skippedReason: cycle.woke.length ? null : (cycle.skippedReason ?? "no minds due"),
+        error: failed?.error ?? null,
+        executedNow: cycle.woke.reduce((sum, wake) => sum + wake.actionsExecuted, 0),
+        events,
+      };
+    }
+    const director = await runWorldDirector(db, options);
+    const drained = await drainDueWorldActions(db, { force: options.manual });
+    return { ...director, executedNow: drained.executed, events: drained.events };
+  });
 }

@@ -109,7 +109,11 @@ export async function worldRoutes(app: FastifyInstance) {
     // Provision immediately (mind rows + invited Noodle accounts) so newly
     // added members are findable on Noodle without waiting for a cycle.
     if (saved.mode === "minds") {
-      const { ensureMindsInitialized } = await import("../services/world/character-mind.service.js");
+      const { ensureMindsInitialized, invalidateMindsInit } = await import(
+        "../services/world/character-mind.service.js"
+      );
+      // A config change may add members or toggle noodle — force a full pass.
+      invalidateMindsInit();
       await ensureMindsInitialized(app.db, saved).catch((error) =>
         app.log.warn(error, "[world] Member provisioning after config save failed"),
       );
@@ -179,6 +183,10 @@ export async function worldRoutes(app: FastifyInstance) {
     }
     await world.resetWorld();
     if (resetNoodle) await noodle.resetTimeline();
+    // Minds/places are gone — force re-provisioning on the next cycle instead
+    // of trusting the process-level "already converged" cache.
+    const { invalidateMindsInit } = await import("../services/world/character-mind.service.js");
+    invalidateMindsInit();
 
     return { ok: true, removedChats, resetNoodle };
   });

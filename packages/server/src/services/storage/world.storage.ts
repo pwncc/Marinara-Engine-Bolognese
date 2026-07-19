@@ -279,8 +279,11 @@ export function createWorldStorage(db: DB) {
         return (await this.getMind(characterId))!;
       }
       const row = { id: characterId, createdAt: timestamp, ...next };
-      await db.insert(characterMinds).values(row);
-      return toMindRow(row);
+      // Idempotent insert: if a concurrent init already created this mind (two
+      // overlapping ensureMindsInitialized runs), fold into it instead of
+      // throwing a unique-constraint error that would abort the whole cycle.
+      await db.insert(characterMinds).values(row).onConflictDoUpdate({ target: characterMinds.id, set: next });
+      return (await this.getMind(characterId))!;
     },
 
     // ── The living city (world_places) ──
@@ -310,8 +313,16 @@ export function createWorldStorage(db: DB) {
       ownerId?: string | null;
     }): Promise<{ place: WorldPlaceRow; created: boolean }> {
       const wanted = normalizeTextForMatch(input.name);
-      const all = await db.select().from(worldPlaces);
-      const match = all.map(toPlaceRow).find((place) => normalizeTextForMatch(place.name) === wanted);
+      const all = (await db.select().from(worldPlaces)).map(toPlaceRow);
+      // Homes are strictly owner-scoped: an owned place never resolves through a
+      // name match belonging to a DIFFERENT owner (two "Luna"s must not collapse
+      // into one home), and a public lookup never lands inside someone's private
+      // home. So an ownerId lookup matches only that owner's place; a public
+      // lookup matches only public (unowned) places.
+      const match = all.find((place) => {
+        if (normalizeTextForMatch(place.name) !== wanted) return false;
+        return input.ownerId ? place.ownerId === input.ownerId : !place.ownerId;
+      });
       if (match) return { place: match, created: false };
       const timestamp = now();
       const row = {
@@ -384,17 +395,49 @@ export function createWorldStorage(db: DB) {
       await db.update(worldEvents).set({ detail: JSON.stringify(detail) }).where(eq(worldEvents.id, id));
     },
 
-    async listEvents(options: { limit?: number; characterId?: string; kind?: string } = {}): Promise<
-      WorldEventRecord[]
-    > {
+    async listEvents(
+      options: { limit?: number; characterId?: string; kind?: string; excludeKinds?: string[] } = {},
+    ): Promise<WorldEventRecord[]> {
       const limit = Math.max(1, Math.min(500, options.limit ?? 100));
-      let rows = await db.select().from(worldEvents).orderBy(desc(worldEvents.createdAt));
+      const rows = await db.select().from(worldEvents).orderBy(desc(worldEvents.createdAt));
       let events = rows.map(toEventRecord);
+      // Filter BEFORE slicing so the limit counts eligible events, not rows of
+      // any kind (otherwise a burst of `thought`/`say` starves a recap window).
       if (options.kind) events = events.filter((event) => event.kind === options.kind);
+      if (options.excludeKinds?.length) {
+        const excluded = new Set(options.excludeKinds);
+        events = events.filter((event) => !excluded.has(event.kind));
+      }
       if (options.characterId) {
         events = events.filter((event) => event.characterIds.includes(options.characterId!));
       }
       return events.slice(0, limit);
+    },
+
+    /**
+     * Bound the append-only event log so it can't grow without limit (every
+     * wake appends ≥1 event). Keeps the newest `keep` events, plus any event a
+     * relationship milestone deep-links to. Returns how many were removed.
+     */
+    async pruneEvents(keep = 4000): Promise<number> {
+      const rows = await db.select().from(worldEvents);
+      if (rows.length <= keep) return 0;
+      const ordered = rows
+        .map((row) => ({ id: String(row.id), createdAt: String(row.createdAt ?? "") }))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      const referenced = new Set<string>();
+      for (const rel of await db.select().from(characterRelationships)) {
+        for (const milestone of parseJsonArray<RelationshipMilestoneEntry>(rel.milestones)) {
+          if (milestone.eventId) referenced.add(milestone.eventId);
+        }
+      }
+      let removed = 0;
+      for (const row of ordered.slice(keep)) {
+        if (referenced.has(row.id)) continue;
+        await db.delete(worldEvents).where(eq(worldEvents.id, row.id));
+        removed += 1;
+      }
+      return removed;
     },
 
     /** Chronological history of everything between two characters. */

@@ -288,14 +288,34 @@ async function recentExchangeDepth(
   bId: string,
 ): Promise<number> {
   const [a, b] = orderPair(aId, bId);
-  const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown; updatedAt?: string }>;
-  const shared = allChats.find((chat) => {
-    const meta = parseJson(chat.metadata);
-    if (meta.worldDmThread === true && Array.isArray(meta.worldPair)) {
-      return sameMembers(meta.worldPair as string[], [a, b]);
-    }
-    return false;
-  });
+  const allChats = (await chats.list()) as Array<{
+    id: string;
+    characterIds?: unknown;
+    metadata?: unknown;
+    updatedAt?: string;
+  }>;
+  // Any world thread the pair shares — DMs, group/hangout threads, AND place
+  // scenes — so an in-person back-and-forth winds down like a text exchange
+  // does. (It used to inspect only worldDmThread, so co-located `scene`/hangout
+  // ping-pong hit depth 0 forever and never braked → runaway wakes.)
+  const shared = allChats
+    .filter((chat) => {
+      const meta = parseJson(chat.metadata);
+      if (meta.worldDmThread === true && Array.isArray(meta.worldPair)) {
+        const pair = meta.worldPair as string[];
+        return pair.includes(a) && pair.includes(b);
+      }
+      if (meta.worldGroupThread === true && Array.isArray(meta.worldMembers)) {
+        const members = meta.worldMembers as string[];
+        return members.includes(a) && members.includes(b);
+      }
+      if (meta.worldPlaceScene === true) {
+        const ids = parseCharacterIdList((chat as { characterIds?: unknown }).characterIds);
+        return ids.includes(a) && ids.includes(b);
+      }
+      return false;
+    })
+    .sort((x, y) => String(y.updatedAt ?? "").localeCompare(String(x.updatedAt ?? "")))[0];
   if (!shared) return 0;
   const messages = (await chats.listMessages(shared.id)) as Array<{ characterId?: string | null }>;
   // Count the trailing run of strictly-alternating author turns.
@@ -399,6 +419,12 @@ interface ThreadContext {
   lines: string[];
   hasNew: boolean;
   memberIds: string[];
+  /** True for place scenes and hangouts — you're physically together (prose, not texts). */
+  inPerson: boolean;
+  /** The other participants' names, comma-joined — for a clean precedence banner. */
+  otherNames: string;
+  /** Where an in-person thread is happening, if known. */
+  placeName: string | null;
 }
 
 interface MindContext {
@@ -458,7 +484,22 @@ async function buildMindContext(
   const name = nameById.get(characterId) ?? (shortText(data.name, 60) || "Unnamed");
   const persona = [shortText(data.description, 400), shortText(data.personality, 300)].filter(Boolean).join("\n");
 
-  // Everyone else in the world, with a one-line sense of who they are.
+  // Snapshot every mind's location once — reused for the roster (so a mind can
+  // see who's where and deliberately go meet them) and the city section below.
+  const allMinds = await world.listMinds();
+  const allPlaces = await world.listPlaces();
+  const placeById = new Map(allPlaces.map((place) => [place.id, place]));
+  const mindByChar = new Map(allMinds.map((other) => [other.id, other]));
+  const locationLabelFor = (charId: string): string => {
+    const otherMind = mindByChar.get(charId);
+    if (!otherMind?.placeId) return "off on their own";
+    const place = placeById.get(otherMind.placeId);
+    if (!place) return "off on their own";
+    return place.ownerId === charId ? "home" : `at ${place.name}`;
+  };
+
+  // Everyone else in the world, with a one-line sense of who they are and where
+  // they are right now — so meeting someone in person is an informed choice.
   const rosterRows = (await chars.list()) as Array<{ id: string; data: unknown }>;
   const roster = rosterRows
     .filter((rosterRow) => rosterRow.id !== characterId && nameById.has(rosterRow.id))
@@ -466,7 +507,7 @@ async function buildMindContext(
       const rosterData = parseJson(rosterRow.data);
       const blurb =
         shortText(rosterData.personality, 100) || shortText(rosterData.description, 100) || "(a familiar face)";
-      return `${rosterRow.id} · ${nameById.get(rosterRow.id)} — ${blurb}`;
+      return `${rosterRow.id} · ${nameById.get(rosterRow.id)} — ${blurb} · ${locationLabelFor(rosterRow.id)}`;
     });
 
   const mind = (await world.getMind(characterId)) ?? (await world.upsertMind(characterId, { nextWakeAt: null }));
@@ -631,10 +672,13 @@ async function buildMindContext(
       createdAt: string;
       extra?: unknown;
     }>;
-    // Arrival scoping: at an in-person scene you only overhear what's happened
-    // since you walked in — an hour of prior conversation between others who've
-    // been here is not yours to have heard. (Place memories still surface.)
-    if (isHangoutThread && arrivedAt) {
+    // Arrival scoping: at the PLACE SCENE you're standing in, you only overhear
+    // what's happened since you walked in — an hour of prior conversation
+    // between others who've been here is not yours to have heard. (Place
+    // memories still surface.) This must NOT apply to a portable hangout group:
+    // arrivedAt tracks your last physical `go`, so a hangout someone set up
+    // would be wrongly truncated after you move somewhere unrelated.
+    if (isPlaceScene && arrivedAt) {
       const iSpokeHere = messages.some((msg) => msg.characterId === characterId);
       if (!iSpokeHere) {
         const sinceArrival = messages.filter((msg) => msg.createdAt >= arrivedAt);
@@ -649,11 +693,16 @@ async function buildMindContext(
     const tail = messages.slice(hasNewProbe ? -8 : -5);
     const hasNew = tail.some((msg) => msg.characterId !== characterId && msg.createdAt > seenDmsAt);
     const otherNamesLabel = memberIds.map((id) => nameById.get(id) ?? "someone").join(", ") || "no one else yet";
+    const placeName = isPlaceScene
+      ? (chat.name ?? null)
+      : meta.worldHangout === true && typeof meta.worldPlace === "string" && meta.worldPlace
+        ? meta.worldPlace
+        : null;
     const threadLabel = isPlaceScene
       ? `HERE at ${chat.name ?? "this place"}${memberIds.length ? ` with ${otherNamesLabel}` : ""} — you're physically here; act with "scene" (prose, not texts)`
       : isGroup
         ? meta.worldHangout === true
-          ? `IN PERSON with ${otherNamesLabel}${typeof meta.worldPlace === "string" && meta.worldPlace ? ` @ ${meta.worldPlace}` : ""} — you're physically together; write prose, not texts`
+          ? `IN PERSON with ${otherNamesLabel}${placeName ? ` @ ${placeName}` : ""} — you're physically together; write prose, not texts`
           : `group with ${otherNamesLabel}`
         : `${memberIds[0] ?? ""} · ${nameById.get(memberIds[0] ?? "") ?? "someone"}`;
     threads.push({
@@ -662,6 +711,9 @@ async function buildMindContext(
       label: threadLabel,
       hasNew,
       memberIds,
+      inPerson: isHangoutThread,
+      otherNames: otherNamesLabel,
+      placeName,
       lines: tail.map((msg) => {
         const who =
           msg.role === "user"
@@ -688,9 +740,9 @@ async function buildMindContext(
     return lastLine ? !lastLine.startsWith("you (") : false;
   });
   const activeScene = liveThread
-    ? liveThread.kind === "group" && liveThread.label.startsWith("IN PERSON")
-      ? `You're mid-hangout — ${liveThread.label.replace(/ — you're.*$/, "")}. ${liveThread.lines[liveThread.lines.length - 1]}`
-      : `You're mid-conversation with ${liveThread.label.split(" · ").pop()?.split(" —")[0] ?? "someone"}. Their latest: ${liveThread.lines[liveThread.lines.length - 1]}`
+    ? liveThread.inPerson
+      ? `You're in a scene${liveThread.placeName ? ` at ${liveThread.placeName}` : ""} with ${liveThread.otherNames} — you're physically there; respond in person with "scene" (lived prose, *actions* and dialogue, not texts). Their latest: ${liveThread.lines[liveThread.lines.length - 1]}`
+      : `You're mid-conversation with ${liveThread.otherNames}. Their latest: ${liveThread.lines[liveThread.lines.length - 1]}`
     : null;
   void nowMs;
 
@@ -716,22 +768,21 @@ async function buildMindContext(
   const atmosphere = (await getAtmosphere(db, config.weatherLocation)).summary;
   const needsNote = needsPrompt(mind.needs);
 
-  const recentAboutMe = (await world.listEvents({ characterId, limit: 14 }))
-    .filter((event) => event.kind !== "thought" && event.kind !== "say")
-    .slice(0, 6)
+  // Exclude thought/say BEFORE the limit so a burst of them can't crowd out
+  // genuine life events (moved, worked, hosted, posted…) from the recap.
+  const recentAboutMe = (await world.listEvents({ characterId, excludeKinds: ["thought", "say"], limit: 6 }))
     .map((event) => `(${ago(event.createdAt)}) ${event.summary}`)
     .reverse();
 
   // ── City: where they are, who else is here, and the places they know ──
-  const allMinds = await world.listMinds();
-  const currentPlace = mind.placeId ? await world.getPlace(mind.placeId) : null;
+  const currentPlace = mind.placeId ? (placeById.get(mind.placeId) ?? null) : null;
   const peopleHere = allMinds
     .filter((other) => other.id !== characterId && other.placeId && other.placeId === mind.placeId && nameById.has(other.id))
     .map((other) => `${other.id} · ${nameById.get(other.id)}`);
   const hereLine = currentPlace
     ? `${currentPlace.name} (${currentPlace.kind})${currentPlace.description ? ` — ${shortText(currentPlace.description, 200)}` : ""}`
     : "somewhere private (home / not out anywhere in particular)";
-  const knownPlaces = (await world.listPlaces())
+  const knownPlaces = allPlaces
     .slice(0, 16)
     .map(
       (place) =>
@@ -826,7 +877,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `  {"type":"go","place":"a PUBLIC place name (existing or new), or \\"home\\"","kind":"cafe|park|bar|gym|shop|street|…","why":"optional"} — go OUT somewhere public (or home). Don't name private rooms here.`,
     `  {"type":"set_home","kind":"apartment|loft|house|villa|studio|…"} — set what kind of home is yours (once). Becomes "Your Name's <kind>".`,
     `  {"type":"describe_place","detail":"a concrete detail about where you are right now"} — flesh out your current place.`,
-    `  {"type":"work","content":"what you did on the job","earn":number} — put in work and earn money (needs a job or take one via intention).`,
+    `  {"type":"work","content":"what you did on the job","earn":number,"job":"optional — the job you hold, e.g. \\"barista at The Grind\\"; set it once and it sticks"} — put in work and earn money.`,
     `  {"type":"spend","amount":number,"on":"what you bought"} — spend money.`,
     `  {"type":"say","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you show (a selfie, your art, a meme, the view…); describe it concretely","photoOfMe":true|false (true when YOU appear in it)` : ""}} — speak aloud in your own space (answers the Visitor if they wrote)`,
     noodleActions +
@@ -834,6 +885,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
   {"type":"group_message","chatId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional image","photoOfMe":true|false` : ""}} — reply in one of your group threads
   {"type":"start_group","withCharacterIds":["…","…"],"name":"…","content":"first message"} — pull 2+ people into a group text thread
   {"type":"scene","content":"what you do/say out loud where you are, in lived prose (*actions*, dialogue)"${ctx.photosEnabled ? `,"photoPrompt":"optional image","photoOfMe":true|false` : ""}} — act in person AT YOUR CURRENT PLACE; everyone here shares this scene. Use this to talk to people who are HERE WITH YOU.
+  {"type":"hangout","withCharacterIds":["…"],"place":"where you meet up","content":"what happens as you come together, in lived prose (*actions*, dialogue)"${ctx.photosEnabled ? `,"photoPrompt":"optional image","photoOfMe":true|false` : ""}} — deliberately MEET specific people IN PERSON (you become physically together, wherever). Use their ids from PEOPLE IN YOUR WORLD — their current location is shown, so choose who to go see.
   {"type":"host_event","title":"…","place":"a public place","startInHours":number,"detail":"what it is"} — throw/announce a gathering everyone can see and show up to (party, open mic, market…)
   {"type":"make_plan","withCharacterIds":["…"],"title":"…","detail":"…","dueInHours":24}
   {"type":"resolve_plan","planEventId":"…","outcome":"what actually happened"}
@@ -1022,9 +1074,13 @@ async function executeDo(
   });
 }
 
-/** Private rooms belong to a home — they must never become public city places. */
+// Private rooms belong to a home — they must never become public city places.
+// Kept deliberately narrow: only unambiguously-interior rooms. Words that can
+// name a public/shared/work spot (office, study, garage, backyard, balcony,
+// porch) are NOT here, so "go to the office for my shift" reaches a real public
+// place instead of silently teleporting the character back home.
 const HOME_ROOM_RE =
-  /^(home|my (place|home|room|apartment|house|flat)|the )?(kitchen|bedroom|bathroom|living ?room|bed|couch|shower|balcony|study|office|hallway|closet|garage|backyard|porch)$/i;
+  /^(home|my (place|home|room|apartment|house|flat)|the )?(kitchen|bedroom|bathroom|living ?room|bed|couch|shower|hallway|closet)$/i;
 
 async function ensureHomePlace(
   db: DB,
@@ -1192,9 +1248,11 @@ async function executeHostEvent(
   const placeName = shortText(action.place, 80);
   if (!title || !placeName) return null;
   const { place } = await world.ensurePlace({ name: placeName, kind: shortText(action.kind, 40) || undefined, discoveredBy: selfId });
-  const startInHours = Number.isFinite(action.startInHours as number)
-    ? Math.max(0.25, Math.min(24 * 7, action.startInHours as number))
-    : 2;
+  // Coerce: models often emit numeric fields as strings ("2"), which
+  // Number.isFinite alone would reject and silently default.
+  const startInHoursRaw =
+    typeof action.startInHours === "string" ? Number.parseFloat(action.startInHours) : (action.startInHours as number);
+  const startInHours = Number.isFinite(startInHoursRaw) ? Math.max(0.25, Math.min(24 * 7, startInHoursRaw)) : 2;
   const startsAt = new Date(Date.now() + startInHours * 3_600_000).toISOString();
   const selfName = nameById.get(selfId) ?? "someone";
   return world.appendEvent({
@@ -1257,12 +1315,18 @@ async function executeWork(
   const content = shortText(action.content, 300);
   if (!content) return null;
   const earn = Math.max(0, Math.min(100_000, Math.round(Number(action.earn) || 0)));
-  await world.upsertMind(selfId, { money: (mind?.money ?? 0) + earn });
+  // Working establishes/keeps a job — the only writer for mind.job, so the
+  // wallet line stops permanently reading "(no job yet)".
+  const job = shortText(action.job, 120);
+  await world.upsertMind(selfId, {
+    money: (mind?.money ?? 0) + earn,
+    ...(job ? { job } : {}),
+  });
   return world.appendEvent({
     kind: "worked",
-    summary: `${nameById.get(selfId) ?? "someone"} worked: ${shortText(content, 100)}${earn ? ` (+${earn})` : ""}`,
+    summary: `${nameById.get(selfId) ?? "someone"} worked${job ? ` as ${job}` : ""}: ${shortText(content, 100)}${earn ? ` (+${earn})` : ""}`,
     characterIds: [selfId],
-    detail: { earn },
+    detail: { earn, ...(job ? { job } : {}) },
   });
 }
 
@@ -1601,7 +1665,12 @@ export async function wakeCharacterMind(
           result.actionsExecuted += 1;
           budgetLeft -= 1;
           // This action nudges their drives (working tires, eating fills…).
-          const effect = needEffectFor(rawAction.type, String(rawAction.activity ?? rawAction.content ?? ""));
+          // `spend` describes what was bought in `on`, so include it — otherwise
+          // buying food never satisfies hunger (the regex tests an empty string).
+          const effect = needEffectFor(
+            rawAction.type,
+            String(rawAction.activity ?? rawAction.content ?? rawAction.on ?? ""),
+          );
           for (const [key, delta] of Object.entries(effect)) {
             const k = key as "energy" | "hunger" | "social";
             workingNeeds[k] = Math.max(0, Math.min(100, workingNeeds[k] + (delta ?? 0)));
@@ -1653,19 +1722,33 @@ export async function wakeCharacterMind(
     }
     const nowIso = nowDate.toISOString();
     // Re-read: a "go" this wake may have just set placeId/arrivedAt; preserve it.
+    // Also, a ping (user intrusion, a DM/hangout) can land DURING the seconds-long
+    // LLM call — honor it instead of overwriting nextWakeAt/wakeReason with our
+    // own paced gap, so a fresh unanswered message isn't silently deferred by
+    // the (possibly hours-long) slow-life gap.
     const latestMind = await world.getMind(characterId);
+    const computedNextIso = new Date(nowDate.getTime() + gap * 60_000).toISOString();
+    const pingedDuringWake = latestMind?.cursors.wakeReason === "ping";
+    const nextWakeAt =
+      pingedDuringWake && latestMind?.nextWakeAt && latestMind.nextWakeAt < computedNextIso
+        ? latestMind.nextWakeAt // never push a pending ping later than it already is
+        : computedNextIso;
     await world.upsertMind(characterId, {
       mood: output.mood ?? undefined,
       // A "do" is a lived intention — it wins unless they stated a newer one.
       intention: output.intention ?? doActivity ?? undefined,
       lastWakeAt: nowIso,
-      nextWakeAt: new Date(nowDate.getTime() + gap * 60_000).toISOString(),
+      nextWakeAt,
       needs: workingNeeds,
       cursors: {
         seenPostsAt: nowIso,
         seenDmsAt: nowIso,
-        wakeReason: "self",
+        // Keep a ping that arrived mid-wake so the next cycle answers it fast.
+        wakeReason: pingedDuringWake ? "ping" : "self",
         arrivedAt: latestMind?.cursors.arrivedAt ?? ctx.mind.cursors.arrivedAt ?? nowIso,
+        // Stamp the pace this wake was scheduled under, so the re-stagger loop
+        // can tell a genuine config change from steady-state (see below).
+        scheduledInterval: config.wakeIntervalMinutes,
       },
     });
 
@@ -1692,16 +1775,48 @@ export async function wakeCharacterMind(
 
 // ── Scheduling ──
 
+// Single-flight serialization + convergence cache for world provisioning. The
+// scheduler, a manual /tick, and PUT /config can all call ensureMindsInitialized
+// at once; without this two runs both take the "new member" branch and race a
+// duplicate insert (which throws and aborts the whole cycle), and the heavy
+// migration/provisioning sweep re-runs every 45s forever after convergence.
+let mindsInitChain: Promise<void> = Promise.resolve();
+let worldInitConverged: string | null = null;
+
+/**
+ * Force the next ensureMindsInitialized to do a full provisioning pass. Call
+ * after anything that changes what needs provisioning: a config save (new
+ * members, noodle toggled) or a world reset (minds/places wiped).
+ */
+export function invalidateMindsInit(): void {
+  worldInitConverged = null;
+}
+
 /**
  * Ensure every member has a mind row (first wakes staggered at offset times)
  * and — when noodle is allowed — an invited Noodle account, so world members
- * can actually post without a manual invite step.
+ * can actually post without a manual invite step. Serialized and cached: a
+ * steady roster makes this a cheap no-op after the first converged pass.
  */
 export async function ensureMindsInitialized(db: DB, config: WorldEngineConfig): Promise<void> {
+  const run = mindsInitChain.then(() => ensureMindsInitializedInner(db, config));
+  // Keep one failure from poisoning every future waiter on the chain.
+  mindsInitChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+async function ensureMindsInitializedInner(db: DB, config: WorldEngineConfig): Promise<void> {
   const world = createWorldStorage(db);
   const noodle = createNoodleStorage(db);
   const chats = createChatsStorage(db);
   const nameById = await buildNameMap(db, config);
+  // Converged? A run is only needed when the roster or noodle setting changed
+  // (new chats are born already-normalized, so the sweep has nothing to do).
+  const signature = `${config.allowNoodle ? "n" : "-"}|${[...nameById.keys()].sort().join(",")}`;
+  if (worldInitConverged === signature) return;
   const existing = new Set((await world.listMinds()).map((mind) => mind.id));
 
   // Migration sweep: normalize every world chat's mode, folder (per-mode), and
@@ -1742,36 +1857,43 @@ export async function ensureMindsInitialized(db: DB, config: WorldEngineConfig):
     }
   }
   for (const [characterId, name] of nameById) {
-    if (config.allowNoodle) {
-      const account = await noodle.getAccountByEntity("character", characterId);
-      if (!account) {
-        await noodle.upsertAccountFromProfile({ kind: "character", entityId: characterId, displayName: name, invited: true });
-      } else if (!account.invited) {
-        await noodle.updateAccount(account.id, { invited: true });
+    // One member's failure (e.g. a lost insert race) must not abort the batch
+    // or the scheduler cycle — everyone else still gets provisioned.
+    try {
+      if (config.allowNoodle) {
+        const account = await noodle.getAccountByEntity("character", characterId);
+        if (!account) {
+          await noodle.upsertAccountFromProfile({ kind: "character", entityId: characterId, displayName: name, invited: true });
+        } else if (!account.invited) {
+          await noodle.updateAccount(account.id, { invited: true });
+        }
       }
-    }
-    // Everyone gets a home place (their own living space) and starts there.
-    const home = await ensureHomePlace(db, characterId, name);
-    if (existing.has(characterId)) {
-      // Existing mind with no place lands home rather than floating nowhere.
-      const current = await world.getMind(characterId);
-      if (current && !current.placeId) {
-        await world.upsertMind(characterId, {
-          placeId: home.id,
-          cursors: { ...current.cursors, arrivedAt: new Date().toISOString() },
-        });
+      // Everyone gets a home place (their own living space) and starts there.
+      const home = await ensureHomePlace(db, characterId, name);
+      if (existing.has(characterId)) {
+        // Existing mind with no place lands home rather than floating nowhere.
+        const current = await world.getMind(characterId);
+        if (current && !current.placeId) {
+          await world.upsertMind(characterId, {
+            placeId: home.id,
+            cursors: { ...current.cursors, arrivedAt: new Date().toISOString() },
+          });
+        }
+        continue;
       }
-      continue;
+      // First wakes spread across the interval at offset times — everyone gets a
+      // turn within roughly one window of enabling.
+      const stagger = (0.05 + Math.random() * 0.95) * config.wakeIntervalMinutes;
+      await world.upsertMind(characterId, {
+        placeId: home.id,
+        nextWakeAt: new Date(Date.now() + stagger * 60_000).toISOString(),
+        cursors: { arrivedAt: new Date().toISOString(), scheduledInterval: config.wakeIntervalMinutes },
+      });
+    } catch (error) {
+      logger.warn(error, "[world/mind] Failed to initialize %s", name);
     }
-    // First wakes spread across the interval at offset times — everyone gets a
-    // turn within roughly one window of enabling.
-    const stagger = (0.05 + Math.random() * 0.95) * config.wakeIntervalMinutes;
-    await world.upsertMind(characterId, {
-      placeId: home.id,
-      nextWakeAt: new Date(Date.now() + stagger * 60_000).toISOString(),
-      cursors: { arrivedAt: new Date().toISOString() },
-    });
   }
+  worldInitConverged = signature;
 }
 
 /** Minimum real-time gap between spontaneous wakes, scaled to pace and roster. */
@@ -1811,21 +1933,33 @@ export async function advanceActiveScenes(db: DB): Promise<{ driven: number }> {
   let driven = 0;
 
   const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown; updatedAt?: string }>;
+  // Occupancy snapshot: place-scene membership is who's physically there NOW
+  // (mind.placeId), not who ever spoke there — so someone who walked away isn't
+  // driven to answer a scene their wake context no longer even contains, and
+  // isn't burning a scarce ping-wake slot every cycle for 25 minutes.
+  const allMinds = await world.listMinds();
   for (const chat of allChats) {
     const meta = parseJson(chat.metadata);
     const isDm = meta.worldDmThread === true && Array.isArray(meta.worldPair);
     const isGroup = meta.worldGroupThread === true && Array.isArray(meta.worldMembers);
     const isPlaceScene = meta.worldPlaceScene === true;
     if (!isDm && !isGroup && !isPlaceScene) continue;
+    // Skip long-dead threads WITHOUT loading a single message — updatedAt is
+    // bumped on every new message, so idle world chats cost nothing per cycle.
+    const updatedMs = new Date(String(chat.updatedAt ?? "")).getTime();
+    if (Number.isFinite(updatedMs) && nowMs - updatedMs > ACTIVE_SCENE_WINDOW_MS) continue;
     const memberSource = isDm
       ? (meta.worldPair as string[])
       : isGroup
         ? (meta.worldMembers as string[])
-        : parseCharacterIdList((chat as { characterIds?: unknown }).characterIds);
+        : typeof meta.worldPlaceId === "string"
+          ? allMinds.filter((m) => m.placeId === meta.worldPlaceId).map((m) => m.id)
+          : [];
     const memberIds = memberSource.filter((id) => nameById.has(id));
     if (memberIds.length < 2) continue;
 
-    const messages = (await chats.listMessages(chat.id)) as Array<{
+    // Only active threads reach here; bound the load to the recent burst.
+    const messages = (await chats.listMessagesPaginated(chat.id, MAX_DRIVEN_SCENE_TURNS + 1)) as Array<{
       role: string;
       characterId?: string | null;
       content: string;
@@ -1917,14 +2051,25 @@ export async function wakeDueCharacterMinds(
   const nowIso = new Date().toISOString();
   const memberMinds = (await world.listMinds()).filter((mind) => nameById.has(mind.id));
 
-  // A pace change (e.g. slow-life → bustling) applies immediately: minds still
-  // scheduled far out under the old pace get re-staggered into the new window.
-  const reStaggerBeyond = new Date(Date.now() + config.wakeIntervalMinutes * 2 * 60_000).toISOString();
+  // A pace CHANGE (e.g. slow-life → bustling) should apply immediately: minds
+  // scheduled under the OLD pace get pulled into the new window. But at steady
+  // pace this MUST be a no-op — otherwise it clobbers every deliberately long
+  // sleep (offline 3–6×, dnd up to 3×, a mind's own up-to-4× check-in) on the
+  // very next 45s cycle, capping everyone at ~1× the interval. So gate on the
+  // interval each mind was last scheduled under: only re-stagger when it differs
+  // from the interval we're running now, and stamp the new interval so a single
+  // pace change re-staggers each mind exactly once, not every cycle.
   for (const mind of memberMinds) {
-    if (mind.nextWakeAt && mind.nextWakeAt > reStaggerBeyond && mind.cursors.wakeReason !== "ping") {
+    const scheduledInterval =
+      typeof mind.cursors.scheduledInterval === "number" ? mind.cursors.scheduledInterval : null;
+    const paceChanged = scheduledInterval !== null && scheduledInterval !== config.wakeIntervalMinutes;
+    if (paceChanged && mind.nextWakeAt && mind.cursors.wakeReason !== "ping") {
       const stagger = (0.05 + Math.random() * 0.95) * config.wakeIntervalMinutes;
       mind.nextWakeAt = new Date(Date.now() + stagger * 60_000).toISOString();
-      await world.upsertMind(mind.id, { nextWakeAt: mind.nextWakeAt });
+      await world.upsertMind(mind.id, {
+        nextWakeAt: mind.nextWakeAt,
+        cursors: { ...mind.cursors, scheduledInterval: config.wakeIntervalMinutes },
+      });
     }
   }
 
