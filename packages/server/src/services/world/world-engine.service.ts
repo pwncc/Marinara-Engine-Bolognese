@@ -103,6 +103,31 @@ export function isWorldMember(config: WorldEngineConfig, characterId: string): b
   return config.memberCharacterIds === null || config.memberCharacterIds.includes(characterId);
 }
 
+/**
+ * Strip user-directed instructions from a character card for use in the WORLD.
+ * A character living their own life shouldn't be bound by a line like "you are
+ * {{user}}'s girlfriend" — in the world they relate to the human through the
+ * relationship system, not a card script. So drop sentences that reference the
+ * {{user}} macro and neutralize any stray macros. The character's intrinsic
+ * self (their actual personality, traits, history) is preserved.
+ */
+export function sanitizeWorldPersona(text: string): string {
+  if (!text) return "";
+  // A sentence is "user-directed" if it names the human: the {{user}} macro, a
+  // possessive "user's" (you are user's X…), or "the user". These are dropped;
+  // everything else — the character's actual self — is kept.
+  const userDirected = (sentence: string): boolean =>
+    /\{\{\s*user\s*\}\}/i.test(sentence) || /\buser['’]s\b/i.test(sentence) || /\bthe user\b/i.test(sentence);
+  return text
+    .split(/(?<=[.!?])\s+|\n+/)
+    .filter((sentence) => !userDirected(sentence))
+    .join(" ")
+    .replace(/\{\{\s*char\s*\}\}/gi, "")
+    .replace(/\{\{[^}]*\}\}/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 /** Remaining daily action budget (Infinity when the cap is off). */
 export function dailyBudgetLeft(config: WorldEngineConfig, dailyCount: number): number {
   if (config.dailyActionCap <= 0) return Number.POSITIVE_INFINITY;

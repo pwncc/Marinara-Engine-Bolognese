@@ -1505,6 +1505,15 @@ export async function generateRoutes(app: FastifyInstance) {
                   : chatMeta.worldGroupThread === true
                     ? ("group" as const)
                     : null;
+        // In a Living World space the character knows the human by NAME and by
+        // what they've actually learned (their bond + memories, injected below) —
+        // never the human's whole persona card. Strip the persona detail so
+        // nothing from the user's prompt leaks in wholesale; it's earned through
+        // the relationship, not handed over up front.
+        if (worldSpaceKind && !input.impersonate) {
+          personaDescription = "";
+          personaFields = { phoneticName: personaPhoneticName, personality: "", scenario: "", backstory: "", appearance: "" };
+        }
         let temperature: number | undefined = 1;
         let maxTokens = 4096;
         let topP: number | undefined = 1;
@@ -2635,22 +2644,31 @@ export async function generateRoutes(app: FastifyInstance) {
           }
         }
 
+        // In world spaces, "you are {{user}}'s X" style card instructions don't
+        // bind — the character lives their own life. Load the sanitizer once.
+        const sanitizeCardForWorld =
+          worldSpaceKind && !input.impersonate
+            ? (await import("../services/world/world-engine.service.js")).sanitizeWorldPersona
+            : null;
         const charInfo = await loadCharacterPromptInfo({ chars, characterIds, chatMode });
         for (const character of charInfo) {
           const resolveCharacterPromptText = (value: string): string =>
             resolveHistoryMessageMacros([{ content: value, characterId: character.id }])[0]?.content ?? value;
-          character.description = resolveCharacterPromptText(character.description);
-          character.personality = resolveCharacterPromptText(character.personality);
+          // Strip user-directed clauses BEFORE macro resolution so they're gone,
+          // not turned into "you are <Name>'s X".
+          const worldClean = (value: string): string => (sanitizeCardForWorld ? sanitizeCardForWorld(value) : value);
+          character.description = resolveCharacterPromptText(worldClean(character.description));
+          character.personality = resolveCharacterPromptText(worldClean(character.personality));
           // World life spaces have no scripted premise — the card's scenario
           // belongs to fresh roleplay sessions, not their ongoing real life.
           character.scenario = worldSpaceKind ? "" : resolveCharacterPromptText(character.scenario);
-          character.creatorNotes = resolveCharacterPromptText(character.creatorNotes);
-          character.systemPrompt = resolveCharacterPromptText(character.systemPrompt);
-          character.backstory = resolveCharacterPromptText(character.backstory);
-          character.appearance = resolveCharacterPromptText(character.appearance);
+          character.creatorNotes = resolveCharacterPromptText(worldClean(character.creatorNotes));
+          character.systemPrompt = resolveCharacterPromptText(worldClean(character.systemPrompt));
+          character.backstory = resolveCharacterPromptText(worldClean(character.backstory));
+          character.appearance = resolveCharacterPromptText(worldClean(character.appearance));
           character.mesExample = resolveCharacterPromptText(character.mesExample);
           character.firstMes = resolveCharacterPromptText(character.firstMes);
-          character.postHistoryInstructions = resolveCharacterPromptText(character.postHistoryInstructions);
+          character.postHistoryInstructions = resolveCharacterPromptText(worldClean(character.postHistoryInstructions));
         }
         const characterMacroProfilesById = buildCharacterMacroProfilesById(charInfo);
 

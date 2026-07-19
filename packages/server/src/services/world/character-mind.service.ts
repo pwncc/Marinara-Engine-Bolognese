@@ -51,6 +51,7 @@ import {
   loadWorldEngineState,
   resolveWorldProvider,
   resolveWorldUser,
+  sanitizeWorldPersona,
   saveWorldEngineStatePatch,
   type ResolvedWorldProvider,
   type WorldAction,
@@ -506,7 +507,14 @@ async function buildMindContext(
   if (!row) return null;
   const data = parseJson(row.data);
   const name = nameById.get(characterId) ?? (shortText(data.name, 60) || "Unnamed");
-  const persona = [shortText(data.description, 400), shortText(data.personality, 300)].filter(Boolean).join("\n");
+  // Sanitize: a character in the world is their own person, not bound by card
+  // lines like "you are {{user}}'s partner" (those are stripped here).
+  const persona = [
+    shortText(sanitizeWorldPersona(String(data.description ?? "")), 400),
+    shortText(sanitizeWorldPersona(String(data.personality ?? "")), 300),
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   // Snapshot every mind's location once — reused for the roster (so a mind can
   // see who's where and deliberately go meet them) and the city section below.
@@ -896,7 +904,10 @@ async function buildMindContext(
     user: {
       id: worldUser.id,
       name: worldUser.name,
-      blurb: worldUser.blurb,
+      // You know the human by name from the start, but not their whole story —
+      // their own description only comes through once you're genuinely close
+      // (until then it's just their name plus whatever you've lived with them).
+      blurb: userRel && userRel.score >= 45 ? worldUser.blurb : "",
       standing: userStanding,
       memories: userMemoryLines,
       lastSeen: lastUserMsgAt ? ago(lastUserMsgAt) : null,
