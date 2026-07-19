@@ -79,6 +79,8 @@ export const worldPlaces = fileTable("world_places", {
   kind: text("kind").notNull().default("place"),
   /** Description that accretes detail as characters visit and add to it. */
   description: text("description").notNull().default(""),
+  /** What it's like INSIDE — accretes as characters describe the interior. */
+  interior: text("interior").notNull().default(""),
   /** 0+ — how fleshed-out this place is; rises as it's described. */
   detail: text("detail").notNull().default("0"),
   /** JSON string array of vibe/feature tags. */

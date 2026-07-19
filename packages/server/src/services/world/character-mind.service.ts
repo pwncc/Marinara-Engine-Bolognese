@@ -58,7 +58,8 @@ import {
 
 const MAX_ACTIONS_PER_WAKE = 3;
 const MAX_LIFE_TAIL = 12;
-const MAX_FEED_ITEMS = 10;
+/** A real recent slice of the feed, not just the last check's delta. */
+const MAX_FEED_ITEMS = 24;
 const MAX_THREADS = 5;
 
 /** Everything pace-related scales with the configured check-in interval. */
@@ -497,6 +498,9 @@ async function buildMindContext(
   const chats = createChatsStorage(db);
   const noodle = createNoodleStorage(db);
   const world = createWorldStorage(db);
+  // The human, resolved once — so the character always knows them by name in
+  // their own space and threads, never as a faceless "Visitor".
+  const worldUser = await resolveWorldUser(db);
 
   const row = (await chars.getById(characterId)) as { id: string; data: unknown } | null;
   if (!row) return null;
@@ -561,7 +565,7 @@ async function buildMindContext(
   };
   const visionCandidates: Array<{ url: string; label: string; createdAt: string }> = [];
   const lifeTail = lifeMessages.slice(-MAX_LIFE_TAIL).map((msg) => {
-    const who = msg.role === "user" ? "Visitor" : "you";
+    const who = msg.role === "user" ? worldUser.name : "you";
     const fresh = msg.role === "user" && msg.createdAt > seenDmsAt ? ", new" : "";
     const pics = msg.characterId !== characterId ? imageAttachmentsOf(msg.extra) : [];
     for (const url of pics) {
@@ -609,25 +613,31 @@ async function buildMindContext(
   const feed: string[] = [];
   const reactions: string[] = [];
   if (hasNoodle) {
-    const posts = await noodle.listPosts({ limit: 25 });
+    const posts = await noodle.listPosts({ limit: 80 });
     const myAccountId = account!.id;
+    // Show the RECENT feed — the last stretch of the timeline, newest first —
+    // not merely what's new since the last check. A character who just opened
+    // Noodle should have real context to react to, the way scrolling a feed
+    // actually works; "new" simply marks what landed since they last looked.
     for (const post of posts) {
+      if (post.authorAccountId === myAccountId) continue;
+      if (feed.length >= MAX_FEED_ITEMS) break;
       const authorName = shortText(parseJson(post.authorSnapshot).displayName, 40) || "someone";
-      if (post.authorAccountId !== myAccountId && post.createdAt > sinceIso && feed.length < MAX_FEED_ITEMS) {
-        const hasPic = typeof post.imageUrl === "string" && post.imageUrl;
-        feed.push(
-          `${post.id} · ${authorName} (${ago(post.createdAt)}): ${shortText(post.content, 140)}${hasPic ? " [has an image — attached]" : ""}`,
-        );
-        if (hasPic) {
-          visionCandidates.push({
-            url: post.imageUrl!,
-            label: `${authorName}'s noodle post ${post.id} ("${shortText(post.content, 50)}")`,
-            createdAt: post.createdAt,
-          });
-        }
+      const isNew = post.createdAt > sinceIso;
+      const hasPic = typeof post.imageUrl === "string" && post.imageUrl;
+      feed.push(
+        `${post.id} · ${authorName} (${ago(post.createdAt)}${isNew ? ", new" : ""}): ${shortText(post.content, 140)}${hasPic ? " [has an image — attached]" : ""}`,
+      );
+      // Attach only the freshest images as real vision inputs (capped to 4 later).
+      if (hasPic && isNew) {
+        visionCandidates.push({
+          url: post.imageUrl!,
+          label: `${authorName}'s noodle post ${post.id} ("${shortText(post.content, 50)}")`,
+          createdAt: post.createdAt,
+        });
       }
     }
-    const myPosts = posts.filter((post) => post.authorAccountId === myAccountId).slice(0, 5);
+    const myPosts = posts.filter((post) => post.authorAccountId === myAccountId).slice(0, 8);
     if (myPosts.length) {
       const interactions = await noodle.listInteractions(myPosts.map((post) => post.id));
       for (const interaction of interactions) {
@@ -737,7 +747,7 @@ async function buildMindContext(
       lines: tail.map((msg) => {
         const who =
           msg.role === "user"
-            ? "Visitor"
+            ? worldUser.name
             : msg.characterId === characterId
               ? "you"
               : (nameById.get(msg.characterId ?? "") ?? "them");
@@ -795,7 +805,6 @@ async function buildMindContext(
     .reverse();
 
   // ── The human whose world this is — a real inhabitant this character knows ──
-  const worldUser = await resolveWorldUser(db);
   const userRel = await world.getRelationship(characterId, WORLD_USER_ID);
   const userStanding = userRel
     ? `${userRel.label ?? userRel.stage} (${userRel.score}${userRel.romance ? ", romantic" : ""})${userRel.summary ? ` — ${userRel.summary}` : ""}`
@@ -831,7 +840,7 @@ async function buildMindContext(
     .filter((other) => other.id !== characterId && other.placeId && other.placeId === mind.placeId && nameById.has(other.id))
     .map((other) => `${other.id} · ${nameById.get(other.id)}`);
   const hereLine = currentPlace
-    ? `${currentPlace.name} (${currentPlace.kind})${currentPlace.description ? ` — ${shortText(currentPlace.description, 200)}` : ""}`
+    ? `${currentPlace.name} (${currentPlace.kind})${currentPlace.description ? ` — ${shortText(currentPlace.description, 200)}` : ""}${currentPlace.interior ? ` [inside: ${shortText(currentPlace.interior, 220)}]` : ""}`
     : "somewhere private (home / not out anywhere in particular)";
   const knownPlaces = allPlaces
     .slice(0, 16)
@@ -946,7 +955,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `  {"type":"do","activity":"…"} — live: what you're doing now (cooking, gaming, resting…). Narrated in your space and becomes your current intention.`,
     `  {"type":"go","place":"a PUBLIC place name (existing or new), or \\"home\\"","kind":"cafe|park|bar|gym|shop|street|…","why":"optional"} — go OUT somewhere public (or home). Don't name private rooms here.`,
     `  {"type":"set_home","kind":"apartment|loft|house|villa|studio|…"} — set what kind of home is yours (once). Becomes "Your Name's <kind>".`,
-    `  {"type":"describe_place","detail":"a concrete detail about where you are right now"} — flesh out your current place.`,
+    `  {"type":"describe_place","detail":"a concrete detail about where you are","inside":true|false (true describes the INTERIOR — what it's like inside)} — flesh out your current place.`,
     `  {"type":"work","content":"what you did on the job","earn":number,"job":"optional — the job you hold, e.g. \\"barista at The Grind\\"; set it once and it sticks"} — put in work and earn money.`,
     `  {"type":"spend","amount":number,"on":"what you bought"} — spend money.`,
     `  {"type":"say","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you show (a selfie, your art, a meme, the view…); describe it concretely","photoOfMe":true|false (true when YOU appear in it)` : ""}} — speak aloud in your own space (answers the Visitor if they wrote)`,
@@ -997,7 +1006,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     ``,
     ctx.memories.length ? `THINGS YOU REMEMBER:\n${ctx.memories.join("\n")}\n` : ``,
     ctx.hasNoodle
-      ? `NEW ON YOUR NOODLE FEED (id · author: content):\n${ctx.feed.join("\n") || "(nothing new)"}\n`
+      ? `YOUR NOODLE FEED — recent posts, newest first ("new" = since you last looked; react only with an EXACT id shown):\n${ctx.feed.join("\n") || "(the feed is quiet)"}\n`
       : `(You don't have a Noodle account.)\n`,
     ctx.reactions.length ? `ON YOUR POSTS:\n${ctx.reactions.join("\n")}\n` : ``,
     ctx.threads.length
@@ -1365,20 +1374,23 @@ async function executeDescribePlace(
   db: DB,
   nameById: Map<string, string>,
   selfId: string,
-  detail: string,
+  action: WorldAction,
 ): Promise<WorldEventRecord | null> {
   const world = createWorldStorage(db);
   const mind = await world.getMind(selfId);
-  const text = shortText(detail, 300);
+  const text = shortText(action.detail ?? action.content, 300);
   if (!mind?.placeId || !text) return null;
   const place = await world.getPlace(mind.placeId);
   if (!place) return null;
-  await world.enrichPlace(place.id, { addition: text });
+  // "inside" fleshes out the interior (what it's like within); otherwise the
+  // outward description.
+  const inside = action.inside === true;
+  await world.enrichPlace(place.id, inside ? { interior: text } : { addition: text });
   return world.appendEvent({
     kind: "place_detail",
-    summary: `${nameById.get(selfId) ?? "someone"} noticed at ${place.name}: ${shortText(text, 110)}`,
+    summary: `${nameById.get(selfId) ?? "someone"} noticed ${inside ? "inside" : "at"} ${place.name}: ${shortText(text, 110)}`,
     characterIds: [selfId],
-    detail: { placeId: place.id },
+    detail: { placeId: place.id, inside },
   });
 }
 
@@ -1577,6 +1589,76 @@ async function executeGroupAction(
  * reuses) their private DM thread, posts the message, and rings the user with
  * an unread badge, so being thought of reaches them even when they're away.
  */
+/**
+ * Get or create the private DM thread between a character and the human. It's a
+ * real conversation chat (the character alone; the human present as their
+ * persona), filed into the Living World section so world DMs live together.
+ * Shared by the mind's `message` action and the client's "Message" button.
+ */
+export async function ensureUserDmChat(db: DB, characterId: string): Promise<string | null> {
+  const chats = createChatsStorage(db);
+  const chars = createCharactersStorage(db);
+  const row = (await chars.getById(characterId)) as { id: string; data: unknown } | null;
+  if (!row) return null;
+  const selfName = shortText(parseJson(row.data).name, 60) || "Someone";
+  const user = await resolveWorldUser(db);
+  const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
+  const existing = allChats.find((chat) => {
+    const meta = parseJson(chat.metadata);
+    return meta.worldUserDm === true && meta.worldCharacterId === characterId;
+  });
+  if (existing) return existing.id;
+  const created = await chats.create({
+    name: selfName,
+    mode: "conversation",
+    characterIds: [characterId],
+    groupId: null,
+    personaId: user.personaId,
+    promptPresetId: null,
+    connectionId: null,
+  });
+  if (!created?.id) return null;
+  await chats.patchMetadata(created.id, {
+    worldUserDm: true,
+    worldCharacterId: characterId,
+    autonomousMessages: true,
+    characterCommands: false,
+  });
+  await fileWorldChat(db, created.id);
+  return created.id;
+}
+
+/** Create a world group chat the human is part of, with the chosen characters. */
+export async function ensureUserGroupChat(db: DB, characterIds: string[], name?: string): Promise<string | null> {
+  const chats = createChatsStorage(db);
+  const config = await loadWorldEngineConfig(db);
+  const nameById = await buildNameMap(db, config);
+  const members = [...new Set(characterIds.filter((id) => nameById.has(id)))];
+  if (!members.length) return null;
+  const user = await resolveWorldUser(db);
+  const groupName = shortText(name, 60) || members.map((id) => nameById.get(id) ?? "?").join(", ");
+  const created = await chats.create({
+    name: groupName,
+    mode: "conversation",
+    characterIds: members,
+    groupId: null,
+    personaId: user.personaId,
+    promptPresetId: null,
+    connectionId: null,
+  });
+  if (!created?.id) return null;
+  await chats.patchMetadata(created.id, {
+    worldGroupThread: true,
+    worldMembers: members,
+    worldUserGroup: true,
+    autonomousMessages: true,
+    characterCommands: false,
+    groupChatMode: "individual",
+  });
+  await fileWorldChat(db, created.id);
+  return created.id;
+}
+
 async function executeMessageUser(
   db: DB,
   selfId: string,
@@ -1588,35 +1670,8 @@ async function executeMessageUser(
   const content = shortText(action.content, 800);
   if (!content) return null;
   const user = await resolveWorldUser(db);
-
-  const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
-  let chatId =
-    allChats.find((chat) => {
-      const meta = parseJson(chat.metadata);
-      return meta.worldUserDm === true && meta.worldCharacterId === selfId;
-    })?.id ?? null;
-  if (!chatId) {
-    // A real DM the human receives: conversation mode, the character alone, the
-    // human present as their persona. Left in the normal chat list on purpose —
-    // a friend texting you belongs in your inbox, not a separate simulation tab.
-    const created = await chats.create({
-      name: selfName,
-      mode: "conversation",
-      characterIds: [selfId],
-      groupId: null,
-      personaId: user.personaId,
-      promptPresetId: null,
-      connectionId: null,
-    });
-    if (!created?.id) return null;
-    await chats.patchMetadata(created.id, {
-      worldUserDm: true,
-      worldCharacterId: selfId,
-      autonomousMessages: true,
-      characterCommands: false,
-    });
-    chatId = created.id;
-  }
+  const chatId = await ensureUserDmChat(db, selfId);
+  if (!chatId) return null;
   const saved = await chats.createMessage({ chatId, role: "assistant", characterId: selfId, content });
   if (!saved?.id) return null;
   const photo = shortText(action.photoPrompt, 1200);
@@ -1765,7 +1820,7 @@ export async function wakeCharacterMind(
         } else if (rawAction.type === "host_event") {
           event = await executeHostEvent(db, nameById, characterId, rawAction);
         } else if (rawAction.type === "describe_place") {
-          event = await executeDescribePlace(db, nameById, characterId, String(rawAction.detail ?? rawAction.content ?? ""));
+          event = await executeDescribePlace(db, nameById, characterId, rawAction);
         } else if (rawAction.type === "work") {
           event = await executeWork(db, nameById, characterId, rawAction);
         } else if (rawAction.type === "spend") {
@@ -1972,6 +2027,10 @@ async function ensureMindsInitializedInner(db: DB, config: WorldEngineConfig): P
   const signature = `${config.allowNoodle ? "n" : "-"}|${[...nameById.keys()].sort().join(",")}`;
   if (worldInitConverged === signature) return;
   const existing = new Set((await world.listMinds()).map((mind) => mind.id));
+
+  // Seed everyday public buildings (hospital, school, bar, cafe…) so the map is
+  // populated from day one and characters have real places to go. Idempotent.
+  await world.seedDefaultPlaces();
 
   // Migration sweep: normalize every world chat's mode, folder (per-mode), and
   // group generation so each character speaks as themselves (not one narrator).

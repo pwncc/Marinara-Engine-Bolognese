@@ -153,6 +153,30 @@ export async function worldRoutes(app: FastifyInstance) {
   //    works while the engine is disabled — great for testing) ──
   app.post("/tick", async () => runWorldTick(app.db, { manual: true, app }));
 
+  // ── Open (or create) a private DM between you and a world character. Powers
+  //    the "Message" button on Noodle — returns the chat id to jump into. ──
+  app.post<{ Body: { characterId?: string } }>("/dm", async (req, reply) => {
+    const characterId = String((req.body as { characterId?: unknown } | undefined)?.characterId ?? "").trim();
+    if (!characterId) return reply.code(400).send({ error: "characterId required" });
+    const { ensureUserDmChat } = await import("../services/world/character-mind.service.js");
+    const chatId = await ensureUserDmChat(app.db, characterId);
+    if (!chatId) return reply.code(404).send({ error: "character not found" });
+    return { ok: true, chatId };
+  });
+
+  // ── Start a group you're in with the chosen world characters. ──
+  app.post<{ Body: { characterIds?: string[]; name?: string } }>("/group", async (req, reply) => {
+    const body = (req.body ?? {}) as { characterIds?: unknown; name?: unknown };
+    const characterIds = Array.isArray(body.characterIds)
+      ? body.characterIds.filter((id): id is string => typeof id === "string")
+      : [];
+    if (!characterIds.length) return reply.code(400).send({ error: "characterIds required" });
+    const { ensureUserGroupChat } = await import("../services/world/character-mind.service.js");
+    const chatId = await ensureUserGroupChat(app.db, characterIds, typeof body.name === "string" ? body.name : undefined);
+    if (!chatId) return reply.code(400).send({ error: "no valid world members" });
+    return { ok: true, chatId };
+  });
+
   // ── Reset the world: wipe all Living World state (events, relationships,
   //    minds, queued actions), the world chats, their folder, and — when asked —
   //    the Noodle timeline. Config is preserved. ──

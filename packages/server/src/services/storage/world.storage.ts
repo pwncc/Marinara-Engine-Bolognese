@@ -133,6 +133,7 @@ export interface WorldPlaceRow {
   name: string;
   kind: string;
   description: string;
+  interior: string;
   detail: number;
   tags: string[];
   discoveredBy: string | null;
@@ -148,6 +149,7 @@ function toPlaceRow(row: Record<string, unknown>): WorldPlaceRow {
     name: String(row.name ?? ""),
     kind: String(row.kind ?? "place"),
     description: String(row.description ?? ""),
+    interior: String(row.interior ?? ""),
     detail: Number.isFinite(Number(row.detail)) ? Number(row.detail) : 0,
     tags: parseJsonArray<string>(row.tags),
     discoveredBy: typeof row.discoveredBy === "string" && row.discoveredBy ? row.discoveredBy : null,
@@ -320,6 +322,7 @@ export function createWorldStorage(db: DB) {
       name: string;
       kind?: string;
       description?: string;
+      interior?: string;
       tags?: string[];
       discoveredBy?: string | null;
       ownerId?: string | null;
@@ -342,6 +345,7 @@ export function createWorldStorage(db: DB) {
         name: input.name.trim().slice(0, 80),
         kind: (input.kind ?? "place").trim().slice(0, 40) || "place",
         description: (input.description ?? "").trim().slice(0, 800),
+        interior: (input.interior ?? "").trim().slice(0, 800),
         detail: input.description ? "1" : "0",
         tags: JSON.stringify((input.tags ?? []).slice(0, 12)),
         discoveredBy: input.discoveredBy ?? null,
@@ -354,6 +358,36 @@ export function createWorldStorage(db: DB) {
       return { place: toPlaceRow(row), created: true };
     },
 
+    /**
+     * Seed the city with a handful of everyday public buildings so the map is
+     * never empty and characters have real places (and jobs) to go to. Idempotent
+     * — each is created only if a place of that name doesn't already exist.
+     */
+    async seedDefaultPlaces(): Promise<number> {
+      const seeds: Array<{ name: string; kind: string; description: string; interior: string; tags: string[] }> = [
+        { name: "Meridian General Hospital", kind: "hospital", description: "The city hospital — always lit, always busy.", interior: "Antiseptic corridors, a hushed waiting room, curtained bays and the far-off beep of monitors.", tags: ["work", "medical", "public"] },
+        { name: "Lincoln High School", kind: "school", description: "The local school, lockers and echoing halls.", interior: "Scuffed linoleum, rows of lockers, classrooms with the smell of chalk and old radiators.", tags: ["work", "public"] },
+        { name: "The Anchor", kind: "bar", description: "A dim neighborhood bar with a good jukebox.", interior: "Low amber light, worn stools, a scratched bar top and a jukebox in the corner.", tags: ["nightlife", "social", "public"] },
+        { name: "Rosa's Trattoria", kind: "restaurant", description: "A warm family-run Italian place.", interior: "Checkered tablecloths, candlelight, the smell of garlic and simmering sauce.", tags: ["food", "social", "public"] },
+        { name: "Daybreak Coffee", kind: "cafe", description: "A busy corner coffee shop.", interior: "Hiss of the espresso machine, mismatched chairs, laptops and low chatter.", tags: ["coffee", "social", "public"] },
+        { name: "Beacon Street Office", kind: "office", description: "A mid-rise where a lot of people work.", interior: "Grey carpet, glass meeting rooms, the hum of fluorescent lights and keyboards.", tags: ["work", "public"] },
+        { name: "Riverside Park", kind: "park", description: "Green space along the water.", interior: "Open lawns, a jogging path, benches under old trees and ducks on the pond.", tags: ["outdoors", "social", "public"] },
+        { name: "Iron & Oak Gym", kind: "gym", description: "The neighborhood gym.", interior: "Rubber floors, clanging weights, mirrors and the smell of chalk and sweat.", tags: ["fitness", "public"] },
+        { name: "Cornerstone Market", kind: "shop", description: "A well-stocked corner grocery.", interior: "Bright aisles, a produce cooler, a bell on the door and a bored cashier.", tags: ["errands", "public"] },
+        { name: "City Library", kind: "library", description: "The public library, quiet and grand.", interior: "High shelves, long reading tables, dust motes in slanting light and total hush.", tags: ["quiet", "public"] },
+        { name: "Northside Clinic", kind: "clinic", description: "A small walk-in clinic.", interior: "A cramped waiting room, dated magazines, a sliding reception window.", tags: ["medical", "public"] },
+        { name: "The Basement", kind: "club", description: "A late-night music club.", interior: "Dark, loud, sticky floors, a low stage and bodies moving under colored light.", tags: ["nightlife", "social", "public"] },
+        { name: "Union Diner", kind: "diner", description: "A 24-hour diner.", interior: "Vinyl booths, chrome trim, bottomless coffee and a griddle always going.", tags: ["food", "public"] },
+        { name: "Page & Bind Bookstore", kind: "shop", description: "A cozy independent bookstore.", interior: "Narrow aisles, creaking floorboards, a reading nook and a shop cat.", tags: ["quiet", "public"] },
+      ];
+      let created = 0;
+      for (const seed of seeds) {
+        const { created: wasCreated } = await this.ensurePlace(seed);
+        if (wasCreated) created += 1;
+      }
+      return created;
+    },
+
     async renameHomePlace(id: string, name: string, kind: string): Promise<void> {
       await db
         .update(worldPlaces)
@@ -361,14 +395,21 @@ export function createWorldStorage(db: DB) {
         .where(eq(worldPlaces.id, id));
     },
 
-    /** Add detail to a place — append to its description, bump its detail level. */
-    async enrichPlace(id: string, input: { addition?: string; tags?: string[]; incrementVisit?: boolean }): Promise<void> {
+    /** Add detail to a place — append to its description or interior, bump detail. */
+    async enrichPlace(
+      id: string,
+      input: { addition?: string; interior?: string; tags?: string[]; incrementVisit?: boolean },
+    ): Promise<void> {
       const existing = await this.getPlace(id);
       if (!existing) return;
       const addition = input.addition?.trim();
       const description = addition
         ? `${existing.description}${existing.description ? " " : ""}${addition}`.slice(0, 1600)
         : existing.description;
+      const interiorAddition = input.interior?.trim();
+      const interior = interiorAddition
+        ? `${existing.interior}${existing.interior ? " " : ""}${interiorAddition}`.slice(0, 1600)
+        : existing.interior;
       const tags = input.tags?.length
         ? [...new Set([...existing.tags, ...input.tags])].slice(0, 16)
         : existing.tags;
@@ -376,7 +417,8 @@ export function createWorldStorage(db: DB) {
         .update(worldPlaces)
         .set({
           description,
-          detail: String(existing.detail + (addition ? 1 : 0)),
+          interior,
+          detail: String(existing.detail + (addition || interiorAddition ? 1 : 0)),
           tags: JSON.stringify(tags),
           visitCount: String(existing.visitCount + (input.incrementVisit ? 1 : 0)),
           updatedAt: now(),
