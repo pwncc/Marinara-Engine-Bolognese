@@ -115,6 +115,8 @@ import {
   useUpdateNoodleSettings,
 } from "../../hooks/use-noodle";
 import { useUIStore } from "../../stores/ui.store";
+import { useChatStore } from "../../stores/chat.store";
+import { useCreateWorldUserDm } from "../../hooks/use-world";
 
 type RawCharacter = { id?: unknown; data?: unknown; avatarPath?: unknown };
 type RawCharacterGroup = { id?: unknown; name?: unknown; description?: unknown; characterIds?: unknown };
@@ -919,6 +921,20 @@ function NoodleToolPopover({
 export function NoodleView() {
   const selectedPersonaId = useUIStore((state) => state.noodleSelectedPersonaId) ?? "";
   const setSelectedPersonaId = useUIStore((state) => state.setNoodleSelectedPersonaId);
+  // Open (or create) a world DM with a character and jump into it — the sidebar
+  // switches to the WORLD tab on its own once the active chat is a world chat.
+  const createWorldUserDm = useCreateWorldUserDm();
+  const openWorldDm = async (characterId: string) => {
+    try {
+      const res = await createWorldUserDm.mutateAsync(characterId);
+      if (res?.chatId) {
+        useUIStore.getState().closeNoodle();
+        useChatStore.getState().setActiveChatId(res.chatId);
+      }
+    } catch {
+      toast.error("Couldn't open that DM. Is the Living World enabled?");
+    }
+  };
   const { data, isLoading } = useNoodle();
   const { data: activePersona } = useActivePersona();
   const { data: personasRaw } = usePersonas();
@@ -5171,33 +5187,46 @@ export function NoodleView() {
                         className="hidden"
                         onChange={(event) => handleProfileImageFile("avatar", event)}
                       />
-                      {canEditViewedProfile ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (isEditingProfile) saveProfile();
-                            else setProfileEditing(true);
-                          }}
-                          disabled={isEditingProfile ? !canSaveProfile || updateAccount.isPending : !viewedProfileAccount}
-                          className="mb-1 h-9 rounded-full bg-[var(--noodle-blue)] px-5 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {isEditingProfile ? (updateAccount.isPending ? "Saving" : "Save") : "Edit Profile"}
-                        </button>
-                      ) : canFollowViewedProfile && viewedProfileAccount ? (
-                        <button
-                          type="button"
-                          onClick={() => updateFollowedAccount(viewedProfileAccount, !viewedProfileFollowed)}
-                          disabled={updateAccount.isPending}
-                          className={cn(
-                            "mb-1 h-9 rounded-full px-5 text-xs font-bold transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50",
-                            viewedProfileFollowed
-                              ? "border border-[var(--noodle-divider)] text-[var(--foreground)]"
-                              : "bg-[var(--foreground)] text-[var(--background)]",
-                          )}
-                        >
-                          {viewedProfileFollowed ? "Following" : "Follow"}
-                        </button>
-                      ) : null}
+                      <div className="flex items-center gap-2">
+                        {viewedProfileAccount?.kind === "character" ? (
+                          <button
+                            type="button"
+                            onClick={() => void openWorldDm(viewedProfileAccount.entityId)}
+                            disabled={createWorldUserDm.isPending}
+                            className="mb-1 h-9 rounded-full border border-[var(--noodle-divider)] px-4 text-xs font-bold text-[var(--foreground)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                            title="Message them in your world"
+                          >
+                            {createWorldUserDm.isPending ? "Opening…" : "Message"}
+                          </button>
+                        ) : null}
+                        {canEditViewedProfile ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isEditingProfile) saveProfile();
+                              else setProfileEditing(true);
+                            }}
+                            disabled={isEditingProfile ? !canSaveProfile || updateAccount.isPending : !viewedProfileAccount}
+                            className="mb-1 h-9 rounded-full bg-[var(--noodle-blue)] px-5 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {isEditingProfile ? (updateAccount.isPending ? "Saving" : "Save") : "Edit Profile"}
+                          </button>
+                        ) : canFollowViewedProfile && viewedProfileAccount ? (
+                          <button
+                            type="button"
+                            onClick={() => updateFollowedAccount(viewedProfileAccount, !viewedProfileFollowed)}
+                            disabled={updateAccount.isPending}
+                            className={cn(
+                              "mb-1 h-9 rounded-full px-5 text-xs font-bold transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50",
+                              viewedProfileFollowed
+                                ? "border border-[var(--noodle-divider)] text-[var(--foreground)]"
+                                : "bg-[var(--foreground)] text-[var(--background)]",
+                            )}
+                          >
+                            {viewedProfileFollowed ? "Following" : "Follow"}
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
 
                     {isEditingProfile ? (

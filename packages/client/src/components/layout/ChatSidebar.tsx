@@ -35,6 +35,7 @@ function isWorldChat(chat: { metadata?: Record<string, unknown> | null }): boole
   return (
     meta.worldLifeChat === true ||
     meta.worldDmThread === true ||
+    meta.worldUserDm === true ||
     meta.worldGroupThread === true ||
     meta.worldPlaceScene === true
   );

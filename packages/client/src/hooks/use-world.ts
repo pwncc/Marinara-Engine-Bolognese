@@ -25,6 +25,7 @@ export interface WorldPlace {
   name: string;
   kind: string;
   description: string;
+  interior: string;
   detail: number;
   tags: string[];
   discoveredBy: string | null;
@@ -179,6 +180,29 @@ export function useResetWorld() {
       api.post<{ ok: boolean; removedChats: number }>("/world/reset", { resetNoodle }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: worldKeys.all });
+      qc.invalidateQueries({ queryKey: ["chats"] });
+    },
+  });
+}
+
+/** Open (or create) a private DM with a world character — returns its chat id. */
+export function useCreateWorldUserDm() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (characterId: string) => api.post<{ ok: boolean; chatId: string }>("/world/dm", { characterId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["chats"] });
+    },
+  });
+}
+
+/** Start a group you're in with the chosen world characters — returns its chat id. */
+export function useCreateWorldGroup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { characterIds: string[]; name?: string }) =>
+      api.post<{ ok: boolean; chatId: string }>("/world/group", input),
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["chats"] });
     },
   });

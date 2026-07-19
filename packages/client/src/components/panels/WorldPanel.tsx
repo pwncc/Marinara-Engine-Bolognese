@@ -4,7 +4,7 @@
 // Status (queued moments, last narration), config (connection, pacing,
 // budgets), the live world timeline, and the bonds browser with per-pair
 // history ("how they met").
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Brain,
@@ -36,6 +36,8 @@ import { toast } from "sonner";
 import type { WorldEngineConfig, WorldEventRecord } from "@marinara-engine/shared";
 import { DEFAULT_WORLD_ENGINE_CONFIG } from "@marinara-engine/shared";
 import {
+  useCreateWorldGroup,
+  useCreateWorldUserDm,
   useResetWorld,
   useRunWorldTick,
   useUpdateWorldConfig,
@@ -625,6 +627,9 @@ function openWorldChatById(chatId: string) {
 
 function CityMap() {
   const { data: city, isLoading } = useWorldCity();
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const drag = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean } | null>(null);
   const nodes = useMemo(() => {
     const places = city?.places ?? [];
     // Homes ring the edge, public places cluster toward the middle.
@@ -634,6 +639,12 @@ function CityMap() {
       return { place, pos: base, here };
     });
   }, [city]);
+
+  const zoomBy = (factor: number) => setScale((s) => Math.min(4, Math.max(0.6, s * factor)));
+  const resetView = () => {
+    setScale(1);
+    setOffset({ x: 0, y: 0 });
+  };
 
   if (isLoading) {
     return (
@@ -650,41 +661,87 @@ function CityMap() {
     );
   }
   return (
-    <div className="relative h-[22rem] w-full overflow-hidden rounded-lg border border-[var(--border)]/60 bg-[radial-gradient(circle_at_50%_40%,var(--secondary)_0%,var(--background)_100%)]">
-      {nodes.map(({ place, pos, here }) => (
-        <button
-          key={place.id}
-          type="button"
-          disabled={!place.sceneChatId}
-          onClick={() => place.sceneChatId && openWorldChatById(place.sceneChatId)}
-          className={cn(
-            "absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-0.5",
-            place.sceneChatId ? "cursor-pointer" : "cursor-default",
-          )}
-          style={{ left: `${pos.x * 100}%`, top: `${pos.y * 100}%` }}
-          title={place.description || place.name}
-        >
-          <span
+    <div
+      className="relative h-[22rem] w-full touch-none select-none overflow-hidden rounded-lg border border-[var(--border)]/60 bg-[radial-gradient(circle_at_50%_40%,var(--secondary)_0%,var(--background)_100%)]"
+      onWheel={(e) => {
+        e.preventDefault();
+        zoomBy(e.deltaY < 0 ? 1.12 : 0.9);
+      }}
+      onPointerDown={(e) => {
+        // Let clicks on place buttons through; drag only on the open map.
+        if ((e.target as HTMLElement).closest("[data-place-node]")) return;
+        drag.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y, moved: false };
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }}
+      onPointerMove={(e) => {
+        if (!drag.current) return;
+        drag.current.moved = true;
+        setOffset({ x: drag.current.ox + (e.clientX - drag.current.x), y: drag.current.oy + (e.clientY - drag.current.y) });
+      }}
+      onPointerUp={(e) => {
+        drag.current = null;
+        try {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        } catch {
+          /* capture may already be released */
+        }
+      }}
+    >
+      <div
+        className="absolute inset-0"
+        style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: "center center" }}
+      >
+        {nodes.map(({ place, pos, here }) => (
+          <button
+            key={place.id}
+            type="button"
+            data-place-node
+            disabled={!place.sceneChatId}
+            onClick={() => place.sceneChatId && openWorldChatById(place.sceneChatId)}
             className={cn(
-              "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[0.6rem] font-medium shadow-sm backdrop-blur-sm transition-colors",
-              here.length
-                ? "border-emerald-400/60 bg-emerald-400/15"
-                : "border-[var(--border)] bg-[var(--card)]/80",
-              place.sceneChatId && "hover:border-[var(--primary)]/70",
+              "absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-0.5",
+              place.sceneChatId ? "cursor-pointer" : "cursor-default",
             )}
+            style={{ left: `${pos.x * 100}%`, top: `${pos.y * 100}%` }}
+            title={
+              [place.description, place.interior && `Inside: ${place.interior}`].filter(Boolean).join(" — ") ||
+              place.name
+            }
           >
-            {place.ownerId ? (
-              <Building2 size="0.6rem" className="text-indigo-400" />
-            ) : (
-              <MapPin size="0.6rem" className="text-teal-400" />
-            )}
-            {place.name}
-          </span>
-          {here.length ? (
-            <span className="max-w-[8rem] truncate text-[0.55rem] text-emerald-400">{here.join(", ")}</span>
-          ) : null}
+            <span
+              className={cn(
+                "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[0.6rem] font-medium shadow-sm backdrop-blur-sm transition-colors",
+                here.length
+                  ? "border-emerald-400/60 bg-emerald-400/15"
+                  : "border-[var(--border)] bg-[var(--card)]/80",
+                place.sceneChatId && "hover:border-[var(--primary)]/70",
+              )}
+            >
+              {place.ownerId ? (
+                <Building2 size="0.6rem" className="text-indigo-400" />
+              ) : (
+                <MapPin size="0.6rem" className="text-teal-400" />
+              )}
+              {place.name}
+            </span>
+            {here.length ? (
+              <span className="max-w-[8rem] truncate text-[0.55rem] text-emerald-400">{here.join(", ")}</span>
+            ) : null}
+          </button>
+        ))}
+      </div>
+      {/* Zoom controls */}
+      <div className="absolute bottom-2 right-2 flex flex-col overflow-hidden rounded-md border border-[var(--border)] bg-[var(--card)]/90 text-[var(--foreground)] shadow-sm backdrop-blur-sm">
+        <button type="button" onClick={() => zoomBy(1.2)} className="px-2 py-1 text-sm leading-none hover:bg-[var(--secondary)]" title="Zoom in">
+          +
         </button>
-      ))}
+        <button type="button" onClick={() => zoomBy(0.83)} className="border-t border-[var(--border)] px-2 py-1 text-sm leading-none hover:bg-[var(--secondary)]" title="Zoom out">
+          −
+        </button>
+        <button type="button" onClick={resetView} className="border-t border-[var(--border)] px-2 py-1 text-[0.6rem] leading-none hover:bg-[var(--secondary)]" title="Reset view">
+          ⟳
+        </button>
+      </div>
     </div>
   );
 }
@@ -694,6 +751,29 @@ function CityMap() {
 function CityView() {
   const { data: city, isLoading } = useWorldCity();
   const homeless = (city?.residents ?? []).filter((resident) => !resident.placeId);
+  // Select residents to message one, or start a group with several.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const createDm = useCreateWorldUserDm();
+  const createGroup = useCreateWorldGroup();
+  const toggleResident = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const startChatWithSelected = async () => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    try {
+      const res = ids.length === 1 ? await createDm.mutateAsync(ids[0]!) : await createGroup.mutateAsync({ characterIds: ids });
+      if (res?.chatId) openWorldChatById(res.chatId);
+      setSelected(new Set());
+    } catch {
+      toast.error("Couldn't start that chat. Is the Living World enabled?");
+    }
+  };
+  const startingChat = createDm.isPending || createGroup.isPending;
 
   if (isLoading) {
     return (
@@ -761,25 +841,72 @@ function CityView() {
 
       {city.residents.length ? (
         <div className="mt-2 rounded-lg border border-[var(--border)]/50 bg-[var(--card)]/40 px-2.5 py-2">
-          <span className="text-[0.65rem] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
-            Residents
-          </span>
-          <div className="mt-1 space-y-0.5">
-            {city.residents.map((resident) => (
-              <div key={resident.characterId} className="flex items-center gap-1.5 text-[0.68rem]">
-                <span className="font-medium">{resident.name}</span>
-                {resident.job ? <span className="truncate text-[var(--muted-foreground)]">· {resident.job}</span> : null}
-                <span className="ml-auto flex items-center gap-1.5 text-[var(--muted-foreground)]">
-                  <span title="energy">⚡{resident.needs.energy}</span>
-                  <span title="hunger">🍽{resident.needs.hunger}</span>
-                  <span title="social">💬{resident.needs.social}</span>
-                  <span className="flex items-center gap-0.5">
-                    <Coins size="0.6rem" /> {resident.money}
-                  </span>
-                </span>
-              </div>
-            ))}
+          <div className="flex items-center justify-between">
+            <span className="text-[0.65rem] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+              Residents
+            </span>
+            <span className="text-[0.55rem] text-[var(--muted-foreground)]">
+              {selected.size > 0 ? `${selected.size} selected` : "tap to message"}
+            </span>
           </div>
+          <div className="mt-1 space-y-0.5">
+            {city.residents.map((resident) => {
+              const isSel = selected.has(resident.characterId);
+              return (
+                <button
+                  key={resident.characterId}
+                  type="button"
+                  onClick={() => toggleResident(resident.characterId)}
+                  className={cn(
+                    "flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[0.68rem] transition-colors",
+                    isSel ? "bg-[var(--primary)]/15" : "hover:bg-[var(--accent)]/30",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "flex h-3 w-3 shrink-0 items-center justify-center rounded-full border text-[0.5rem] leading-none",
+                      isSel ? "border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)]" : "border-[var(--border)]",
+                    )}
+                  >
+                    {isSel ? "✓" : ""}
+                  </span>
+                  <span className="font-medium">{resident.name}</span>
+                  {resident.job ? <span className="truncate text-[var(--muted-foreground)]">· {resident.job}</span> : null}
+                  <span className="ml-auto flex items-center gap-1.5 text-[var(--muted-foreground)]">
+                    <span title="energy">⚡{resident.needs.energy}</span>
+                    <span title="hunger">🍽{resident.needs.hunger}</span>
+                    <span title="social">💬{resident.needs.social}</span>
+                    <span className="flex items-center gap-0.5">
+                      <Coins size="0.6rem" /> {resident.money}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {selected.size > 0 ? (
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                disabled={startingChat}
+                onClick={() => void startChatWithSelected()}
+                className="flex-1 rounded-md bg-[var(--primary)] px-2 py-1 text-[0.65rem] font-semibold text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
+              >
+                {startingChat
+                  ? "Opening…"
+                  : selected.size === 1
+                    ? `Message ${city.residents.find((r) => selected.has(r.characterId))?.name ?? ""}`
+                    : `Start group (${selected.size})`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelected(new Set())}
+                className="rounded-md border border-[var(--border)] px-2 py-1 text-[0.65rem] text-[var(--muted-foreground)] hover:bg-[var(--secondary)]"
+              >
+                Clear
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
