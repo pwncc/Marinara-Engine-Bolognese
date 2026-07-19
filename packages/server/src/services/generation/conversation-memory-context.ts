@@ -101,11 +101,33 @@ export async function mergeConversationCharacterMemories({
     }
   }
 
-  if (memoryLines.length === 0 && relationshipLines.length === 0) return awarenessBlock;
+  // In a 1:1 chat, how this character feels about the HUMAN — their world bond
+  // rides into every DM, so they arrive already knowing (and reacting to) you.
+  let userRelSection: string | null = null;
+  if (db && characterIds.length === 1) {
+    try {
+      const { createWorldStorage, WORLD_USER_ID } = await import("../storage/world.storage.js");
+      const world = createWorldStorage(db);
+      const rel = await world.getRelationship(characterIds[0]!, WORLD_USER_ID);
+      if (rel && (rel.summary || rel.label || rel.score !== 0 || rel.romance)) {
+        const { resolveWorldUser } = await import("../world/world-engine.service.js");
+        const user = await resolveWorldUser(db);
+        const label = rel.label ?? rel.stage;
+        userRelSection = `## How they feel about ${escapeXmlText(user.name)}\n${escapeXmlText(label)}${
+          rel.romance ? " (romantic)" : ""
+        }${rel.summary ? ` — ${escapeXmlText(rel.summary)}` : ""} (warmth ${rel.score})`;
+      }
+    } catch (error) {
+      logger.debug(error, "[memory] World user-relationship injection skipped");
+    }
+  }
+
+  if (memoryLines.length === 0 && relationshipLines.length === 0 && !userRelSection) return awarenessBlock;
 
   const sections: string[] = [];
   if (memoryLines.length) sections.push(`## Memories\n${memoryLines.join("\n")}`);
   if (relationshipLines.length) sections.push(`## How they stand with each other\n${relationshipLines.join("\n")}`);
+  if (userRelSection) sections.push(userRelSection);
   const memoriesSection = `\n\n${sections.join("\n\n")}`;
   if (awarenessBlock) {
     return awarenessBlock.replace(/<\/awareness>$/, memoriesSection + "\n</awareness>");

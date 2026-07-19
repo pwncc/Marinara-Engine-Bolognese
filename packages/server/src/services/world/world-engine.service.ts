@@ -42,7 +42,7 @@ import { createChatFoldersStorage } from "../storage/chat-folders.storage.js";
 import { createChatsStorage } from "../storage/chats.storage.js";
 import { createConnectionsStorage } from "../storage/connections.storage.js";
 import { createNoodleStorage } from "../storage/noodle.storage.js";
-import { createWorldStorage, orderPair, type WorldStorage } from "../storage/world.storage.js";
+import { createWorldStorage, orderPair, WORLD_USER_ID, type WorldStorage } from "../storage/world.storage.js";
 
 const CONFIG_KEY = "worldEngine";
 const STATE_KEY = "worldEngineState";
@@ -309,6 +309,39 @@ export async function buildNameMap(db: DB, config: WorldEngineConfig): Promise<M
   return nameById;
 }
 
+export interface WorldUserIdentity {
+  id: string;
+  /** How characters know the human — their active persona's name, or "you". */
+  name: string;
+  /** A short sense of who the human is (from the persona), if any. */
+  blurb: string;
+  /** The persona to speak to in a character↔user DM (null falls back to active). */
+  personaId: string | null;
+}
+
+/**
+ * The human, as an inhabitant characters can know. Their identity is their
+ * active Persona (name + a short blurb); with no persona they're simply "you".
+ */
+export async function resolveWorldUser(db: DB): Promise<WorldUserIdentity> {
+  try {
+    const chars = createCharactersStorage(db);
+    const personas = (await chars.listPersonas()) as Array<Record<string, unknown>>;
+    const active = personas.find((p) => p.isActive === "true" || p.isActive === true) ?? personas[0];
+    if (active) {
+      return {
+        id: WORLD_USER_ID,
+        name: shortText(active.name, 60) || "you",
+        blurb: shortText(active.aboutMe, 200) || shortText(active.description, 200) || "",
+        personaId: typeof active.id === "string" ? active.id : null,
+      };
+    }
+  } catch (error) {
+    logger.debug(error, "[world] Could not resolve the world user persona");
+  }
+  return { id: WORLD_USER_ID, name: "you", blurb: "", personaId: null };
+}
+
 export async function buildWorldSnapshot(
   db: DB,
   config: WorldEngineConfig,
@@ -568,7 +601,16 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
   const noodle = createNoodleStorage(db);
   const chats = createChatsStorage(db);
   const chars = createCharactersStorage(db);
-  const name = (id: unknown) => (typeof id === "string" ? (nameById.get(id) ?? null) : null);
+  // The human may be one side of a relationship/memory; resolve their name once.
+  const referencesUser =
+    action.aCharacterId === WORLD_USER_ID ||
+    action.bCharacterId === WORLD_USER_ID ||
+    action.aboutCharacterId === WORLD_USER_ID ||
+    action.characterId === WORLD_USER_ID ||
+    action.toCharacterId === WORLD_USER_ID;
+  const userName = referencesUser ? (await resolveWorldUser(db)).name : null;
+  const name = (id: unknown) =>
+    id === WORLD_USER_ID ? (userName ?? "them") : typeof id === "string" ? (nameById.get(id) ?? null) : null;
   const invitedAccountId = async (characterId: string): Promise<string | null> => {
     const account = await noodle.getAccountByEntity("character", characterId);
     return account?.invited ? account.id : null;
@@ -829,7 +871,10 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
     case "relationship": {
       const aId = String(action.aCharacterId ?? "");
       const bId = String(action.bCharacterId ?? "");
-      if (!nameById.has(aId) || !nameById.has(bId) || aId === bId) return null;
+      // One side may be the human (WORLD_USER_ID); never both, never self.
+      const validTarget = (id: string) => nameById.has(id) || id === WORLD_USER_ID;
+      if (!validTarget(aId) || !validTarget(bId) || aId === bId || (aId === WORLD_USER_ID && bId === WORLD_USER_ID))
+        return null;
       const milestoneRaw = parseJson(action.milestone);
       const milestone =
         typeof milestoneRaw.title === "string" && milestoneRaw.title.trim()
@@ -860,7 +905,9 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       const characterId = String(action.characterId ?? "");
       const aboutCharacterId = String(action.aboutCharacterId ?? "");
       const summary = shortText(action.summary, 400);
-      if (!nameById.has(characterId) || !nameById.has(aboutCharacterId) || !summary) return null;
+      // A character can remember another member OR the human.
+      if (!nameById.has(characterId) || !(nameById.has(aboutCharacterId) || aboutCharacterId === WORLD_USER_ID) || !summary)
+        return null;
       const target = (await chars.getById(characterId)) as { id: string; data: unknown } | null;
       if (!target) return null;
       const data = parseJson(target.data);
@@ -868,7 +915,7 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       const memories = Array.isArray(extensions.characterMemories) ? [...extensions.characterMemories] : [];
       const memoryPlace = shortText(action.place, 80) || undefined;
       memories.push({
-        from: nameById.get(aboutCharacterId),
+        from: aboutCharacterId === WORLD_USER_ID ? (userName ?? "them") : nameById.get(aboutCharacterId),
         fromCharId: aboutCharacterId,
         summary,
         createdAt: new Date().toISOString(),

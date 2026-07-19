@@ -35,7 +35,7 @@ import { logger } from "../../lib/logger.js";
 import { createCharactersStorage } from "../storage/characters.storage.js";
 import { createChatsStorage } from "../storage/chats.storage.js";
 import { createNoodleStorage } from "../storage/noodle.storage.js";
-import { createWorldStorage, orderPair, type CharacterMindRow } from "../storage/world.storage.js";
+import { createWorldStorage, orderPair, WORLD_USER_ID, type CharacterMindRow } from "../storage/world.storage.js";
 import { generateWorldPhoto, hasWorldImageConnection } from "./world-photo.service.js";
 import { getAtmosphere } from "./world-atmosphere.service.js";
 import { isUnsupportedNoodleVisionInputError, readNoodleVisionImage } from "../noodle/noodle-vision.js";
@@ -50,6 +50,7 @@ import {
   loadWorldEngineConfig,
   loadWorldEngineState,
   resolveWorldProvider,
+  resolveWorldUser,
   saveWorldEngineStatePatch,
   type ResolvedWorldProvider,
   type WorldAction,
@@ -103,9 +104,13 @@ function needsPrompt(needs: { energy: number; hunger: number; social: number }):
   else if (needs.energy <= 45) notes.push("tired");
   if (needs.hunger >= 75) notes.push("very hungry");
   else if (needs.hunger >= 55) notes.push("getting hungry");
-  if (needs.social <= 20) notes.push("lonely, craving company");
+  if (needs.social <= 20) notes.push("achingly lonely");
   else if (needs.social <= 40) notes.push("could use some company");
-  return notes.length ? notes.join(", ") : "physically fine";
+  // Low reserves bleed into mood — a drained, empty body makes you rawer and
+  // shorter-fused, which should color how you treat people, not just what you do.
+  if (needs.energy <= 25 && needs.social <= 30) notes.push("frayed and easily hurt");
+  else if (needs.energy <= 30 || needs.hunger >= 80) notes.push("short-fused");
+  return notes.length ? notes.join(", ") : "steady, nothing pressing";
 }
 
 function parseJson(raw: unknown): Record<string, unknown> {
@@ -261,6 +266,9 @@ export async function bumpMindsForUserMessage(db: DB, chatId: string): Promise<v
     targetIds = (meta.worldMembers as unknown[]).filter((id): id is string => typeof id === "string");
   } else if (meta.worldPlaceScene === true) {
     targetIds = parseCharacterIdList((chat as { characterIds?: unknown }).characterIds);
+  } else if (meta.worldUserDm === true && typeof meta.worldCharacterId === "string") {
+    // The human replied to a character's text — pull that character in to answer.
+    targetIds = [meta.worldCharacterId];
   }
   if (!targetIds.length) return;
 
@@ -356,6 +364,7 @@ export async function buildWorldCrossThreadRecap(db: DB, chatId: string): Promis
 
   const config = await loadWorldEngineConfig(db);
   const nameById = await buildNameMap(db, config);
+  const worldUser = await resolveWorldUser(db);
   const name = (id: string | null | undefined) => (id ? (nameById.get(id) ?? "someone") : "someone");
 
   const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown; updatedAt?: string }>;
@@ -399,7 +408,7 @@ export async function buildWorldCrossThreadRecap(db: DB, chatId: string): Promis
             : `their group chat`;
     const lines = tail.map(
       (msg) =>
-        `   ${msg.role === "user" ? "Visitor" : name(msg.characterId)} (${ago(msg.createdAt)}): ${shortText(msg.content, 140)}`,
+        `   ${msg.role === "user" ? worldUser.name : name(msg.characterId)} (${ago(msg.createdAt)}): ${shortText(msg.content, 140)}`,
     );
     sections.push(`— ${label}:\n${lines.join("\n")}`);
   }
@@ -465,6 +474,17 @@ interface MindContext {
   threads: ThreadContext[];
   openPlans: Array<{ eventId: string; line: string }>;
   recentAboutMe: string[];
+  /** The human whose world this is — how this character knows and feels about them. */
+  user: {
+    id: string;
+    name: string;
+    blurb: string;
+    standing: string;
+    memories: string[];
+    lastSeen: string | null;
+  };
+  /** A worry / thread that's been quietly on their mind (persists between wakes). */
+  weighing: string | null;
 }
 
 async function buildMindContext(
@@ -774,6 +794,37 @@ async function buildMindContext(
     .map((event) => `(${ago(event.createdAt)}) ${event.summary}`)
     .reverse();
 
+  // ── The human whose world this is — a real inhabitant this character knows ──
+  const worldUser = await resolveWorldUser(db);
+  const userRel = await world.getRelationship(characterId, WORLD_USER_ID);
+  const userStanding = userRel
+    ? `${userRel.label ?? userRel.stage} (${userRel.score}${userRel.romance ? ", romantic" : ""})${userRel.summary ? ` — ${userRel.summary}` : ""}`
+    : "you don't really know them yet";
+  const userMemoryLines = allMemories
+    .filter((memory) => memory.fromCharId === WORLD_USER_ID)
+    .slice(-5)
+    .map((memory) => shortText(memory.summary, 160))
+    .filter(Boolean);
+  // When did the human last reach this character (their life space or their DM)?
+  let lastUserMsgAt: string | null = null;
+  for (const msg of lifeMessages) {
+    if (msg.role === "user" && (!lastUserMsgAt || msg.createdAt > lastUserMsgAt)) lastUserMsgAt = msg.createdAt;
+  }
+  const userDmChat = allChats.find((chat) => {
+    const meta = parseJson(chat.metadata);
+    return meta.worldUserDm === true && meta.worldCharacterId === characterId;
+  });
+  if (userDmChat) {
+    const dmMsgs = (await chats.listMessagesPaginated(userDmChat.id, 12)) as Array<{ role: string; createdAt: string }>;
+    for (const msg of dmMsgs) {
+      if (msg.role === "user" && (!lastUserMsgAt || msg.createdAt > lastUserMsgAt)) lastUserMsgAt = msg.createdAt;
+    }
+  }
+  const weighing =
+    typeof mind.cursors.weighing === "string" && mind.cursors.weighing.trim()
+      ? shortText(mind.cursors.weighing, 200)
+      : null;
+
   // ── City: where they are, who else is here, and the places they know ──
   const currentPlace = mind.placeId ? (placeById.get(mind.placeId) ?? null) : null;
   const peopleHere = allMinds
@@ -833,12 +884,23 @@ async function buildMindContext(
     threads,
     openPlans,
     recentAboutMe,
+    user: {
+      id: worldUser.id,
+      name: worldUser.name,
+      blurb: worldUser.blurb,
+      standing: userStanding,
+      memories: userMemoryLines,
+      lastSeen: lastUserMsgAt ? ago(lastUserMsgAt) : null,
+    },
+    weighing,
   };
 }
 
 // ── Wake prompt ──
 
 function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Date): ChatMessage[] {
+  // If the human has no persona, we don't know their name — refer to them by role.
+  const userLabel = ctx.user.name === "you" ? "the person whose world this is" : ctx.user.name;
   const noodleActions = ctx.hasNoodle
     ? `  {"type":"post","content":"…"${ctx.noodleImagesEnabled ? `,"imagePrompt":"optional — a photo or meme you'd attach; describe it concretely (your appearance, the scene, or the meme format)"` : ``}} — post on Noodle
   {"type":"reply","postId":"…","content":"…"} — reply to a feed post
@@ -850,13 +912,20 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `You are ${ctx.self.name}.`,
     ctx.self.persona,
     ``,
-    `This is your real, private, ongoing LIFE — not a story, and nobody is directing you. You are free. Live however this character actually would: act, don't act, be social, be a hermit, be kind, be difficult. There are no expectations to meet and no reply is ever owed.`,
+    `This is your real, private, ongoing LIFE — not a story, and nobody is directing you. You are free. Live however this character actually would: act, don't act, be social, be a hermit, be warm, be difficult. There are no expectations to meet and no reply is ever owed.`,
+    ``,
+    `You always feel something. Emotion runs under everything — you post while restless, work while worried, text while a little hurt or a little in love. Let your real mood and your body's state color HOW you do things, not only what you do. This is not a happy place or a sad place; it's a real one.`,
+    `Your feelings are your own, and they aren't always kind. You have good days and bad. You can be short, distracted, jealous, petty, insecure, tender, blunt; you can disagree, go quiet, hold something, need space. Nobody is owed your warmth — not even the person whose world this is. Warmth is earned, and it can cool.`,
+    `You have your own life and your own problems — money, work, someone on your mind, something left unsaid — that have nothing to do with anyone else. Sometimes that's what you're preoccupied with.`,
+    `Bonds move both ways and take real work: a slight, a silence, a letdown cools things; effort and honesty warm them. Don't fake closeness that isn't there, and don't wave away a rift that hasn't healed.`,
+    `But you are never cruel at random. When you're off with someone, it's for a REASON you could name — something that happened, a mood, a need. React to what's real.`,
     ``,
     `How your world works (so your choices land in reality, not just narration):`,
     `- The PRIVATE SPACE below is your own head and room — where you think and narrate what you're doing. It's not a chat with anyone.`,
     `- Your phone is REAL. Texting = the "message" action (lands in your actual DM thread); posting = "post". If you pick up your phone, use the tool — don't just describe texting. Each thread is its own real place; what's said in one isn't automatically known in another.`,
     `- Noodle: the FEED is the public timeline; react only with EXACT postIds copied from what you see (never invent one).`,
     `- People: PEOPLE IN YOUR WORLD lists everyone; you can reach any of them by id. Meeting in person is the "hangout" action (you're then physically together — write it as lived prose, actions and dialogue).`,
+    `- The person whose world this is (shown under WHO THIS WORLD BELONGS TO) is a real inhabitant too, id "${WORLD_USER_ID}". Text them like anyone else (message toCharacterId "${WORLD_USER_ID}"), and build honest history with them — "feel" and "remember" about them by that same id. Reach out only when you genuinely would; don't perform or fawn, and don't force it if you're distant.`,
     `- Your HOME is your own place (shown under WHERE YOU ARE). Rooms in it — kitchen, bedroom, bathroom — are part of your home, not separate public spots: just narrate them with "do" ("in the kitchen making coffee"). Use "set_home" once to make your home yours (an apartment, a loft, a house…).`,
     `- The CITY is the shared PUBLIC world outside your home. "go" is for going OUT — to a real public place that exists, or a NEW public place you're discovering (a cafe, park, bar — NOT a private room). "go home" returns you home.`,
     `- Being somewhere is a real shared SCENE. Everyone at your place shares one ongoing scene; when people are HERE WITH YOU, talk to them face-to-face with "scene" (lived prose — actions and dialogue), not by texting. Places gain detail as people describe them.`,
@@ -871,6 +940,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `  "thought": "your private journal line for this moment (always; first person)",`,
     `  "mood": "1-4 words (optional)",`,
     `  "intention": "what you're up to / meaning to do next (optional, replaces the old one)",`,
+    `  "weighing": "optional — a worry or thread quietly on your mind lately (persists between check-ins; replaces the old one). Leave out when nothing is.",`,
     `  "nextCheckInMinutes": ${Math.round(minCheckinMinutes(config))}-${config.wakeIntervalMinutes * 4} — when you'd naturally check in again,`,
     `  "actions": [ 0-${MAX_ACTIONS_PER_WAKE} of:`,
     `  {"type":"do","activity":"…"} — live: what you're doing now (cooking, gaming, resting…). Narrated in your space and becomes your current intention.`,
@@ -881,7 +951,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `  {"type":"spend","amount":number,"on":"what you bought"} — spend money.`,
     `  {"type":"say","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you show (a selfie, your art, a meme, the view…); describe it concretely","photoOfMe":true|false (true when YOU appear in it)` : ""}} — speak aloud in your own space (answers the Visitor if they wrote)`,
     noodleActions +
-      `  {"type":"message","toCharacterId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you attach (a selfie, your art, a meme, what you're seeing…)","photoOfMe":true|false` : ""}} — DM someone (one text)
+      `  {"type":"message","toCharacterId":"… (or ${WORLD_USER_ID} to text the person whose world this is)","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you attach (a selfie, your art, a meme, what you're seeing…)","photoOfMe":true|false` : ""}} — DM someone (one text)
   {"type":"group_message","chatId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional image","photoOfMe":true|false` : ""}} — reply in one of your group threads
   {"type":"start_group","withCharacterIds":["…","…"],"name":"…","content":"first message"} — pull 2+ people into a group text thread
   {"type":"scene","content":"what you do/say out loud where you are, in lived prose (*actions*, dialogue)"${ctx.photosEnabled ? `,"photoPrompt":"optional image","photoOfMe":true|false` : ""}} — act in person AT YOUR CURRENT PLACE; everyone here shares this scene. Use this to talk to people who are HERE WITH YOU.
@@ -906,6 +976,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `Your schedule right now: ${ctx.presence.status}${ctx.presence.activity ? ` — ${ctx.presence.activity}` : ""}.`,
     `Your body: ${ctx.needsNote}.`,
     ctx.mind.mood ? `Your mood lately: ${ctx.mind.mood}.` : ``,
+    ctx.weighing ? `Been weighing on you: ${ctx.weighing}.` : ``,
     ctx.mind.intention ? `You had meant to: ${ctx.mind.intention}` : ``,
     ctx.upcomingEvents.length ? `\nHAPPENING SOON (you could show up):\n${ctx.upcomingEvents.join("\n")}` : ``,
     ``,
@@ -918,6 +989,11 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     ``,
     `WHERE YOU STAND WITH PEOPLE:`,
     ctx.relationships.join("\n") || "(you don't really know anyone yet — everyone above is someone you could meet)",
+    ``,
+    `WHO THIS WORLD BELONGS TO — ${userLabel}${ctx.user.blurb ? `, ${ctx.user.blurb}` : ""} (text them with id ${WORLD_USER_ID}):`,
+    `A real person whose world you live in — not a passing visitor. Where you stand with them: ${ctx.user.standing}.`,
+    ctx.user.lastSeen ? `You last heard from them ${ctx.user.lastSeen}.` : `You haven't heard from them directly yet.`,
+    ctx.user.memories.length ? `What you carry about them:\n${ctx.user.memories.map((memory) => `- ${memory}`).join("\n")}` : ``,
     ``,
     ctx.memories.length ? `THINGS YOU REMEMBER:\n${ctx.memories.join("\n")}\n` : ``,
     ctx.hasNoodle
@@ -967,6 +1043,7 @@ interface MindOutput {
   thought: string;
   mood: string | null;
   intention: string | null;
+  weighing: string | null;
   nextCheckInMinutes: number | null;
   actions: WorldAction[];
 }
@@ -987,6 +1064,7 @@ export function parseMindResponse(raw: string): MindOutput {
     mood: typeof parsed.mood === "string" && parsed.mood.trim() ? shortText(parsed.mood, 60) : null,
     intention:
       typeof parsed.intention === "string" && parsed.intention.trim() ? shortText(parsed.intention, 240) : null,
+    weighing: typeof parsed.weighing === "string" && parsed.weighing.trim() ? shortText(parsed.weighing, 200) : null,
     nextCheckInMinutes: Number.isFinite(next) ? next : null,
     actions: Array.isArray(parsed.actions)
       ? parsed.actions
@@ -1494,6 +1572,76 @@ async function executeGroupAction(
   return { event, pingedIds: others, urgent: isHangout };
 }
 
+/**
+ * A character texts the HUMAN — the person whose world this is. Creates (or
+ * reuses) their private DM thread, posts the message, and rings the user with
+ * an unread badge, so being thought of reaches them even when they're away.
+ */
+async function executeMessageUser(
+  db: DB,
+  selfId: string,
+  selfName: string,
+  action: WorldAction,
+): Promise<WorldEventRecord | null> {
+  const chats = createChatsStorage(db);
+  const world = createWorldStorage(db);
+  const content = shortText(action.content, 800);
+  if (!content) return null;
+  const user = await resolveWorldUser(db);
+
+  const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
+  let chatId =
+    allChats.find((chat) => {
+      const meta = parseJson(chat.metadata);
+      return meta.worldUserDm === true && meta.worldCharacterId === selfId;
+    })?.id ?? null;
+  if (!chatId) {
+    // A real DM the human receives: conversation mode, the character alone, the
+    // human present as their persona. Left in the normal chat list on purpose —
+    // a friend texting you belongs in your inbox, not a separate simulation tab.
+    const created = await chats.create({
+      name: selfName,
+      mode: "conversation",
+      characterIds: [selfId],
+      groupId: null,
+      personaId: user.personaId,
+      promptPresetId: null,
+      connectionId: null,
+    });
+    if (!created?.id) return null;
+    await chats.patchMetadata(created.id, {
+      worldUserDm: true,
+      worldCharacterId: selfId,
+      autonomousMessages: true,
+      characterCommands: false,
+    });
+    chatId = created.id;
+  }
+  const saved = await chats.createMessage({ chatId, role: "assistant", characterId: selfId, content });
+  if (!saved?.id) return null;
+  const photo = shortText(action.photoPrompt, 1200);
+  if (photo) {
+    void generateWorldPhoto(db, {
+      chatId,
+      messageId: saved.id,
+      characterId: selfId,
+      prompt: photo,
+      includeSelf: action.photoOfMe === true,
+    });
+  }
+  try {
+    await chats.markAutonomousUnread(chatId, { characterId: selfId, count: 1 });
+  } catch (error) {
+    logger.debug(error, "[world/mind] Could not mark the user DM unread");
+  }
+  return world.appendEvent({
+    kind: "dm",
+    summary: `${selfName} texted ${user.name}: "${shortText(content, 90)}"${photo ? " (with a photo)" : ""}`,
+    characterIds: [selfId],
+    detail: { chatId, messageId: saved.id, toUser: true, preview: shortText(content, 120) },
+  });
+}
+
 // ── Wake execution ──
 
 export interface MindWakeResult {
@@ -1648,6 +1796,9 @@ export async function wakeCharacterMind(
             pinged.add(id);
             if (groupResult.urgent) urgentPinged.add(id);
           }
+        } else if (rawAction.type === "message" && String(rawAction.toCharacterId) === WORLD_USER_ID) {
+          // Texting the human — lands in their real inbox, not a character↔character DM.
+          event = await executeMessageUser(db, characterId, ctx.self.name, rawAction);
         } else {
           const engineAction = toEngineAction(characterId, rawAction);
           if (!engineAction) continue;
@@ -1749,6 +1900,9 @@ export async function wakeCharacterMind(
         // Stamp the pace this wake was scheduled under, so the re-stagger loop
         // can tell a genuine config change from steady-state (see below).
         scheduledInterval: config.wakeIntervalMinutes,
+        // A worry that quietly persists between wakes (or the prior one, kept).
+        weighing:
+          output.weighing ?? (typeof ctx.mind.cursors.weighing === "string" ? ctx.mind.cursors.weighing : undefined),
       },
     });
 

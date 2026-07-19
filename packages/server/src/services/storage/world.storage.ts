@@ -74,6 +74,18 @@ export function orderPair(x: string, y: string): [string, string] {
   return x < y ? [x, y] : [y, x];
 }
 
+/**
+ * Stable sentinel id for the HUMAN — the person whose world this is. Characters
+ * can form a relationship with them, remember them, and text them, exactly like
+ * any other inhabitant, keyed by this id instead of a character row.
+ */
+export const WORLD_USER_ID = "__user__";
+
+/** True for the human sentinel — used to exempt them from world-member checks. */
+export function isWorldUser(id: string): boolean {
+  return id === WORLD_USER_ID;
+}
+
 export interface CharacterMindRow {
   id: string;
   intention: string;

@@ -1496,13 +1496,15 @@ export async function generateRoutes(app: FastifyInstance) {
         const worldSpaceKind =
           chatMeta.worldLifeChat === true
             ? ("life" as const)
-            : chatMeta.worldPlaceScene === true
-              ? ("place" as const)
-              : chatMeta.worldDmThread === true
-                ? ("dm" as const)
-                : chatMeta.worldGroupThread === true
-                  ? ("group" as const)
-                  : null;
+            : chatMeta.worldUserDm === true
+              ? ("userdm" as const)
+              : chatMeta.worldPlaceScene === true
+                ? ("place" as const)
+                : chatMeta.worldDmThread === true
+                  ? ("dm" as const)
+                  : chatMeta.worldGroupThread === true
+                    ? ("group" as const)
+                    : null;
         let temperature: number | undefined = 1;
         let maxTokens = 4096;
         let topP: number | undefined = 1;
@@ -2987,27 +2989,34 @@ export async function generateRoutes(app: FastifyInstance) {
         // ── Living World space framing (both modes): this is their life, not a scene ──
         if (worldSpaceKind && !input.impersonate) {
           const spaceCharNames = charInfo.map((character) => character.name).join(", ") || "the character";
+          // The human is known by their persona name — never a faceless "Visitor".
+          const worldUserName = personaName && personaName !== "User" ? personaName : "the person whose world this is";
           const spaceLines =
             worldSpaceKind === "life"
               ? [
                   `This chat is ${spaceCharNames}'s own private LIFE SPACE — their real, ongoing life, not a roleplay scene and not a fresh meeting.`,
                   `There is no scenario or script. Continuity comes only from this chat's history, their memories, their relationships, and what has actually happened in their world.`,
-                  `Messages in *asterisks* are their inner thoughts and lived moments accumulating over time. The human writing here is a Visitor stepping into their space — respond as yourself, mid-life, aware of what you were just doing.`,
+                  `Messages in *asterisks* are their inner thoughts and lived moments accumulating over time. The one writing to you here is ${worldUserName} — the real person whose world this is, not a stranger passing through. Respond as yourself, mid-life, aware of what you were just doing and of your history with them.`,
                 ]
-              : worldSpaceKind === "place"
+              : worldSpaceKind === "userdm"
                 ? [
-                    `This is a real PLACE in an ongoing world — whoever is physically here shares this scene. Not a fresh roleplay: it's a continuous location in these characters' lives.`,
-                    `No scenario or script. Play only the character(s) actually present; act in lived prose (*actions*, dialogue). Continuity comes from what's happened here and each character's memories of this place.`,
+                    `This is a real, ongoing DM thread between you (${spaceCharNames}) and ${worldUserName} — the person whose world this is. Not a roleplay scene: you're texting them back, in your own voice, mid-life.`,
+                    `No scenario applies. Continuity comes from this thread, your memories of them, and how you actually feel about them. Time passes between messages. Be however you honestly are with them right now — warm, distant, busy, glad to hear from them, or not. You don't owe them a performance.`,
                   ]
-                : worldSpaceKind === "dm"
+                : worldSpaceKind === "place"
                   ? [
-                      `This chat is a real, ongoing private DM thread between ${spaceCharNames} in their day-to-day lives — not a roleplay scene.`,
-                      `No scenario applies. Continuity comes from this thread's history, their memories, and their relationship. Time passes between messages; mind the gaps.`,
+                      `This is a real PLACE in an ongoing world — whoever is physically here shares this scene. Not a fresh roleplay: it's a continuous location in these characters' lives.`,
+                      `No scenario or script. Play only the character(s) actually present; act in lived prose (*actions*, dialogue). Continuity comes from what's happened here and each character's memories of this place.`,
                     ]
-                  : [
-                      `This chat is a real, ongoing group thread between ${spaceCharNames} — their own hangout space in their day-to-day lives, not a roleplay scene.`,
-                      `No scenario applies unless the group is gathering for a concrete plan they made. Continuity comes from this thread's history, their memories, and their relationships.`,
-                    ];
+                  : worldSpaceKind === "dm"
+                    ? [
+                        `This chat is a real, ongoing private DM thread between ${spaceCharNames} in their day-to-day lives — not a roleplay scene.`,
+                        `No scenario applies. Continuity comes from this thread's history, their memories, and their relationship. Time passes between messages; mind the gaps.`,
+                      ]
+                    : [
+                        `This chat is a real, ongoing group thread between ${spaceCharNames} — their own hangout space in their day-to-day lives, not a roleplay scene.`,
+                        `No scenario applies unless the group is gathering for a concrete plan they made. Continuity comes from this thread's history, their memories, and their relationships.`,
+                      ];
           // Cross-thread continuity: what the same people just said/did in
           // their other world threads (hangout ↔ DMs ↔ life) rides along.
           let crossThreadRecap: string | null = null;
@@ -3017,7 +3026,37 @@ export async function generateRoutes(app: FastifyInstance) {
           } catch (error) {
             logger.debug(error, "[generate] World cross-thread recap skipped");
           }
-          const lifeSpaceBlock = `<life_space>\n${spaceLines.join("\n")}${crossThreadRecap ? `\n\n${crossThreadRecap}` : ""}\n</life_space>`;
+          // In their LIFE space (roleplay — the conversation memory injector
+          // doesn't run here), fold in this character's real bond with, and
+          // memories of, the human, so they arrive already knowing them.
+          let visitorHistory: string | null = null;
+          if (worldSpaceKind === "life" && charInfo[0]) {
+            try {
+              const { createWorldStorage, WORLD_USER_ID } = await import("../services/storage/world.storage.js");
+              const world = createWorldStorage(app.db);
+              const lifeCharId = charInfo[0].id;
+              const rel = await world.getRelationship(lifeCharId, WORLD_USER_ID);
+              const charRow = await chars.getById(lifeCharId);
+              const cData: Record<string, any> =
+                typeof charRow?.data === "string" ? JSON.parse(charRow.data) : (charRow?.data ?? {});
+              const userMemories: string[] = (cData?.extensions?.characterMemories ?? [])
+                .filter((memory: { fromCharId?: string }) => memory.fromCharId === WORLD_USER_ID)
+                .slice(-6)
+                .map((memory: { summary?: string }) => String(memory.summary ?? ""))
+                .filter(Boolean);
+              const bits: string[] = [];
+              if (rel)
+                bits.push(
+                  `Where you stand with ${worldUserName}: ${rel.label ?? rel.stage} (${rel.score}${rel.romance ? ", romantic" : ""})${rel.summary ? ` — ${rel.summary}` : ""}.`,
+                );
+              if (userMemories.length)
+                bits.push(`What you carry about them:\n${userMemories.map((memory) => `- ${memory}`).join("\n")}`);
+              if (bits.length) visitorHistory = `Your real history with ${worldUserName}:\n${bits.join("\n")}`;
+            } catch (error) {
+              logger.debug(error, "[generate] World user-history injection skipped");
+            }
+          }
+          const lifeSpaceBlock = `<life_space>\n${spaceLines.join("\n")}${visitorHistory ? `\n\n${visitorHistory}` : ""}${crossThreadRecap ? `\n\n${crossThreadRecap}` : ""}\n</life_space>`;
           const lastUserIdxForSpace = findLastIndex(finalMessages, "user");
           if (lastUserIdxForSpace >= 0) {
             const target = finalMessages[lastUserIdxForSpace]!;
