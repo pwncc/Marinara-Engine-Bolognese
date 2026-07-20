@@ -20,8 +20,11 @@ import { createWorldStorage } from "../storage/world.storage.js";
 let lastWeatherRefreshMs = 0;
 let lastEventsPruneMs = 0;
 
-const POLL_MS = 45_000;
-const INITIAL_DELAY_MS = 30_000;
+// 15s heartbeat: a live in-person exchange alternates roughly per cycle, so
+// replies land in seconds — conversation speed, not queue speed. Idle cycles
+// are cheap (cached init, updatedAt-gated scene scan, one config read).
+const POLL_MS = 15_000;
+const INITIAL_DELAY_MS = 10_000;
 /** Director failure backoff: cadence × 2^failures, capped at 6h. */
 const MAX_BACKOFF_MS = 6 * 60 * 60_000;
 

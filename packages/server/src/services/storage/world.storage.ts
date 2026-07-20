@@ -175,6 +175,23 @@ export interface UpsertRelationshipInput {
   milestone?: { title: string; description: string; eventId?: string };
 }
 
+// Wakes run in parallel; two minds can adjust the SAME pair row at once (A
+// feels about B while B feels about A). Chain per pair so the read-modify-write
+// spans never interleave and no delta/milestone is lost.
+const relationshipChains = new Map<string, Promise<unknown>>();
+function chainRelationship<T>(pairKey: string, fn: () => Promise<T>): Promise<T> {
+  const prev = relationshipChains.get(pairKey) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  relationshipChains.set(
+    pairKey,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return run;
+}
+
 export function createWorldStorage(db: DB) {
   return {
     async appendEvent(input: AppendWorldEventInput): Promise<WorldEventRecord> {
@@ -530,6 +547,14 @@ export function createWorldStorage(db: DB) {
 
     async upsertRelationship(x: string, y: string, input: UpsertRelationshipInput): Promise<CharacterRelationshipRecord> {
       const [a, b] = orderPair(x, y);
+      return chainRelationship(`${a}|${b}`, () => this.upsertRelationshipUnlocked(a, b, input));
+    },
+
+    async upsertRelationshipUnlocked(
+      a: string,
+      b: string,
+      input: UpsertRelationshipInput,
+    ): Promise<CharacterRelationshipRecord> {
       const existing = await this.getRelationship(a, b);
       const timestamp = now();
 

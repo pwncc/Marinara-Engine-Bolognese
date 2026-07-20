@@ -252,6 +252,24 @@ export function runWorldCycleExclusive<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+// Keyed critical sections for find-or-create paths. Wakes within a cycle now
+// run in PARALLEL (that's what makes live conversations flow), so two minds can
+// simultaneously reach "does the scene chat / group / DM thread exist yet?" —
+// without a lock both would create one and the pair splits across duplicates.
+const worldKeyedChains = new Map<string, Promise<unknown>>();
+export function withWorldLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = worldKeyedChains.get(key) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  worldKeyedChains.set(
+    key,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return run;
+}
+
 // ── Provider resolution ──
 
 export interface ResolvedWorldProvider {
@@ -799,15 +817,17 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       if (!messages.length) return null;
 
       const [a, b] = orderPair(fromId, toId);
-      const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
-      let dmChatId =
-        allChats.find((chat) => {
+      // Parallel wakes: both sides can text each other in the same cycle — the
+      // pair lock guarantees exactly one thread ever exists for them.
+      const dmChatId = await withWorldLock(`dm:${a}|${b}`, async () => {
+        const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
+        const existing = allChats.find((chat) => {
           const meta = parseJson(chat.metadata);
           if (meta.worldDmThread !== true) return false;
           const pair = Array.isArray(meta.worldPair) ? (meta.worldPair as string[]) : [];
           return pair.length === 2 && pair[0] === a && pair[1] === b;
-        })?.id ?? null;
-      if (!dmChatId) {
+        })?.id;
+        if (existing) return existing;
         const created = await chats.create({
           name: `${nameById.get(a)} & ${nameById.get(b)}`,
           // DMs are texting — conversation mode (two characters, not a narrator scene).
@@ -827,8 +847,9 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
           groupChatMode: "individual",
         });
         await fileWorldChat(db, created.id);
-        dmChatId = created.id;
-      }
+        return created.id;
+      });
+      if (!dmChatId) return null;
       const messageIds: string[] = [];
       let sentPhoto = false;
       for (const msg of messages) {

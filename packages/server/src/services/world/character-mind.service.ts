@@ -53,6 +53,7 @@ import {
   resolveWorldUser,
   sanitizeWorldPersona,
   saveWorldEngineStatePatch,
+  withWorldLock,
   type ResolvedWorldProvider,
   type WorldAction,
 } from "./world-engine.service.js";
@@ -74,6 +75,8 @@ function needEffectFor(actionType: string, activity: string): Partial<Record<"en
   if (actionType === "work") return { energy: -12 };
   if (actionType === "scene" || actionType === "hangout" || actionType === "message" || actionType === "group_message")
     return { social: +14 };
+  // Sharing your life publicly scratches the social itch a little too.
+  if (actionType === "post" || actionType === "reply") return { social: +6 };
   if (actionType === "do") {
     if (/\b(sleep|slept|nap|rest|resting|lie down|lay down|bed|dozed)\b/.test(text)) return { energy: +30 };
     if (/\b(eat|ate|eating|dinner|lunch|breakfast|meal|snack|cook|food|coffee|drink)\b/.test(text))
@@ -436,6 +439,10 @@ interface ThreadContext {
   otherNames: string;
   /** Where an in-person thread is happening, if known. */
   placeName: string | null;
+  /** The thread's last message is from someone else (it's on you). */
+  lastFromOther: boolean;
+  /** When that last message landed (ms) — liveness is time, not read-cursors. */
+  lastAtMs: number;
 }
 
 interface MindContext {
@@ -487,6 +494,8 @@ interface MindContext {
   };
   /** A worry / thread that's been quietly on their mind (persists between wakes). */
   weighing: string | null;
+  /** How long since they last posted on Noodle (null = never) — their sharing rhythm. */
+  lastPostedAgo: string | null;
 }
 
 async function buildMindContext(
@@ -743,6 +752,7 @@ async function buildMindContext(
           ? `IN PERSON with ${otherNamesLabel}${placeName ? ` @ ${placeName}` : ""} — you're physically together; write prose, not texts`
           : `group with ${otherNamesLabel}`
         : `${memberIds[0] ?? ""} · ${nameById.get(memberIds[0] ?? "") ?? "someone"}`;
+    const lastMsg = messages[messages.length - 1];
     threads.push({
       chatId: chat.id,
       kind: isGroup ? "group" : "dm",
@@ -752,6 +762,8 @@ async function buildMindContext(
       inPerson: isHangoutThread,
       otherNames: otherNamesLabel,
       placeName,
+      lastFromOther: !!lastMsg && lastMsg.characterId !== characterId,
+      lastAtMs: lastMsg ? new Date(lastMsg.createdAt).getTime() : 0,
       lines: tail.map((msg) => {
         const who =
           msg.role === "user"
@@ -770,19 +782,19 @@ async function buildMindContext(
   }
 
   // Precedence: is there a live conversation demanding attention right now?
-  // (A thread whose latest message is fresh, from someone else, unanswered.)
+  // Liveness is TIME + AUTHORSHIP, never read-cursors: an unanswered message
+  // from minutes ago is live even if an earlier wake technically "saw" it.
+  // (The old hasNew-based check meant one distracted wake permanently killed
+  // the signal — the other side was left asking "hey, are you gonna respond?")
   const nowMs = Date.now();
-  const liveThread = threads.find((thread) => {
-    if (!thread.hasNew) return false;
-    const lastLine = thread.lines[thread.lines.length - 1];
-    return lastLine ? !lastLine.startsWith("you (") : false;
-  });
+  const liveThread = threads.find(
+    (thread) => thread.lastFromOther && thread.lastAtMs > 0 && nowMs - thread.lastAtMs < ACTIVE_SCENE_WINDOW_MS,
+  );
   const activeScene = liveThread
     ? liveThread.inPerson
-      ? `You're in a scene${liveThread.placeName ? ` at ${liveThread.placeName}` : ""} with ${liveThread.otherNames} — you're physically there; respond in person with "scene" (lived prose, *actions* and dialogue, not texts). Their latest: ${liveThread.lines[liveThread.lines.length - 1]}`
-      : `You're mid-conversation with ${liveThread.otherNames}. Their latest: ${liveThread.lines[liveThread.lines.length - 1]}`
+      ? `You're ${liveThread.placeName ? `at ${liveThread.placeName} ` : ""}with ${liveThread.otherNames}, and their last words (${ago(new Date(liveThread.lastAtMs).toISOString())}) are hanging in the air — this is live, face to face. Answer in the scene ("scene" action, lived prose), or leave on purpose (excuse yourself out loud, then "go"). Don't go silent on someone standing in front of you. Their latest: ${liveThread.lines[liveThread.lines.length - 1]}`
+      : `${liveThread.otherNames} ${liveThread.kind === "group" ? "are" : "is"} waiting on your thread (${ago(new Date(liveThread.lastAtMs).toISOString())}). Reply with ${liveThread.kind === "group" ? `"group_message" (chatId ${liveThread.chatId})` : `"message" (toCharacterId ${liveThread.memberIds[0] ?? ""})`} — or consciously let it sit; silence says something too, and they may feel it. Their latest: ${liveThread.lines[liveThread.lines.length - 1]}`
     : null;
-  void nowMs;
 
   const openPlans = (await world.listEvents({ kind: "plan", limit: 60 }))
     .filter((event) => event.detail.done !== true && event.characterIds.includes(characterId))
@@ -840,6 +852,10 @@ async function buildMindContext(
   const weighing =
     typeof mind.cursors.weighing === "string" && mind.cursors.weighing.trim()
       ? shortText(mind.cursors.weighing, 200)
+      : null;
+  const lastPostedAgo =
+    typeof mind.cursors.lastPostedAt === "string" && mind.cursors.lastPostedAt
+      ? ago(mind.cursors.lastPostedAt)
       : null;
 
   // ── City: where they are, who else is here, and the places they know ──
@@ -901,6 +917,7 @@ async function buildMindContext(
     threads,
     openPlans,
     recentAboutMe,
+    lastPostedAgo,
     user: {
       id: worldUser.id,
       name: worldUser.name,
@@ -950,7 +967,8 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `- The CITY is the shared PUBLIC world outside your home. "go" is for going OUT — to a real public place that exists, or a NEW public place you're discovering (a cafe, park, bar — NOT a private room). "go home" returns you home.`,
     `- Being somewhere is a real shared SCENE. Everyone at your place shares one ongoing scene; when people are HERE WITH YOU, talk to them face-to-face with "scene" (lived prose — actions and dialogue), not by texting. Places gain detail as people describe them.`,
     `- You have a wallet and can have a job. "work" earns money; "spend" uses it. Let real life — rent, coffee, wanting more — motivate you.`,
-    `- ONE life at a time. You are in exactly one place, doing one thing. If you're mid-conversation with someone (a fresh unanswered message, or an in-person hangout), THAT takes precedence — finish or bow out of it before wandering off; you can't be talking here and posting from across town in the same breath. Posting on Noodle and going somewhere are deliberate choices, never idle filler.`,
+    `- ONE life at a time. You are in exactly one place, doing one thing. If you're mid-conversation with someone (a fresh unanswered message, or an in-person moment), THAT takes precedence — finish or bow out of it before wandering off; you can't be talking here and posting from across town in the same breath.`,
+    `- Noodle is part of your life's rhythm. When you're free and something's on your mind — a moment from your day, a mood, a gripe, a photo — actually "post" it, as a conscious act. Don't hoard your life; days of silence isn't discipline, it's just you being absent.`,
     `- Every item shows how long ago it happened. A minutes-old message is live; an hours-old one you're catching up on; something days old may have moved on. A conversation is allowed to simply end.`,
     `- A Visitor may speak into your private space; you can answer them plainly with "say".`,
     config.userDirective ? `\nThe one who hosts this world asks:\n${config.userDirective}` : ``,
@@ -989,7 +1007,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
 
   const user = [
     ctx.activeScene
-      ? `>>> RIGHT NOW: ${ctx.activeScene}\nThis is happening live and it's on you — respond to it first. Don't drift off to post or go elsewhere while you're in it (leaving is fine, but do it on purpose, in words).\n`
+      ? `>>> RIGHT NOW: ${ctx.activeScene}\nHandle this before anything else — answer it, or step out of it deliberately, in words. Never just vanish mid-moment.\n`
       : ``,
     `It's ${localClock(now)}. ${ctx.atmosphere}.`,
     ctx.mind.lastWakeAt ? `You last checked in ${ago(ctx.mind.lastWakeAt, now)}.` : `This is your first check-in here.`,
@@ -1017,7 +1035,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     ``,
     ctx.memories.length ? `THINGS YOU REMEMBER:\n${ctx.memories.join("\n")}\n` : ``,
     ctx.hasNoodle
-      ? `YOUR NOODLE FEED — recent posts, newest first ("new" = since you last looked; react only with an EXACT id shown):\n${ctx.feed.join("\n") || "(the feed is quiet)"}\n`
+      ? `YOUR NOODLE FEED — recent posts, newest first ("new" = since you last looked; react only with an EXACT id shown):\n${ctx.feed.join("\n") || "(the feed is quiet)"}\n${ctx.lastPostedAgo ? `You last posted ${ctx.lastPostedAgo}.` : `You haven't posted anything yet.`} Moments from your day — something you did, saw, felt — are the kind of thing you might "post" when the mood strikes; your life is worth sharing sometimes.\n`
       : `(You don't have a Noodle account.)\n`,
     ctx.reactions.length ? `ON YOUR POSTS:\n${ctx.reactions.join("\n")}\n` : ``,
     ctx.threads.length
@@ -1236,10 +1254,18 @@ async function executeGo(
     cursors: { ...(mind?.cursors ?? {}), arrivedAt: nowIso },
   });
 
-  const others = (await world.listMinds())
-    .filter((m) => m.id !== selfId && m.placeId === placeId && nameById.has(m.id))
-    .map((m) => nameById.get(m.id));
-  const withWhom = others.length ? ` — ${others.join(", ")} ${others.length === 1 ? "is" : "are"} here` : "";
+  const othersHere = (await world.listMinds()).filter(
+    (m) => m.id !== selfId && m.placeId === placeId && nameById.has(m.id),
+  );
+  const otherNames = othersHere.map((m) => nameById.get(m.id));
+  const withWhom = otherNames.length
+    ? ` — ${otherNames.join(", ")} ${otherNames.length === 1 ? "is" : "are"} here`
+    : "";
+  // Chance encounters spark: the people already here notice someone walking in
+  // (a quick wake, so a "hey, look who it is" can actually happen in the moment).
+  for (const other of othersHere.slice(0, 3)) {
+    await world.bumpMindWake(other.id, new Date(Date.now() + (0.2 + Math.random() * 1) * 60_000).toISOString());
+  }
   return world.appendEvent({
     kind: created ? "discovered" : "moved",
     summary: created ? `${selfName} discovered ${placeName}` : `${selfName} went to ${placeName}${withWhom}`,
@@ -1248,38 +1274,40 @@ async function executeGo(
   });
 }
 
-/** Get or create the single shared scene chat for a place. */
+/** Get or create the single shared scene chat for a place (parallel-safe). */
 export async function ensurePlaceSceneChat(
   db: DB,
   place: { id: string; name: string },
 ): Promise<string> {
-  const chats = createChatsStorage(db);
-  const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
-  const existing = allChats.find((chat) => parseJson(chat.metadata).worldPlaceId === place.id);
-  if (existing) return existing.id;
-  const world = createWorldStorage(db);
-  const members = (await world.listMinds())
-    .filter((m) => m.placeId === place.id)
-    .map((m) => m.id);
-  const created = await chats.create({
-    name: place.name,
-    mode: "roleplay",
-    characterIds: members.length ? members : [],
-    groupId: null,
-    personaId: null,
-    promptPresetId: null,
-    connectionId: null,
+  return withWorldLock(`scene:${place.id}`, async () => {
+    const chats = createChatsStorage(db);
+    const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
+    const existing = allChats.find((chat) => parseJson(chat.metadata).worldPlaceId === place.id);
+    if (existing) return existing.id;
+    const world = createWorldStorage(db);
+    const members = (await world.listMinds())
+      .filter((m) => m.placeId === place.id)
+      .map((m) => m.id);
+    const created = await chats.create({
+      name: place.name,
+      mode: "roleplay",
+      characterIds: members.length ? members : [],
+      groupId: null,
+      personaId: null,
+      promptPresetId: null,
+      connectionId: null,
+    });
+    if (!created?.id) throw new Error(`Failed to create scene chat for ${place.name}`);
+    await chats.patchMetadata(created.id, {
+      worldPlaceScene: true,
+      worldPlaceId: place.id,
+      autonomousMessages: false,
+      characterCommands: false,
+      groupChatMode: "individual",
+    });
+    await fileWorldChat(db, created.id);
+    return created.id;
   });
-  if (!created?.id) throw new Error(`Failed to create scene chat for ${place.name}`);
-  await chats.patchMetadata(created.id, {
-    worldPlaceScene: true,
-    worldPlaceId: place.id,
-    autonomousMessages: false,
-    characterCommands: false,
-    groupChatMode: "individual",
-  });
-  await fileWorldChat(db, created.id);
-  return created.id;
 }
 
 /** Act/speak in-person at your current place — lands in the place's shared scene. */
@@ -1526,22 +1554,25 @@ async function executeGroupAction(
     );
     const members = [...new Set([selfId, ...withIds])];
     if (members.length < (isHangout ? 2 : 3)) return { event: null, pingedIds: [], urgent: false };
-    const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
-    const existing = allChats.find((chat) => {
-      const meta = parseJson(chat.metadata);
-      return (
-        meta.worldGroupThread === true &&
-        (meta.worldHangout === true) === isHangout &&
-        Array.isArray(meta.worldMembers) &&
-        sameMembers(meta.worldMembers as string[], members)
-      );
-    });
-    if (existing) {
-      chatId = existing.id;
-      if (isHangout && place) {
-        await chats.patchMetadata(existing.id, { worldPlace: place });
+    // Parallel-safe: one thread per member-set even if two members start it at once.
+    const memberKey = [...members].sort().join("+");
+    chatId = await withWorldLock(`group:${isHangout ? "hang" : "text"}:${memberKey}`, async () => {
+      const allChats = (await chats.list()) as Array<{ id: string; metadata?: unknown }>;
+      const existing = allChats.find((chat) => {
+        const meta = parseJson(chat.metadata);
+        return (
+          meta.worldGroupThread === true &&
+          (meta.worldHangout === true) === isHangout &&
+          Array.isArray(meta.worldMembers) &&
+          sameMembers(meta.worldMembers as string[], members)
+        );
+      });
+      if (existing) {
+        if (isHangout && place) {
+          await chats.patchMetadata(existing.id, { worldPlace: place });
+        }
+        return existing.id;
       }
-    } else {
       const names = members.map((id) => nameById.get(id) ?? "?").join(", ");
       const groupName = shortText(action.name, 60) || (isHangout ? `${names}${place ? ` @ ${place}` : " — hangout"}` : names);
       const created = await chats.create({
@@ -1554,7 +1585,7 @@ async function executeGroupAction(
         promptPresetId: null,
         connectionId: null,
       });
-      if (!created?.id) return { event: null, pingedIds: [], urgent: false };
+      if (!created?.id) return null;
       await chats.patchMetadata(created.id, {
         worldGroupThread: true,
         worldMembers: members,
@@ -1565,8 +1596,9 @@ async function executeGroupAction(
         groupChatMode: "individual",
       });
       await fileWorldChat(db, created.id);
-      chatId = created.id;
-    }
+      return created.id;
+    });
+    if (!chatId) return { event: null, pingedIds: [], urgent: false };
     memberIds = members;
   }
 
@@ -1807,6 +1839,7 @@ export async function wakeCharacterMind(
     const pinged = new Set<string>();
     const urgentPinged = new Set<string>();
     let doActivity: string | null = null;
+    let postedNow = false;
     // Decay needs for the time slept/awake since last wake, then let this wake's
     // actions restore them — the loop that makes behavior purposeful.
     const minutesSinceWake = ctx.mind.lastWakeAt
@@ -1881,6 +1914,7 @@ export async function wakeCharacterMind(
           result.events.push(event);
           result.actionsExecuted += 1;
           budgetLeft -= 1;
+          if (rawAction.type === "post") postedNow = true;
           // This action nudges their drives (working tires, eating fills…).
           // `spend` describes what was bought in `on`, so include it — otherwise
           // buying food never satisfies hunger (the regex tests an empty string).
@@ -1916,8 +1950,10 @@ export async function wakeCharacterMind(
         const depth = await recentExchangeDepth(chats, characterId, recipientId);
         if (depth >= 8) continue; // let it die — no forced continuation
         const slowdown = 1 + Math.max(0, depth - 2) * 0.6; // grows after a few turns
+        // Someone physically present reacts in SECONDS — they're standing right
+        // there. Texts land at a presence-shaped notice delay.
         const base = urgentPinged.has(recipientId)
-          ? 1 + Math.random() * 3
+          ? 0.05 + Math.random() * 0.4
           : noticeDelayMinutes(presence.get(recipientId)?.status ?? "unknown");
         const delay = base * slowdown;
         await world.bumpMindWake(recipientId, new Date(nowDate.getTime() + delay * 60_000).toISOString());
@@ -1969,6 +2005,12 @@ export async function wakeCharacterMind(
         // A worry that quietly persists between wakes (or the prior one, kept).
         weighing:
           output.weighing ?? (typeof ctx.mind.cursors.weighing === "string" ? ctx.mind.cursors.weighing : undefined),
+        // Their posting rhythm — so "haven't shared anything in days" is felt.
+        lastPostedAt: postedNow
+          ? nowIso
+          : typeof ctx.mind.cursors.lastPostedAt === "string"
+            ? ctx.mind.cursors.lastPostedAt
+            : undefined,
       },
     });
 
@@ -2202,17 +2244,27 @@ export async function advanceActiveScenes(db: DB): Promise<{ driven: number }> {
     }
     if (burstTurns >= MAX_DRIVEN_SCENE_TURNS) continue;
 
-    // On-deck = members who didn't send the last message (their turn to react).
+    // On-deck = members who didn't send the last message (their turn to react)
+    // AND haven't yet had a wake since it landed. Someone who woke after the
+    // message already saw it — if they stayed silent, that WAS their answer;
+    // re-poking them every cycle is what produced "hey, are you gonna respond?"
+    // (their next wake still shows the thread; they can pick it up themselves).
     const lastSpeaker = last.role === "user" ? "user" : (last.characterId ?? null);
-    const onDeck = memberIds.filter((id) => id !== lastSpeaker);
+    const mindByChar = new Map(allMinds.map((m) => [m.id, m]));
+    const onDeck = memberIds.filter((id) => {
+      if (id === lastSpeaker) return false;
+      const lastWakeMs = mindByChar.get(id)?.lastWakeAt ? new Date(mindByChar.get(id)!.lastWakeAt!).getTime() : 0;
+      return lastWakeMs < lastMs;
+    });
     if (!onDeck.length) continue;
 
     const inPerson = meta.worldHangout === true || isPlaceScene;
     const presence = await resolvePresenceMap(db, onDeck);
     for (const id of onDeck) {
-      const delay = inPerson
-        ? 1 + Math.random() * 3
-        : Math.max(2, noticeDelayMinutes(presence.get(id)?.status ?? "online") * 0.5);
+      // In person the moment is NOW — bump to due immediately so this very
+      // cycle's wake pass (which runs right after) picks them up. Texts flow
+      // at a presence-shaped texting pace.
+      const delay = inPerson ? 0 : Math.max(2, noticeDelayMinutes(presence.get(id)?.status ?? "online") * 0.5);
       await world.bumpMindWake(id, new Date(nowMs + delay * 60_000).toISOString());
       driven += 1;
     }
@@ -2309,16 +2361,22 @@ export async function wakeDueCharacterMinds(
     return result;
   }
 
-  for (const mind of due) {
-    const wasPing = mind.cursors.wakeReason === "ping";
-    result.woke.push(await wakeCharacterMind(db, mind.id, { provider: resolved, app: options.app }));
-    // Only spontaneous wakes advance the pace clock — a flowing conversation
-    // shouldn't starve everyone else's check-ins.
-    if (!wasPing) {
-      await saveWorldEngineStatePatch(db, (current) => {
-        current.lastRunAt = new Date().toISOString();
-      });
-    }
+  // Wake everyone due IN PARALLEL — a cycle costs one LLM latency, not the sum
+  // of them. This is what lets a live conversation actually flow: the reply
+  // lands next cycle (~seconds), instead of queueing behind every other wake.
+  // Each wake touches its own mind row; shared find-or-create paths are behind
+  // keyed locks and the budget/pace counters go through the serialized patch.
+  const anyScheduled = due.some((mind) => mind.cursors.wakeReason !== "ping");
+  const woke = await Promise.all(
+    due.map((mind) => wakeCharacterMind(db, mind.id, { provider: resolved, app: options.app })),
+  );
+  result.woke.push(...woke);
+  // Only spontaneous wakes advance the pace clock — a flowing conversation
+  // shouldn't starve everyone else's check-ins.
+  if (anyScheduled) {
+    await saveWorldEngineStatePatch(db, (current) => {
+      current.lastRunAt = new Date().toISOString();
+    });
   }
   return result;
 }

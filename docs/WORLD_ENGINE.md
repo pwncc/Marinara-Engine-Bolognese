@@ -46,7 +46,7 @@ Three layers that make the world feel self-sustaining:
 
 ## Turn-based scene continuity
 
-Live DMs and in-person hangouts need clean alternation, which the loose per-character wake clock alone can't guarantee. Each scheduler cycle, `advanceActiveScenes` finds world threads with a message in the last ~25 minutes, works out who's **on-deck** (didn't send the last message), and pulls their wake in — fast for hangouts (they're physically together), at texting pace for DMs. A scene that goes quiet or trades more than ~12 turns simply stops being driven, so exchanges flow *and* end naturally instead of stalling or looping.
+Live DMs and in-person hangouts need clean alternation, which the loose per-character wake clock alone can't guarantee. Each scheduler cycle, `advanceActiveScenes` finds world threads with a message in the last ~25 minutes, works out who's **on-deck** (didn't send the last message *and* hasn't had a wake since it landed — a wake that saw it and stayed silent was an answer, not a miss), and pulls their wake in — **immediately** for in-person scenes (the same cycle wakes them, so face-to-face replies land in seconds) and at texting pace for DMs. Wakes within a cycle run **in parallel**, so a cycle costs one model latency rather than the sum. A scene that goes quiet or trades more than ~12 turns simply stops being driven, so exchanges flow *and* end naturally instead of stalling or looping.
 
 ## Director (cheap fallback — authored)
 
@@ -96,7 +96,7 @@ Cost control: the daily action cap is hard; the scheduler backs off exponentiall
 
 ```
 character-mind.service.ts           minds mode: per-character wake context, prompt, execution, wake scheduling
-world-engine-scheduler.service.ts   poll loop (45s): wake due minds — or drip + director in director mode
+world-engine-scheduler.service.ts   poll loop (15s): wake due minds in parallel — or drip + director in director mode
 world-engine.service.ts             config/state, provider resolution, action executors, director planning
 world.storage.ts                    world_events + character_relationships + world_actions + character_minds
 world.routes.ts                     /api/world/* (feed, relationships, config, status, tick)
