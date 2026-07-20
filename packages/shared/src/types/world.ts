@@ -44,6 +44,8 @@ export interface WorldEngineConfig {
   userDirective: string;
   /** City for the world's real weather (Open-Meteo). Empty = clock/season only. */
   weatherLocation: string;
+  /** Which persona is YOU in the world (null = the globally active persona). */
+  userPersonaId: string | null;
   /**
    * Who lives in the world: null = every character, otherwise only these ids
    * (noodle-invite style). An empty list pauses the world (nobody to simulate).
@@ -65,6 +67,7 @@ export const DEFAULT_WORLD_ENGINE_CONFIG: WorldEngineConfig = {
   temperature: 0.9,
   userDirective: "",
   weatherLocation: "",
+  userPersonaId: null,
   memberCharacterIds: null,
 };
 

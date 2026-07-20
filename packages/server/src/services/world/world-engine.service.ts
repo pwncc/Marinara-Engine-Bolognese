@@ -92,6 +92,8 @@ export function normalizeWorldEngineConfig(raw: unknown): WorldEngineConfig {
     temperature: num(data.temperature, DEFAULT_WORLD_ENGINE_CONFIG.temperature, 0, 2),
     userDirective: typeof data.userDirective === "string" ? data.userDirective.slice(0, 2000) : "",
     weatherLocation: typeof data.weatherLocation === "string" ? data.weatherLocation.slice(0, 80) : "",
+    userPersonaId:
+      typeof data.userPersonaId === "string" && data.userPersonaId.trim() ? data.userPersonaId.trim() : null,
     memberCharacterIds: Array.isArray(data.memberCharacterIds)
       ? [...new Set(data.memberCharacterIds.filter((id): id is string => typeof id === "string" && id.length > 0))]
       : null,
@@ -371,7 +373,11 @@ export async function resolveWorldUser(db: DB): Promise<WorldUserIdentity> {
   try {
     const chars = createCharactersStorage(db);
     const personas = (await chars.listPersonas()) as Array<Record<string, unknown>>;
-    const active = personas.find((p) => p.isActive === "true" || p.isActive === true) ?? personas[0];
+    // An explicitly chosen world persona wins; else the globally active one.
+    const config = await loadWorldEngineConfig(db);
+    const chosen = config.userPersonaId ? personas.find((p) => p.id === config.userPersonaId) : undefined;
+    const active =
+      chosen ?? personas.find((p) => p.isActive === "true" || p.isActive === true) ?? personas[0];
     if (active) {
       return {
         id: WORLD_USER_ID,

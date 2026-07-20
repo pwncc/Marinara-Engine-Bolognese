@@ -3,7 +3,7 @@
 // ──────────────────────────────────────────────
 import type { FastifyInstance } from "fastify";
 
-import { createWorldStorage } from "../services/storage/world.storage.js";
+import { createWorldStorage, WORLD_USER_ID } from "../services/storage/world.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createNoodleStorage } from "../services/storage/noodle.storage.js";
@@ -84,7 +84,8 @@ export async function worldRoutes(app: FastifyInstance) {
         (peopleByPlace[resident.placeId] ??= []).push(resident.name);
       }
     }
-    return { places: placesWithScene, residents, peopleByPlace, names };
+    const userMind = minds.find((mind) => mind.id === WORLD_USER_ID);
+    return { places: placesWithScene, residents, peopleByPlace, names, userPlaceId: userMind?.placeId ?? null };
   });
 
   // ── Relationships ──
@@ -163,6 +164,68 @@ export async function worldRoutes(app: FastifyInstance) {
     if (!chatId) return reply.code(404).send({ error: "character not found" });
     return { ok: true, chatId };
   });
+
+  // ── YOU move through the world: set where you are (null = nowhere/offline).
+  //    People already there notice you walk in. Returns the place's chat id. ──
+  app.post<{ Body: { placeId?: string | null } }>("/go", async (req, reply) => {
+    const { WORLD_USER_ID } = await import("../services/storage/world.storage.js");
+    const placeId = (req.body as { placeId?: string | null } | undefined)?.placeId ?? null;
+    if (placeId === null) {
+      await world.upsertMind(WORLD_USER_ID, { placeId: null });
+      return { ok: true, placeId: null, chatId: null };
+    }
+    const place = await world.getPlace(String(placeId));
+    if (!place) return reply.code(404).send({ error: "place not found" });
+    await world.upsertMind(WORLD_USER_ID, {
+      placeId: place.id,
+      cursors: { arrivedAt: new Date().toISOString() },
+    });
+    const { ensurePlaceSceneChat } = await import("../services/world/character-mind.service.js");
+    const chatId = await ensurePlaceSceneChat(app.db, place);
+    // Arrival spark: whoever is here notices you walk in.
+    const names = await buildNameMap();
+    for (const mind of (await world.listMinds()).filter((m) => m.placeId === place.id && names[m.id]).slice(0, 4)) {
+      await world.bumpMindWake(mind.id, new Date(Date.now() + (0.2 + Math.random()) * 60_000).toISOString());
+    }
+    return { ok: true, placeId: place.id, chatId };
+  });
+
+  // ── Create a public place of your own design. ──
+  app.post<{ Body: { name?: string; kind?: string; description?: string; interior?: string } }>(
+    "/place",
+    async (req, reply) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const name = String(body.name ?? "").trim();
+      if (!name) return reply.code(400).send({ error: "name required" });
+      const { place, created } = await world.ensurePlace({
+        name,
+        kind: typeof body.kind === "string" && body.kind.trim() ? body.kind.trim() : "place",
+        description: typeof body.description === "string" ? body.description : "",
+        interior: typeof body.interior === "string" ? body.interior : "",
+      });
+      const { ensurePlaceSceneChat } = await import("../services/world/character-mind.service.js");
+      const chatId = await ensurePlaceSceneChat(app.db, place);
+      return { ok: true, created, place, chatId };
+    },
+  );
+
+  // ── Edit a place: rename, and/or add to its description/interior. ──
+  app.patch<{ Params: { id: string }; Body: { name?: string; kind?: string; description?: string; interior?: string } }>(
+    "/place/:id",
+    async (req, reply) => {
+      const place = await world.getPlace(req.params.id);
+      if (!place) return reply.code(404).send({ error: "place not found" });
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof body.name === "string" && body.name.trim()) {
+        await world.renameHomePlace(place.id, body.name.trim(), String(body.kind ?? place.kind));
+      }
+      await world.enrichPlace(place.id, {
+        addition: typeof body.description === "string" && body.description.trim() ? body.description.trim() : undefined,
+        interior: typeof body.interior === "string" && body.interior.trim() ? body.interior.trim() : undefined,
+      });
+      return { ok: true, place: await world.getPlace(place.id) };
+    },
+  );
 
   // ── Start a group you're in with the chosen world characters. ──
   app.post<{ Body: { characterIds?: string[]; name?: string } }>("/group", async (req, reply) => {

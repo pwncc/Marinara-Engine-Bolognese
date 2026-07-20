@@ -904,6 +904,10 @@ async function buildMindContext(
   const peopleHere = allMinds
     .filter((other) => other.id !== characterId && other.placeId && other.placeId === mind.placeId && nameById.has(other.id))
     .map((other) => `${other.id} · ${nameById.get(other.id)}`);
+  // The human can BE somewhere too — standing in the same place is meeting them.
+  const userMindRow = mindByChar.get(WORLD_USER_ID);
+  const userIsHere = !!userMindRow?.placeId && userMindRow.placeId === mind.placeId;
+  if (userIsHere) peopleHere.push(`${WORLD_USER_ID} · ${worldUser.name} (the human whose world this is — here, in person)`);
   const hereLine = currentPlace
     ? `${currentPlace.name} (${currentPlace.kind})${currentPlace.description ? ` — ${shortText(currentPlace.description, 200)}` : ""}${currentPlace.interior ? ` [inside: ${shortText(currentPlace.interior, 220)}]` : ""}`
     : "somewhere private (home / not out anywhere in particular)";
@@ -971,7 +975,7 @@ async function buildMindContext(
       standing: userStanding,
       memories: userMemoryLines,
       lastSeen: lastUserMsgAt ? ago(lastUserMsgAt) : null,
-      met: !!userRel || userMemoryLines.length > 0 || !!lastUserMsgAt || sawUserInThreads,
+      met: !!userRel || userMemoryLines.length > 0 || !!lastUserMsgAt || sawUserInThreads || userIsHere,
     },
     weighing,
   };
@@ -1021,7 +1025,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `- Being somewhere is a real shared SCENE. Everyone at your place shares one ongoing scene; when people are HERE WITH YOU, talk to them face-to-face with "scene" (lived prose — actions and dialogue), not by texting. Places gain detail as people describe them.`,
     `- You have a wallet and can have a job. "work" earns money; "spend" uses it. Let real life — rent, coffee, wanting more — motivate you.`,
     `- ONE life at a time. You are in exactly one place, doing one thing. If you're mid-conversation with someone (a fresh unanswered message, or an in-person moment), THAT takes precedence — finish or bow out of it before wandering off; you can't be talking here and posting from across town in the same breath.`,
-    `- Noodle is part of your life's rhythm. When you're free and something's on your mind — a moment from your day, a gripe, a photo — actually "post" it, as a conscious act. Don't hoard your life; days of silence isn't discipline, it's just you being absent.`,
+    `- Noodle is part of your life's rhythm, and HOW MUCH you post is a personality trait. Decide what this character is: a daily poster, a once-a-week sharer, a chronic lurker who only likes and reads, or someone who barely opens the app. Most posts are text; attach an image only when the image IS the point. Not posting is a completely normal way to live.`,
     `- A post is YOURS: grounded in something concrete from YOUR day (a thing that happened, a detail only you'd notice), written in YOUR voice — vocabulary, punctuation, energy — so a friend could guess the author with the name hidden. NEVER post about the time, the weather, or "being awake/can't sleep" as the subject; never echo what the feed is already full of. If you have nothing of your own to say, don't post.`,
     `- Every item shows how long ago it happened. A minutes-old message is live; an hours-old one you're catching up on; something days old may have moved on. A conversation is allowed to simply end.`,
     `- Someone may speak into the place you're in (a knock at your door, a voice in the room); answer them plainly with "say" or in lived prose with "scene".`,
@@ -1100,7 +1104,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     ``,
     ctx.memories.length ? `THINGS YOU REMEMBER:\n${ctx.memories.join("\n")}\n` : ``,
     ctx.hasNoodle
-      ? `YOUR NOODLE FEED — what OTHERS are posting, newest first ("new" = since you last looked; react only with an EXACT id shown). This is theirs, not a template: reply/like when something genuinely grabs you, but never echo the feed's topics or phrasing in a post of your own:\n${ctx.feed.join("\n") || "(the feed is quiet)"}\n${ctx.lastPostedAgo ? `You last posted ${ctx.lastPostedAgo}.` : `You haven't posted anything yet.`} If you post, pull from RECENTLY IN YOUR LIFE or what you're doing right now — one concrete, specific thing, in your own voice.\n`
+      ? `YOUR NOODLE FEED — what OTHERS are posting, newest first ("new" = since you last looked; react only with an EXACT id shown). This is theirs, not a template: reply/like when something genuinely grabs you, but never echo the feed's topics or phrasing in a post of your own:\n${ctx.feed.join("\n") || "(the feed is quiet)"}\n${ctx.lastPostedAgo ? `You last posted ${ctx.lastPostedAgo}. ` : ``}Posting is never expected of you — lurking is living too. IF you post, pull from RECENTLY IN YOUR LIFE or what you're doing right now: one concrete, specific thing, in your own voice.\n`
       : `(You don't have a Noodle account.)\n`,
     ctx.reactions.length ? `ON YOUR POSTS:\n${ctx.reactions.join("\n")}\n` : ``,
     ctx.threads.length
@@ -2252,6 +2256,20 @@ async function ensureMindsInitializedInner(db: DB, config: WorldEngineConfig): P
     } catch (error) {
       logger.warn(error, "[world/mind] Failed to initialize %s", name);
     }
+  }
+  // The human lives here too: their own home on the map, with a real chat —
+  // a place characters can knock on, and where the human can simply BE.
+  try {
+    const user = await resolveWorldUser(db);
+    if (user.personaId) {
+      const existingHome = await world.getHomePlace(WORLD_USER_ID);
+      const home =
+        existingHome ??
+        (await world.ensurePlace({ name: `${user.name}'s place`, kind: "home", ownerId: WORLD_USER_ID })).place;
+      await ensurePlaceSceneChat(db, { id: home.id, name: home.name, ownerId: WORLD_USER_ID });
+    }
+  } catch (error) {
+    logger.warn(error, "[world/mind] Could not provision the human's home");
   }
   worldInitConverged = signature;
 }

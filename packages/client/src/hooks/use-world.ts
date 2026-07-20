@@ -48,6 +48,8 @@ export interface WorldCityResponse {
   residents: WorldResident[];
   peopleByPlace: Record<string, string[]>;
   names: Record<string, string>;
+  /** Where YOU currently are (null = nowhere in particular). */
+  userPlaceId: string | null;
 }
 
 export interface WorldAtmosphere {
@@ -180,6 +182,32 @@ export function useResetWorld() {
       api.post<{ ok: boolean; removedChats: number }>("/world/reset", { resetNoodle }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: worldKeys.all });
+      qc.invalidateQueries({ queryKey: ["chats"] });
+    },
+  });
+}
+
+/** Move yourself to a place (null = leave). Returns the place's chat id. */
+export function useGoToPlace() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (placeId: string | null) =>
+      api.post<{ ok: boolean; placeId: string | null; chatId: string | null }>("/world/go", { placeId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: worldKeys.city() });
+      qc.invalidateQueries({ queryKey: ["chats"] });
+    },
+  });
+}
+
+/** Create a public place of your own design. */
+export function useCreatePlace() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; kind?: string; description?: string; interior?: string }) =>
+      api.post<{ ok: boolean; created: boolean; place: WorldPlace; chatId: string }>("/world/place", input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: worldKeys.city() });
       qc.invalidateQueries({ queryKey: ["chats"] });
     },
   });

@@ -36,8 +36,10 @@ import { toast } from "sonner";
 import type { WorldEngineConfig, WorldEventRecord } from "@marinara-engine/shared";
 import { DEFAULT_WORLD_ENGINE_CONFIG } from "@marinara-engine/shared";
 import {
+  useCreatePlace,
   useCreateWorldGroup,
   useCreateWorldUserDm,
+  useGoToPlace,
   useResetWorld,
   useRunWorldTick,
   useUpdateWorldConfig,
@@ -48,7 +50,7 @@ import {
   useWorldStatus,
 } from "../../hooks/use-world";
 import { useConnections } from "../../hooks/use-connections";
-import { useCharacters } from "../../hooks/use-characters";
+import { useCharacters, usePersonas } from "../../hooks/use-characters";
 import { useChatStore } from "../../stores/chat.store";
 import { useUIStore } from "../../stores/ui.store";
 import { cn } from "../../lib/utils";
@@ -299,6 +301,7 @@ function WorldConfigForm({
   const [draft, setDraft] = useState<WorldEngineConfig>(config);
   const { data: connections } = useConnections();
   const { data: characters } = useCharacters();
+  const { data: personas } = usePersonas();
   const updateConfig = useUpdateWorldConfig();
   const resetWorld = useResetWorld();
 
@@ -550,6 +553,24 @@ function WorldConfigForm({
 
       <label className="block space-y-0.5">
         <span className="text-[0.65rem] text-[var(--muted-foreground)]">
+          You in the world (which persona the characters know you as)
+        </span>
+        <select
+          className={inputClass}
+          value={draft.userPersonaId ?? ""}
+          onChange={(e) => setDraft({ ...draft, userPersonaId: e.target.value || null })}
+        >
+          <option value="">(use the globally active persona)</option>
+          {((personas ?? []) as Array<{ id: string; name: string }>).map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="block space-y-0.5">
+        <span className="text-[0.65rem] text-[var(--muted-foreground)]">
           Weather city (optional — real weather from this city colors the whole world)
         </span>
         <input
@@ -635,7 +656,8 @@ function CityMap() {
     // Homes ring the edge, public places cluster toward the middle.
     return places.map((place) => {
       const base = hashPosition(place.id);
-      const here = city?.peopleByPlace[place.id] ?? [];
+      const here = [...(city?.peopleByPlace[place.id] ?? [])];
+      if (city?.userPlaceId === place.id) here.push("You");
       return { place, pos: base, here };
     });
   }, [city]);
@@ -774,6 +796,31 @@ function CityView() {
     }
   };
   const startingChat = createDm.isPending || createGroup.isPending;
+  // Your own movement + place creation.
+  const goTo = useGoToPlace();
+  const createPlace = useCreatePlace();
+  const [newPlaceName, setNewPlaceName] = useState("");
+  const [newPlaceKind, setNewPlaceKind] = useState("");
+  const goHere = async (placeId: string) => {
+    try {
+      const res = await goTo.mutateAsync(placeId);
+      if (res?.chatId) openWorldChatById(res.chatId);
+    } catch {
+      toast.error("Couldn't go there.");
+    }
+  };
+  const addPlace = async () => {
+    const name = newPlaceName.trim();
+    if (!name) return;
+    try {
+      await createPlace.mutateAsync({ name, kind: newPlaceKind.trim() || undefined });
+      setNewPlaceName("");
+      setNewPlaceKind("");
+      toast.success(`${name} is on the map.`);
+    } catch {
+      toast.error("Couldn't create that place.");
+    }
+  };
 
   if (isLoading) {
     return (
@@ -792,14 +839,55 @@ function CityView() {
   }
   return (
     <div className="space-y-1.5">
+      {/* Put yourself on the map: make a place of your own */}
+      <div className="flex items-center gap-1.5 rounded-lg border border-dashed border-[var(--border)]/60 px-2 py-1.5">
+        <input
+          value={newPlaceName}
+          onChange={(e) => setNewPlaceName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && void addPlace()}
+          placeholder="New place name…"
+          className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-[var(--muted-foreground)]"
+        />
+        <input
+          value={newPlaceKind}
+          onChange={(e) => setNewPlaceKind(e.target.value)}
+          placeholder="kind"
+          className="w-16 bg-transparent text-xs outline-none placeholder:text-[var(--muted-foreground)]"
+        />
+        <button
+          type="button"
+          disabled={!newPlaceName.trim() || createPlace.isPending}
+          onClick={() => void addPlace()}
+          className="rounded-md bg-[var(--primary)] px-2 py-0.5 text-[0.65rem] font-semibold text-[var(--primary-foreground)] disabled:opacity-50"
+        >
+          Add
+        </button>
+      </div>
       {city.places.map((place) => {
-        const here = city.peopleByPlace[place.id] ?? [];
+        const here = [...(city.peopleByPlace[place.id] ?? [])];
+        const youAreHere = city.userPlaceId === place.id;
         return (
-          <button
-            key={place.id}
-            type="button"
-            disabled={!place.sceneChatId}
-            onClick={() => place.sceneChatId && openWorldChatById(place.sceneChatId)}
+          <div key={place.id} className="relative">
+            <button
+              type="button"
+              onClick={() =>
+                youAreHere ? void goTo.mutateAsync(null) : void goHere(place.id)
+              }
+              disabled={goTo.isPending}
+              title={youAreHere ? "Leave this place" : "Go here (people will notice you arrive)"}
+              className={cn(
+                "absolute right-1.5 top-1.5 z-10 rounded-md border px-1.5 py-0.5 text-[0.6rem] font-semibold",
+                youAreHere
+                  ? "border-emerald-400/60 bg-emerald-400/15 text-emerald-400"
+                  : "border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)] hover:border-[var(--primary)]/60",
+              )}
+            >
+              {youAreHere ? "You're here · leave" : "Go"}
+            </button>
+            <button
+              type="button"
+              disabled={!place.sceneChatId}
+              onClick={() => place.sceneChatId && openWorldChatById(place.sceneChatId)}
             className={cn(
               "block w-full rounded-lg border border-[var(--border)]/50 bg-[var(--card)]/50 px-2.5 py-2 text-left",
               place.sceneChatId && "transition-colors hover:border-[var(--primary)]/50 hover:bg-[var(--accent)]/30",
@@ -830,12 +918,13 @@ function CityView() {
                 ))}
               </div>
             ) : null}
-            {here.length ? (
+            {here.length || youAreHere ? (
               <div className="mt-1 flex items-center gap-1 text-[0.65rem] text-emerald-400">
-                <UsersRound size="0.65rem" /> {here.join(", ")}
+                <UsersRound size="0.65rem" /> {[...here, ...(youAreHere ? ["You"] : [])].join(", ")}
               </div>
             ) : null}
-          </button>
+            </button>
+          </div>
         );
       })}
 
