@@ -163,7 +163,10 @@ async function resetClientAfterExpunge(qc: ReturnType<typeof useQueryClient>) {
 export function useChats(options: { enabled?: boolean; refetchOnMount?: boolean | "always" } = {}) {
   return useQuery({
     queryKey: chatKeys.list(),
-    queryFn: () => api.get<Chat[]>("/chats"),
+    // The server stores/serves chat.metadata as a raw JSON string — normalize
+    // to an object at the source or every metadata read downstream (WORLD-tab
+    // routing, game-chat filtering…) silently sees `undefined`.
+    queryFn: () => api.get<Chat[]>("/chats").then((rows) => rows.map(normalizeChatForCache)),
     enabled: options.enabled ?? true,
     placeholderData: (previousData) => previousData,
     staleTime: 10_000,
@@ -181,7 +184,7 @@ export function useChats(options: { enabled?: boolean; refetchOnMount?: boolean 
 export function useChat(id: string | null) {
   return useQuery({
     queryKey: chatKeys.detail(id ?? ""),
-    queryFn: () => api.get<Chat>(`/chats/${id}`),
+    queryFn: () => api.get<Chat>(`/chats/${id}`).then(normalizeChatForCache),
     enabled: !!id,
     staleTime: 60_000,
     retry: (failureCount, error) => {

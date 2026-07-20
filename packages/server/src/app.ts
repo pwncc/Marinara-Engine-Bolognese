@@ -246,7 +246,12 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
     await app.register(fastifyStatic, {
       root: clientDist,
       prefix: "/",
-      wildcard: false,
+      // Wildcard serving resolves files per-request. With `wildcard: false` the
+      // plugin instead registers one route per file that exists AT BOOT — so a
+      // client rebuilt while the server runs produced new hashed bundles that
+      // fell through to the SPA fallback and came back as index.html (a blank
+      // app until the next lucky restart).
+      wildcard: true,
       maxAge: 0,
       decorateReply: false,
       setHeaders(res, filePath) {
