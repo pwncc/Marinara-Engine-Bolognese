@@ -461,11 +461,9 @@ export function ChatSidebar() {
   // ── Folder grouping ──
   const modeFolders = useMemo(() => {
     if (!folders) return [] as ChatFolder[];
-    // The WORLD tab shows the Living World folders (which are per-mode); other
-    // tabs show their own mode's folders, minus the Living World ones.
-    if (activeTab === "world") {
-      return folders.filter((f) => f.name === "Living World").sort((a, b) => a.sortOrder - b.sortOrder);
-    }
+    // The WORLD tab is folderless — world chats route here by metadata and
+    // render flat, so there are no empty "Living World" subdividers.
+    if (activeTab === "world") return [] as ChatFolder[];
     return folders
       .filter(
         (f) =>
@@ -477,6 +475,10 @@ export function ChatSidebar() {
 
   const { unfiledChats, folderChatsMap } = useMemo(() => {
     if (!visibleDisplayChats.length)
+      return { unfiledChats: visibleDisplayChats, folderChatsMap: new Map<string, typeof displayChats>() };
+    // The WORLD tab renders flat: ignore any (stale) folderId so a world chat
+    // can never be swallowed by a folder that isn't shown here.
+    if (activeTab === "world")
       return { unfiledChats: visibleDisplayChats, folderChatsMap: new Map<string, typeof displayChats>() };
     const unfiled: typeof displayChats = [];
     const map = new Map<string, typeof displayChats>();
@@ -490,7 +492,7 @@ export function ChatSidebar() {
       map.get(fid)!.push(entry);
     }
     return { unfiledChats: unfiled, folderChatsMap: map };
-  }, [visibleDisplayChats]);
+  }, [visibleDisplayChats, activeTab]);
   const folderChatCounts = useMemo(() => {
     const map = new Map<string, Set<string>>();
     for (const chat of modeChats) {

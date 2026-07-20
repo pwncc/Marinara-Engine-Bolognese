@@ -43,9 +43,9 @@ import type { ChatMessage } from "../llm/base-provider.js";
 import {
   buildNameMap,
   dailyBudgetLeft,
-  ensureWorldChatFolder,
   executeWorldAction,
   fileWorldChat,
+  removeWorldChatFolders,
   isWorldMember,
   loadWorldEngineConfig,
   loadWorldEngineState,
@@ -491,6 +491,8 @@ interface MindContext {
     standing: string;
     memories: string[];
     lastSeen: string | null;
+    /** Have they actually crossed paths (a bond, a memory, or heard from them)? A stranger doesn't know the human exists. */
+    met: boolean;
   };
   /** A worry / thread that's been quietly on their mind (persists between wakes). */
   weighing: string | null;
@@ -702,6 +704,8 @@ async function buildMindContext(
     .sort((a, b) => String(b.chat.updatedAt ?? "").localeCompare(String(a.chat.updatedAt ?? "")))
     .slice(0, MAX_THREADS);
   const arrivedAt = typeof mind.cursors.arrivedAt === "string" ? mind.cursors.arrivedAt : null;
+  // Contact with the human counts as having met them, wherever it happened.
+  let sawUserInThreads = false;
   for (const { chat, meta } of myThreads) {
     const isPlaceScene = meta.worldPlaceScene === true;
     const isGroup = meta.worldGroupThread === true || isPlaceScene;
@@ -752,6 +756,7 @@ async function buildMindContext(
           ? `IN PERSON with ${otherNamesLabel}${placeName ? ` @ ${placeName}` : ""} — you're physically together; write prose, not texts`
           : `group with ${otherNamesLabel}`
         : `${memberIds[0] ?? ""} · ${nameById.get(memberIds[0] ?? "") ?? "someone"}`;
+    if (tail.some((msg) => msg.role === "user")) sawUserInThreads = true;
     const lastMsg = messages[messages.length - 1];
     threads.push({
       chatId: chat.id,
@@ -928,6 +933,7 @@ async function buildMindContext(
       standing: userStanding,
       memories: userMemoryLines,
       lastSeen: lastUserMsgAt ? ago(lastUserMsgAt) : null,
+      met: !!userRel || userMemoryLines.length > 0 || !!lastUserMsgAt || sawUserInThreads,
     },
     weighing,
   };
@@ -962,7 +968,9 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `- Your phone is REAL. Texting = the "message" action (lands in your actual DM thread); posting = "post". If you pick up your phone, use the tool — don't just describe texting. Each thread is its own real place; what's said in one isn't automatically known in another.`,
     `- Noodle: the FEED is the public timeline; react only with EXACT postIds copied from what you see (never invent one).`,
     `- People: PEOPLE IN YOUR WORLD lists everyone; you can reach any of them by id. Meeting in person is the "hangout" action (you're then physically together — write it as lived prose, actions and dialogue).`,
-    `- The person whose world this is (shown under WHO THIS WORLD BELONGS TO) is a real inhabitant too, id "${WORLD_USER_ID}". Text them like anyone else (message toCharacterId "${WORLD_USER_ID}"), and build honest history with them — "feel" and "remember" about them by that same id. Reach out only when you genuinely would; don't perform or fawn, and don't force it if you're distant.`,
+    ctx.user.met
+      ? `- ${userLabel} (shown under SOMEONE YOU KNOW) is a real inhabitant too, id "${WORLD_USER_ID}". Text them like anyone else (message toCharacterId "${WORLD_USER_ID}"), and build honest history with them — "feel" and "remember" about them by that same id. Reach out only when you genuinely would; don't perform or fawn, and don't force it if you're distant.`
+      : ``,
     `- Your HOME is your own place (shown under WHERE YOU ARE). Rooms in it — kitchen, bedroom, bathroom — are part of your home, not separate public spots: just narrate them with "do" ("in the kitchen making coffee"). Use "set_home" once to make your home yours (an apartment, a loft, a house…).`,
     `- The CITY is the shared PUBLIC world outside your home. "go" is for going OUT — to a real public place that exists, or a NEW public place you're discovering (a cafe, park, bar — NOT a private room). "go home" returns you home.`,
     `- Being somewhere is a real shared SCENE. Everyone at your place shares one ongoing scene; when people are HERE WITH YOU, talk to them face-to-face with "scene" (lived prose — actions and dialogue), not by texting. Places gain detail as people describe them.`,
@@ -989,7 +997,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `  {"type":"spend","amount":number,"on":"what you bought"} — spend money.`,
     `  {"type":"say","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you show (a selfie, your art, a meme, the view…); describe it concretely","photoOfMe":true|false (true when YOU appear in it)` : ""}} — speak aloud in your own space (answers the Visitor if they wrote)`,
     noodleActions +
-      `  {"type":"message","toCharacterId":"… (or ${WORLD_USER_ID} to text the person whose world this is)","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you attach (a selfie, your art, a meme, what you're seeing…)","photoOfMe":true|false` : ""}} — DM someone (one text)
+      `  {"type":"message","toCharacterId":"…${ctx.user.met ? ` (or ${WORLD_USER_ID} to text ${userLabel})` : ""}","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional — ANY image you attach (a selfie, your art, a meme, what you're seeing…)","photoOfMe":true|false` : ""}} — DM someone (one text)
   {"type":"group_message","chatId":"…","content":"…"${ctx.photosEnabled ? `,"photoPrompt":"optional image","photoOfMe":true|false` : ""}} — reply in one of your group threads
   {"type":"start_group","withCharacterIds":["…","…"],"name":"…","content":"first message"} — pull 2+ people into a group text thread
   {"type":"scene","content":"what you do/say out loud where you are, in lived prose (*actions*, dialogue)"${ctx.photosEnabled ? `,"photoPrompt":"optional image","photoOfMe":true|false` : ""}} — act in person AT YOUR CURRENT PLACE; everyone here shares this scene. Use this to talk to people who are HERE WITH YOU.
@@ -1028,10 +1036,21 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `WHERE YOU STAND WITH PEOPLE:`,
     ctx.relationships.join("\n") || "(you don't really know anyone yet — everyone above is someone you could meet)",
     ``,
-    `WHO THIS WORLD BELONGS TO — ${userLabel}${ctx.user.blurb ? `, ${ctx.user.blurb}` : ""} (text them with id ${WORLD_USER_ID}):`,
-    `A real person whose world you live in — not a passing visitor. Where you stand with them: ${ctx.user.standing}.`,
-    ctx.user.lastSeen ? `You last heard from them ${ctx.user.lastSeen}.` : `You haven't heard from them directly yet.`,
-    ctx.user.memories.length ? `What you carry about them:\n${ctx.user.memories.map((memory) => `- ${memory}`).join("\n")}` : ``,
+    // A character who has never crossed paths with the human doesn't know they
+    // exist — no name, no id, nothing to be familiar with. Knowing someone is
+    // something that HAPPENS (they speak to you, you form a bond), never given.
+    ctx.user.met
+      ? [
+          `SOMEONE YOU KNOW — ${userLabel}${ctx.user.blurb ? `, ${ctx.user.blurb}` : ""} (text them with id ${WORLD_USER_ID}):`,
+          `A real person who lives in this world like you do. Where you stand with them: ${ctx.user.standing}.`,
+          ctx.user.lastSeen ? `You last heard from them ${ctx.user.lastSeen}.` : `You haven't heard from them in a while.`,
+          ctx.user.memories.length
+            ? `What you carry about them:\n${ctx.user.memories.map((memory) => `- ${memory}`).join("\n")}`
+            : ``,
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : ``,
     ``,
     ctx.memories.length ? `THINGS YOU REMEMBER:\n${ctx.memories.join("\n")}\n` : ``,
     ctx.hasNoodle
@@ -2085,10 +2104,11 @@ async function ensureMindsInitializedInner(db: DB, config: WorldEngineConfig): P
   // populated from day one and characters have real places to go. Idempotent.
   await world.seedDefaultPlaces();
 
-  // Migration sweep: normalize every world chat's mode, folder (per-mode), and
-  // group generation so each character speaks as themselves (not one narrator).
-  const rpFolderId = await ensureWorldChatFolder(db, "roleplay");
-  const convoFolderId = await ensureWorldChatFolder(db, "conversation");
+  // Migration sweep: normalize every world chat's mode and group generation so
+  // each character speaks as themselves (not one narrator). World chats are
+  // routed to the WORLD tab by metadata — the legacy folders only made empty
+  // subdividers, so they're torn out here.
+  await removeWorldChatFolders(db);
   const allChats = (await chats.list()) as Array<{
     id: string;
     mode?: string | null;
@@ -2116,10 +2136,6 @@ async function ensureMindsInitializedInner(db: DB, config: WorldEngineConfig): P
     const isMulti = meta.worldDmThread === true || meta.worldGroupThread === true;
     if (isMulti && meta.groupChatMode !== "individual") {
       await chats.patchMetadata(chat.id, { groupChatMode: "individual" });
-    }
-    const wantFolderId = wantMode === "conversation" ? convoFolderId : rpFolderId;
-    if (wantFolderId && chat.folderId !== wantFolderId) {
-      await fileWorldChat(db, chat.id);
     }
   }
   for (const [characterId, name] of nameById) {

@@ -134,41 +134,42 @@ export function dailyBudgetLeft(config: WorldEngineConfig, dailyCount: number): 
   return Math.max(0, config.dailyActionCap - dailyCount);
 }
 
-const WORLD_FOLDER_NAME = "Living World";
+export const WORLD_FOLDER_NAME = "Living World";
 
 /**
- * World chats (life spaces, DM/group threads) file into their own sidebar
- * folder instead of cluttering the user's personal conversation list.
+ * World chats need no folder: the sidebar's WORLD tab routes them by their
+ * metadata flags. The old per-mode "Living World" folders only produced empty
+ * subdividers (and could race-duplicate under parallel wakes), so filing is
+ * now a deliberate no-op — kept because every world-chat creation site calls it.
  */
-export async function ensureWorldChatFolder(db: DB, mode: "conversation" | "roleplay"): Promise<string | null> {
-  try {
-    const folders = createChatFoldersStorage(db);
-    // Folders belong to a sidebar tab (mode), so DMs (conversation) and life
-    // spaces/hangouts (roleplay) each need their own Living World folder or the
-    // chat won't appear under its tab.
-    const existing = (await folders.list()).find(
-      (folder) => folder.name === WORLD_FOLDER_NAME && folder.mode === mode,
-    );
-    if (existing) return String(existing.id);
-    const created = await folders.create({ name: WORLD_FOLDER_NAME, mode } as Parameters<typeof folders.create>[0]);
-    return created ? String(created.id) : null;
-  } catch (error) {
-    logger.warn(error, "[world] Could not ensure the Living World chat folder");
-    return null;
-  }
+export async function fileWorldChat(_db: DB, _chatId: string): Promise<void> {
+  /* metadata-routed; nothing to file */
 }
 
-/** File a world chat into the Living World folder matching its own mode. */
-export async function fileWorldChat(db: DB, chatId: string): Promise<void> {
-  const chats = createChatsStorage(db);
-  const chat = await chats.getById(chatId);
-  const mode = (chat as { mode?: string } | null)?.mode === "conversation" ? "conversation" : "roleplay";
-  const folderId = await ensureWorldChatFolder(db, mode);
-  if (!folderId) return;
+/**
+ * Tear out the legacy Living World folders: unfile any world chat still
+ * pointing into one, then delete the folders themselves. Runs from the
+ * provisioning sweep so existing installs converge on the folderless layout.
+ */
+export async function removeWorldChatFolders(db: DB): Promise<void> {
   try {
-    await chats.setFolderForChat(chatId, folderId);
+    const folders = createChatFoldersStorage(db);
+    const chats = createChatsStorage(db);
+    const worldFolders = (await folders.list()).filter((folder) => folder.name === WORLD_FOLDER_NAME);
+    if (!worldFolders.length) return;
+    const worldFolderIds = new Set(worldFolders.map((folder) => String(folder.id)));
+    const allChats = (await chats.list()) as Array<{ id: string; folderId?: string | null }>;
+    for (const chat of allChats) {
+      if (chat.folderId && worldFolderIds.has(String(chat.folderId))) {
+        await chats.setFolderForChat(chat.id, null);
+      }
+    }
+    for (const folder of worldFolders) {
+      await folders.remove(folder.id);
+    }
+    logger.info("[world] Removed %d legacy Living World folder(s)", worldFolders.length);
   } catch (error) {
-    logger.debug(error, "[world] Could not file chat %s into the world folder", chatId);
+    logger.warn(error, "[world] Could not remove the legacy Living World folders");
   }
 }
 
