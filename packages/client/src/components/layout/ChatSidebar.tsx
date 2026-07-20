@@ -1497,8 +1497,33 @@ export function ChatSidebar() {
             </Reorder.Group>
           )}
 
-          {/* Unfiled chats */}
-          {unfiledChats.map(renderChatRow)}
+          {/* Unfiled chats — the WORLD tab is sectioned so a place never looks like a DM */}
+          {activeTab === "world"
+            ? (() => {
+                const metaOf = (entry: (typeof unfiledChats)[number]) =>
+                  (entry.chat.metadata ?? {}) as Record<string, unknown>;
+                const isPlaceEntry = (entry: (typeof unfiledChats)[number]) =>
+                  metaOf(entry).worldPlaceScene === true || metaOf(entry).worldHangout === true;
+                const places = unfiledChats.filter(isPlaceEntry);
+                const convos = unfiledChats.filter((entry) => !isPlaceEntry(entry));
+                const sectionHeader = (label: string) => (
+                  <p
+                    key={`world-section-${label}`}
+                    className="mt-2 px-2 text-[0.6rem] font-semibold uppercase tracking-widest text-[var(--muted-foreground)]"
+                  >
+                    {label}
+                  </p>
+                );
+                return (
+                  <>
+                    {places.length > 0 && sectionHeader("Places")}
+                    {places.map(renderChatRow)}
+                    {convos.length > 0 && sectionHeader("Conversations")}
+                    {convos.map(renderChatRow)}
+                  </>
+                );
+              })()
+            : unfiledChats.map(renderChatRow)}
 
           {hasMoreDisplayChats && (
             <button

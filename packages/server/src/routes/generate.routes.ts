@@ -3048,7 +3048,7 @@ export async function generateRoutes(app: FastifyInstance) {
           // doesn't run here), fold in this character's real bond with, and
           // memories of, the human, so they arrive already knowing them.
           let visitorHistory: string | null = null;
-          if (worldSpaceKind === "life" && charInfo[0]) {
+          if ((worldSpaceKind === "life" || worldSpaceKind === "place") && charInfo.length === 1 && charInfo[0]) {
             try {
               const { createWorldStorage, WORLD_USER_ID } = await import("../services/storage/world.storage.js");
               const world = createWorldStorage(app.db);
