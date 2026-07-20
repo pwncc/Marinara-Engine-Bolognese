@@ -2660,7 +2660,17 @@ export async function generateRoutes(app: FastifyInstance) {
             const { createWorldStorage } = await import("../services/storage/world.storage.js");
             const placeId = typeof chatMeta.worldPlaceId === "string" ? chatMeta.worldPlaceId : null;
             const place = placeId ? await createWorldStorage(app.db).getPlace(placeId) : null;
-            if (place) placeFlavor = [place.description, place.interior && `Inside: ${place.interior}`].filter(Boolean).join(" ");
+            if (place) {
+              const { staffForPlace } = await import("../services/world/world-engine.service.js");
+              const staff = staffForPlace(place);
+              placeFlavor = [
+                place.description,
+                place.interior && `Inside: ${place.interior}`,
+                staff.length && `The staff here (always the same people): ${staff.join("; ")}.`,
+              ]
+                .filter(Boolean)
+                .join(" ");
+            }
           } catch {
             /* flavor is optional */
           }

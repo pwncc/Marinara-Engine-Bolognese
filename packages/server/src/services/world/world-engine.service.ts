@@ -355,6 +355,29 @@ export async function buildNameMap(db: DB, config: WorldEngineConfig): Promise<M
   return nameById;
 }
 
+// ── Place staff: consistent NPCs derived from the place itself ──
+// Not agents — fixtures. The same bar always has the same named bartender, for
+// the human AND for any character who walks in, at zero standing cost: staff
+// only exist inside whoever's generation references them.
+const STAFF_ROLES: Record<string, string[]> = {
+  bar: ["bartender"], cafe: ["barista"], coffee: ["barista"], restaurant: ["server", "cook"],
+  diner: ["waitress"], hospital: ["nurse", "doctor"], clinic: ["nurse"], school: ["teacher"],
+  library: ["librarian"], gym: ["trainer"], shop: ["cashier"], club: ["bouncer", "DJ"],
+  office: ["receptionist"], bookstore: ["clerk"], market: ["vendor"], hotel: ["concierge"],
+};
+const STAFF_NAMES = ["Marge", "Dee", "Sal", "Nia", "Otis", "Priya", "Walt", "Rosa", "Gus", "Ines", "Ken", "Tam", "Bea", "Cal", "Femi", "Lou"];
+const STAFF_QUIRKS = ["dry humor, remembers every regular", "hums while working", "chatty about the neighborhood", "quietly kind, few words", "always slightly rushed", "tells the same three stories", "sharp-eyed, misses nothing", "new here and a bit nervous"];
+export function staffForPlace(place: { id: string; kind: string }): string[] {
+  const roles = STAFF_ROLES[place.kind?.toLowerCase?.() ?? ""] ?? [];
+  let h = 2166136261;
+  for (let i = 0; i < place.id.length; i++) { h ^= place.id.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return roles.map((role, index) => {
+    const n = STAFF_NAMES[Math.abs(h + index * 7) % STAFF_NAMES.length];
+    const q = STAFF_QUIRKS[Math.abs(h + index * 13) % STAFF_QUIRKS.length];
+    return `${n} the ${role} (${q})`;
+  });
+}
+
 export interface WorldUserIdentity {
   id: string;
   /** How characters know the human — their active persona's name, or "you". */

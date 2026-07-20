@@ -52,6 +52,7 @@ import {
   resolveWorldProvider,
   resolveWorldUser,
   sanitizeWorldPersona,
+  staffForPlace,
   saveWorldEngineStatePatch,
   withWorldLock,
   type ResolvedWorldProvider,
@@ -908,8 +909,9 @@ async function buildMindContext(
   const userMindRow = mindByChar.get(WORLD_USER_ID);
   const userIsHere = !!userMindRow?.placeId && userMindRow.placeId === mind.placeId;
   if (userIsHere) peopleHere.push(`${WORLD_USER_ID} · ${worldUser.name} (the human whose world this is — here, in person)`);
+  const placeStaff = currentPlace ? staffForPlace(currentPlace) : [];
   const hereLine = currentPlace
-    ? `${currentPlace.name} (${currentPlace.kind})${currentPlace.description ? ` — ${shortText(currentPlace.description, 200)}` : ""}${currentPlace.interior ? ` [inside: ${shortText(currentPlace.interior, 220)}]` : ""}`
+    ? `${currentPlace.name} (${currentPlace.kind})${currentPlace.description ? ` — ${shortText(currentPlace.description, 200)}` : ""}${currentPlace.interior ? ` [inside: ${shortText(currentPlace.interior, 220)}]` : ""}${placeStaff.length ? ` [staff, always the same: ${placeStaff.join("; ")} — order from them, chat with them, they're part of the scene]` : ""}`
     : "somewhere private (home / not out anywhere in particular)";
   const knownPlaces = allPlaces
     .slice(0, 16)
