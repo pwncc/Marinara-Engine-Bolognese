@@ -305,8 +305,16 @@ function WorldConfigForm({
   const updateConfig = useUpdateWorldConfig();
   const resetWorld = useResetWorld();
 
+  // Only re-sync the form when the server config MEANINGFULLY changed — the
+  // status poll returns a fresh object every 15s, and syncing on identity
+  // wiped in-progress edits (the persona picker kept "defaulting to none").
+  const lastSyncedConfig = useRef<string>("");
   useEffect(() => {
-    setDraft(config);
+    const serialized = JSON.stringify(config);
+    if (serialized !== lastSyncedConfig.current) {
+      lastSyncedConfig.current = serialized;
+      setDraft(config);
+    }
   }, [config]);
 
   const characterRows = useMemo(

@@ -2651,6 +2651,38 @@ export async function generateRoutes(app: FastifyInstance) {
             ? (await import("../services/world/world-engine.service.js")).sanitizeWorldPersona
             : null;
         const charInfo = await loadCharacterPromptInfo({ chars, characterIds, chatMode });
+        // Empty room, but the ROOM is alive: when the human is alone at a world
+        // place, the place itself responds — staff, regulars, ambience. You can
+        // sit down at The Anchor and actually get handed a beer.
+        if (worldSpaceKind === "place" && charInfo.length === 0 && !input.impersonate) {
+          let placeFlavor = "";
+          try {
+            const { createWorldStorage } = await import("../services/storage/world.storage.js");
+            const placeId = typeof chatMeta.worldPlaceId === "string" ? chatMeta.worldPlaceId : null;
+            const place = placeId ? await createWorldStorage(app.db).getPlace(placeId) : null;
+            if (place) placeFlavor = [place.description, place.interior && `Inside: ${place.interior}`].filter(Boolean).join(" ");
+          } catch {
+            /* flavor is optional */
+          }
+          charInfo.push({
+            id: "__world_env__",
+            name: String(chat.name ?? "The place"),
+            description: `You are the living ENVIRONMENT of ${chat.name ?? "this place"} — its staff, regulars, sounds and smells. ${placeFlavor}\nPlay the room: minor NPCs act and speak (a bartender, a waiter, a stranger at the counter — give them small first names and keep them consistent), drinks get poured, doors open, weather drifts past the windows. React to what the visitor does in grounded, sensory prose. Minor NPCs are ordinary people with their own small moods.\nNEVER speak or act for the named main-cast characters of this world; they arrive only when they actually arrive. Keep replies modest in length — a living room, not a novel.`,
+            personality: "",
+            scenario: "",
+            creatorNotes: "",
+            systemPrompt: "",
+            backstory: "",
+            appearance: "",
+            mesExample: "",
+            firstMes: "",
+            postHistoryInstructions: "",
+            tags: [],
+            talkativeness: 0.5,
+            avatarPath: null,
+            avatarCrop: null,
+          });
+        }
         for (const character of charInfo) {
           const resolveCharacterPromptText = (value: string): string =>
             resolveHistoryMessageMacros([{ content: value, characterId: character.id }])[0]?.content ?? value;
