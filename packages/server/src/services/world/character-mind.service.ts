@@ -59,10 +59,14 @@ import {
 } from "./world-engine.service.js";
 
 const MAX_ACTIONS_PER_WAKE = 3;
-const MAX_LIFE_TAIL = 12;
+// Context is deliberately GENEROUS: a mind should see its life in full — the
+// room's history, whole conversations, activated memories. Tokens are cheap;
+// a character who half-remembers their own evening is not.
+const MAX_LIFE_TAIL = 40;
 /** A real recent slice of the feed, not just the last check's delta. */
-const MAX_FEED_ITEMS = 24;
-const MAX_THREADS = 5;
+const MAX_FEED_ITEMS = 40;
+const MAX_THREADS = 8;
+const MAX_THREAD_TAIL = 24;
 
 /** Everything pace-related scales with the configured check-in interval. */
 function minCheckinMinutes(config: WorldEngineConfig): number {
@@ -505,9 +509,11 @@ async function buildMindContext(
   const name = nameById.get(characterId) ?? (shortText(data.name, 60) || "Unnamed");
   // Sanitize: a character in the world is their own person, not bound by card
   // lines like "you are {{user}}'s partner" (those are stripped here).
+  // Their full self, not a blurb — the persona must outweigh the shared world
+  // context or every mind converges on the same voice.
   const persona = [
-    shortText(sanitizeWorldPersona(String(data.description ?? "")), 400),
-    shortText(sanitizeWorldPersona(String(data.personality ?? "")), 300),
+    shortText(sanitizeWorldPersona(String(data.description ?? "")), 2000),
+    shortText(sanitizeWorldPersona(String(data.personality ?? "")), 1200),
   ]
     .filter(Boolean)
     .join("\n");
@@ -600,7 +606,7 @@ async function buildMindContext(
     for (const url of pics) {
       visionCandidates.push({ url, label: `shown by ${who} here`, createdAt: msg.createdAt });
     }
-    return `${who} (${ago(msg.createdAt)}${fresh}): ${shortText(msg.content, 200)}${pics.length ? " [sent an image — attached]" : ""}`;
+    return `${who} (${ago(msg.createdAt)}${fresh}): ${shortText(msg.content, 500)}${pics.length ? " [sent an image — attached]" : ""}`;
   });
   const spaceLast = spaceMessages[spaceMessages.length - 1];
   const hasUnansweredVisitor = !!spaceLast && spaceLast.role === "user";
@@ -619,7 +625,7 @@ async function buildMindContext(
 
   const relationships = (await world.listRelationships(characterId))
     .filter((rel) => isWorldMember(config, rel.aCharacterId) && isWorldMember(config, rel.bCharacterId))
-    .slice(0, 20)
+    .slice(0, 40)
     .map((rel) => {
       const otherId = rel.aCharacterId === characterId ? rel.bCharacterId : rel.aCharacterId;
       const other = nameById.get(otherId) ?? "someone";
@@ -638,11 +644,22 @@ async function buildMindContext(
     const place = typeof memory.place === "string" && memory.place ? ` (at ${memory.place})` : "";
     return `About ${shortText(memory.from, 40) || "someone"}${place}: ${shortText(memory.summary, 160)}`;
   };
+  // Memory ACTIVATION: what you're seeing wakes what you know. Memories formed
+  // at this place, and memories about the people physically around you, surface
+  // in full; a generous tail of everything else rides along.
+  const presentIds = new Set(allMinds.filter((m) => m.placeId && m.placeId === mind.placeId).map((m) => m.id));
   const hereMemories = herePlaceName
     ? allMemories.filter((m) => typeof m.place === "string" && normalizeTextForMatch(m.place) === herePlaceName)
     : [];
-  const otherMemories = allMemories.filter((m) => !hereMemories.includes(m)).slice(-8);
-  const memories = [...hereMemories.slice(-4), ...otherMemories].slice(-10).map(memoryLine);
+  const aboutPresent = allMemories.filter(
+    (m) => !hereMemories.includes(m) && typeof m.fromCharId === "string" && presentIds.has(m.fromCharId),
+  );
+  const otherMemories = allMemories
+    .filter((m) => !hereMemories.includes(m) && !aboutPresent.includes(m))
+    .slice(-14);
+  const memories = [...hereMemories.slice(-8), ...aboutPresent.slice(-10), ...otherMemories]
+    .slice(-30)
+    .map(memoryLine);
 
   // Noodle: what's new in my feed + reactions to my posts.
   const feed: string[] = [];
@@ -661,7 +678,7 @@ async function buildMindContext(
       const isNew = post.createdAt > sinceIso;
       const hasPic = typeof post.imageUrl === "string" && post.imageUrl;
       feed.push(
-        `${post.id} · ${authorName} (${ago(post.createdAt)}${isNew ? ", new" : ""}): ${shortText(post.content, 140)}${hasPic ? " [has an image — attached]" : ""}`,
+        `${post.id} · ${authorName} (${ago(post.createdAt)}${isNew ? ", new" : ""}): ${shortText(post.content, 300)}${hasPic ? " [has an image — attached]" : ""}`,
       );
       // Attach only the freshest images as real vision inputs (capped to 4 later).
       if (hasPic && isNew) {
@@ -756,7 +773,7 @@ async function buildMindContext(
     const hasNewProbe = messages
       .slice(-8)
       .some((msg) => msg.characterId !== characterId && msg.createdAt > seenDmsAt);
-    const tail = messages.slice(hasNewProbe ? -8 : -5);
+    const tail = messages.slice(hasNewProbe ? -MAX_THREAD_TAIL : -12);
     const hasNew = tail.some((msg) => msg.characterId !== characterId && msg.createdAt > seenDmsAt);
     const otherNamesLabel = memberIds.map((id) => nameById.get(id) ?? "someone").join(", ") || "no one else yet";
     const placeName = isPlaceScene
@@ -796,7 +813,7 @@ async function buildMindContext(
         for (const url of pics) {
           visionCandidates.push({ url, label: `sent by ${who} in your ${isGroup ? "group" : "DM"} thread`, createdAt: msg.createdAt });
         }
-        return `${who} (${ago(msg.createdAt)}${fresh}): ${shortText(msg.content, 150)}${pics.length ? " [sent an image — attached]" : ""}`;
+        return `${who} (${ago(msg.createdAt)}${fresh}): ${shortText(msg.content, 400)}${pics.length ? " [sent an image — attached]" : ""}`;
       }),
     });
   }
@@ -844,7 +861,7 @@ async function buildMindContext(
 
   // Exclude thought/say BEFORE the limit so a burst of them can't crowd out
   // genuine life events (moved, worked, hosted, posted…) from the recap.
-  const recentAboutMe = (await world.listEvents({ characterId, excludeKinds: ["thought", "say"], limit: 6 }))
+  const recentAboutMe = (await world.listEvents({ characterId, excludeKinds: ["thought", "say"], limit: 14 }))
     .map((event) => `(${ago(event.createdAt)}) ${event.summary}`)
     .reverse();
 
@@ -984,6 +1001,13 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `Bonds move both ways and take real work: a slight, a silence, a letdown cools things; effort and honesty warm them. Don't fake closeness that isn't there, and don't wave away a rift that hasn't healed.`,
     `But you are never cruel at random. When you're off with someone, it's for a REASON you could name — something that happened, a mood, a need. React to what's real.`,
     ``,
+    `HOW YOU WRITE (everything: posts, texts, talking) — like a person, never like an AI:`,
+    `- NEVER use an em dash (—). Use a period, a comma, parentheses, or just start a new sentence.`,
+    `- Emojis: most people use almost none. Only if it's genuinely this character's habit, never decoratively, never more than one.`,
+    `- No engagement bait ("anyone else...?", "who's up?"), no rhetorical-question hooks ("you ever just..."), no tidy wrap-up lines, no hashtag-speak.`,
+    `- Fragments are fine. Imperfect punctuation is fine. Some messages are four words. Don't be poetic unless this character actually is.`,
+    `- Specific beats vague, always: the burnt rice, the name of the song, the exact thing they said. Not "vibes", not "the quiet".`,
+    ``,
     `How your world works (so your choices land in reality, not just narration):`,
     `- You are always SOMEWHERE (one place at a time). WHERE YOU ARE below shows your current place and what's been happening there — that's the shared reality of the room. What you do and say lands THERE. Alone, your thoughts drift into the room too; with company, thoughts stay in your head.`,
     `- Your phone is REAL. Texting = the "message" action (lands in your actual DM thread); posting = "post". If you pick up your phone, use the tool — don't just describe texting. Each thread is its own real place; what's said in one isn't automatically known in another.`,
@@ -997,7 +1021,8 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `- Being somewhere is a real shared SCENE. Everyone at your place shares one ongoing scene; when people are HERE WITH YOU, talk to them face-to-face with "scene" (lived prose — actions and dialogue), not by texting. Places gain detail as people describe them.`,
     `- You have a wallet and can have a job. "work" earns money; "spend" uses it. Let real life — rent, coffee, wanting more — motivate you.`,
     `- ONE life at a time. You are in exactly one place, doing one thing. If you're mid-conversation with someone (a fresh unanswered message, or an in-person moment), THAT takes precedence — finish or bow out of it before wandering off; you can't be talking here and posting from across town in the same breath.`,
-    `- Noodle is part of your life's rhythm. When you're free and something's on your mind — a moment from your day, a mood, a gripe, a photo — actually "post" it, as a conscious act. Don't hoard your life; days of silence isn't discipline, it's just you being absent.`,
+    `- Noodle is part of your life's rhythm. When you're free and something's on your mind — a moment from your day, a gripe, a photo — actually "post" it, as a conscious act. Don't hoard your life; days of silence isn't discipline, it's just you being absent.`,
+    `- A post is YOURS: grounded in something concrete from YOUR day (a thing that happened, a detail only you'd notice), written in YOUR voice — vocabulary, punctuation, energy — so a friend could guess the author with the name hidden. NEVER post about the time, the weather, or "being awake/can't sleep" as the subject; never echo what the feed is already full of. If you have nothing of your own to say, don't post.`,
     `- Every item shows how long ago it happened. A minutes-old message is live; an hours-old one you're catching up on; something days old may have moved on. A conversation is allowed to simply end.`,
     `- Someone may speak into the place you're in (a knock at your door, a voice in the room); answer them plainly with "say" or in lived prose with "scene".`,
     config.userDirective ? `\nThe one who hosts this world asks:\n${config.userDirective}` : ``,
@@ -1038,7 +1063,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     ctx.activeScene
       ? `>>> RIGHT NOW: ${ctx.activeScene}\nHandle this before anything else — answer it, or step out of it deliberately, in words. Never just vanish mid-moment.\n`
       : ``,
-    `It's ${localClock(now)}. ${ctx.atmosphere}.`,
+    `It's ${localClock(now)}. ${ctx.atmosphere}. (Backdrop only — the time and weather are never the SUBJECT of a post or message.)`,
     ctx.mind.lastWakeAt ? `You last checked in ${ago(ctx.mind.lastWakeAt, now)}.` : `This is your first check-in here.`,
     `Your schedule right now: ${ctx.presence.status}${ctx.presence.activity ? ` — ${ctx.presence.activity}` : ""}.`,
     `Your body: ${ctx.needsNote}.`,
@@ -1075,7 +1100,7 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     ``,
     ctx.memories.length ? `THINGS YOU REMEMBER:\n${ctx.memories.join("\n")}\n` : ``,
     ctx.hasNoodle
-      ? `YOUR NOODLE FEED — recent posts, newest first ("new" = since you last looked; react only with an EXACT id shown):\n${ctx.feed.join("\n") || "(the feed is quiet)"}\n${ctx.lastPostedAgo ? `You last posted ${ctx.lastPostedAgo}.` : `You haven't posted anything yet.`} Moments from your day — something you did, saw, felt — are the kind of thing you might "post" when the mood strikes; your life is worth sharing sometimes.\n`
+      ? `YOUR NOODLE FEED — what OTHERS are posting, newest first ("new" = since you last looked; react only with an EXACT id shown). This is theirs, not a template: reply/like when something genuinely grabs you, but never echo the feed's topics or phrasing in a post of your own:\n${ctx.feed.join("\n") || "(the feed is quiet)"}\n${ctx.lastPostedAgo ? `You last posted ${ctx.lastPostedAgo}.` : `You haven't posted anything yet.`} If you post, pull from RECENTLY IN YOUR LIFE or what you're doing right now — one concrete, specific thing, in your own voice.\n`
       : `(You don't have a Noodle account.)\n`,
     ctx.reactions.length ? `ON YOUR POSTS:\n${ctx.reactions.join("\n")}\n` : ``,
     ctx.threads.length
@@ -1853,10 +1878,14 @@ export async function wakeCharacterMind(
     }
 
     const wakeMessages = buildMindMessages(ctx, config, nowDate);
+    // Per-wake temperature jitter: 18 minds fed near-identical world context at
+    // one fixed temperature collapse to one voice ("mode collapse" — ten
+    // characters writing the same insomnia post). A little spread breaks it.
+    const jitteredTemp = Math.max(0.5, Math.min(1.35, config.temperature + (Math.random() - 0.5) * 0.3));
     const completionOptions = {
       model: resolved.model,
-      temperature: config.temperature,
-      maxTokens: 1024,
+      temperature: jitteredTemp,
+      maxTokens: 1536,
       stream: false as const,
       responseFormat: { type: "json_object" },
     };

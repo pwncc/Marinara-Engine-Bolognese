@@ -3074,7 +3074,13 @@ export async function generateRoutes(app: FastifyInstance) {
               logger.debug(error, "[generate] World user-history injection skipped");
             }
           }
-          const lifeSpaceBlock = `<life_space>\n${spaceLines.join("\n")}${visitorHistory ? `\n\n${visitorHistory}` : ""}${crossThreadRecap ? `\n\n${crossThreadRecap}` : ""}\n</life_space>`;
+          // Human voice, not assistant voice — the #1 immersion killer in world
+          // surfaces is AI-flavored prose (em dashes, decorative emoji, tidy
+          // wrap-ups). Same rules the autonomous minds follow.
+          const humanVoice = [
+            `Write like a person, never like an AI: no em dashes (use a period, comma, or parentheses), emojis only if this character genuinely uses them (most people rarely do), no tidy wrap-up lines, no engagement-bait questions. Fragments and imperfect punctuation are fine. Specific beats vague: name the actual thing, not "the vibes". Vary message length; short is often right.`,
+          ].join("\n");
+          const lifeSpaceBlock = `<life_space>\n${spaceLines.join("\n")}\n\n${humanVoice}${visitorHistory ? `\n\n${visitorHistory}` : ""}${crossThreadRecap ? `\n\n${crossThreadRecap}` : ""}\n</life_space>`;
           const lastUserIdxForSpace = findLastIndex(finalMessages, "user");
           if (lastUserIdxForSpace >= 0) {
             const target = finalMessages[lastUserIdxForSpace]!;
