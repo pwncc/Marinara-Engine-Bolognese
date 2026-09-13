@@ -39,7 +39,7 @@ import { createWorldStorage, orderPair, WORLD_USER_ID, type CharacterMindRow } f
 import { generateWorldPhoto, hasWorldImageConnection } from "./world-photo.service.js";
 import { getAtmosphere } from "./world-atmosphere.service.js";
 import { isUnsupportedNoodleVisionInputError, readNoodleVisionImage } from "../noodle/noodle-vision.js";
-import type { ChatMessage } from "../llm/base-provider.js";
+import { LLMHttpError, type ChatCompletionResult, type ChatMessage } from "../llm/base-provider.js";
 import {
   buildNameMap,
   dailyBudgetLeft,
@@ -1897,39 +1897,43 @@ export async function wakeCharacterMind(
       stream: false as const,
       responseFormat: { type: "json_object" },
     };
+    const textOnlyMessages = wakeMessages.map(({ images: _images, ...message }) => message);
     const complete = (options: typeof completionOptions & { reasoningEffort?: "none" }) =>
       resolved.provider.chatComplete(wakeMessages, options).catch(async (error: unknown) => {
-        // Non-vision model with images attached: retry text-only (labels remain).
-        if (!ctx.visionImages.length || !isUnsupportedNoodleVisionInputError(error)) throw error;
+        // Images attached and the endpoint refused the request: most often a
+        // non-vision model (or an aggregator route to one), so retry text-only
+        // with the image labels still in place.
+        const refusedRequest = error instanceof LLMHttpError && error.status === 400;
+        if (!ctx.visionImages.length || !(refusedRequest || isUnsupportedNoodleVisionInputError(error))) throw error;
         logger.debug("[world/mind] Model rejected image input; retrying %s's wake text-only", ctx.self.name);
-        return resolved.provider.chatComplete(
-          wakeMessages.map(({ images: _images, ...message }) => message),
-          options,
-        );
+        return resolved.provider.chatComplete(textOnlyMessages, options);
       });
+    const describe = (completion: ChatCompletionResult) =>
+      `finish=${completion.finishReason}, contentChars=${completion.content?.length ?? 0}, reasoningTokens=${
+        completion.usage?.completionReasoningTokens ?? "n/a"
+      }, contentHead=${JSON.stringify((completion.content ?? "").slice(0, 160))}`;
+
     let completion = await complete(completionOptions);
-    if (!completion.content?.trim()) {
-      // A thinking model can spend the whole budget reasoning and return nothing.
-      // One more try with thinking off; models without the toggle ignore it.
-      logger.warn(
-        "[world/mind] %s's wake returned no content (finish=%s, reasoningTokens=%s); retrying without reasoning",
-        ctx.self.name,
-        completion.finishReason,
-        completion.usage?.completionReasoningTokens ?? "n/a",
-      );
-      completion = await complete({ ...completionOptions, reasoningEffort: "none" });
-    }
     let output: MindOutput;
     try {
       output = parseMindResponse(completion.content ?? "");
-    } catch (error) {
-      const reasoningTokens = completion.usage?.completionReasoningTokens;
-      throw new Error(
-        `${error instanceof Error ? error.message : String(error)} (finish=${completion.finishReason}, contentChars=${
-          completion.content?.length ?? 0
-        }, reasoningTokens=${reasoningTokens ?? "n/a"})`,
-        { cause: error },
+    } catch (firstError) {
+      // A thinking model can spend the whole budget reasoning and return
+      // nothing, or the upstream provider can fail mid-answer. One more try
+      // with thinking off; models without the toggle simply ignore it.
+      logger.warn(
+        "[world/mind] %s's wake produced no usable JSON (%s); retrying without reasoning",
+        ctx.self.name,
+        describe(completion),
       );
+      completion = await complete({ ...completionOptions, reasoningEffort: "none" });
+      try {
+        output = parseMindResponse(completion.content ?? "");
+      } catch (error) {
+        throw new Error(`${error instanceof Error ? error.message : String(error)} (${describe(completion)})`, {
+          cause: firstError,
+        });
+      }
     }
     result.thought = output.thought || null;
 
