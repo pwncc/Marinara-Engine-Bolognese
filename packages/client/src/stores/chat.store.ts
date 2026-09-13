@@ -2,18 +2,18 @@
 // Zustand Store: Chat Slice
 // ──────────────────────────────────────────────
 import { create } from "zustand";
-import type { AvatarCropValue } from "../lib/utils";
+import type { AvatarCrop } from "@marinara-engine/shared";
 import { subscribeWithSelector } from "zustand/middleware";
 import type {
   Chat,
   ChatMode,
   ConversationCallSession,
   ConversationPresenceStatus,
-  Message,
   PendingSpatialTransition,
   SpatialDestinationRelation,
 } from "@marinara-engine/shared";
 import type { CharacterMap, PersonaInfo } from "../components/chat/chat-area.types";
+import { api } from "../lib/api-client";
 import { useAgentStore } from "./agent.store";
 import { useGameStateStore } from "./game-state.store";
 
@@ -21,9 +21,39 @@ const STORAGE_KEY = "marinara-active-chat-id";
 const DRAFTS_KEY = "marinara-input-drafts";
 const SPATIAL_TRANSITIONS_KEY = "marinara-pending-spatial-transitions";
 const NOTIFICATION_AUTODISMISS_MS = 8000;
+const CURRENT_INPUT_PRESENCE_IDLE_MS = 150;
 
-type NotificationAvatarCrop = AvatarCropValue | null;
+let currentInputSnapshot = "";
+let currentInputPresenceTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Read the exact active composer value without subscribing the UI to every keystroke. */
+export function getCurrentInputSnapshot(): string {
+  return currentInputSnapshot;
+}
+
+/** Update the exact active composer value without notifying Zustand subscribers. */
+export function updateCurrentInputSnapshot(text: string): void {
+  currentInputSnapshot = text;
+}
+
+function clearCurrentInputPresenceTimer(): void {
+  if (currentInputPresenceTimer === null) return;
+  clearTimeout(currentInputPresenceTimer);
+  currentInputPresenceTimer = null;
+}
+
+type NotificationAvatarCrop = AvatarCrop | null;
 type ChatNotificationKind = "message" | "call";
+type ChatNotification = {
+  chatId: string;
+  characterName: string;
+  avatarUrl: string | null;
+  avatarCrop?: NotificationAvatarCrop;
+  kind?: ChatNotificationKind;
+  callId?: string | null;
+  reason?: string | null;
+  count: number;
+};
 
 type DelayedCharacterStatus = ConversationPresenceStatus;
 
@@ -111,16 +141,28 @@ function savePendingSpatialTransitions(m: Map<string, PendingSpatialTransitionDr
   }
 }
 
-function abortGenerationForChat(chatId: string, controller?: AbortController) {
+export async function abortGenerationForChat(chatId: string, controller?: AbortController): Promise<void> {
   controller?.abort();
-  fetch("/api/generate/abort", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chatId }),
-  }).catch(() => {});
+  await api.post("/generate/abort", { chatId });
 }
 
 const notificationAutoDismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+type UnreadCountSources = { server: number; client: number };
+type ChatNotificationSources = { server?: ChatNotification; client?: ChatNotification };
+
+const unreadCountSources = new Map<string, UnreadCountSources>();
+const chatNotificationSources = new Map<string, ChatNotificationSources>();
+
+function mergedUnreadCount(chatId: string): number {
+  const sources = unreadCountSources.get(chatId);
+  return sources ? sources.server + sources.client : 0;
+}
+
+function mergedChatNotification(chatId: string): ChatNotification | undefined {
+  const sources = chatNotificationSources.get(chatId);
+  return sources?.client ?? sources?.server;
+}
 
 function clearNotificationTimer(chatId: string) {
   const timer = notificationAutoDismissTimers.get(chatId);
@@ -150,7 +192,6 @@ function scheduleNotificationAutoDismiss(chatId: string, getState: () => ChatSta
 interface ChatState {
   activeChatId: string | null;
   activeChat: Chat | null;
-  messages: Message[];
   isStreaming: boolean;
   /** The chatId that the current streaming generation belongs to. */
   streamingChatId: string | null;
@@ -169,8 +210,6 @@ interface ChatState {
   streamBuffer: string;
   /** Per-chat stream text for active generations, so switching chats does not lose in-flight UI state. */
   streamBuffers: Map<string, string>;
-  /** Chat IDs whose live stream has been replaced by the saved message while agents continue. */
-  committedStreamChatIds: Set<string>;
   /** Persisted assistant row currently represented by each chat's live streaming row. */
   streamedMessageIds: Map<string, string>;
   thinkingBuffer: string;
@@ -178,6 +217,8 @@ interface ChatState {
   thinkingBuffers: Map<string, string>;
   /** Per-chat AbortControllers for active generations — keyed by chatId. */
   abortControllers: Map<string, AbortController>;
+  /** Chats whose reply is complete while an Illustrator image finishes on the existing SSE tail. */
+  backgroundIllustrationChatIds: Set<string>;
   /** When regenerating, the ID of the message being regenerated (so streaming shows in-place). */
   regenerateMessageId: string | null;
   /** During group chat individual mode, the character currently streaming. */
@@ -194,7 +235,6 @@ interface ChatState {
   perChatTyping: Map<string, string>;
   /** Per-chat delayed state so switching chats restores the correct indicator. */
   perChatDelayed: Map<string, DelayedCharacterInfo>;
-  swipeIndex: Map<string, number>; // messageId → active swipe index
   /** When true, ChatArea should open the settings drawer on next render. */
   shouldOpenSettings: boolean;
   /** When true, ChatArea should show the setup wizard for the newly created chat. */
@@ -202,29 +242,19 @@ interface ChatState {
   /** When true (and the wizard opens), it should land directly on the Quick Setup shortcut view. */
   shouldOpenWizardInShortcutMode: boolean;
   /** Pending new-chat mode for first-run connection setup gating. */
-  pendingNewChatMode: Exclude<ChatMode, "visual_novel"> | null;
+  pendingNewChatMode: ChatMode | null;
+  /** Where the pending first-run chat was launched, for post-create navigation. */
+  pendingNewChatOrigin: "home" | "sidebar" | null;
   /** Per-chat draft input text so typing isn't lost when navigating away. */
   inputDrafts: Map<string, string>;
   /** Per-chat structured movement staged for the next accepted owner turn. */
   pendingSpatialTransitions: Map<string, PendingSpatialTransitionDraft>;
-  /** Current chat input */
-  currentInput: string;
+  /** Whether the active composer contains non-whitespace input. */
+  hasCurrentInput: boolean;
   /** Per-chat unread message count (from autonomous messages). */
   unreadCounts: Map<string, number>;
   /** Floating notification bubbles — tracks character info for each unread chat. */
-  chatNotifications: Map<
-    string,
-    {
-      chatId: string;
-      characterName: string;
-      avatarUrl: string | null;
-      avatarCrop?: NotificationAvatarCrop;
-      kind?: ChatNotificationKind;
-      callId?: string | null;
-      reason?: string | null;
-      count: number;
-    }
-  >;
+  chatNotifications: Map<string, ChatNotification>;
   /** Manually dismissed notification chatIds (won't re-appear until next message). */
   dismissedNotifications: Set<string>;
   /** Pending /goto request — ChatArea fulfils by paginating + scrolling to the target message. Token forces re-fire on identical N. */
@@ -237,14 +267,11 @@ interface ChatState {
   // Actions
   setActiveChat: (chat: Chat | null) => void;
   setActiveChatId: (id: string | null) => void;
-  setMessages: (messages: Message[]) => void;
-  addMessage: (message: Message) => void;
-  updateLastMessage: (content: string) => void;
   setStreaming: (streaming: boolean, chatId?: string) => void;
-  setStreamCommitted: (chatId: string, committed: boolean) => void;
   setStreamedMessageId: (chatId: string, messageId: string | null) => void;
   setMariPhase: (chatId: string, phase: "thinking" | "updating" | "idle") => void;
   setAbortController: (chatId: string, controller: AbortController | null) => void;
+  setBackgroundIllustration: (chatId: string, pending: boolean) => void;
   stopGeneration: (chatId?: string) => void;
   appendStreamBuffer: (text: string, chatId?: string) => void;
   setStreamBuffer: (text: string, chatId?: string) => void;
@@ -264,17 +291,17 @@ interface ChatState {
   setPerChatTyping: (chatId: string, name: string | null) => void;
   setPerChatDelayed: (chatId: string, info: DelayedCharacterInfo | null) => void;
   clearPerChatState: (chatId: string) => void;
-  setSwipeIndex: (messageId: string, index: number) => void;
   setShouldOpenSettings: (v: boolean) => void;
   setShouldOpenWizard: (v: boolean) => void;
   setShouldOpenWizardInShortcutMode: (v: boolean) => void;
-  setPendingNewChatMode: (mode: Exclude<ChatMode, "visual_novel"> | null) => void;
+  setPendingNewChatMode: (mode: ChatMode | null, origin?: "home" | "sidebar" | null) => void;
   setInputDraft: (chatId: string, text: string) => void;
   clearInputDraft: (chatId: string) => void;
   setPendingSpatialTransition: (chatId: string, draft: PendingSpatialTransitionDraft) => void;
   clearPendingSpatialTransition: (chatId: string, commandId?: string) => void;
   setPendingSpatialTransitionStatus: (chatId: string, status: PendingSpatialTransitionDraft["status"]) => void;
   setCurrentInput: (text: string) => void;
+  setCurrentInputPresence: (hasInput: boolean) => void;
   incrementUnread: (chatId: string) => void;
   hydrateUnread: (
     unread: Array<{
@@ -323,17 +350,16 @@ export const useChatStore = create<ChatState>()(
       }
     })(),
     activeChat: null,
-    messages: [],
     isStreaming: false,
     streamingChatId: null,
     mariPhaseByChatId: new Map(),
     streamBuffer: "",
     streamBuffers: new Map(),
-    committedStreamChatIds: new Set(),
     streamedMessageIds: new Map(),
     thinkingBuffer: "",
     thinkingBuffers: new Map(),
     abortControllers: new Map(),
+    backgroundIllustrationChatIds: new Set(),
     regenerateMessageId: null,
     streamingCharacterId: null,
     responseQueues: new Map(),
@@ -342,14 +368,14 @@ export const useChatStore = create<ChatState>()(
     delayedCharacterInfo: null,
     perChatTyping: new Map(),
     perChatDelayed: new Map(),
-    swipeIndex: new Map(),
     shouldOpenSettings: false,
     shouldOpenWizard: false,
     shouldOpenWizardInShortcutMode: false,
     pendingNewChatMode: null,
+    pendingNewChatOrigin: null,
     inputDrafts: loadDrafts(),
     pendingSpatialTransitions: loadPendingSpatialTransitions(),
-    currentInput: "",
+    hasCurrentInput: false,
     unreadCounts: new Map(),
     chatNotifications: new Map(),
     dismissedNotifications: new Set(),
@@ -360,6 +386,10 @@ export const useChatStore = create<ChatState>()(
     setActiveChat: (chat) => set({ activeChat: chat }),
     setActiveChatId: (id) => {
       const prev = get().activeChatId;
+      if (id !== prev) {
+        currentInputSnapshot = "";
+        clearCurrentInputPresenceTimer();
+      }
       // Clear unread for the chat being opened
       if (id) {
         set((state) => {
@@ -368,10 +398,14 @@ export const useChatStore = create<ChatState>()(
           const hasDismissed = state.dismissedNotifications.has(id);
           if (!hasUnread && !hasNotif && !hasDismissed) return {};
           const m = hasUnread ? new Map(state.unreadCounts) : state.unreadCounts;
-          if (hasUnread) m.delete(id);
+          if (hasUnread) {
+            unreadCountSources.delete(id);
+            m.delete(id);
+          }
           const n = hasNotif ? new Map(state.chatNotifications) : state.chatNotifications;
           if (hasNotif) {
             clearNotificationTimer(id);
+            chatNotificationSources.delete(id);
             n.delete(id);
           }
           const d = hasDismissed ? new Set(state.dismissedNotifications) : state.dismissedNotifications;
@@ -382,16 +416,23 @@ export const useChatStore = create<ChatState>()(
       const activeCall = get().activeConversationCall;
       set({
         activeChatId: id,
-        swipeIndex: new Map(),
-        ...(id !== prev && { generationPhase: null }),
+        ...(id !== prev && { generationPhase: null, hasCurrentInput: false }),
         ...(!id && { activeChat: null }),
         ...(activeCall ? { conversationCallExpanded: id === activeCall.session.chatId } : {}),
       });
       // Only reset agent + game state when actually switching chats — re-selecting the
       // same chat should not blow away loaded tracker data.
       if (id !== prev) {
-        useAgentStore.getState().reset();
+        // Professor Mari suggestions and guided plans are already scoped to their chat IDs.
+        // Keep them through temporary editor navigation so reopening the chat does not flash
+        // or replace them with the starter suggestions (#4953).
+        useAgentStore.getState().resetForChatChange();
         useGameStateStore.getState().setGameState(null);
+        if (id) {
+          // Opening a chat is meaningful recency even when the user only reads it.
+          // The lightweight touch keeps Home's Continue Chatting shelf in visit order.
+          void api.post(`/chats/${encodeURIComponent(id)}/touch`).catch(() => undefined);
+        }
         // Background is NOT cleared here — it's managed by ChatArea's restore effect.
         // Clearing it would cause a black flash and wipe the background for new chats.
         // Restore per-chat typing/delayed indicators for the newly active chat
@@ -428,41 +469,17 @@ export const useChatStore = create<ChatState>()(
         /* ignore */
       }
     },
-    setMessages: (messages) => set({ messages }),
-
-    addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
-
-    updateLastMessage: (content) =>
-      set((state) => {
-        const messages = [...state.messages];
-        const last = messages[messages.length - 1];
-        if (last) {
-          messages[messages.length - 1] = { ...last, content };
-        }
-        return { messages };
-      }),
-
     setStreaming: (streaming, chatId) =>
       set((state) => {
-        const committed = new Set(state.committedStreamChatIds);
         const streamedMessageIds = new Map(state.streamedMessageIds);
         const targetChatId = chatId ?? state.streamingChatId;
-        if (targetChatId) committed.delete(targetChatId);
         if (targetChatId) streamedMessageIds.delete(targetChatId);
         return {
           isStreaming: streaming,
           streamingChatId: streaming ? (chatId ?? null) : null,
-          committedStreamChatIds: committed,
           streamedMessageIds,
           ...(!streaming ? { generationPhase: null } : {}),
         };
-      }),
-    setStreamCommitted: (chatId, committed) =>
-      set((state) => {
-        const next = new Set(state.committedStreamChatIds);
-        if (committed) next.add(chatId);
-        else next.delete(chatId);
-        return { committedStreamChatIds: next };
       }),
     setStreamedMessageId: (chatId, messageId) =>
       set((state) => {
@@ -487,10 +504,23 @@ export const useChatStore = create<ChatState>()(
       }),
     setAbortController: (chatId, controller) =>
       set((state) => {
-        const m = new Map(state.abortControllers);
-        if (controller) m.set(chatId, controller);
-        else m.delete(chatId);
-        return { abortControllers: m };
+        const abortControllers = new Map(state.abortControllers);
+        if (!controller) {
+          abortControllers.delete(chatId);
+          return { abortControllers };
+        }
+
+        abortControllers.set(chatId, controller);
+        const backgroundIllustrationChatIds = new Set(state.backgroundIllustrationChatIds);
+        backgroundIllustrationChatIds.delete(chatId);
+        return { abortControllers, backgroundIllustrationChatIds };
+      }),
+    setBackgroundIllustration: (chatId, pending) =>
+      set((state) => {
+        const next = new Set(state.backgroundIllustrationChatIds);
+        if (pending) next.add(chatId);
+        else next.delete(chatId);
+        return { backgroundIllustrationChatIds: next };
       }),
     stopGeneration: (chatId) => {
       const { activeChatId, streamingChatId, abortControllers } = useChatStore.getState();
@@ -502,7 +532,7 @@ export const useChatStore = create<ChatState>()(
             ? [streamingChatId]
             : [...abortControllers.keys()];
       for (const targetChatId of new Set(targetIds)) {
-        abortGenerationForChat(targetChatId, abortControllers.get(targetChatId));
+        void abortGenerationForChat(targetChatId, abortControllers.get(targetChatId)).catch(() => {});
       }
     },
     appendStreamBuffer: (text, chatId) =>
@@ -669,16 +699,13 @@ export const useChatStore = create<ChatState>()(
         const t = new Map(state.perChatTyping);
         const d = new Map(state.perChatDelayed);
         const thoughts = new Map(state.thinkingBuffers);
-        const committed = new Set(state.committedStreamChatIds);
         t.delete(chatId);
         d.delete(chatId);
         thoughts.delete(chatId);
-        committed.delete(chatId);
         return {
           perChatTyping: t,
           perChatDelayed: d,
           thinkingBuffers: thoughts,
-          committedStreamChatIds: committed,
           ...(state.activeChatId === chatId ? { thinkingBuffer: "" } : {}),
         };
       }),
@@ -689,7 +716,11 @@ export const useChatStore = create<ChatState>()(
 
     setShouldOpenWizardInShortcutMode: (v) => set({ shouldOpenWizardInShortcutMode: v }),
 
-    setPendingNewChatMode: (mode) => set({ pendingNewChatMode: mode }),
+    setPendingNewChatMode: (mode, origin = null) =>
+      set({
+        pendingNewChatMode: mode,
+        pendingNewChatOrigin: mode ? origin : null,
+      }),
 
     setInputDraft: (chatId: string, text: string) =>
       set((state) => {
@@ -734,12 +765,31 @@ export const useChatStore = create<ChatState>()(
         return { pendingSpatialTransitions: m };
       }),
 
-    setCurrentInput: (text) => set({ currentInput: text }),
+    setCurrentInput: (text) => {
+      updateCurrentInputSnapshot(text);
+      const hasCurrentInput = text.trim().length > 0;
+      clearCurrentInputPresenceTimer();
+      if (!hasCurrentInput) {
+        set((state) => (state.hasCurrentInput ? { hasCurrentInput: false } : state));
+        return;
+      }
+      if (get().hasCurrentInput) return;
+      currentInputPresenceTimer = setTimeout(() => {
+        currentInputPresenceTimer = null;
+        if (currentInputSnapshot.trim().length > 0) set({ hasCurrentInput: true });
+      }, CURRENT_INPUT_PRESENCE_IDLE_MS);
+    },
+    setCurrentInputPresence: (hasInput) => {
+      clearCurrentInputPresenceTimer();
+      set((state) => (state.hasCurrentInput === hasInput ? state : { hasCurrentInput: hasInput }));
+    },
 
     incrementUnread: (chatId: string) =>
       set((state) => {
+        const sources = unreadCountSources.get(chatId) ?? { server: 0, client: 0 };
+        unreadCountSources.set(chatId, { ...sources, client: sources.client + 1 });
         const m = new Map(state.unreadCounts);
-        m.set(chatId, (m.get(chatId) || 0) + 1);
+        m.set(chatId, mergedUnreadCount(chatId));
         return { unreadCounts: m };
       }),
     hydrateUnread: (unread, knownChatIds) =>
@@ -752,28 +802,56 @@ export const useChatStore = create<ChatState>()(
         for (const item of unread) {
           if (item.count <= 0 || state.activeChatId === item.chatId) continue;
           serverChatIds.add(item.chatId);
-          unreadCounts.set(item.chatId, item.count);
+          const previous = unreadCountSources.get(item.chatId) ?? { server: 0, client: 0 };
+          const acknowledgedClientCount = Math.max(0, item.count - previous.server);
+          unreadCountSources.set(item.chatId, {
+            server: item.count,
+            client: Math.max(0, previous.client - acknowledgedClientCount),
+          });
+          unreadCounts.set(item.chatId, mergedUnreadCount(item.chatId));
           if (!state.dismissedNotifications.has(item.chatId)) {
-            chatNotifications.set(item.chatId, {
+            const sources = chatNotificationSources.get(item.chatId) ?? {};
+            sources.server = {
               chatId: item.chatId,
               characterName: item.characterName,
               avatarUrl: item.avatarUrl,
               avatarCrop: item.avatarCrop ?? null,
               kind: "message",
               count: item.count,
-            });
+            };
+            chatNotificationSources.set(item.chatId, sources);
+            chatNotifications.set(item.chatId, mergedChatNotification(item.chatId)!);
           }
         }
 
         if (known) {
-          for (const chatId of Array.from(unreadCounts.keys())) {
-            if (!known.has(chatId) || !serverChatIds.has(chatId)) {
+          for (const [chatId, sources] of unreadCountSources) {
+            if (!known.has(chatId)) {
+              unreadCountSources.delete(chatId);
+              unreadCounts.delete(chatId);
+              continue;
+            }
+            if (!serverChatIds.has(chatId)) sources.server = 0;
+            const count = mergedUnreadCount(chatId);
+            if (count > 0) unreadCounts.set(chatId, count);
+            else {
+              unreadCountSources.delete(chatId);
               unreadCounts.delete(chatId);
             }
           }
-          for (const chatId of Array.from(chatNotifications.keys())) {
-            if (!known.has(chatId) || !serverChatIds.has(chatId)) {
+
+          for (const [chatId, sources] of chatNotificationSources) {
+            if (!known.has(chatId)) {
               clearNotificationTimer(chatId);
+              chatNotificationSources.delete(chatId);
+              chatNotifications.delete(chatId);
+              continue;
+            }
+            if (!serverChatIds.has(chatId)) delete sources.server;
+            const notification = mergedChatNotification(chatId);
+            if (notification) chatNotifications.set(chatId, notification);
+            else {
+              chatNotificationSources.delete(chatId);
               chatNotifications.delete(chatId);
             }
           }
@@ -784,6 +862,7 @@ export const useChatStore = create<ChatState>()(
     clearUnread: (chatId: string) =>
       set((state) => {
         if (!state.unreadCounts.has(chatId)) return state;
+        unreadCountSources.delete(chatId);
         const m = new Map(state.unreadCounts);
         m.delete(chatId);
         return { unreadCounts: m };
@@ -800,15 +879,18 @@ export const useChatStore = create<ChatState>()(
           return state;
         }
         const m = new Map(state.chatNotifications);
-        const existing = m.get(chatId);
-        m.set(chatId, {
+        const sources = chatNotificationSources.get(chatId) ?? {};
+        const existing = sources.client;
+        sources.client = {
           chatId,
           characterName,
           avatarUrl,
           avatarCrop: avatarCrop ?? existing?.avatarCrop ?? null,
           kind: "message",
           count: (existing?.count ?? 0) + 1,
-        });
+        };
+        chatNotificationSources.set(chatId, sources);
+        m.set(chatId, sources.client);
         scheduleNotificationAutoDismiss(chatId, get);
         return { chatNotifications: m };
       }),
@@ -820,7 +902,8 @@ export const useChatStore = create<ChatState>()(
         }
         clearNotificationTimer(chatId);
         const m = new Map(state.chatNotifications);
-        m.set(chatId, {
+        const sources = chatNotificationSources.get(chatId) ?? {};
+        sources.client = {
           chatId,
           characterName,
           avatarUrl,
@@ -829,20 +912,30 @@ export const useChatStore = create<ChatState>()(
           callId,
           reason: reason ?? null,
           count: 1,
-        });
+        };
+        chatNotificationSources.set(chatId, sources);
+        m.set(chatId, sources.client);
         return { chatNotifications: m };
       }),
     autoDismissNotification: (chatId) =>
       set((state) => {
         clearNotificationTimer(chatId);
-        if (!state.chatNotifications.has(chatId)) return state;
+        const sources = chatNotificationSources.get(chatId);
+        if (!sources?.client) return state;
+        delete sources.client;
         const m = new Map(state.chatNotifications);
-        m.delete(chatId);
+        const notification = mergedChatNotification(chatId);
+        if (notification) m.set(chatId, notification);
+        else {
+          chatNotificationSources.delete(chatId);
+          m.delete(chatId);
+        }
         return { chatNotifications: m };
       }),
     dismissNotification: (chatId) =>
       set((state) => {
         clearNotificationTimer(chatId);
+        chatNotificationSources.delete(chatId);
         const m = new Map(state.chatNotifications);
         m.delete(chatId);
         const d = new Set(state.dismissedNotifications);
@@ -856,6 +949,7 @@ export const useChatStore = create<ChatState>()(
         const d = new Set(state.dismissedNotifications);
         for (const chatId of chatIds) {
           clearNotificationTimer(chatId);
+          chatNotificationSources.delete(chatId);
           m.delete(chatId);
           d.add(chatId);
         }
@@ -891,33 +985,29 @@ export const useChatStore = create<ChatState>()(
 
     setConversationCallExpanded: (expanded) => set({ conversationCallExpanded: expanded }),
 
-    setSwipeIndex: (messageId: string, index: number) =>
-      set((state) => {
-        const m = new Map(state.swipeIndex);
-        m.set(messageId, index);
-        return { swipeIndex: m };
-      }),
-
     reset: () => {
+      unreadCountSources.clear();
+      chatNotificationSources.clear();
       const { abortControllers } = useChatStore.getState();
       for (const [chatId, controller] of abortControllers) {
-        abortGenerationForChat(chatId, controller);
+        void abortGenerationForChat(chatId, controller).catch(() => {});
       }
       clearAllNotificationTimers();
+      currentInputSnapshot = "";
+      clearCurrentInputPresenceTimer();
       set({
         activeChatId: null,
         activeChat: null,
-        messages: [],
         isStreaming: false,
         streamingChatId: null,
         mariPhaseByChatId: new Map(),
         streamBuffer: "",
         streamBuffers: new Map(),
-        committedStreamChatIds: new Set(),
         streamedMessageIds: new Map(),
         thinkingBuffer: "",
         thinkingBuffers: new Map(),
         abortControllers: new Map(),
+        backgroundIllustrationChatIds: new Set(),
         regenerateMessageId: null,
         streamingCharacterId: null,
         responseQueues: new Map(),
@@ -926,11 +1016,11 @@ export const useChatStore = create<ChatState>()(
         delayedCharacterInfo: null,
         perChatTyping: new Map(),
         perChatDelayed: new Map(),
-        swipeIndex: new Map(),
         pendingNewChatMode: null,
+        pendingNewChatOrigin: null,
         inputDrafts: new Map(),
         pendingSpatialTransitions: new Map(),
-        currentInput: "",
+        hasCurrentInput: false,
         unreadCounts: new Map(),
         chatNotifications: new Map(),
         dismissedNotifications: new Set(),

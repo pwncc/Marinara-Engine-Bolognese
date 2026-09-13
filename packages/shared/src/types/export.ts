@@ -11,6 +11,7 @@ export type ExportType =
   | "marinara_lorebook"
   | "marinara_preset"
   | "marinara_chat_preset"
+  | "marinara_chat_settings_profile"
   | "marinara_memory_recall"
   | "marinara_profile";
 
@@ -25,6 +26,8 @@ export interface ExportEnvelope<T = unknown> {
 export interface ChatMemoryRecallExportChunk {
   content: string;
   embedding: number[] | null;
+  /** Stable provider/model/profile identity for the exported vector. */
+  embeddingSpaceId?: string | null;
   messageCount: number;
   firstMessageAt: string;
   lastMessageAt: string;

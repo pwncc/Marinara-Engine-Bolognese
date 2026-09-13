@@ -5,8 +5,8 @@ import { CalendarClock, ChevronDown, RefreshCw, Settings2, Trash2 } from "lucide
 import { toast } from "sonner";
 import type { ConversationPresenceStatus, ConversationStatusOverride, WeekSchedule } from "@marinara-engine/shared";
 import type { Message } from "@marinara-engine/shared";
-import { useUpdateChatMetadata } from "../../hooks/use-chats";
-import { characterKeys } from "../../hooks/use-characters";
+import { chatKeys, useUpdateChatMetadata } from "../../hooks/use-chats";
+import { characterKeys, useUpdateCharacter } from "../../hooks/use-characters";
 import { useGenerate } from "../../hooks/use-generate";
 import { api } from "../../lib/api-client";
 import { cn, getAvatarCropStyle } from "../../lib/utils";
@@ -20,13 +20,15 @@ import {
   getChatToolbarButtonClass,
 } from "./ChatToolbarControls";
 import {
-  ROLEPLAY_POPOVER_HEADER,
-  ROLEPLAY_POPOVER_SCROLL_AREA,
-  ROLEPLAY_POPOVER_SHELL,
-  ROLEPLAY_POPOVER_SUBTITLE,
-  ROLEPLAY_POPOVER_TITLE,
-} from "./roleplay-popover-styles";
+  NEUTRAL_PANEL_HEADER,
+  NEUTRAL_PANEL_SCROLL_AREA,
+  NEUTRAL_PANEL_SHELL,
+  NEUTRAL_PANEL_SUBTITLE,
+  NEUTRAL_PANEL_TITLE,
+} from "../ui/neutral-surface-styles";
 import { ConversationPresenceScheduleSection } from "./ConversationPresenceScheduleSection";
+import { formatRelativeContact } from "../../lib/relative-time";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 type StatusEntry = {
   status: ConversationPresenceStatus;
@@ -107,43 +109,6 @@ function parseSchedules(raw: unknown): Record<string, WeekSchedule> {
   return schedules;
 }
 
-function buildOverrides(
-  existing: Record<string, ConversationStatusOverride>,
-  characterId: string,
-  override: ConversationStatusOverride | null,
-): Record<string, ConversationStatusOverride | null> {
-  const next: Record<string, ConversationStatusOverride | null> = { ...existing };
-  // Null signals deletion to the server merge; the server strips these tombstones.
-  next[characterId] = override;
-  return next;
-}
-
-function formatRelativeContact(isoTimestamp: string, now = Date.now()) {
-  const timestamp = new Date(isoTimestamp).getTime();
-  if (!Number.isFinite(timestamp)) return null;
-
-  const diffMs = now - timestamp;
-  if (diffMs < 60_000) return "just now";
-
-  const minutes = Math.floor(diffMs / 60_000);
-  if (minutes < 60) return `${minutes}m ago`;
-
-  const hours = Math.floor(diffMs / 3_600_000);
-  if (hours < 24) return `${hours}h ago`;
-
-  const days = Math.floor(diffMs / 86_400_000);
-  if (days < 7) return `${days}d ago`;
-
-  const weeks = Math.floor(days / 7);
-  if (weeks < 5) return `${weeks}w ago`;
-
-  const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-
-  const years = Math.floor(days / 365);
-  return `${years}y ago`;
-}
-
 function resizeActivityField(field: HTMLTextAreaElement | null) {
   if (!field) return;
   field.style.height = "0px";
@@ -159,6 +124,7 @@ export function ConversationPresenceCard({
   onOpenSettings,
   onOpenScheduleEditor,
 }: ConversationPresenceCardProps) {
+  const { t: localizeUi } = useUiTranslation();
   const [open, setOpen] = useState(false);
   const [editingCharacterId, setEditingCharacterId] = useState<string | null>(null);
   const [statusMenuCharacterId, setStatusMenuCharacterId] = useState<string | null>(null);
@@ -181,7 +147,9 @@ export function ConversationPresenceCard({
     width: 320,
   });
   const queryClient = useQueryClient();
+  const qc = queryClient;
   const updateMeta = useUpdateChatMetadata();
+  const updateCharacter = useUpdateCharacter();
   const { generate } = useGenerate();
   const activeAbortController = useChatStore((s) => s.abortControllers.get(chatId) ?? null);
   const delayedInfo = useChatStore((s) => s.perChatDelayed.get(chatId) ?? null);
@@ -408,15 +376,23 @@ export function ConversationPresenceCard({
   ): Promise<boolean> => {
     setPendingStatuses((current) => ({ ...current, [characterId]: status }));
     try {
-      await updateMeta.mutateAsync({
-        id: chatId,
-        conversationStatusOverrides: buildOverrides(overrides, characterId, {
-          status,
-          activity: typeof activity === "string" ? activity : null,
-          createdAt: new Date().toISOString(),
-          expiresAt: null,
-        }),
+      // The override belongs to the character, so it applies in every chat. The
+      // chat's cached copy is refreshed when the chat is re-read.
+      await updateCharacter.mutateAsync({
+        id: characterId,
+        data: {
+          extensions: {
+            conversationStatusOverride: {
+              status,
+              activity: typeof activity === "string" ? activity : null,
+              createdAt: new Date().toISOString(),
+              expiresAt: null,
+            },
+          },
+        },
+        skipVersionSnapshot: true,
       });
+      await qc.invalidateQueries({ queryKey: chatKeys.detail(chatId) });
       await statusesQuery.refetch();
       setPendingStatuses((current) => {
         const next = { ...current };
@@ -430,7 +406,11 @@ export function ConversationPresenceCard({
         delete next[characterId];
         return next;
       });
-      toast.error(error instanceof Error ? error.message : "Failed to save presence override");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : localizeUi("ui.chat.conversationpresencecard.failedToSavePresenceOverride"),
+      );
       return false;
     }
   };
@@ -442,13 +422,19 @@ export function ConversationPresenceCard({
       return next;
     });
     try {
-      await updateMeta.mutateAsync({
-        id: chatId,
-        conversationStatusOverrides: buildOverrides(overrides, characterId, null),
+      await updateCharacter.mutateAsync({
+        id: characterId,
+        data: { extensions: { conversationStatusOverride: null } },
+        skipVersionSnapshot: true,
       });
+      await qc.invalidateQueries({ queryKey: chatKeys.detail(chatId) });
       void statusesQuery.refetch();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to clear presence override");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : localizeUi("ui.chat.conversationpresencecard.failedToClearPresenceOverride"),
+      );
     }
   };
 
@@ -467,9 +453,11 @@ export function ConversationPresenceCard({
         forCharacterId: characterId,
         skipPresenceDelay: true,
       });
-      if (!produced) toast.info("No reply was generated.");
+      if (!produced) toast.info(localizeUi("ui.chat.conversationpresencecard.noReplyWasGenerated"));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to reply now");
+      toast.error(
+        error instanceof Error ? error.message : localizeUi("ui.chat.conversationpresencecard.failedToReplyNow"),
+      );
     } finally {
       setReplyNowCharacterId(null);
     }
@@ -529,6 +517,7 @@ export function ConversationPresenceCard({
       <button
         ref={buttonRef}
         type="button"
+        data-chat-help="identity"
         className={identityPillClass}
         title={title}
         onClick={() => {
@@ -599,7 +588,10 @@ export function ConversationPresenceCard({
             <span className="min-w-0 truncate text-[0.75rem] font-semibold text-[var(--foreground)]/90">
               {characters.length <= 2
                 ? characters.map((character) => character.name).join(" & ")
-                : `${characters[0].name} + ${characters.length - 1}`}
+                : localizeUi("ui.chat.conversationpresencecard.value1Value2", {
+                    value1: characters[0].name,
+                    value2: characters.length - 1,
+                  })}
             </span>
           </>
         )}
@@ -609,29 +601,29 @@ export function ConversationPresenceCard({
         createPortal(
           <div
             ref={popoverRef}
-            className={cn(ROLEPLAY_POPOVER_SHELL, "fixed z-[9999] overflow-hidden")}
+            className={cn(NEUTRAL_PANEL_SHELL, "fixed z-[9999] overflow-hidden")}
             style={{
               top: position.top,
               left: `max(calc(var(--mari-chat-ui-inset-left, 0px) + 0.75rem), min(${position.left}px, calc(100vw - var(--mari-chat-ui-inset-right, 0px) - ${position.width}px - 0.75rem)))`,
               width: position.width,
             }}
           >
-            <div className={ROLEPLAY_POPOVER_HEADER}>
+            <div className={NEUTRAL_PANEL_HEADER}>
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className={ROLEPLAY_POPOVER_TITLE}>
+                  <div className={NEUTRAL_PANEL_TITLE}>
                     <CalendarClock size="0.75rem" className="shrink-0 text-[var(--muted-foreground)]" />
-                    Conversation Presence
+                    {localizeUi("ui.chat.conversationpresencecard.conversationPresence")}
                   </div>
-                  <div className={ROLEPLAY_POPOVER_SUBTITLE}>
-                    See who is following schedule and step in manually only when needed.
+                  <div className={NEUTRAL_PANEL_SUBTITLE}>
+                    {localizeUi("ui.chat.conversationpresencecard.seeWhoIsFollowingScheduleAndStepInManually")}
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
                   <button
                     type="button"
                     className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-                    title="Open autonomous settings"
+                    title={localizeUi("ui.chat.conversationpresencecard.openAutonomousSettings")}
                     onClick={() => {
                       setOpen(false);
                       onOpenSettings(undefined, { initialSection: "autonomous" });
@@ -642,7 +634,7 @@ export function ConversationPresenceCard({
                   <button
                     type="button"
                     className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-                    title="Refresh status"
+                    title={localizeUi("ui.chat.conversationpresencecard.refreshStatus")}
                     onClick={() => void refreshStatuses()}
                   >
                     <RefreshCw
@@ -656,7 +648,7 @@ export function ConversationPresenceCard({
 
             <div
               className={cn(
-                ROLEPLAY_POPOVER_SCROLL_AREA,
+                NEUTRAL_PANEL_SCROLL_AREA,
                 "max-h-[min(28rem,calc(100vh-12rem))] space-y-2 overflow-y-auto p-2",
               )}
             >
@@ -702,25 +694,29 @@ export function ConversationPresenceCard({
                             <button
                               type="button"
                               className="min-w-0 flex-1 truncate text-left text-sm font-medium text-[var(--foreground)] transition-colors hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)]"
-                              title={`Open ${character.name} profile`}
+                              title={localizeUi("ui.chat.conversationpresencecard.openValue1Profile", {
+                                value1: character.name,
+                              })}
                               onClick={() => openCharacterDetail(character.id)}
                             >
                               {character.name}
                             </button>
                             {isManual && (
                               <span className="shrink-0 rounded-full bg-[var(--foreground)]/10 px-2 py-0.5 text-[0.625rem] font-medium text-[var(--foreground)]/75 ring-1 ring-[var(--border)]/70">
-                                Override
+                                {localizeUi("ui.chat.conversationpresencecard.override")}
                               </span>
                             )}
                           </div>
 
                           <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                             <span className="text-[0.625rem] text-[var(--muted-foreground)]">
-                              {isManual ? "Manual override" : "Following schedule"}
+                              {isManual
+                                ? localizeUi("ui.chat.conversationpresencecard.manualOverride")
+                                : localizeUi("ui.chat.conversationpresencecard.followingSchedule")}
                             </span>
                             {lastContactLabel && (
                               <span className="text-[0.625rem] text-[var(--muted-foreground)]/90">
-                                Last contact {lastContactLabel}
+                                {localizeUi("ui.chat.conversationpresencecard.lastContact")} {lastContactLabel}
                               </span>
                             )}
                           </div>
@@ -758,7 +754,7 @@ export function ConversationPresenceCard({
                             disabled={updateMeta.isPending}
                             rows={1}
                             className="min-h-[2rem] max-h-28 w-full min-w-0 flex-1 resize-none overflow-y-auto bg-transparent px-2.5 py-1.5 text-[0.75rem] leading-5 text-[var(--foreground)]/88 outline-none placeholder:text-[var(--muted-foreground)]/55 disabled:opacity-60"
-                            placeholder="Manual activity"
+                            placeholder={localizeUi("ui.chat.conversationpresencecard.manualActivity")}
                             onFocus={() => {
                               beginEditing(character);
                               resizeActivityField(activityFieldRefs.current[character.id]);
@@ -786,7 +782,7 @@ export function ConversationPresenceCard({
                               type="button"
                               disabled={updateMeta.isPending}
                               className="shrink-0 border-l border-[var(--border)] px-2.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)]/20 hover:text-[var(--foreground)] disabled:opacity-60"
-                              title="Clear manual override"
+                              title={localizeUi("ui.chat.conversationpresencecard.clearManualOverride")}
                               onClick={() => void restoreSchedule(character.id)}
                             >
                               <Trash2 size="0.75rem" />
@@ -810,7 +806,9 @@ export function ConversationPresenceCard({
                           className="mt-2 inline-flex w-full items-center justify-center rounded-md bg-[var(--foreground)]/8 px-2.5 py-1.5 text-[0.6875rem] font-medium text-[var(--foreground)]/78 ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--foreground)]/12 hover:text-[var(--foreground)] disabled:cursor-wait disabled:opacity-60"
                           onClick={() => void replyNow(character.id)}
                         >
-                          {isReplyNowPending ? "Replying now..." : "Reply now"}
+                          {isReplyNowPending
+                            ? localizeUi("ui.chat.conversationpresencecard.replyingNow")
+                            : localizeUi("ui.chat.conversationpresencecard.replyNow")}
                         </button>
                       )}
                     </div>
@@ -820,7 +818,7 @@ export function ConversationPresenceCard({
                         <div
                           ref={statusMenuRef}
                           role="menu"
-                          aria-label="Choose conversation status"
+                          aria-label={localizeUi("ui.chat.conversationpresencecard.chooseConversationStatus")}
                           className="fixed z-[10000] rounded-lg border border-[var(--border)] bg-[var(--popover)] p-1 text-[var(--popover-foreground)] shadow-xl ring-1 ring-[var(--border)]"
                           style={{
                             left: statusMenuPosition.left,

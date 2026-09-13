@@ -29,6 +29,7 @@ import {
   pruneStatusDraft,
   readMessageConvoCharacterStatus,
 } from "../chat/convo-character-status-utils";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 const LIVE_SOURCE = "live";
 
@@ -82,6 +83,7 @@ function BarRow({
   onRenameKey,
   onRemove,
 }: BarRowProps) {
+  const { t: localizeUi } = useUiTranslation();
   const [keyDraft, setKeyDraft] = useState(barKey);
   const spec = getConvoBarSpec(barKey);
   const label = getConvoBarDisplayLabel(barKey, meta);
@@ -108,7 +110,11 @@ function BarRow({
           onClick={onToggleExpand}
           className="flex h-5 w-4 shrink-0 items-center justify-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
           aria-expanded={expanded}
-          aria-label={expanded ? `Collapse ${label} details` : `Expand ${label} details`}
+          aria-label={
+            expanded
+              ? localizeUi("ui.modals.barrow.collapseValue1Details", { value1: label })
+              : localizeUi("ui.modals.barrow.expandValue1Details", { value1: label })
+          }
         >
           {expanded ? <ChevronDown size="0.75rem" /> : <ChevronRight size="0.75rem" />}
         </button>
@@ -122,7 +128,7 @@ function BarRow({
           value={value}
           onChange={(e) => onValueChange(Number(e.target.value))}
           className="h-1.5 min-w-0 flex-1 accent-[var(--primary)]"
-          aria-label={`${label} value`}
+          aria-label={localizeUi("ui.characters.statstab.value1Value", { value1: label })}
         />
         <input
           type="number"
@@ -131,13 +137,13 @@ function BarRow({
           value={value}
           onChange={(e) => onValueChange(Number(e.target.value))}
           className={`${inputClass} w-14 shrink-0 text-center tabular-nums`}
-          aria-label={`${label} percentage`}
+          aria-label={localizeUi("ui.modals.barrow.value1Percentage", { value1: label })}
         />
         <button
           type="button"
           className="shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--destructive)]"
           onClick={onRemove}
-          aria-label={`Remove ${label} bar`}
+          aria-label={localizeUi("ui.modals.barrow.removeValue1Bar", { value1: label })}
         >
           <Trash2 size="0.75rem" />
         </button>
@@ -151,7 +157,9 @@ function BarRow({
           ) : null}
           <div className="grid grid-cols-2 gap-1.5">
             <label className="block space-y-0.5">
-              <span className="text-[0.6rem] text-[var(--muted-foreground)]">Display name</span>
+              <span className="text-[0.6rem] text-[var(--muted-foreground)]">
+                {localizeUi("ui.noodle.noodleprofilesurface.displayName")}
+              </span>
               <input
                 className={inputClass}
                 value={meta?.label ?? ""}
@@ -160,7 +168,9 @@ function BarRow({
               />
             </label>
             <label className="block space-y-0.5">
-              <span className="text-[0.6rem] text-[var(--muted-foreground)]">Key (JSON id)</span>
+              <span className="text-[0.6rem] text-[var(--muted-foreground)]">
+                {localizeUi("ui.modals.barrow.keyJsonId")}
+              </span>
               <input
                 className={inputClass}
                 value={keyDraft}
@@ -176,23 +186,31 @@ function BarRow({
             </label>
           </div>
           <label className="block space-y-0.5">
-            <span className="text-[0.6rem] text-[var(--muted-foreground)]">What this meter means (sent to the AI)</span>
+            <span className="text-[0.6rem] text-[var(--muted-foreground)]">
+              {localizeUi("ui.modals.barrow.whatThisMeterMeansSentToTheAi")}
+            </span>
             <textarea
               className={`${inputClass} min-h-[2rem] resize-y`}
               rows={1}
               value={meta?.description ?? ""}
               onChange={(e) => onMetaChange({ ...(meta ?? {}), description: e.target.value })}
-              placeholder={spec ? "Override the built-in meaning…" : "What does this meter measure?"}
+              placeholder={
+                spec
+                  ? localizeUi("ui.modals.barrow.overrideTheBuiltInMeaning")
+                  : localizeUi("ui.modals.barrow.whatDoesThisMeterMeasure")
+              }
             />
           </label>
           <label className="block space-y-0.5">
-            <span className="text-[0.6rem] text-[var(--muted-foreground)]">Notes for the AI</span>
+            <span className="text-[0.6rem] text-[var(--muted-foreground)]">
+              {localizeUi("ui.modals.barrow.notesForTheAi")}
+            </span>
             <textarea
               className={`${inputClass} min-h-[2rem] resize-y`}
               rows={1}
               value={meta?.notes ?? ""}
               onChange={(e) => onMetaChange({ ...(meta ?? {}), notes: e.target.value })}
-              placeholder="Scene-specific reminders…"
+              placeholder={localizeUi("ui.modals.barrow.sceneSpecificReminders")}
             />
           </label>
         </div>
@@ -211,6 +229,7 @@ interface StatusEditorFormProps {
 }
 
 function StatusEditorForm({ draft, onChange }: StatusEditorFormProps) {
+  const { t: localizeUi } = useUiTranslation();
   const [expandedBars, setExpandedBars] = useState<Set<string>>(() => new Set());
   const [newBarKey, setNewBarKey] = useState("");
   const [newLimbKey, setNewLimbKey] = useState("");
@@ -327,33 +346,39 @@ function StatusEditorForm({ draft, onChange }: StatusEditorFormProps) {
     <div className="space-y-4">
       {/* ── Mood ── */}
       <div className="space-y-1.5">
-        <span className={sectionLabelClass}>Mood</span>
+        <span className={sectionLabelClass}>{localizeUi("ui.chat.combinedplayerpanel.mood")}</span>
         <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-[1fr_1.4fr_1fr]">
           <label className="block space-y-0.5">
-            <span className="text-[0.6rem] text-[var(--muted-foreground)]">Emotion</span>
+            <span className="text-[0.6rem] text-[var(--muted-foreground)]">
+              {localizeUi("ui.modals.statuseditorform.emotion")}
+            </span>
             <input
               className={inputClass}
               value={draft.emotion ?? ""}
               onChange={(e) => onChange({ ...draft, emotion: e.target.value })}
-              placeholder="jealous, giddy, tender…"
+              placeholder={localizeUi("ui.modals.statuseditorform.jealousGiddyTender")}
             />
           </label>
           <label className="block space-y-0.5">
-            <span className="text-[0.6rem] text-[var(--muted-foreground)]">Because…</span>
+            <span className="text-[0.6rem] text-[var(--muted-foreground)]">
+              {localizeUi("ui.modals.statuseditorform.because")}
+            </span>
             <input
               className={inputClass}
               value={draft.emotionCause ?? ""}
               onChange={(e) => onChange({ ...draft, emotionCause: e.target.value })}
-              placeholder="why they feel this way"
+              placeholder={localizeUi("ui.modals.statuseditorform.whyTheyFeelThisWay")}
             />
           </label>
           <label className="block space-y-0.5">
-            <span className="text-[0.6rem] text-[var(--muted-foreground)]">Temperature</span>
+            <span className="text-[0.6rem] text-[var(--muted-foreground)]">
+              {localizeUi("ui.modals.modeldownloadmodal.temperature")}
+            </span>
             <input
               className={inputClass}
               value={draft.temperature ?? ""}
               onChange={(e) => onChange({ ...draft, temperature: e.target.value })}
-              placeholder="warm, flushed, chilled…"
+              placeholder={localizeUi("ui.modals.statuseditorform.warmFlushedChilled")}
             />
           </label>
         </div>
@@ -361,7 +386,7 @@ function StatusEditorForm({ draft, onChange }: StatusEditorFormProps) {
 
       {/* ── Bars ── */}
       <div className="space-y-1.5">
-        <span className={sectionLabelClass}>Meters</span>
+        <span className={sectionLabelClass}>{localizeUi("ui.modals.statuseditorform.meters")}</span>
         <div className="space-y-1">
           {barKeys.map((key) => (
             <BarRow
@@ -379,7 +404,7 @@ function StatusEditorForm({ draft, onChange }: StatusEditorFormProps) {
           ))}
           {!barKeys.length ? (
             <p className="rounded-md border border-dashed border-[var(--border)] px-2 py-1.5 text-[0.65rem] text-[var(--muted-foreground)]">
-              No meters yet — add the ones below, or let the AI establish them in chat.
+              {localizeUi("ui.modals.statuseditorform.noMetersYetAddTheOnesBelowOrLet")}
             </p>
           ) : null}
         </div>
@@ -407,7 +432,7 @@ function StatusEditorForm({ draft, onChange }: StatusEditorFormProps) {
                   setNewBarKey("");
                 }
               }}
-              placeholder="custom meter…"
+              placeholder={localizeUi("ui.modals.statuseditorform.customMeter")}
             />
             <button
               type="button"
@@ -417,7 +442,7 @@ function StatusEditorForm({ draft, onChange }: StatusEditorFormProps) {
               }}
               disabled={!sanitizeConvoBarKey(newBarKey)}
               className="rounded-md border border-[var(--border)] px-1.5 py-1 text-[0.65rem] transition-colors hover:bg-[var(--accent)]/40 disabled:opacity-40"
-              aria-label="Add custom meter"
+              aria-label={localizeUi("ui.modals.statuseditorform.addCustomMeter")}
             >
               <Plus size="0.7rem" />
             </button>
@@ -427,10 +452,9 @@ function StatusEditorForm({ draft, onChange }: StatusEditorFormProps) {
 
       {/* ── Body ── */}
       <div className="space-y-1.5">
-        <span className={sectionLabelClass}>Body</span>
+        <span className={sectionLabelClass}>{localizeUi("ui.modals.statuseditorform.body")}</span>
         <p className="text-[0.65rem] leading-snug text-[var(--muted-foreground)]">
-          Sensation, position, held items, objects inside — e.g. &quot;sore, holding a beer can&quot;. Only set parts are
-          saved.
+          {localizeUi("ui.modals.statuseditorform.sensationPositionHeldItemsObjectsInsideEGSore")}
         </p>
         <div className="space-y-1">
           {setLimbKeys.map((key) => (
@@ -442,13 +466,15 @@ function StatusEditorForm({ draft, onChange }: StatusEditorFormProps) {
                 className={inputClass}
                 value={draft.limbs?.[key] ?? ""}
                 onChange={(e) => setLimb(key, e.target.value)}
-                placeholder="fine; sore; holding…"
+                placeholder={localizeUi("ui.modals.statuseditorform.fineSoreHolding")}
               />
               <button
                 type="button"
                 className="shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--destructive)]"
                 onClick={() => removeLimb(key)}
-                aria-label={`Clear ${formatConvoBarKeyLabel(key)}`}
+                aria-label={localizeUi("ui.modals.statuseditorform.clearValue1", {
+                  value1: formatConvoBarKeyLabel(key),
+                })}
               >
                 <X size="0.75rem" />
               </button>
@@ -478,7 +504,7 @@ function StatusEditorForm({ draft, onChange }: StatusEditorFormProps) {
                   setNewLimbKey("");
                 }
               }}
-              placeholder="custom part…"
+              placeholder={localizeUi("ui.modals.statuseditorform.customPart")}
             />
             <button
               type="button"
@@ -488,7 +514,7 @@ function StatusEditorForm({ draft, onChange }: StatusEditorFormProps) {
               }}
               disabled={!newLimbKey.trim()}
               className="rounded-md border border-[var(--border)] px-1.5 py-1 text-[0.65rem] transition-colors hover:bg-[var(--accent)]/40 disabled:opacity-40"
-              aria-label="Add custom body part"
+              aria-label={localizeUi("ui.modals.statuseditorform.addCustomBodyPart")}
             >
               <Plus size="0.7rem" />
             </button>
@@ -498,13 +524,13 @@ function StatusEditorForm({ draft, onChange }: StatusEditorFormProps) {
 
       {/* ── Extras & notes ── */}
       <div className="space-y-1.5">
-        <span className={sectionLabelClass}>Extras</span>
+        <span className={sectionLabelClass}>{localizeUi("ui.modals.statuseditorform.extras")}</span>
         {extraRows.map((row, idx) => (
           <div key={row.id} className="flex items-center gap-2">
             <input
               className={`${inputClass} w-32 shrink-0`}
               value={row.key}
-              placeholder="field"
+              placeholder={localizeUi("ui.chat.combinedplayerpanel.field")}
               onChange={(e) => {
                 const rows = [...extraRows];
                 rows[idx] = { ...row, key: e.target.value };
@@ -514,7 +540,7 @@ function StatusEditorForm({ draft, onChange }: StatusEditorFormProps) {
             <input
               className={inputClass}
               value={row.value}
-              placeholder="value"
+              placeholder={localizeUi("ui.modals.statuseditorform.value")}
               onChange={(e) => {
                 const rows = [...extraRows];
                 rows[idx] = { ...row, value: e.target.value };
@@ -525,7 +551,7 @@ function StatusEditorForm({ draft, onChange }: StatusEditorFormProps) {
               type="button"
               className="shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--destructive)]"
               onClick={() => syncExtras(extraRows.filter((_, i) => i !== idx))}
-              aria-label="Remove extra field"
+              aria-label={localizeUi("ui.modals.statuseditorform.removeExtraField")}
             >
               <X size="0.75rem" />
             </button>
@@ -536,15 +562,17 @@ function StatusEditorForm({ draft, onChange }: StatusEditorFormProps) {
           className="flex items-center gap-0.5 text-[0.65rem] text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
           onClick={() => setExtraRows([...extraRows, { id: `new-${Date.now()}`, key: "", value: "" }])}
         >
-          <Plus size="0.65rem" /> Add field
+          <Plus size="0.65rem" /> {localizeUi("ui.modals.statuseditorform.addField")}
         </button>
         <label className="block space-y-0.5">
-          <span className="text-[0.6rem] text-[var(--muted-foreground)]">Notes</span>
+          <span className="text-[0.6rem] text-[var(--muted-foreground)]">
+            {localizeUi("ui.modals.statuseditorform.notes")}
+          </span>
           <textarea
             className={`${inputClass} min-h-[2.5rem] resize-y`}
             value={draft.notes ?? ""}
             onChange={(e) => onChange({ ...draft, notes: e.target.value })}
-            placeholder="breathless, tipsy, aftercare…"
+            placeholder={localizeUi("ui.modals.statuseditorform.breathlessTipsyAftercare")}
             rows={2}
           />
         </label>
@@ -570,6 +598,7 @@ export function CharacterStatusModal({
   initialCharacterId,
   messages,
 }: CharacterStatusModalProps) {
+  const { t: localizeUi } = useUiTranslation();
   const { data: chat } = useChat(chatId);
   const { data: characters } = useCharacters();
   const updateMetadata = useUpdateChatMetadata();
@@ -595,7 +624,8 @@ export function CharacterStatusModal({
   const [drafts, setDrafts] = useState<Record<string, ConvoCharacterStatus>>({});
   const [dirty, setDirty] = useState(false);
 
-  const activeCharId = selectedCharId && chatCharIds.includes(selectedCharId) ? selectedCharId : (chatCharIds[0] ?? null);
+  const activeCharId =
+    selectedCharId && chatCharIds.includes(selectedCharId) ? selectedCharId : (chatCharIds[0] ?? null);
 
   const historyOptions = useMemo(() => {
     const options: Array<{ id: string; label: string }> = [{ id: LIVE_SOURCE, label: "Current (live)" }];
@@ -640,7 +670,7 @@ export function CharacterStatusModal({
 
   const handleHistoryChange = useCallback(
     (sourceId: string) => {
-      if (dirty && !window.confirm("Discard unsaved status edits?")) return;
+      if (dirty && !window.confirm(localizeUi("ui.modals.characterstatusmodal.discardUnsavedStatusEdits"))) return;
       setHistorySource(sourceId);
       const snapshot =
         sourceId === LIVE_SOURCE
@@ -648,7 +678,7 @@ export function CharacterStatusModal({
           : (readMessageConvoCharacterStatus(messages?.find((m) => m.id === sourceId) ?? ({} as Message)) ?? {});
       resetDrafts(snapshot);
     },
-    [dirty, messages, resetDrafts, statusMap],
+    [dirty, localizeUi, messages, resetDrafts, statusMap],
   );
 
   const handleDraftChange = useCallback((charId: string, next: ConvoCharacterStatus) => {
@@ -665,27 +695,33 @@ export function CharacterStatusModal({
     try {
       if (historySource === LIVE_SOURCE) {
         await updateMetadata.mutateAsync({ id: chatId, convoCharacterStatus });
-        toast.success("Character status saved");
+        toast.success(localizeUi("ui.modals.characterstatusmodal.characterStatusSaved"));
       } else {
         await updateMessageExtra.mutateAsync({ messageId: historySource, extra: { convoCharacterStatus } });
-        toast.success("Status snapshot updated for that message");
+        toast.success(localizeUi("ui.modals.characterstatusmodal.statusSnapshotUpdatedForThatMessage"));
       }
       setDirty(false);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save status");
+      toast.error(err instanceof Error ? err.message : localizeUi("ui.modals.characterstatusmodal.failedToSaveStatus"));
     }
-  }, [chatId, drafts, historySource, updateMessageExtra, updateMetadata]);
+  }, [chatId, drafts, historySource, localizeUi, updateMessageExtra, updateMetadata]);
 
   const saving = updateMetadata.isPending || updateMessageExtra.isPending;
   const viewingHistorical = historySource !== LIVE_SOURCE;
 
   return (
-    <Modal open={open} onClose={onClose} title="Character status" width="max-w-2xl" mobileFullscreen>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={localizeUi("ui.modals.characterstatusmodal.characterStatus")}
+      width="max-w-2xl"
+      mobileFullscreen
+    >
       <div className="space-y-3">
         <p className="text-[0.7rem] leading-snug text-[var(--muted-foreground)]">
-          The AI reads this ledger every turn and updates it with hidden{" "}
-          <code className="rounded bg-[var(--secondary)] px-1">&lt;character_status&gt;</code> tags. Edits here become
-          the new truth for the next reply.
+          {localizeUi("ui.modals.characterstatusmodal.theAiReadsThisLedgerEveryTurnAndUpdates")}{" "}
+          <code className="rounded bg-[var(--secondary)] px-1">&lt;character_status&gt;</code>{" "}
+          {localizeUi("ui.modals.characterstatusmodal.tagsEditsHereBecomeTheNewTruthForThe")}
         </p>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -714,14 +750,16 @@ export function CharacterStatusModal({
               })}
             </div>
           ) : (
-            <span className="flex-1 text-xs font-medium">{activeCharId ? (nameById.get(activeCharId) ?? "Character") : ""}</span>
+            <span className="flex-1 text-xs font-medium">
+              {activeCharId ? (nameById.get(activeCharId) ?? "Character") : ""}
+            </span>
           )}
           {historyOptions.length > 1 ? (
             <select
               className={`${inputClass} w-auto max-w-[14rem] shrink-0`}
               value={historySource}
               onChange={(e) => handleHistoryChange(e.target.value)}
-              aria-label="Status history"
+              aria-label={localizeUi("ui.modals.characterstatusmodal.statusHistory")}
             >
               {historyOptions.map((opt) => (
                 <option key={opt.id} value={opt.id}>
@@ -734,8 +772,7 @@ export function CharacterStatusModal({
 
         {viewingHistorical ? (
           <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[0.65rem] leading-snug text-amber-600 dark:text-amber-400">
-            Viewing a per-message snapshot. Saving updates that message&apos;s snapshot only — switch to
-            &quot;Current&quot; to edit the live ledger.
+            {localizeUi("ui.modals.characterstatusmodal.viewingAPerMessageSnapshotSavingUpdatesThatMessage")}
           </p>
         ) : null}
 
@@ -745,7 +782,9 @@ export function CharacterStatusModal({
             onChange={(next) => handleDraftChange(activeCharId, next)}
           />
         ) : (
-          <p className="text-xs text-[var(--muted-foreground)]">No characters in this chat.</p>
+          <p className="text-xs text-[var(--muted-foreground)]">
+            {localizeUi("ui.modals.characterstatusmodal.noCharactersInThisChat")}
+          </p>
         )}
 
         <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] pt-3">
@@ -755,7 +794,7 @@ export function CharacterStatusModal({
             onClick={() => resetDrafts(selectedSnapshot)}
             className="flex items-center gap-1 rounded-md border border-[var(--border)] px-3 py-1.5 text-xs transition-colors hover:bg-[var(--accent)]/40 disabled:opacity-40"
           >
-            <RotateCcw size="0.7rem" /> Reset
+            <RotateCcw size="0.7rem" /> {localizeUi("ui.cardversionhistory.reset")}
           </button>
           <button
             type="button"
@@ -763,7 +802,7 @@ export function CharacterStatusModal({
             onClick={() => void handleSave()}
             className="rounded-md bg-[var(--primary)] px-4 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity disabled:opacity-40"
           >
-            {saving ? "Saving…" : "Save"}
+            {saving ? localizeUi("chat.settings.inlineEditor.saving") : localizeUi("editor.save.action")}
           </button>
         </div>
       </div>

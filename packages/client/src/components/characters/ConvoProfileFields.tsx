@@ -4,14 +4,16 @@
 // These fields only affect Conversation mode; they are never read in RP/VN/Game.
 // ──────────────────────────────────────────────
 import { useEffect, useRef, useState } from "react";
-import { RotateCcw, Smile } from "lucide-react";
+import { CalendarClock, RotateCcw, Smile } from "lucide-react";
 import {
   type ConvoBehaviorConfig,
   type ConvoBehaviorInsertionStrategy,
+  type WeekSchedule,
 } from "@marinara-engine/shared";
 import { MacroTextarea } from "../ui/MacroTextarea";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { HelpTooltip } from "../ui/HelpTooltip";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 const STRATEGY_OPTIONS: Array<{ value: ConvoBehaviorInsertionStrategy; label: string }> = [
   { value: "constant_after", label: "Constant — after the card" },
@@ -21,6 +23,15 @@ const STRATEGY_OPTIONS: Array<{ value: ConvoBehaviorInsertionStrategy; label: st
   { value: "post_history_replace", label: "Replace post-history" },
   { value: "macro", label: "Only where {{convo_behavior}} is placed" },
 ];
+
+/** One-line description of the saved schedule for the Convo tab panel. */
+function scheduleSummary(schedule: WeekSchedule | undefined): string {
+  if (!schedule) return "No schedule yet — create one to give this character a routine.";
+  const summary = schedule.routineSummary?.trim();
+  if (summary) return summary;
+  const dayCount = Object.values(schedule.days ?? {}).filter((blocks) => blocks?.length).length;
+  return `${dayCount} of 7 days planned.`;
+}
 
 interface ConvoProfileFieldsProps {
   kind: "character" | "persona";
@@ -37,6 +48,14 @@ interface ConvoProfileFieldsProps {
   onAboutMeChange: (value: string) => void;
   behavior: ConvoBehaviorConfig | null | undefined;
   onBehaviorChange: (value: ConvoBehaviorConfig) => void;
+  imageInstructions?: string;
+  onImageInstructionsChange?: (value: string) => void;
+  applyImageInstructionsToNoodle?: boolean;
+  onApplyImageInstructionsToNoodleChange?: (value: boolean) => void;
+  /** The character's weekly convo schedule, if one has been generated. */
+  schedule?: WeekSchedule;
+  /** Opens the schedule editor. Omit to hide the schedule panel entirely. */
+  onEditSchedule?: () => void;
 }
 
 export function ConvoProfileFields({
@@ -51,7 +70,14 @@ export function ConvoProfileFields({
   onAboutMeChange,
   behavior,
   onBehaviorChange,
+  imageInstructions,
+  onImageInstructionsChange,
+  applyImageInstructionsToNoodle,
+  onApplyImageInstructionsToNoodleChange,
+  schedule,
+  onEditSchedule,
 }: ConvoProfileFieldsProps) {
+  const { t: localizeUi } = useUiTranslation();
   const aboutMeRef = useRef<HTMLTextAreaElement>(null);
   const emojiBtnRef = useRef<HTMLButtonElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -99,8 +125,8 @@ export function ConvoProfileFields({
     <div className="space-y-4" data-component="ConvoProfileFields">
       <div className="mari-editor-panel space-y-2 p-3">
         <span className="inline-flex items-center gap-1 text-xs font-semibold">
-          Convo Display Name
-          <HelpTooltip text="Shown as this person's name in Conversation mode. Leave blank to use their card name. Only affects Convo mode." />
+          {localizeUi("ui.characters.convoprofilefields.convoDisplayName")}
+          <HelpTooltip text={localizeUi("ui.characters.convoprofilefields.shownAsThisPersonSNameInConversationMode")} />
         </span>
         <input
           value={displayName}
@@ -117,8 +143,10 @@ export function ConvoProfileFields({
               className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--primary)]"
             />
             <span className="inline-flex items-center gap-1">
-              Declare this name on the card in the prompt
-              <HelpTooltip text="Prepends a line like “Conversation display name: X” to this character's card so the model knows which card presents under which Convo name. Needs a display name set. Convo mode only." />
+              {localizeUi("ui.characters.convoprofilefields.declareThisNameOnTheCardInThePrompt")}
+              <HelpTooltip
+                text={localizeUi("ui.characters.convoprofilefields.prependsALineLikeConversationDisplayNameXTo")}
+              />
             </span>
           </label>
         )}
@@ -127,32 +155,39 @@ export function ConvoProfileFields({
       <div className="mari-editor-panel space-y-3 p-3">
         <div className="flex items-center justify-between gap-2">
           <span className="inline-flex items-center gap-1 text-xs font-semibold">
-            About Me
-            <HelpTooltip text="A short self-authored profile / bio, shown in Conversation mode. Some people write a lot; some leave it blank or drop a single emoji — that's fine. You can also ask Professor Mari to draft or revise it. Only affects Convo mode." />
+            {localizeUi("ui.characters.convoprofilefields.aboutMe")}
+            <HelpTooltip
+              text={localizeUi("ui.characters.convoprofilefields.aShortSelfAuthoredProfileBioShownInConversation")}
+            />
           </span>
         </div>
         <MacroTextarea
           value={aboutMe}
           onChange={changeAboutMe}
           textareaRef={aboutMeRef}
-          placeholder="A line or two, an emoji, a joke, or nothing at all — whatever fits them…"
+          placeholder={localizeUi("ui.characters.convoprofilefields.aLineOrTwoAnEmojiAJokeOr")}
           rows={5}
-          title="About Me"
+          title={localizeUi("ui.characters.convoprofilefields.aboutMe")}
           className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-3 text-sm leading-relaxed outline-none transition-colors placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
           toolbarExtra={
             <button
               ref={emojiBtnRef}
               type="button"
               onClick={() => setEmojiOpen((v) => !v)}
-              aria-label="Insert emoji"
-              title="Insert emoji"
+              aria-label={localizeUi("ui.characters.convoprofilefields.insertEmoji")}
+              title={localizeUi("ui.characters.convoprofilefields.insertEmoji")}
               className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
             >
               <Smile className="h-3 w-3" />
             </button>
           }
         />
-        <EmojiPicker open={emojiOpen} onClose={() => setEmojiOpen(false)} onSelect={insertEmoji} anchorRef={emojiBtnRef} />
+        <EmojiPicker
+          open={emojiOpen}
+          onClose={() => setEmojiOpen(false)}
+          onSelect={insertEmoji}
+          anchorRef={emojiBtnRef}
+        />
         {revertTo !== null && revertTo !== aboutMe && (
           <button
             type="button"
@@ -160,51 +195,103 @@ export function ConvoProfileFields({
               onAboutMeChange(revertTo);
               setRevertTo(null);
             }}
-            title="Undo the changes to this about me"
+            title={localizeUi("ui.characters.convoprofilefields.undoTheChangesToThisAboutMe")}
             className="inline-flex items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
           >
             <RotateCcw size="0.8125rem" />
-            Revert
+            {localizeUi("ui.characters.convoprofilefields.revert")}
           </button>
         )}
       </div>
 
-      <div className="mari-editor-panel space-y-3 p-3">
-        <span className="inline-flex items-center gap-1 text-xs font-semibold">
-          Convo Behavior
-          <HelpTooltip
-            wide
-            text="A Conversation-mode-only instruction for how this person behaves in chat, plus where it goes in the prompt. Never sent in Roleplay or Game mode."
+      {kind === "character" && (
+        <div className="mari-editor-panel space-y-3 p-3">
+          <span className="inline-flex items-center gap-1 text-xs font-semibold">
+            {localizeUi("ui.characters.convoprofilefields.convoBehavior")}
+            <HelpTooltip
+              wide
+              text={localizeUi("ui.characters.convoprofilefields.aConversationModeOnlyInstructionForHowThisPerson")}
+            />
+          </span>
+          <MacroTextarea
+            value={behaviorInstruction}
+            onChange={(value) => onBehaviorChange({ instruction: value, insertionStrategy: behaviorStrategy })}
+            placeholder={localizeUi("ui.characters.convoprofilefields.eGKeepRepliesShortAndLowercaseTextsLike")}
+            rows={4}
+            title={localizeUi("ui.characters.convoprofilefields.convoBehavior")}
+            className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-3 text-sm outline-none transition-colors placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
           />
-        </span>
-        <MacroTextarea
-          value={behaviorInstruction}
-          onChange={(value) => onBehaviorChange({ instruction: value, insertionStrategy: behaviorStrategy })}
-          placeholder="e.g. Keep replies short and lowercase; texts like a real person, not a narrator…"
-          rows={4}
-          title="Convo Behavior"
-          className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-3 text-sm outline-none transition-colors placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
-        />
-        <label className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-[var(--muted-foreground)]">Insertion</span>
-          <select
-            value={behaviorStrategy}
-            onChange={(e) =>
-              onBehaviorChange({
-                instruction: behaviorInstruction,
-                insertionStrategy: e.target.value as ConvoBehaviorInsertionStrategy,
-              })
-            }
-            className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs outline-none"
+          <label className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-[var(--muted-foreground)]">
+              {localizeUi("ui.characters.convoprofilefields.insertion")}
+            </span>
+            <select
+              value={behaviorStrategy}
+              onChange={(e) =>
+                onBehaviorChange({
+                  instruction: behaviorInstruction,
+                  insertionStrategy: e.target.value as ConvoBehaviorInsertionStrategy,
+                })
+              }
+              className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs outline-none"
+            >
+              {STRATEGY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+
+      {kind === "character" && onEditSchedule && (
+        <div className="mari-editor-panel space-y-3 p-3">
+          <span className="inline-flex items-center gap-1 text-xs font-semibold">
+            <CalendarClock className="h-3.5 w-3.5" />
+            {localizeUi("ui.characters.convoprofilefields.weeklySchedule")}
+            <HelpTooltip
+              wide
+              text={localizeUi("ui.characters.convoprofilefields.thisCharacterSDailyRoutineItDrivesPresenceReply")}
+            />
+          </span>
+          <p className="text-xs leading-relaxed text-[var(--muted-foreground)]">{scheduleSummary(schedule)}</p>
+          <button
+            type="button"
+            onClick={onEditSchedule}
+            className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-1.5 text-xs font-medium transition-colors hover:border-[var(--primary)]/40"
           >
-            {STRATEGY_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+            {schedule
+              ? localizeUi("ui.characters.convoprofilefields.editSchedule")
+              : localizeUi("ui.chat.chatsettingsdrawer.createSchedule")}
+          </button>
+        </div>
+      )}
+
+      {kind === "character" && onImageInstructionsChange && onApplyImageInstructionsToNoodleChange && (
+        <div className="mari-editor-panel space-y-3 p-3">
+          <span className="inline-flex items-center gap-1 text-xs font-semibold">
+            {localizeUi("ui.characters.convoprofilefields.imageGenerationInstructions")}
+            <HelpTooltip wide text={localizeUi("ui.characters.convoprofilefields.imageGenerationInstructionsHelp")} />
+          </span>
+          <textarea
+            value={imageInstructions ?? ""}
+            onChange={(event) => onImageInstructionsChange(event.target.value)}
+            placeholder={localizeUi("ui.characters.convoprofilefields.imageGenerationInstructionsPlaceholder")}
+            rows={5}
+            className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-3 text-sm leading-relaxed outline-none transition-colors placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
+          />
+          <label className="flex items-start gap-2 text-xs text-[var(--muted-foreground)]">
+            <input
+              type="checkbox"
+              checked={!!applyImageInstructionsToNoodle}
+              onChange={(event) => onApplyImageInstructionsToNoodleChange(event.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--primary)]"
+            />
+            <span>{localizeUi("ui.characters.convoprofilefields.applyImageInstructionsToNoodle")}</span>
+          </label>
+        </div>
+      )}
     </div>
   );
 }

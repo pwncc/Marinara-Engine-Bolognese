@@ -19,40 +19,6 @@ import type {
 import { normalizeLocationKind, normalizeMusicGenre, normalizeMusicIntensity } from "@marinara-engine/shared";
 import { logger } from "../../lib/logger.js";
 
-// ── Expression normalization ──
-
-const VALID_EXPRESSIONS = new Set([
-  "happy",
-  "sad",
-  "angry",
-  "smirk",
-  "surprised",
-  "neutral",
-  "worried",
-  "thinking",
-  "amused",
-  "battle_stance",
-  "frightened",
-  "determined",
-  "exhausted",
-]);
-
-/** keyword fragments → canonical expression  */
-const EXPRESSION_MAP: [string[], string][] = [
-  [["happy", "joy", "cheerful", "delighted", "pleased", "bright", "grinning"], "happy"],
-  [["sad", "sorrow", "grief", "melanchol", "tearful", "dejected", "mournful"], "sad"],
-  [["angry", "rage", "fury", "furious", "hostile", "irritat", "livid"], "angry"],
-  [["smirk", "sly", "smug", "sardonic", "wry", "cunning", "scheming"], "smirk"],
-  [["surprise", "shock", "startl", "astonish", "stun", "bewild"], "surprised"],
-  [["worri", "anxious", "concern", "nervous", "uneasy", "apprehen"], "worried"],
-  [["think", "ponder", "contemplat", "thoughtful", "calculat", "consider"], "thinking"],
-  [["amuse", "playful", "entertai", "mischiev", "bemuse", "ironic", "clinical"], "amused"],
-  [["battle", "fight", "combat", "stance", "ready", "poised", "brace"], "battle_stance"],
-  [["fright", "fear", "terror", "scare", "horrif", "panic", "vulnerable"], "frightened"],
-  [["determin", "resolv", "command", "precise", "focus", "steel", "stoic", "stern"], "determined"],
-  [["exhaust", "tired", "fatigue", "weary", "drain", "spent", "collaps", "concuss", "disorient"], "exhausted"],
-];
-
 const VALID_DIRECTION_EFFECTS = new Set<DirectionCommand["effect"]>([
   "fade_from_black",
   "fade_to_black",
@@ -76,19 +42,6 @@ const VALID_DIRECTION_EFFECTS = new Set<DirectionCommand["effect"]>([
 
 const VALID_DIRECTION_TARGETS = new Set<NonNullable<DirectionCommand["target"]>>(["background", "content", "all"]);
 const VALID_SCENE_TIME_OF_DAY = new Set(["dawn", "morning", "afternoon", "evening", "night", "midnight"]);
-
-function normalizeExpression(value: string): string {
-  const lower = value.toLowerCase().trim();
-  // Direct hit (e.g. "amused")
-  const firstWord = lower.split(/[\s,;.]+/)[0] ?? "";
-  if (VALID_EXPRESSIONS.has(firstWord)) return firstWord;
-  if (VALID_EXPRESSIONS.has(lower)) return lower;
-  // Keyword scan
-  for (const [keywords, expr] of EXPRESSION_MAP) {
-    if (keywords.some((k) => lower.includes(k))) return expr;
-  }
-  return "neutral";
-}
 
 function normalizeSceneTimeOfDay(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -243,6 +196,9 @@ export interface PostProcessContext {
   availableBackgrounds: string[];
   availableSfx: string[];
   useSpotifyMusic?: boolean;
+  generateSoundEffects?: boolean;
+  /** Accepted for caller compatibility; music free-text is retired (#5161) and this no longer changes behavior. */
+  generateMusic?: boolean;
   availableSpotifyTracks?: SceneSpotifyTrackCandidate[];
   validWidgetIds: Set<string>;
   characterNames: string[];
@@ -287,22 +243,34 @@ function postProcessSegment(seg: SceneSegmentEffect, ctx: PostProcessContext): S
 
   // SFX
   if (out.sfx?.length) {
-    const matched: string[] = [];
-    for (const item of out.sfx) {
-      if (ctx.availableSfx.includes(item)) {
-        matched.push(item);
-      } else {
-        const m = bestMatch(item, ctx.availableSfx);
-        if (m && !matched.includes(m)) {
-          logger.debug(`[postprocess] seg[${seg.segment}] sfx: "${item}" → "${m}"`);
-          matched.push(m);
+    if (ctx.generateSoundEffects) {
+      out.sfx = Array.from(
+        new Set(out.sfx.map((item) => sanitizeGeneratedAudioPrompt(item)).filter((item): item is string => !!item)),
+      ).slice(0, 3);
+    } else {
+      const matched: string[] = [];
+      for (const item of out.sfx) {
+        if (ctx.availableSfx.includes(item)) {
+          matched.push(item);
         } else {
-          logger.debug(`[postprocess] seg[${seg.segment}] sfx: "${item}" → dropped`);
+          const m = bestMatch(item, ctx.availableSfx);
+          if (m && !matched.includes(m)) {
+            logger.debug(`[postprocess] seg[${seg.segment}] sfx: "${item}" → "${m}"`);
+            matched.push(m);
+          } else {
+            logger.debug(`[postprocess] seg[${seg.segment}] sfx: "${item}" → dropped`);
+          }
         }
       }
+      out.sfx = matched;
     }
-    out.sfx = matched;
   }
+  const loopCount = Number(out.sfxLoopCount);
+  out.sfxLoopCount =
+    out.sfx?.length && Number.isFinite(loopCount) ? Math.max(1, Math.min(5, Math.floor(loopCount))) : undefined;
+  // Music is never a free-text prompt anymore (#5161): segment music strings
+  // are dropped outright — deterministic scoring owns every music decision.
+  out.music = undefined;
 
   // Widget Updates
   const outWithWidgets = out as SceneSegmentEffect & { widgetUpdates?: Array<{ widgetId?: string }> };
@@ -371,6 +339,10 @@ export function postProcessSceneResult(raw: SceneAnalysis, ctx: PostProcessConte
   if (result.background === "null") result.background = null;
   if (result.weather === "null") result.weather = null;
   result.timeOfDay = normalizeSceneTimeOfDay(rawRecord.timeOfDay);
+  // Music is never a free-text prompt anymore (#5161): postprocess always
+  // clears it and the deterministic scoring pass downstream fills it with a
+  // library tag (context tracks included). Genre/intensity hints are parsed
+  // whenever Spotify isn't driving playback.
   result.music = null;
   result.ambient = null;
   if (ctx.useSpotifyMusic) {
@@ -461,4 +433,14 @@ export function postProcessSceneResult(raw: SceneAnalysis, ctx: PostProcessConte
   result.illustration = sanitizeIllustration((result as unknown as Record<string, unknown>).illustration);
 
   return result;
+}
+
+function sanitizeGeneratedAudioPrompt(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const prompt = value
+    .replace(/[\u0000-\u001f<>]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
+  return prompt && prompt.toLowerCase() !== "null" ? prompt : null;
 }

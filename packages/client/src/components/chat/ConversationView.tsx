@@ -13,20 +13,22 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import {
-  Loader2,
-  ChevronUp,
-  Settings2,
-  Image as ImageIcon,
-  ArrowRightLeft,
-} from "lucide-react";
+import { useTranslation, useTranslation as useUiTranslation } from "react-i18next";
+import { Loader2, ChevronUp, Settings2, Image as ImageIcon, ArrowRightLeft } from "lucide-react";
 import { ConversationMessage } from "./ConversationMessage";
 import { ConversationInput } from "./ConversationInput";
 import { ConversationGamesPicker } from "./ConversationGamesPicker";
 import { SceneBanner, EndSceneBar } from "./SceneBanner";
 import { ChatBranchSelector } from "./ChatBranchSelector";
+import { ChatMessageSearch } from "./ChatMessageSearch";
 import { ActiveLorebookEntriesButton } from "./ActiveLorebookEntriesButton";
-import { ChatToolbarButton, ChatToolbarMenu } from "./ChatToolbarControls";
+import {
+  CHAT_TOOLBAR_OVERFLOW_BUTTON_SIZE_CLASS,
+  ChatToolbarButton,
+  ChatToolbarMenu,
+  getChatToolbarButtonClass,
+} from "./ChatToolbarControls";
+import { ChatHelpButton } from "./ChatHelpButton";
 import { ConversationPresenceCard } from "./ConversationPresenceCard";
 import { PendingTypingDots } from "./PendingTypingDots";
 import { TranscriptWindowControls } from "./TranscriptWindowControls";
@@ -35,6 +37,7 @@ import { useChatStore } from "../../stores/chat.store";
 import { useConversationGamesStore } from "../../stores/conversation-games.store";
 import { useUIStore } from "../../stores/ui.store";
 import { playConfiguredNotificationPing } from "../../lib/notification-sound";
+import { rememberBoundedSetValue } from "../../lib/bounded-set";
 import { useRenderTimer } from "../../lib/perf-diagnostics";
 import { messageHasPendingPostProcessing } from "../../lib/chat-message-extra";
 import { getTranscriptRenderWindow, TRANSCRIPT_RENDER_WINDOW_STEP } from "../../lib/transcript-render-window";
@@ -54,6 +57,11 @@ import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packa
 import { CapabilityElement } from "../capabilities/CapabilityElement";
 import { TURN_GAME_BOT_REQUEST_EVENT } from "../../lib/capability-turn-game-events";
 import { useGenerate } from "../../hooks/use-generate";
+import {
+  useChatComposerFocused,
+  useChatKeyboardOpen,
+  useKeepLatestChatMessageVisible,
+} from "../../hooks/use-visual-viewport-chat-bottom";
 
 const ConversationAutonomousEffects = lazy(async () => {
   const module = await import("./ConversationAutonomousEffects");
@@ -268,6 +276,7 @@ function splitAssistantContentLines(content: string, charName?: string | null): 
 // component remounts. This prevents stagger animations and notification sounds
 // from replaying when the user navigates away from a chat and comes back.
 const globalSeenKeys = new Set<string>();
+const MAX_GLOBAL_SEEN_KEYS = 5_000;
 
 export function ConversationView({
   chatId,
@@ -307,6 +316,8 @@ export function ConversationView({
   onConcludeScene,
   onAbandonScene,
 }: ConversationViewProps) {
+  const { t: localizeUi } = useUiTranslation();
+  const { t } = useTranslation();
   useRenderTimer("convo-messages"); // [#3104 diagnostic]
   const streamingChatId = useChatStore((s) => s.streamingChatId);
   const isStreaming = useChatStore((s) => s.isStreaming) && streamingChatId === chatId;
@@ -327,17 +338,13 @@ export function ConversationView({
   }, [chatId, generateTurnGameBots]);
   const gamesPickerOpen = useConversationGamesStore((s) => s.pickerChatId === chatId);
   const closeGamesPicker = useConversationGamesStore((s) => s.closePicker);
-  const gameSetup = useConversationGamesStore((s) => s.setup?.chatId === chatId ? s.setup : null);
+  const gameSetup = useConversationGamesStore((s) => (s.setup?.chatId === chatId ? s.setup : null));
   const closeGameSetup = useConversationGamesStore((s) => s.closeSetup);
   const { data: installedCapabilities = [] } = useInstalledCapabilityPackages();
   const turnGamePackages = installedCapabilities.filter(
-    (item) =>
-      item.status === "active" &&
-      item.manifest.kind.includes("turn-game") &&
-      item.manifest.entrypoints.client,
+    (item) => item.status === "active" && item.manifest.kind.includes("turn-game") && item.manifest.entrypoints.client,
   );
-  const isStreamCommitted = useChatStore((s) => s.committedStreamChatIds.has(chatId));
-  const hasLiveStream = isStreaming && !isStreamCommitted;
+  const hasLiveStream = isStreaming;
   const streamBuffer = useThrottledStreamBuffer();
   const thinkingBuffer = useChatStore((s) => s.thinkingBuffer);
   const regenerateMessageId = useChatStore((s) => s.regenerateMessageId);
@@ -345,7 +352,7 @@ export function ConversationView({
   const typingCharacterName = useChatStore((s) => s.typingCharacterName);
   const delayedCharacterInfo = useChatStore((s) => s.delayedCharacterInfo);
   const conversationMessageStyle = useUIStore((s) => s.conversationMessageStyle);
-  const hasDraftInput = useChatStore((s) => s.currentInput.trim().length > 0);
+  const hasDraftInput = useChatStore((s) => s.hasCurrentInput);
   const isGroupConversation = chatCharIds.length > 1;
   const liveTypingName = useMemo(() => {
     if (isGroupConversation) return "Multiple people";
@@ -435,13 +442,36 @@ export function ConversationView({
   const hasAutonomousMessaging = !!chatMeta.autonomousMessages || !!chatMeta.characterExchanges;
   const callsPackage = installedCapabilities.find(
     (item) =>
-      item.status === "active" &&
-      item.manifest.kind.includes("conversation-calls") &&
-      item.manifest.entrypoints.client,
+      item.status === "active" && item.manifest.kind.includes("conversation-calls") && item.manifest.entrypoints.client,
   );
-  const callCapabilityProps = { chatId, metadata: chatMeta, characterMap, chatCharIds, personaInfo };
+  const callCapabilityProps = {
+    chatId,
+    metadata: chatMeta,
+    characterMap,
+    chatCharIds,
+    personaInfo,
+    toolbarButtonClass: getChatToolbarButtonClass({ sizeClassName: CHAT_TOOLBAR_OVERFLOW_BUTTON_SIZE_CLASS }),
+  };
+  const activeAgentIds = chatMeta.activeAgentIds;
+  const enabledConversationCapabilities =
+    chatMeta.enableAgents === true
+      ? installedCapabilities.filter((item) => {
+          if (item.status !== "active" || !item.manifest.entrypoints.client) return false;
+          if (item.manifest.kind.includes("conversation-calls")) return false;
+          const contributedAgentIds = item.manifest.contributions?.agentDetail?.agentIds ?? [];
+          return activeAgentIds.includes(item.id) || contributedAgentIds.some((id) => activeAgentIds.includes(id));
+        })
+      : [];
+  const conversationToolbarPackages = enabledConversationCapabilities.filter((item) =>
+    item.manifest.contributions?.slots?.includes("conversation-toolbar"),
+  );
+  const conversationSurfacePackages = enabledConversationCapabilities.filter((item) =>
+    item.manifest.contributions?.slots?.includes("conversation-surface"),
+  );
+  const conversationCapabilityProps = { chatId, metadata: chatMeta, characterMap, chatCharIds, personaInfo };
   const renderToolbarActions = (compact = false) => (
     <>
+      <ChatHelpButton mode="conversation" compact={compact} />
       <ChatBranchSelector
         activeChatId={chatId}
         activeChatName={chatName}
@@ -450,45 +480,77 @@ export function ConversationView({
         compact={compact}
       />
       <ActiveLorebookEntriesButton chatId={chatId} />
-      <ChatToolbarButton icon={<ImageIcon size="0.875rem" />} title="Gallery" onClick={onOpenGallery} />
+      <ChatToolbarButton
+        icon={<ImageIcon size="0.875rem" />}
+        title={t("chat.toolbar.gallery")}
+        panelAction="gallery"
+        onClick={onOpenGallery}
+      />
       {onSwitchChat && (
         <ChatToolbarButton
           icon={<ArrowRightLeft size="0.875rem" />}
-          title={connectedChatName ? `Switch to ${connectedChatName}` : "Switch to connected chat"}
+          helpTarget="connected-chat"
+          title={
+            connectedChatName
+              ? t("chat.toolbar.switchTo", { name: connectedChatName })
+              : t("chat.toolbar.switchToConnected")
+          }
           onClick={onSwitchChat}
         />
       )}
-      <ChatToolbarButton icon={<Settings2 size="0.875rem" />} title="Chat Settings" onClick={onOpenSettings} />
+      <ChatMessageSearch chatId={chatId} />
+      <ChatToolbarButton
+        icon={<Settings2 size="0.875rem" />}
+        title={t("chat.toolbar.settings")}
+        panelAction="settings"
+        onClick={onOpenSettings}
+      />
     </>
   );
   const renderHeader = () => (
-    <div
-      className="sticky top-0 z-30 flex items-center justify-between px-4 py-2"
-    >
-      <ConversationPresenceCard
-        chatId={chatId}
-        chatMeta={chatMeta}
-        chatCharIds={chatCharIds}
-        characterMap={characterMap}
-        messages={messages}
-        onOpenSettings={onOpenSettings}
-        onOpenScheduleEditor={onOpenScheduleEditor}
-      />
+    <div className="sticky top-0 z-30 flex items-center justify-between px-4 py-2">
+      <div data-conversation-header-identity className="flex min-w-0 items-center gap-1.5">
+        <ConversationPresenceCard
+          chatId={chatId}
+          chatMeta={chatMeta}
+          chatCharIds={chatCharIds}
+          characterMap={characterMap}
+          messages={messages}
+          onOpenSettings={onOpenSettings}
+          onOpenScheduleEditor={onOpenScheduleEditor}
+        />
+        {callsPackage && (
+          <span data-chat-help="call" className="contents">
+            <CapabilityElement
+              packageId={callsPackage.id}
+              view="toolbar"
+              capabilityProps={callCapabilityProps}
+              // ponytail: This direct-child size bridge supports Calls <=1.0.11; remove it once 1.0.12 is the minimum.
+              className="contents [&>button]:h-8! [&>button]:w-8! max-md:[&>button]:h-9! max-md:[&>button]:w-9!"
+            />
+          </span>
+        )}
+      </div>
 
       <div className="ml-2 flex min-w-0 flex-1 items-center justify-end gap-2">
-        {callsPackage && (
-          <CapabilityElement
-            packageId={callsPackage.id}
-            view="toolbar"
-            capabilityProps={callCapabilityProps}
-            className="contents"
-          />
-        )}
         <ChatToolbarMenu
           className="flex-1"
           desktopChildren={renderToolbarActions()}
           mobileChildren={renderToolbarActions(true)}
         />
+        {conversationToolbarPackages.map((item) => (
+          <span key={`${item.id}-toolbar`} data-chat-help="agent-controls" className="contents">
+            <CapabilityElement
+              packageId={item.id}
+              view="toolbar"
+              capabilityProps={{
+                ...conversationCapabilityProps,
+                toolbarButtonClass: getChatToolbarButtonClass(),
+              }}
+              className="contents"
+            />
+          </span>
+        ))}
       </div>
     </div>
   );
@@ -506,7 +568,10 @@ export function ConversationView({
   const userScrolledAtRef = useRef(0);
   const openedAtBottomChatIdRef = useRef<string | null>(null);
   const streamScrollFrameRef = useRef(0);
-  const shouldKeepMobileComposerOpen = hasLiveStream || hasDraftInput || isFetchingNextPage;
+  const keyboardOpen = useChatKeyboardOpen();
+  const composerFocused = useChatComposerFocused();
+  const shouldKeepMobileComposerOpen =
+    keyboardOpen || composerFocused || hasLiveStream || hasDraftInput || isFetchingNextPage;
 
   const scrollToMessagesBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const el = scrollRef.current;
@@ -541,6 +606,7 @@ export function ConversationView({
     },
     [scrollToMessagesBottom],
   );
+  useKeepLatestChatMessageVisible(scrollRef, scrollToMessagesBottom);
 
   useEffect(() => {
     if (shouldKeepMobileComposerOpen) setMobileHistoryComposerCollapsed(false);
@@ -556,7 +622,8 @@ export function ConversationView({
       const currentTop = el.scrollTop;
       const previousComposerTop = composerScrollTopRef.current;
       const isMobile = typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches;
-      if (!isMobile || shouldKeepMobileComposerOpen || nearBottom) {
+      const composerHasFocus = document.activeElement?.matches("[data-chat-composer]") === true;
+      if (!isMobile || shouldKeepMobileComposerOpen || composerHasFocus || nearBottom) {
         setMobileHistoryComposerCollapsed(false);
       } else if (currentTop > previousComposerTop + 18) {
         setMobileHistoryComposerCollapsed(false);
@@ -647,6 +714,30 @@ export function ConversationView({
     () => getTranscriptRenderWindow(messages, { startIndex: transcriptWindowStart }),
     [messages, transcriptWindowStart],
   );
+  const gotoRequest = useChatStore((state) => state.gotoRequest);
+  // ChatArea clears the request after scrolling; only reveal its transcript window once.
+  const handledTranscriptGotoRef = useRef<typeof gotoRequest>(null);
+
+  useLayoutEffect(() => {
+    handledTranscriptGotoRef.current = null;
+  }, [chatId]);
+
+  useLayoutEffect(() => {
+    if (
+      !gotoRequest ||
+      gotoRequest.chatId !== chatId ||
+      !messages ||
+      handledTranscriptGotoRef.current === gotoRequest
+    ) {
+      return;
+    }
+    const loadedMessageOffset = totalMessageCount - messages.length;
+    const localIndex = gotoRequest.messageNumber - 1 - loadedMessageOffset;
+    if (localIndex >= 0 && localIndex < messages.length) {
+      handledTranscriptGotoRef.current = gotoRequest;
+      setTranscriptWindowStart(localIndex);
+    }
+  }, [chatId, gotoRequest, messages, totalMessageCount]);
 
   const showOlderTranscriptMessages = useCallback(() => {
     setTranscriptWindowStart((current) => {
@@ -974,7 +1065,9 @@ export function ConversationView({
         prevRenderedKeysRef.current = currentKeys;
         // Mark all current keys as globally seen so remount won't replay them
         for (const item of messageItems) {
-          if (!pendingPostProcessingKeys.has(item.key)) globalSeenKeysRef.current.add(item.key);
+          if (!pendingPostProcessingKeys.has(item.key)) {
+            rememberBoundedSetValue(globalSeenKeysRef.current, item.key, MAX_GLOBAL_SEEN_KEYS);
+          }
         }
         pendingPostProcessingKeysRef.current = pendingPostProcessingKeys;
         initialLoadSettledRef.current = true;
@@ -1030,7 +1123,9 @@ export function ConversationView({
 
     // Mark all current keys as globally seen
     for (const item of messageItems) {
-      if (!pendingPostProcessingKeys.has(item.key)) seenGlobal.add(item.key);
+      if (!pendingPostProcessingKeys.has(item.key)) {
+        rememberBoundedSetValue(seenGlobal, item.key, MAX_GLOBAL_SEEN_KEYS);
+      }
     }
     prevRenderedKeysRef.current = currentKeys;
     pendingPostProcessingKeysRef.current = pendingPostProcessingKeys;
@@ -1066,6 +1161,9 @@ export function ConversationView({
           if (!renderedMessageKeysRef.current.has(key)) {
             staggerTimersRef.current[key]?.forEach(clearTimeout);
             delete staggerTimersRef.current[key];
+            // Reveal fully so an interrupted stagger never leaves the message
+            // permanently truncated at a part boundary (#4039).
+            setVisiblePartCounts((prev) => ({ ...prev, [key]: count }));
             return;
           }
           setVisiblePartCounts((prev) => ({ ...prev, [key]: partIndex }));
@@ -1089,6 +1187,9 @@ export function ConversationView({
           if (!renderedMessageKeysRef.current.has(key)) {
             staggerTimersRef.current[key]?.forEach(clearTimeout);
             delete staggerTimersRef.current[key];
+            // Reveal fully so an interrupted stagger never leaves the message
+            // permanently truncated at a speaker-segment boundary (#4039).
+            setVisibleSegmentCounts((prev) => ({ ...prev, [key]: count }));
             return;
           }
           setVisibleSegmentCounts((prev) => ({ ...prev, [key]: segmentIndex }));
@@ -1132,7 +1233,12 @@ export function ConversationView({
       style={{ ...gradientStyle, isolation: "isolate" }}
     >
       {/* ── Messages scroll area ── */}
-      <div ref={scrollRef} className="mari-messages-scroll flex-1 overflow-y-auto overflow-x-hidden">
+      <div
+        ref={scrollRef}
+        data-chat-scroll
+        data-chat-resource-drop-surface
+        className="mari-messages-scroll flex-1 overflow-y-auto overflow-x-hidden"
+      >
         {/* Floating header — character info + action buttons */}
         {renderHeader()}
 
@@ -1145,7 +1251,7 @@ export function ConversationView({
               className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-all hover:bg-[var(--accent)] disabled:opacity-50"
             >
               {isFetchingNextPage ? <Loader2 size="0.75rem" className="animate-spin" /> : <ChevronUp size="0.75rem" />}
-              Load More
+              {localizeUi("ui.chat.chatroleplaysurface.loadMore")}
             </button>
           </div>
         )}
@@ -1166,7 +1272,7 @@ export function ConversationView({
         {!isLoading && !hasNextPage && messages && messages.length === 0 && (
           <div className="px-4 pt-2">
             <p className="text-xs text-[var(--marinara-chat-chrome-panel-muted)]">
-              This is the start of your conversation with{" "}
+              {localizeUi("ui.chat.conversationview.thisIsTheStartOfYourConversationWith")}{" "}
               <span className="font-medium text-[var(--marinara-chat-chrome-panel-title)]">
                 {(() => {
                   const names = chatCharIds.map((id) => characterMap.get(id)?.name).filter(Boolean) as string[];
@@ -1175,7 +1281,7 @@ export function ConversationView({
                   return names.slice(0, -1).join(", ") + " & " + names[names.length - 1];
                 })()}
               </span>
-              . Say hi!
+              {localizeUi("ui.chat.conversationview.sayHi")}
             </p>
           </div>
         )}
@@ -1186,7 +1292,7 @@ export function ConversationView({
             return (
               <div key={item.key} className="relative my-4 flex items-center px-4">
                 <div className="flex-1 border-t border-[var(--border)]/40" />
-                <span className="mx-4 text-[0.6875rem] font-semibold text-[var(--marinara-chat-chrome-panel-muted)]">
+                <span className="mari-conversation-transcript-chrome-text mx-4 text-[0.6875rem] font-semibold">
                   {item.label}
                 </span>
                 <div className="flex-1 border-t border-[var(--border)]/40" />
@@ -1210,8 +1316,11 @@ export function ConversationView({
                     ...msg,
                     content:
                       stripCharacterStatusTagsForDisplay(streamBuffer) ||
-                      (thinkingBuffer ? "Thinking..." : msg.content),
-                    extra: { ...parsed, attachments: null, thinking: thinkingBuffer || parsed.thinking },
+                      (thinkingBuffer ? t("chat.message.thinking") : msg.content),
+                    // Only the live buffer belongs here: falling back to the
+                    // previous swipe's thinking would show stale thoughts in
+                    // the viewer while the replacement is still streaming.
+                    extra: { ...parsed, attachments: null, thinking: thinkingBuffer || null },
                   };
                 })()
               : msg;
@@ -1221,6 +1330,7 @@ export function ConversationView({
             !contentParts && item.groupSegmentCount && item.groupSegmentCount > 1
               ? (visibleSegmentCounts[item.key] ?? item.groupSegmentCount)
               : undefined;
+          const messageDepth = Math.max(0, totalMessageCount - 1 - item.index);
           const originalContent = item.rawContent ?? (displayMsg.content !== msg.content ? msg.content : undefined);
           const regenerationDraftMessage =
             isBubbleRegenerating && !isStreamWindingDown
@@ -1260,6 +1370,7 @@ export function ConversationView({
                 chatCharacterIds={chatCharIds}
                 messageIndex={item.index + 1}
                 messageOrderIndex={item.index}
+                messageDepth={messageDepth}
                 multiSelectMode={multiSelectMode}
                 isSelected={selectedMessageIds?.has(msg.id)}
                 onToggleSelect={onToggleSelectMessage}
@@ -1271,6 +1382,7 @@ export function ConversationView({
                 visibleSegmentCount={visibleSegmentCount}
                 bubbleGroupPosition={item.bubbleGroupPosition}
                 originalContent={originalContent}
+                translationDisplayOnly={chatMeta.translationDisplayOnly === true}
               />
               {regenerationDraftMessage && (
                 <ConversationMessage
@@ -1291,11 +1403,13 @@ export function ConversationView({
                   emojiMap={conversationEmojiMap}
                   stickerMap={conversationStickerMap}
                   chatCharacterIds={chatCharIds}
+                  messageDepth={messageDepth}
                   hasDraftInput={hasDraftInput}
                   messageStyle={conversationMessageStyle}
                   contentParts={liveStreamContentParts}
                   visiblePartCount={liveStreamContentParts?.length}
                   bubbleGroupPosition="single"
+                  translationDisplayOnly={chatMeta.translationDisplayOnly === true}
                 />
               )}
             </Fragment>
@@ -1321,11 +1435,13 @@ export function ConversationView({
             emojiMap={conversationEmojiMap}
             stickerMap={conversationStickerMap}
             chatCharacterIds={chatCharIds}
+            messageDepth={0}
             hasDraftInput={hasDraftInput}
             messageStyle={conversationMessageStyle}
             contentParts={liveStreamContentParts}
             visiblePartCount={liveStreamContentParts?.length}
             bubbleGroupPosition="single"
+            translationDisplayOnly={chatMeta.translationDisplayOnly === true}
           />
         )}
 
@@ -1341,8 +1457,14 @@ export function ConversationView({
           <div className="flex items-center gap-2 px-4 py-1.5 text-[0.8125rem] text-[var(--text-secondary)]">
             <span className="italic">
               {delayedCharacterInfo.status === "dnd"
-                ? `${delayedDisplayName} ${delayedDisplayVerb} busy — they'll respond when they're back`
-                : `${delayedDisplayName} ${delayedDisplayVerb} away — they'll respond in a moment`}
+                ? localizeUi("ui.chat.conversationview.value1Value2BusyTheyLlRespondWhenTheyRe", {
+                    value1: delayedDisplayName,
+                    value2: delayedDisplayVerb,
+                  })
+                : localizeUi("ui.chat.conversationview.value1Value2AwayTheyLlRespondInAMoment", {
+                    value1: delayedDisplayName,
+                    value2: delayedDisplayVerb,
+                  })}
             </span>
           </div>
         )}
@@ -1366,8 +1488,8 @@ export function ConversationView({
 
         {/* Scene banner — inline at bottom of messages (origin variant only); hidden during a turn-game */}
         {sceneInfo?.variant === "origin" && (
-            <SceneBanner variant="origin" sceneChatId={sceneInfo.sceneChatId} sceneChatName={sceneInfo.sceneChatName} />
-          )}
+          <SceneBanner variant="origin" sceneChatId={sceneInfo.sceneChatId} sceneChatName={sceneInfo.sceneChatName} />
+        )}
 
         <div ref={messagesEndRef} className="h-1" />
       </div>
@@ -1398,12 +1520,7 @@ export function ConversationView({
 
       {/* Downloaded games own their board and setup UI. The base client only provides stable slots. */}
       {turnGamePackages.map((game) => (
-        <CapabilityElement
-          key={`${game.id}-surface`}
-          packageId={game.id}
-          view="surface"
-          capabilityProps={{ chatId }}
-        />
+        <CapabilityElement key={`${game.id}-surface`} packageId={game.id} view="surface" capabilityProps={{ chatId }} />
       ))}
       {callsPackage && (
         <CapabilityElement
@@ -1413,6 +1530,15 @@ export function ConversationView({
           className="contents"
         />
       )}
+      {conversationSurfacePackages.map((item) => (
+        <CapabilityElement
+          key={`${item.id}-conversation-surface`}
+          packageId={item.id}
+          view="surface"
+          capabilityProps={conversationCapabilityProps}
+          className="contents"
+        />
+      ))}
       {/* Setup modals mounted once here (stable position) so they never double-render.
           Keyed by chatId so their internal selection state resets on a chat switch
           (matches ConversationInput below) — otherwise stale selected ids would

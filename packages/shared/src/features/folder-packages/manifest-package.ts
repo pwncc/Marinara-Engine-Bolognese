@@ -6,7 +6,6 @@ export type MarinaraFolderKind =
   | "marinara.agent-folder"
   | "marinara.function-folder"
   | "marinara.theme-folder"
-  | "marinara.extension-folder"
   | "marinara.preset-folder";
 
 export interface MarinaraItemManifest<T = unknown> {
@@ -28,7 +27,6 @@ export interface MarinaraFolderPackage<T = unknown> {
   agents?: MarinaraFolderEntry<T>[];
   functions?: MarinaraFolderEntry<T>[];
   themes?: MarinaraFolderEntry<T>[];
-  extensions?: MarinaraFolderEntry<T>[];
   presets?: MarinaraFolderEntry<T>[];
 }
 
@@ -37,14 +35,20 @@ export function isJsonRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function sanitizeFolderSegment(value: string, fallback: string): string {
-  const safe = value
+  const normalized = value
     .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/[^a-zA-Z0-9._ -]+/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
+    .replace(/\s+/g, "-");
+  let start = 0;
+  let end = normalized.length;
+  while (normalized[start] === "-") start++;
+  while (end > start && normalized[end - 1] === "-") end--;
+  const truncated = normalized.slice(start, end).slice(0, 80);
+  let safeEnd = truncated.length;
+  while (safeEnd > 0 && truncated[safeEnd - 1] === "-") safeEnd--;
+  const safe = truncated.slice(0, safeEnd);
   return safe || fallback;
 }
 

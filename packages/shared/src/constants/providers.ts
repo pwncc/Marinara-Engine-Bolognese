@@ -150,6 +150,15 @@ export const PROVIDERS: Record<APIProvider, ProviderDefinition> = {
     usesAuthHeader: true,
     apiKeyHeader: null,
   },
+  arli: {
+    id: "arli",
+    name: "Arli AI",
+    defaultBaseUrl: "https://api.arliai.com/v1",
+    modelsEndpoint: "/models",
+    supportsStreaming: true,
+    usesAuthHeader: true,
+    apiKeyHeader: null,
+  },
   custom: {
     id: "custom",
     name: "Custom (OAI-Compatible)",
@@ -176,5 +185,16 @@ export const PROVIDERS: Record<APIProvider, ProviderDefinition> = {
     supportsStreaming: false,
     usesAuthHeader: false,
     apiKeyHeader: "x-goog-api-key",
+  },
+  audio: {
+    id: "audio",
+    name: "Audio",
+    // The per-source default is applied by the audio resolver; ElevenLabs is
+    // the fullest-featured backend (speech + sound effects + music).
+    defaultBaseUrl: "https://api.elevenlabs.io",
+    modelsEndpoint: "",
+    supportsStreaming: false,
+    usesAuthHeader: false,
+    apiKeyHeader: "xi-api-key",
   },
 };

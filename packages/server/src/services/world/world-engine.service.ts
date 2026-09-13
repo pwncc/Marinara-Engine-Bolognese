@@ -795,20 +795,9 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       if (!accountId || !targetAccountId || accountId === targetAccountId) return null;
       const actorAccount = await noodle.getAccountByEntity("character", characterId);
       if (!actorAccount) return null;
-      const settings = parseJson(actorAccount.settings);
-      const following = Array.isArray(settings.followingAccountIds)
-        ? (settings.followingAccountIds as string[])
-        : [];
+      const following = actorAccount.settings.social.followingAccountIds ?? [];
       if (!following.includes(targetAccountId)) {
-        const timestamps = parseJson(settings.followingAccountTimestamps);
-        timestamps[targetAccountId] = new Date().toISOString();
-        await noodle.updateAccount(actorAccount.id, {
-          settings: {
-            ...settings,
-            followingAccountIds: [...following, targetAccountId],
-            followingAccountTimestamps: timestamps,
-          },
-        });
+        await noodle.updateAccountFollow(actorAccount.id, targetAccountId, true);
       }
       try {
         await noodle.createDigest({

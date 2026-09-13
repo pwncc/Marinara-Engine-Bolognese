@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Storage: Prompt Presets, Groups, Sections & Choices
 // ──────────────────────────────────────────────
-import { eq, desc, asc } from "../../db/file-query.js";
+import { and, eq, desc, asc } from "../../db/file-query.js";
 import type { DB } from "../../db/connection.js";
 import { promptPresets, promptGroups, promptSections, choiceBlocks } from "../../db/schema/index.js";
 import { newId, now } from "../../utils/id-generator.js";
@@ -84,6 +84,7 @@ export function createPromptsStorage(db: DB) {
         id,
         name: input.name,
         description: input.description ?? "",
+        imagePath: input.imagePath ?? null,
         conversationPrompt: input.conversationPrompt ?? "",
         gamePrompt: input.gamePrompt ?? "",
         sectionOrder: JSON.stringify([]),
@@ -94,6 +95,7 @@ export function createPromptsStorage(db: DB) {
         wrapFormat: input.wrapFormat ?? "xml",
         isDefault: String(input.isDefault ?? false),
         author: input.author ?? "",
+        systemKey: "",
         createdAt: timestamp.createdAt,
         updatedAt: timestamp.updatedAt,
       });
@@ -104,6 +106,7 @@ export function createPromptsStorage(db: DB) {
       const updateFields: Record<string, unknown> = { updatedAt: now() };
       if (data.name !== undefined) updateFields.name = data.name;
       if (data.description !== undefined) updateFields.description = data.description;
+      if (data.imagePath !== undefined) updateFields.imagePath = data.imagePath;
       if (data.conversationPrompt !== undefined) updateFields.conversationPrompt = data.conversationPrompt;
       if (data.gamePrompt !== undefined) updateFields.gamePrompt = data.gamePrompt;
       if (data.sectionOrder !== undefined) updateFields.sectionOrder = JSON.stringify(data.sectionOrder);
@@ -142,12 +145,18 @@ export function createPromptsStorage(db: DB) {
       return this.getById(id);
     },
 
+    async setSystemKey(id: string, systemKey: string) {
+      await db.update(promptPresets).set({ systemKey, updatedAt: now() }).where(eq(promptPresets.id, id));
+      return this.getById(id);
+    },
+
     async duplicate(id: string) {
       const preset = await this.getById(id);
       if (!preset) return null;
       const newPreset = await this.create({
         name: `${preset.name} (Copy)`,
         description: preset.description,
+        imagePath: preset.imagePath,
         conversationPrompt: preset.conversationPrompt,
         gamePrompt: preset.gamePrompt,
         variableGroups: JSON.parse(preset.variableGroups as string),
@@ -309,7 +318,7 @@ export function createPromptsStorage(db: DB) {
         await db
           .update(promptGroups)
           .set({ order: i * 100 })
-          .where(eq(promptGroups.id, groupIds[i]!));
+          .where(and(eq(promptGroups.id, groupIds[i]!), eq(promptGroups.presetId, presetId)));
       }
     },
 
@@ -393,7 +402,7 @@ export function createPromptsStorage(db: DB) {
         await db
           .update(promptSections)
           .set({ injectionOrder: i * 100 })
-          .where(eq(promptSections.id, sectionIds[i]!));
+          .where(and(eq(promptSections.id, sectionIds[i]!), eq(promptSections.presetId, presetId)));
       }
     },
 
@@ -461,7 +470,7 @@ export function createPromptsStorage(db: DB) {
         await db
           .update(choiceBlocks)
           .set({ sortOrder: i * 100 })
-          .where(eq(choiceBlocks.id, variableIds[i]!));
+          .where(and(eq(choiceBlocks.id, variableIds[i]!), eq(choiceBlocks.presetId, presetId)));
       }
     },
   };

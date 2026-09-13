@@ -9,6 +9,7 @@ import { cn } from "../../lib/utils";
 import { getChatToolbarButtonClass } from "./ChatToolbarControls";
 import { useGalleryImages, useSceneVideos } from "../../hooks/use-gallery";
 import type { GeneratedSceneVideo } from "@marinara-engine/shared";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 const EMPTY_SCENE_VIDEOS: GeneratedSceneVideo[] = [];
 
@@ -80,6 +81,7 @@ function PinnedMediaViewer({
   onClose: () => void;
   offsetIndex: number;
 }) {
+  const { t: localizeUi } = useUiTranslation();
   const initialSize = getInitialSize(media);
   const [pos, setPos] = useState(() =>
     clampPosition(
@@ -211,7 +213,12 @@ function PinnedMediaViewer({
       onPointerMove={onDragMove}
       onPointerUp={onDragEnd}
       onPointerCancel={onDragEnd}
-      aria-label={`Pinned ${media.kind === "video" ? "scene video" : "gallery image"}. Drag to move.`}
+      aria-label={localizeUi("ui.chat.pinnedmediaviewer.pinnedValue1DragToMove", {
+        value1:
+          media.kind === "video"
+            ? localizeUi("ui.chat.pinnedmediaviewer.sceneVideo")
+            : localizeUi("ui.chat.pinnedmediaviewer.galleryImage"),
+      })}
     >
       <div className="relative h-full w-full">
         <button
@@ -229,7 +236,12 @@ function PinnedMediaViewer({
             }),
             controlsVisibilityClass,
           )}
-          aria-label={`Dismiss pinned ${media.kind === "video" ? "video" : "image"}`}
+          aria-label={localizeUi("ui.chat.pinnedmediaviewer.dismissPinnedValue1", {
+            value1:
+              media.kind === "video"
+                ? localizeUi("ui.ui.spritegenerationmodal.video")
+                : localizeUi("ui.ui.spritegenerationmodal.image"),
+          })}
         >
           <X size="0.875rem" />
         </button>
@@ -241,7 +253,7 @@ function PinnedMediaViewer({
                 controlsVisibilityClass,
               )}
               onPointerDown={onDragStart}
-              aria-label="Drag pinned video"
+              aria-label={localizeUi("ui.chat.pinnedmediaviewer.dragPinnedVideo")}
             >
               <GripHorizontal size="0.75rem" className="shrink-0" />
               <Film size="0.75rem" className="shrink-0" />
@@ -271,7 +283,12 @@ function PinnedMediaViewer({
             "absolute -bottom-2 -right-2 z-10 flex h-7 w-7 cursor-nwse-resize items-center justify-center rounded-lg border border-[var(--marinara-chat-chrome-button-border)] bg-[var(--marinara-chat-chrome-button-bg)] text-[var(--marinara-chat-chrome-button-text)] shadow-lg transition-all duration-150 hover:border-[var(--marinara-chat-chrome-button-border-hover)] hover:bg-[var(--marinara-chat-chrome-button-bg-hover)] hover:text-[var(--marinara-chat-chrome-button-text-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--marinara-chat-chrome-focus-ring)] active:scale-95",
             controlsVisibilityClass,
           )}
-          aria-label={`Resize pinned ${media.kind === "video" ? "video" : "image"}`}
+          aria-label={localizeUi("ui.chat.pinnedmediaviewer.resizePinnedValue1", {
+            value1:
+              media.kind === "video"
+                ? localizeUi("ui.ui.spritegenerationmodal.video")
+                : localizeUi("ui.ui.spritegenerationmodal.image"),
+          })}
           tabIndex={0}
           onPointerDown={onResizeStart}
           onPointerMove={onResizeMove}
@@ -303,10 +320,7 @@ export function PinnedImageOverlay({
   const latestViewerActive = !!activeChatId && latestViewerChatId === activeChatId;
   const viewerChatId = latestViewerActive && activeChatId ? activeChatId : undefined;
   const galleryImagesQuery = useGalleryImages(viewerChatId);
-  const sceneVideosQuery = useSceneVideos(
-    viewerChatId,
-    latestViewerActive && includeSceneVideos,
-  );
+  const sceneVideosQuery = useSceneVideos(viewerChatId, latestViewerActive && includeSceneVideos);
   const latestMedia = useMemo<PinnedGalleryMedia | null>(() => {
     if (!latestViewerActive) return null;
     const imageMedia = (galleryImagesQuery.data ?? []).map((image) => ({ ...image, kind: "image" as const }));
@@ -323,7 +337,9 @@ export function PinnedImageOverlay({
   }, [latestMedia, latestViewerActive, syncLatestViewer]);
 
   const activeViewer = viewerMedia?.chatId === activeChatId ? viewerMedia : null;
-  const visiblePinnedMedia = pinnedMedia.filter((media) => media.chatId === activeChatId && media.id !== activeViewer?.id);
+  const visiblePinnedMedia = pinnedMedia.filter(
+    (media) => media.chatId === activeChatId && media.id !== activeViewer?.id,
+  );
   const visibleMedia = activeViewer ? [activeViewer, ...visiblePinnedMedia] : visiblePinnedMedia;
   const activeViewerKey =
     latestViewerActive && activeViewer ? `${activeChatId}:latest-viewer` : `${activeViewer?.id ?? "viewer"}:viewer`;

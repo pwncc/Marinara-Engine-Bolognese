@@ -13,6 +13,7 @@ import { formatTextQuotes, type DiceRollResult, type PendingSpatialTransition } 
 import { getChatInputShellClass } from "../chat/chat-input-styles";
 import { CapabilityElement } from "../capabilities/CapabilityElement";
 import type { PendingSpatialTransitionDraft } from "../../stores/chat.store";
+import { useTranslation, useTranslation as useUiTranslation } from "react-i18next";
 
 interface Attachment {
   type: string;
@@ -35,7 +36,10 @@ interface GameInputProps {
   pendingMoveLabel?: string | null;
   /** Clear the staged destination without sending it. */
   onClearPendingMove?: () => void;
+  /** Blocks turn submission and turn-mutating controls while generation is active. */
   disabled: boolean;
+  /** Blocks drafting only when the current game view itself is not interactive. */
+  draftDisabled: boolean;
   isStreaming: boolean;
   /** When true, renders without the bottom-bar chrome (for embedding inside narration box) */
   inline?: boolean;
@@ -112,6 +116,7 @@ export function GameInput({
   pendingMoveLabel,
   onClearPendingMove,
   disabled,
+  draftDisabled,
   isStreaming,
   inline,
   draftKey,
@@ -120,6 +125,8 @@ export function GameInput({
   spatialCapabilityEnabled = false,
   interruptMode,
 }: GameInputProps) {
+  const { t: localizeUi } = useUiTranslation();
+  const { t } = useTranslation();
   const enterToSend = useUIStore((s) => s.enterToSendGame);
   const speechToTextEnabled = useUIStore((s) => s.speechToTextEnabled);
   const quoteFormat = useUIStore((s) => s.quoteFormat);
@@ -171,17 +178,15 @@ export function GameInput({
     setAddressMode("scene");
   }, [addressMode, hasPartyMembers]);
 
-  // Honors focus requests even if the input was disabled at the time the
-  // token bumped (e.g. Interrupt clicked while `isStreaming` is still true) —
-  // we re-attempt the focus once `disabled` flips to false.
+  // A reviewed/history game state can still disable drafting entirely.
   const lastFocusedTokenRef = useRef(0);
   useEffect(() => {
     if (!focusToken) return;
     if (lastFocusedTokenRef.current === focusToken) return;
-    if (disabled) return;
+    if (draftDisabled) return;
     inputRef.current?.focus();
     lastFocusedTokenRef.current = focusToken;
-  }, [focusToken, disabled]);
+  }, [focusToken, draftDisabled]);
 
   useEffect(() => {
     if (!addressMenuOpen) return;
@@ -386,6 +391,7 @@ export function GameInput({
 
   return (
     <div
+      data-chat-resource-drop-exclude
       className={cn(inline ? "" : "px-3 pt-2 pb-3")}
       style={inline ? undefined : { minHeight: 61 }}
     >
@@ -395,6 +401,7 @@ export function GameInput({
           view="runtime"
           capabilityProps={{
             chatId: draftKey,
+            chatMode: "game",
             disabled,
             pendingTransition: pendingSpatialTransition,
             onPendingTransitionChange: (pending: unknown) => {
@@ -432,7 +439,7 @@ export function GameInput({
               type="text"
               value={customDice}
               onChange={(e) => setCustomDice(e.target.value)}
-              placeholder="3d8+2"
+              placeholder={localizeUi("ui.game.gameinput.text3d82")}
               className="h-[26px] w-16 rounded bg-foreground/10 px-1.5 text-xs font-mono text-foreground/70 outline-none ring-1 ring-foreground/10 placeholder:text-foreground/35 focus:ring-foreground/20"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && customDice.trim()) {
@@ -484,12 +491,14 @@ export function GameInput({
         <div className={cn("flex items-center", inline ? "px-0 pb-1" : "border-b border-foreground/10 px-4 py-2")}>
           <div className="flex min-w-0 items-center gap-1.5 rounded-lg border border-foreground/10 bg-foreground/10 px-2.5 py-1 text-[0.6875rem] text-foreground/80">
             <span className="shrink-0">📍</span>
-            <span className="min-w-0 truncate">Map position: {pendingMoveLabel}</span>
+            <span className="min-w-0 truncate">
+              {localizeUi("ui.game.gameinput.mapPosition")} {pendingMoveLabel}
+            </span>
             {onClearPendingMove && (
               <button
                 onClick={onClearPendingMove}
                 className="shrink-0 text-foreground/45 transition-colors hover:text-foreground/80"
-                title="Clear destination"
+                title={localizeUi("ui.game.gameinput.clearDestination")}
               >
                 ✕
               </button>
@@ -503,12 +512,15 @@ export function GameInput({
         ref={inputBarRef}
         className={getChatInputShellClass({
           className: cn(
-            riskyInterrupt &&
-              "ring-1 ring-red-500/40 bg-red-500/5 shadow-[0_0_18px_-6px_rgba(248,113,113,0.55)]",
+            riskyInterrupt && "ring-1 ring-red-500/40 bg-red-500/5 shadow-[0_0_18px_-6px_rgba(248,113,113,0.55)]",
             forceInterrupt && "ring-1",
           ),
           hasContent:
-            text.trim().length > 0 || attachments.length > 0 || !!queuedDice || !!pendingMoveLabel || canSubmitSpatialMove,
+            text.trim().length > 0 ||
+            attachments.length > 0 ||
+            !!queuedDice ||
+            !!pendingMoveLabel ||
+            canSubmitSpatialMove,
           inline,
           layout: "game",
         })}
@@ -525,14 +537,14 @@ export function GameInput({
         />
         <button
           onClick={() => fileInputRef.current?.click()}
-          aria-label="Attach files"
+          aria-label={localizeUi("chat.input.attachFiles")}
           className={cn(
             "shrink-0 rounded-lg p-1 transition-all active:scale-90 sm:p-1.5",
             attachments.length
               ? "bg-foreground/10 text-foreground/75 ring-1 ring-foreground/20 hover:bg-foreground/15"
               : "text-foreground/40 hover:bg-foreground/10 hover:text-foreground/70",
           )}
-          title="Attach files"
+          title={localizeUi("chat.input.attachFiles")}
         >
           <Paperclip size={18} />
         </button>
@@ -554,8 +566,12 @@ export function GameInput({
                   )}
                 >
                   <Users size={14} className="shrink-0" />
-                  <span className="flex-1">Talk to Party</span>
-                  {addressMode === "party" && <span className="text-[0.625rem] uppercase tracking-wide">On</span>}
+                  <span className="flex-1">{localizeUi("ui.game.gameinput.talkToParty")}</span>
+                  {addressMode === "party" && (
+                    <span className="text-[0.625rem] uppercase tracking-wide">
+                      {localizeUi("ui.game.gameinput.on")}
+                    </span>
+                  )}
                 </button>
               )}
               <button
@@ -568,8 +584,10 @@ export function GameInput({
                 )}
               >
                 <MessageCircle size={14} className="shrink-0" />
-                <span className="flex-1">Talk to GM</span>
-                {addressMode === "gm" && <span className="text-[0.625rem] uppercase tracking-wide">On</span>}
+                <span className="flex-1">{localizeUi("ui.game.gameinput.talkToGm")}</span>
+                {addressMode === "gm" && (
+                  <span className="text-[0.625rem] uppercase tracking-wide">{localizeUi("ui.game.gameinput.on")}</span>
+                )}
               </button>
             </div>
           )}
@@ -586,10 +604,10 @@ export function GameInput({
             )}
             title={
               addressMode === "party"
-                ? "Choose who to address (currently Party)"
+                ? localizeUi("ui.game.gameinput.chooseWhoToAddressCurrentlyParty")
                 : addressMode === "gm"
-                  ? "Choose who to address (currently GM)"
-                  : "Choose who to address"
+                  ? localizeUi("ui.game.gameinput.chooseWhoToAddressCurrentlyGm")
+                  : localizeUi("ui.game.gameinput.chooseWhoToAddress")
             }
             aria-haspopup="menu"
             aria-expanded={addressMenuOpen}
@@ -615,16 +633,16 @@ export function GameInput({
           onKeyDown={handleKeyDown}
           placeholder={
             isStreaming
-              ? "Waiting for the Game Master..."
+              ? t("game.input.prepareNextMove")
               : addressMode === "party"
-                ? "Say to party..."
+                ? t("game.input.sayToParty")
                 : addressMode === "gm"
-                  ? "Say to GM..."
+                  ? t("game.input.sayToGm")
                   : pendingMoveLabel
-                    ? "What do you do when you arrive?"
-                    : "What do you do?"
+                    ? t("game.input.onArrival")
+                    : t("game.input.default")
           }
-          disabled={disabled}
+          disabled={draftDisabled}
           rows={1}
           className="min-w-0 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm leading-normal text-foreground outline-none placeholder:text-foreground/30 disabled:opacity-50"
           style={{ minHeight: 36, maxHeight: 120 }}
@@ -637,7 +655,7 @@ export function GameInput({
               type="button"
               onClick={() => setQueuedDice(null)}
               className="ml-1 text-foreground/45 transition-colors hover:text-foreground/80"
-              title="Clear queued roll"
+              title={t("game.input.clearQueuedRoll")}
             >
               ✕
             </button>
@@ -647,7 +665,7 @@ export function GameInput({
         {/* Right: Dice, Emoji (desktop), Send */}
         {riskyInterrupt && !queuedDice && (
           <span className="hidden text-[0.625rem] font-medium uppercase tracking-wide text-red-300/80 sm:inline">
-            using dice recommended
+            {localizeUi("ui.game.gameinput.usingDiceRecommended")}
           </span>
         )}
         {forceInterrupt && (
@@ -655,7 +673,7 @@ export function GameInput({
             className="hidden text-[0.625rem] font-medium uppercase tracking-wide sm:inline"
             style={{ color: "#20C20E", opacity: 0.9 }}
           >
-            force interrupting
+            {localizeUi("ui.game.gameinput.forceInterrupting")}
           </span>
         )}
         <button
@@ -670,7 +688,11 @@ export function GameInput({
               !queuedDice &&
               "animate-pulse text-red-300 ring-1 ring-red-400/60 shadow-[0_0_12px_-2px_rgba(248,113,113,0.85)] hover:text-red-200",
           )}
-          title={riskyInterrupt && !queuedDice ? "Roll dice — recommended for an interrupt attempt" : "Roll dice"}
+          title={
+            riskyInterrupt && !queuedDice
+              ? localizeUi("ui.game.gameinput.rollDiceRecommendedForAnInterruptAttempt")
+              : localizeUi("ui.game.gameinput.rollDice")
+          }
         >
           <Dices size={18} />
         </button>
@@ -686,7 +708,7 @@ export function GameInput({
                 ? "bg-foreground/10 text-foreground/75 ring-1 ring-foreground/20"
                 : "text-foreground/40 hover:bg-foreground/10 hover:text-foreground/70",
             )}
-            title="Emoji"
+            title={t("chat.input.emoji")}
           >
             <Smile size={18} />
           </button>
@@ -710,7 +732,7 @@ export function GameInput({
                 ? "text-foreground/40 hover:bg-foreground/10 hover:text-foreground/70"
                 : "text-foreground/25",
             )}
-            title="Translate draft"
+            title={t("chat.input.translateDraft")}
           >
             {isTranslatingDraft ? <Loader2 size={18} className="animate-spin" /> : <Languages size={18} />}
           </button>
@@ -749,7 +771,7 @@ export function GameInput({
               ? "text-foreground/70 hover:bg-foreground/10 hover:text-foreground/90"
               : "text-foreground/25",
           )}
-          aria-label="Send game turn"
+          aria-label={t("game.input.sendTurn")}
         >
           <Send size={18} />
         </button>

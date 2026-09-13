@@ -13,6 +13,7 @@ import type {
   LorebookSchedule,
 } from "@marinara-engine/shared";
 import { LIMITS, testPrimaryKeys, testSecondaryKeys } from "@marinara-engine/shared";
+import { logger } from "../../lib/logger.js";
 import { calibrateLorebookSimilarity } from "./embeddings.js";
 import { vmRegexExecutor } from "./regex-timeout.js";
 
@@ -46,8 +47,8 @@ export interface ActivatedEntry {
   matchedKeys: string[];
   /** Every mechanism that activated this entry in this generation. */
   activationSources: LorebookActivationSource[];
-  /** True when a primary key matched the latest user message directly. */
-  matchedLatestUserMessage?: boolean;
+  /** True when keyword or semantic activation reflects the current user context. */
+  matchedCurrentContext?: boolean;
   /** Priority order for injection */
   injectionOrder: number;
   /** True when sticky state kept this entry active without a fresh keyword match */
@@ -415,6 +416,8 @@ export interface ScanOptions {
   chatEmbedding?: number[] | null;
   /** Per-lorebook chat context embeddings for semantic matching. */
   semanticEmbeddingsByLorebookId?: ReadonlyMap<string, number[] | null>;
+  /** Provider/model/profile identity used to produce semantic query vectors. */
+  semanticEmbeddingSpaceId?: string | null;
   /** Cosine similarity threshold for semantic matching (0-1, default 0.3). */
   semanticThreshold?: number;
   /** Unrelated-text cosine floor used to calibrate clustered embedding models. */
@@ -456,9 +459,9 @@ export function scanForActivatedEntries(
     scanDepth = 0,
     gameState = null,
     timingStates = new Map(),
-    currentMessageIndex = messages.length,
     chatEmbedding = null,
     semanticEmbeddingsByLorebookId = new Map<string, number[] | null>(),
+    semanticEmbeddingSpaceId = null,
     semanticThreshold = 0.3,
     semanticSimilarityBaseline = 0,
     semanticThresholdByLorebookId = new Map<string, number>(),
@@ -569,7 +572,7 @@ export function scanForActivatedEntries(
     // Test primary keys
     const { matched, matchedKeys } = testPrimaryKeys(entry.keys, entryScanText, matchOptions);
     if (!matched) continue;
-    const matchedLatestUserMessage =
+    const matchedCurrentContext =
       latestUserText.length > 0 ? testPrimaryKeys(entry.keys, latestUserText, matchOptions).matched : false;
 
     // Test secondary keys (selective mode)
@@ -584,14 +587,14 @@ export function scanForActivatedEntries(
     activated.push({
       entry,
       matchedKeys,
-      matchedLatestUserMessage,
+      matchedCurrentContext,
       activationSources: [recursionPass ? "recursive" : "keyword"],
       injectionOrder: entry.order,
     });
     activatedIds.add(entry.id);
   }
 
-  // ── Semantic fallback: check entries with embeddings that weren't keyword-matched ──
+  // ── Semantic matching: add vector matches that weren't already activated ──
   if (
     (chatEmbedding && chatEmbedding.length > 0) ||
     Array.from(semanticEmbeddingsByLorebookId.values()).some((embedding) => embedding && embedding.length > 0)
@@ -606,13 +609,38 @@ export function scanForActivatedEntries(
       if (!entry.embedding || entry.embedding.length === 0) continue;
       const queryEmbedding = semanticEmbeddingsByLorebookId.get(entry.lorebookId) ?? chatEmbedding;
       if (!queryEmbedding || queryEmbedding.length === 0) continue;
+      if (semanticEmbeddingSpaceId && entry.embeddingSpaceId !== semanticEmbeddingSpaceId) {
+        logger.debug(
+          "[lorebook-vectors] Rejected entry %s: stored vector space %s differs from active space %s",
+          entry.id,
+          entry.embeddingSpaceId,
+          semanticEmbeddingSpaceId,
+        );
+        continue;
+      }
+      if (entry.embedding.length !== queryEmbedding.length) {
+        logger.debug(
+          "[lorebook-vectors] Rejected entry %s: stored dimension %d differs from query dimension %d",
+          entry.id,
+          entry.embedding.length,
+          queryEmbedding.length,
+        );
+        continue;
+      }
       const timingState = timingStates.get(entry.id);
       if (!passesActivationGate(entry, timingState, filterContext, gameState, ignoreTiming)) continue;
 
       const threshold = semanticThresholdByLorebookId.get(entry.lorebookId) ?? semanticThreshold;
-      const similarity = calibrateLorebookSimilarity(
-        cosineSimilarity(queryEmbedding, entry.embedding),
+      const rawSimilarity = cosineSimilarity(queryEmbedding, entry.embedding);
+      const similarity = calibrateLorebookSimilarity(rawSimilarity, semanticSimilarityBaseline);
+      logger.debug(
+        "[lorebook-vectors] Scored entry %s: raw=%d calibrated=%d baseline=%d threshold=%d accepted=%s",
+        entry.id,
+        rawSimilarity,
+        similarity,
         semanticSimilarityBaseline,
+        threshold,
+        similarity >= threshold,
       );
       if (similarity >= threshold) {
         const entryScanText = getEntryScanText(entry);
@@ -643,6 +671,10 @@ export function scanForActivatedEntries(
       activated.push({
         entry: candidate.entry,
         matchedKeys: [`[semantic:${candidate.similarity.toFixed(3)}]`],
+        // Semantic candidates describe the same current scan context as a key
+        // matched in the latest user turn. Giving both this marker keeps the
+        // budget selector neutral between keyword and vector activation.
+        matchedCurrentContext: latestUserText.length > 0,
         injectionOrder: candidate.entry.order,
         activationSources: [recursionPass ? "recursive" : "semantic"],
       });

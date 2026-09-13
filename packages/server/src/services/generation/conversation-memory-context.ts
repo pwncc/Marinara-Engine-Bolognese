@@ -1,7 +1,10 @@
+import type { WrapFormat } from "@marinara-engine/shared";
+
 import { logger } from "../../lib/logger.js";
-import { escapeXmlText } from "../prompt/prompt-escaping.js";
 import { getZonedDayBounds } from "../conversation/timezone.js";
 import type { DB } from "../../db/connection.js";
+import { wrapContent } from "../prompt/format-engine.js";
+import { sanitizePromptLeaf } from "../prompt/prompt-escaping.js";
 
 type CharactersStore = {
   getById(id: string): Promise<{ data: unknown } | null>;
@@ -23,6 +26,7 @@ export async function mergeConversationCharacterMemories({
   awarenessBlock,
   timeZone,
   db,
+  wrapFormat,
 }: {
   chars: CharactersStore;
   characterIds: string[];
@@ -30,9 +34,11 @@ export async function mergeConversationCharacterMemories({
   timeZone?: string;
   /** When provided, injects Living World relationship standing between co-present characters. */
   db?: DB;
+  wrapFormat: WrapFormat;
 }): Promise<string | null> {
   const memoryLines: string[] = [];
   const today = getZonedDayBounds(new Date(), timeZone).start;
+  const leaf = (text: string) => sanitizePromptLeaf(text, wrapFormat);
 
   for (const characterId of characterIds) {
     const charRow = await chars.getById(characterId);
@@ -58,12 +64,10 @@ export async function mergeConversationCharacterMemories({
       .slice(-CARRIED_OLDER_MEMORIES);
 
     for (const memory of older) {
-      memoryLines.push(
-        `Memory from ${escapeXmlText(memory.from)} (${memory.createdAt.slice(0, 10)}): ${escapeXmlText(memory.summary)}`,
-      );
+      memoryLines.push(`Memory from ${leaf(memory.from)} (${memory.createdAt.slice(0, 10)}): ${leaf(memory.summary)}`);
     }
     for (const memory of fresh) {
-      memoryLines.push(`Memory from ${escapeXmlText(memory.from)}: ${escapeXmlText(memory.summary)}`);
+      memoryLines.push(`Memory from ${leaf(memory.from)}: ${leaf(memory.summary)}`);
     }
   }
 
@@ -91,8 +95,8 @@ export async function mergeConversationCharacterMemories({
         const b = await nameOf(rel.bCharacterId);
         const label = rel.label ?? rel.stage;
         relationshipLines.push(
-          `${escapeXmlText(a)} and ${escapeXmlText(b)} are ${escapeXmlText(label)}${rel.romance ? " (romantic)" : ""}${
-            rel.summary ? ` — ${escapeXmlText(rel.summary)}` : ""
+          `${leaf(a)} and ${leaf(b)} are ${leaf(label)}${rel.romance ? " (romantic)" : ""}${
+            rel.summary ? ` — ${leaf(rel.summary)}` : ""
           }`,
         );
       }
@@ -113,9 +117,12 @@ export async function mergeConversationCharacterMemories({
         const { resolveWorldUser } = await import("../world/world-engine.service.js");
         const user = await resolveWorldUser(db);
         const label = rel.label ?? rel.stage;
-        userRelSection = `## How they feel about ${escapeXmlText(user.name)}\n${escapeXmlText(label)}${
-          rel.romance ? " (romantic)" : ""
-        }${rel.summary ? ` — ${escapeXmlText(rel.summary)}` : ""} (warmth ${rel.score})`;
+        userRelSection = wrapContent(
+          `${leaf(label)}${rel.romance ? " (romantic)" : ""}${rel.summary ? ` — ${leaf(rel.summary)}` : ""} (warmth ${rel.score})`,
+          `How they feel about ${user.name}`,
+          wrapFormat,
+          1,
+        );
       }
     } catch (error) {
       logger.debug(error, "[memory] World user-relationship injection skipped");
@@ -125,12 +132,17 @@ export async function mergeConversationCharacterMemories({
   if (memoryLines.length === 0 && relationshipLines.length === 0 && !userRelSection) return awarenessBlock;
 
   const sections: string[] = [];
-  if (memoryLines.length) sections.push(`## Memories\n${memoryLines.join("\n")}`);
-  if (relationshipLines.length) sections.push(`## How they stand with each other\n${relationshipLines.join("\n")}`);
-  if (userRelSection) sections.push(userRelSection);
-  const memoriesSection = `\n\n${sections.join("\n\n")}`;
-  if (awarenessBlock) {
-    return awarenessBlock.replace(/<\/awareness>$/, memoriesSection + "\n</awareness>");
+  if (memoryLines.length) sections.push(wrapContent(memoryLines.join("\n"), "Memories", wrapFormat, 1));
+  if (relationshipLines.length) {
+    sections.push(wrapContent(relationshipLines.join("\n"), "How they stand with each other", wrapFormat, 1));
   }
-  return `<awareness>\n${memoriesSection.trimStart()}\n</awareness>`;
+  if (userRelSection) sections.push(userRelSection);
+  const memoriesSection = sections.join("\n\n");
+  if (awarenessBlock) {
+    if (wrapFormat === "xml") {
+      return awarenessBlock.replace(/<\/awareness>$/, `${memoriesSection}\n</awareness>`);
+    }
+    return `${awarenessBlock}\n\n${memoriesSection}`;
+  }
+  return wrapContent(memoriesSection, "Awareness", wrapFormat);
 }

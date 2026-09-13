@@ -37,13 +37,17 @@ function parseJsonishObject(value: string): Record<string, unknown> | null {
 /**
  * Gemma 4 uses <|"|>string value<|"|> as a string delimiter instead of "string value".
  * Normalize these to standard double-quoted strings so JSON parsing can succeed.
+ * Also used by the agent executor's JSON extraction (#5537), so the same model
+ * quirk cannot fail structured agent responses that the tool-call path tolerates.
  */
-function normalizeGemma4Delimiters(content: string): string {
+export function normalizeGemma4Delimiters(content: string): string {
   return content.replace(/<\|"\|>(.*?)<\|"\|>/gs, (_, inner: string) => JSON.stringify(inner));
 }
 
 function parseJsonishObjectWithGemmaDelimiters(value: string): Record<string, unknown> | null {
-  return parseJsonishObject(value) ?? (value.includes('<|"|>') ? parseJsonishObject(normalizeGemma4Delimiters(value)) : null);
+  return (
+    parseJsonishObject(value) ?? (value.includes('<|"|>') ? parseJsonishObject(normalizeGemma4Delimiters(value)) : null)
+  );
 }
 
 function rawToolCalls(payload: Record<string, unknown>): unknown[] {
@@ -221,8 +225,14 @@ function toolCallFromRaw(
   const name = nameValue.trim();
   // "parameters" is used by many models (e.g. Llama 3.1, Gemma) instead of "arguments"
   const args = normalizeArguments(
-    raw.arguments ?? raw.args ?? raw.input ?? raw.parameters ??
-    fnWrap?.arguments ?? fnWrap?.args ?? fnWrap?.parameters ?? {},
+    raw.arguments ??
+      raw.args ??
+      raw.input ??
+      raw.parameters ??
+      fnWrap?.arguments ??
+      fnWrap?.args ??
+      fnWrap?.parameters ??
+      {},
   );
   if (knownTools.has(name)) {
     return {
@@ -234,7 +244,9 @@ function toolCallFromRaw(
 
   const normalizedName = name.toLowerCase().replace(/[-.]/g, "_");
   if (!hasBashTool || !["mari", "mari_cli", "mari_command", "mari_db"].includes(normalizedName)) return null;
-  const command = normalizeMariCommand(args.command ?? args.cmd ?? args.query ?? args.input ?? args.text ?? raw.command);
+  const command = normalizeMariCommand(
+    args.command ?? args.cmd ?? args.query ?? args.input ?? args.text ?? raw.command,
+  );
   return command
     ? {
         id: toolCallId(index),
@@ -244,7 +256,10 @@ function toolCallFromRaw(
     : null;
 }
 
-export function parseTextualToolCalls(content: string | null | undefined, tools: LLMToolDefinition[] = []): LLMToolCall[] {
+export function parseTextualToolCalls(
+  content: string | null | undefined,
+  tools: LLMToolDefinition[] = [],
+): LLMToolCall[] {
   if (!content || tools.length === 0) return [];
 
   const knownTools = new Set(tools.map((tool) => tool.function.name));

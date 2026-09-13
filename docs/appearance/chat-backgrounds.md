@@ -63,7 +63,7 @@ The **Background** agent still sees every available background, including backgr
 You can only rename images with the **Library** label.
 
 1. Hover over the image row and click the pencil icon (**Rename**).
-2. Type the new name. You do not need to type the file extension.
+2. Type the new name. You do not need to type the file suffix.
 3. Click **Save**.
 
 ### Tag a background
@@ -107,7 +107,7 @@ AI-generated scene backgrounds you create from the Gallery also land in this sam
 
 ## Where your background choices are saved
 
-Two different settings decide what background a chat shows, and they save in different ways:
+Three different settings decide what background a chat shows, and they save in different ways:
 
 - The **Chat Background** you pick for a chat is saved with that chat on the server. It follows the chat to any device you open it on.
 - Background folders and their assignments are saved on the server and follow the library to other devices.

@@ -5,13 +5,14 @@ import { cn } from "../../lib/utils";
 import { useActiveLorebookEntries } from "../../hooks/use-lorebooks";
 import { useUIStore } from "../../stores/ui.store";
 import { CHAT_FLOATING_UI_DISMISS_EVENT, isDesktopShellNavigationTarget } from "../../lib/chat-floating-ui-events";
-import { ROLEPLAY_POPOVER_SCROLL_AREA, ROLEPLAY_POPOVER_SHELL } from "./roleplay-popover-styles";
+import { NEUTRAL_PANEL_SCROLL_AREA, NEUTRAL_PANEL_SHELL } from "../ui/neutral-surface-styles";
 import {
   CHAT_FLOATING_PANEL_SELECTOR,
   getChatToolbarButtonClass,
   readChatToolbarFloatingPanelAnchor,
   type ChatToolbarFloatingPanelAnchor,
 } from "./ChatToolbarControls";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 const ActiveLorebookEntriesPanel = lazy(async () => {
   const module = await import("./ChatRoleplayPanels");
@@ -21,8 +22,8 @@ const ActiveLorebookEntriesPanel = lazy(async () => {
 const PANEL_BACKDROP =
   "fixed inset-0 z-[9999] flex items-center justify-center p-4 max-md:pt-[max(1rem,env(safe-area-inset-top))]";
 const PANEL_CONTAINER = cn(
-  ROLEPLAY_POPOVER_SHELL,
-  ROLEPLAY_POPOVER_SCROLL_AREA,
+  NEUTRAL_PANEL_SHELL,
+  NEUTRAL_PANEL_SCROLL_AREA,
   "relative max-h-[calc(100dvh-4rem)] w-full max-w-sm overflow-y-auto p-3",
 );
 
@@ -52,10 +53,11 @@ function getMobileActiveContextPanelStyle(anchor: NonNullable<ChatToolbarFloatin
 }
 
 function ActiveLorebookEntriesLoadingFallback() {
+  const { t: localizeUi } = useUiTranslation();
   return (
     <div className="flex items-center gap-2 py-4 text-xs text-[var(--muted-foreground)]">
       <Loader2 size="0.75rem" className="animate-spin" />
-      Loading active context...
+      {localizeUi("ui.chat.activelorebookentriesloadingfallback.loadingActiveContext")}
     </div>
   );
 }
@@ -77,7 +79,7 @@ export function ActiveLorebookEntriesModal({
     return createPortal(
       <div
         data-chat-floating-panel
-        className={cn(ROLEPLAY_POPOVER_SHELL, ROLEPLAY_POPOVER_SCROLL_AREA, "fixed z-[9999] overflow-y-auto p-3")}
+        className={cn(NEUTRAL_PANEL_SHELL, NEUTRAL_PANEL_SCROLL_AREA, "fixed z-[9999] overflow-y-auto p-3")}
         style={getMobileActiveContextPanelStyle(anchor)}
         onMouseDown={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
@@ -112,9 +114,10 @@ export function ActiveLorebookEntriesButton({
   chatId,
   buttonClassName,
   iconSize = "0.875rem",
-  title = "Active Context",
+  title,
   onOpen,
 }: ActiveLorebookEntriesButtonProps) {
+  const { t: localizeUi } = useUiTranslation();
   const [open, setOpen] = useState(false);
   const [mobileAnchor, setMobileAnchor] = useState<ChatToolbarFloatingPanelAnchor>(null);
   const { data, isLoading } = useActiveLorebookEntries(chatId, true);
@@ -122,6 +125,7 @@ export function ActiveLorebookEntriesButton({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const compact = useUIStore((s) => s.centerCompact);
+  const resolvedTitle = title ?? localizeUi("chat.toolbar.activeContext");
 
   useEffect(() => {
     if (!open) return;
@@ -187,6 +191,7 @@ export function ActiveLorebookEntriesButton({
     <div className="relative" ref={ref} onClick={(e) => e.stopPropagation()}>
       <button
         ref={buttonRef}
+        data-chat-help="context"
         onClick={() => {
           const nextOpen = !open;
           if (nextOpen) onOpen?.();
@@ -194,8 +199,8 @@ export function ActiveLorebookEntriesButton({
           setOpen(nextOpen);
         }}
         className={resolvedButtonClassName}
-        title={title}
-        aria-label={title}
+        title={resolvedTitle}
+        aria-label={resolvedTitle}
       >
         <BookOpen size={iconSize} />
       </button>
@@ -211,8 +216,8 @@ export function ActiveLorebookEntriesButton({
           <div
             data-chat-floating-panel
             className={cn(
-              ROLEPLAY_POPOVER_SHELL,
-              ROLEPLAY_POPOVER_SCROLL_AREA,
+              NEUTRAL_PANEL_SHELL,
+              NEUTRAL_PANEL_SCROLL_AREA,
               "absolute right-0 top-full z-50 mt-2 max-h-[60vh] w-[min(20rem,calc(100vw-2rem))] overflow-y-auto p-3",
             )}
           >

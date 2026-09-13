@@ -6,6 +6,7 @@
 // ──────────────────────────────────────────────
 import type { PromptOverrideKeyDef } from "./types.js";
 
+import { CHARACTERS_REFERENCE_SHEET } from "./registry/characters.js";
 import {
   SPRITES_ANIMATED_PORTRAIT,
   SPRITES_EXPRESSION_SHEET,
@@ -16,13 +17,14 @@ import {
 import {
   GAME_NPC_PORTRAIT,
   GAME_BACKGROUND,
+  MAPS_LOCATION_ARTWORK,
   GAME_SCENE_ILLUSTRATION,
   GAME_NARRATION_SUMMARIZER,
   GAME_IMAGE_PROMPT_DIRECTOR,
-  GAME_STORYBOARD_ILLUSTRATION_DIRECTOR,
   GAME_VIDEO,
 } from "./registry/game-assets.js";
 import { CONVERSATION_SELFIE } from "./registry/conversation.js";
+import { ROLEPLAY_GALLERY_VIDEO_DIRECTOR } from "./registry/roleplay.js";
 import {
   CONVERSATION_CALL_VIDEO_CLIP_INSTRUCTION_BY_KIND,
   CONVERSATION_CALL_VIDEO_CLIP_LABEL_BY_KIND,
@@ -33,6 +35,7 @@ import {
 import { NOODLE_IMAGE_POST, NOODLE_TIMELINE_BASE, NOODLE_TIMELINE_VOICE } from "./registry/noodle.js";
 
 export const PROMPT_OVERRIDE_REGISTRY = [
+  CHARACTERS_REFERENCE_SHEET,
   SPRITES_EXPRESSION_SHEET,
   SPRITES_SINGLE_PORTRAIT,
   SPRITES_ANIMATED_PORTRAIT,
@@ -40,11 +43,12 @@ export const PROMPT_OVERRIDE_REGISTRY = [
   SPRITES_FULL_BODY_SHEET,
   GAME_NPC_PORTRAIT,
   GAME_BACKGROUND,
+  MAPS_LOCATION_ARTWORK,
   GAME_SCENE_ILLUSTRATION,
   GAME_NARRATION_SUMMARIZER,
   GAME_IMAGE_PROMPT_DIRECTOR,
-  GAME_STORYBOARD_ILLUSTRATION_DIRECTOR,
   GAME_VIDEO,
+  ROLEPLAY_GALLERY_VIDEO_DIRECTOR,
   ...CONVERSATION_CALL_VIDEO_PROMPTS,
   CONVERSATION_CALL_CUSTOM_VIDEO_PROMPT,
   CONVERSATION_SELFIE,
@@ -77,6 +81,7 @@ export function listPromptOverrideKeys(): string[] {
 
 // Re-export the typed key defs for direct import at call sites.
 export {
+  CHARACTERS_REFERENCE_SHEET,
   SPRITES_EXPRESSION_SHEET,
   SPRITES_SINGLE_PORTRAIT,
   SPRITES_ANIMATED_PORTRAIT,
@@ -84,11 +89,12 @@ export {
   SPRITES_FULL_BODY_SHEET,
   GAME_NPC_PORTRAIT,
   GAME_BACKGROUND,
+  MAPS_LOCATION_ARTWORK,
   GAME_SCENE_ILLUSTRATION,
   GAME_NARRATION_SUMMARIZER,
   GAME_IMAGE_PROMPT_DIRECTOR,
-  GAME_STORYBOARD_ILLUSTRATION_DIRECTOR,
   GAME_VIDEO,
+  ROLEPLAY_GALLERY_VIDEO_DIRECTOR,
   CONVERSATION_CALL_VIDEO_PROMPTS,
   CONVERSATION_CALL_CUSTOM_VIDEO_PROMPT,
   CONVERSATION_CALL_VIDEO_PROMPT_BY_KIND,
@@ -99,6 +105,7 @@ export {
   NOODLE_TIMELINE_BASE,
   NOODLE_TIMELINE_VOICE,
 };
+export type { CharactersReferenceSheetCtx } from "./registry/characters.js";
 export type {
   SpritesExpressionSheetCtx,
   SpritesSinglePortraitCtx,
@@ -109,12 +116,13 @@ export type {
 export type {
   GameNpcPortraitCtx,
   GameBackgroundCtx,
+  MapsLocationArtworkCtx,
   GameSceneIllustrationCtx,
   GameNarrationSummarizerCtx,
   GameImagePromptDirectorCtx,
-  GameStoryboardIllustratorCtx,
   GameVideoCtx,
 } from "./registry/game-assets.js";
+export type { RoleplayGalleryVideoDirectorCtx } from "./registry/roleplay.js";
 export type {
   ConversationCallCustomVideoClipCtx,
   ConversationCallVideoClipCtx,

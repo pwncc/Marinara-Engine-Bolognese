@@ -1,10 +1,15 @@
 import { Trash2, Upload } from "lucide-react";
+import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 interface SelectionActionBarProps {
   selectedCount: number;
+  /** Optional extra button rendered before Export (e.g. "Move to folder"). */
+  extraAction?: ReactNode;
   onExport: () => void;
   onDelete: () => void;
+  deleteTone?: "accent" | "danger";
   exportDisabled?: boolean;
   deleteDisabled?: boolean;
   exporting?: boolean;
@@ -14,14 +19,17 @@ interface SelectionActionBarProps {
 
 export function SelectionActionBar({
   selectedCount,
+  extraAction,
   onExport,
   onDelete,
+  deleteTone = "danger",
   exportDisabled = false,
   deleteDisabled = false,
   exporting = false,
   placement = "sticky",
   className,
 }: SelectionActionBarProps) {
+  const { t: localizeUi } = useUiTranslation();
   const isPanelFooter = placement === "panel";
 
   const actionBar = (
@@ -34,9 +42,10 @@ export function SelectionActionBar({
       )}
     >
       <div className="mb-2 text-center text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
-        {selectedCount} selected
+        {selectedCount} {localizeUi("ui.agents.agenteditor.selected")}
       </div>
       <div className="flex gap-2">
+        {extraAction}
         <button
           type="button"
           onClick={onExport}
@@ -44,16 +53,19 @@ export function SelectionActionBar({
           className="mari-chrome-control flex-1 px-3 py-2 text-xs"
         >
           <Upload size="0.75rem" />
-          Export
+          {localizeUi("ui.characters.spritestab.export")}
         </button>
         <button
           type="button"
           onClick={onDelete}
           disabled={selectedCount === 0 || deleteDisabled || exporting}
-          className="mari-chrome-control mari-chrome-control--danger flex-1 px-3 py-2 text-xs"
+          className={cn(
+            "mari-chrome-control flex-1 px-3 py-2 text-xs",
+            deleteTone === "danger" ? "mari-chrome-control--danger" : "mari-chrome-control--primary",
+          )}
         >
           <Trash2 size="0.75rem" />
-          Delete
+          {localizeUi("lorebook.editor.batch.delete")}
         </button>
       </div>
     </div>

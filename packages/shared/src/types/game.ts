@@ -3,6 +3,8 @@
 // ──────────────────────────────────────────────
 import type { GenerationParameters } from "./prompt.js";
 import type { CombatItemEffect, CombatMechanic, CombatDialogueCue } from "./combat-encounter.js";
+import type { SpotifySourceType } from "./spotify.js";
+import type { SpatialMapDraftSize, SpatialMapGroundingMode } from "./spatial-context.js";
 
 /** The four main states a game can be in during a session. */
 export type GameActiveState = "exploration" | "dialogue" | "combat" | "travel_rest";
@@ -20,8 +22,29 @@ export type GameCombatStyle = "classic" | "tactical";
 /** Status of a game session. */
 export type GameSessionStatus = "setup" | "active" | "concluded";
 
+/** Which system owns the campaign-scale map when a new game begins. */
+export type GameWorldMapMode = "standard" | "hierarchical";
+
+export const GAME_SPATIAL_MAP_DRAFT_PRESET_TARGETS: Readonly<Record<SpatialMapDraftSize, number>> = {
+  small: 8,
+  medium: 16,
+  large: 28,
+};
+
+/** Keep the exact target authoritative while preserving the matching draft-size bucket. */
+export function resolveGameSpatialMapDraftOptions(
+  size: SpatialMapDraftSize | undefined,
+  targetLocationCount: number | undefined,
+): { size: SpatialMapDraftSize; targetLocationCount: number } {
+  const target = targetLocationCount ?? GAME_SPATIAL_MAP_DRAFT_PRESET_TARGETS[size ?? "medium"];
+  return {
+    size: target <= 8 ? "small" : target <= 16 ? "medium" : "large",
+    targetLocationCount: target,
+  };
+}
+
 /** Spotify source constraints for Game Mode DJ selection. */
-export type GameSpotifySourceType = "liked" | "playlist" | "artist" | "any";
+export type GameSpotifySourceType = SpotifySourceType;
 
 // ── Maps ──
 
@@ -181,6 +204,16 @@ export interface GameSetupConfig {
   rating: "sfw" | "nsfw";
   /** Combat presentation preference (classic menu battles vs tactical grid battles). Defaults to "classic". */
   combatStyle?: GameCombatStyle;
+  /** Optional user prompt used to create the initial hierarchical world map draft. */
+  spatialMapInstructions?: string;
+  /** Campaign-scale map authority selected during New Game. Older saves default to "standard". */
+  gameWorldMapMode?: GameWorldMapMode;
+  /** Size bucket selected for the initial World Maps AI draft. */
+  spatialMapDraftSize?: SpatialMapDraftSize;
+  /** Exact number of places requested for the initial World Maps AI draft. */
+  spatialMapTargetLocationCount?: number;
+  /** Sources the initial World Maps AI draft may use. */
+  spatialMapGroundingMode?: SpatialMapGroundingMode;
   /** Character ID to use as GM (only when gmMode is "character") */
   gmCharacterId?: string | null;
   /** Party member IDs; library character IDs or `npc:<slug>` tracked-NPC IDs. */
@@ -190,16 +223,37 @@ export interface GameSetupConfig {
   /** Connection to use for the scene wrap-up turn (backgrounds, music, widgets, etc.).
    *  When omitted, falls back to sidecar (if available) or skips the wrap-up. */
   sceneConnectionId?: string;
+  /** Id of the installed package providing this game's EXPERIENCE — a self-contained game mode drawing its
+   *  own surface over the shared narration. Chosen at creation and fixed for the game's lifetime, since an
+   *  experience owns the whole run. Omitted = the built-in Game mode, unchanged. */
+  gameExperienceId?: string;
+  /** Whatever the experience's own setup collected, stored verbatim and never interpreted by the host, so
+   *  it can always recover the options the game was created with. */
+  experienceConfig?: Record<string, unknown>;
+  /** Enable installed agents and agent-driven Game Mode features for this game. */
+  enableAgents?: boolean;
+  /** Let the GM offer timed reaction prompts. Defaults to true. */
+  enableQuickTimeEvents?: boolean;
   /** Enable automatic sprite generation for characters using image model */
   enableSpriteGeneration?: boolean;
+  /** Ask the configured prompt model to rewrite Game Illustrator prompts before image generation. */
+  gameImageDynamicPromptEnabled?: boolean;
   /** Connection ID for image generation (NPC portraits + location backgrounds) */
   imageConnectionId?: string;
   /** Connection ID for video generation (animated scene clips from generated illustrations). */
   videoConnectionId?: string;
+  /** Connection ID for audio generation (speech, game sound effects, and music). */
+  audioConnectionId?: string;
+  /** Generate scene sound effects for this game (requires a capable audio connection). Defaults to true. */
+  enableGameSoundEffects?: boolean;
+  /** Generate scene music for this game (requires a capable audio connection). Defaults to true. */
+  enableGameMusic?: boolean;
   /** Automatically create storyboard keyframe illustrations after completed GM turns. */
   gameStoryboardAutoIllustrationsEnabled?: boolean;
   /** Automatically create storyboard keyframe videos after completed GM turns. */
   gameStoryboardAutoGenerationEnabled?: boolean;
+  /** Master switch for Game Mode storyboard controls and automatic generation. */
+  gameStoryboardsEnabled?: boolean;
   /** Target number of storyboard keyframes to create per completed GM turn. */
   gameStoryboardKeyframeCount?: number;
   /** Selected built-in or chat-local GM prompt template. */
@@ -248,6 +302,25 @@ export interface GameSetupConfig {
   gameSpecialInstructions?: string | null;
 }
 
+/** Resolve the setup-time Illustrator prompt choice into the root chat-metadata value used at runtime. */
+export function resolveGameImageDynamicPromptEnabled(
+  config: Readonly<Pick<GameSetupConfig, "enableSpriteGeneration" | "gameImageDynamicPromptEnabled">>,
+): boolean {
+  return config.enableSpriteGeneration === true && config.gameImageDynamicPromptEnabled === true;
+}
+
+/** Retain the new prompt choice when an older/imported setup omits it; other undefined fields still clear as before. */
+export function mergeGameSetupConfigPreservingDynamicPrompt(
+  stored: Readonly<Partial<GameSetupConfig>>,
+  submitted: Readonly<Partial<GameSetupConfig>>,
+): Partial<GameSetupConfig> {
+  const merged = { ...stored, ...submitted };
+  if (submitted.gameImageDynamicPromptEnabled === undefined) {
+    merged.gameImageDynamicPromptEnabled = stored.gameImageDynamicPromptEnabled;
+  }
+  return merged;
+}
+
 /** Safe, immutable connection details retained for sharing a game's original setup. */
 export interface GameInitialSetupConnectionSnapshot {
   name: string;
@@ -277,6 +350,7 @@ export interface GameInitialSetupSnapshot {
     scene?: GameInitialSetupConnectionSnapshot | null;
     image?: GameInitialSetupConnectionSnapshot | null;
     video?: GameInitialSetupConnectionSnapshot | null;
+    audio?: GameInitialSetupConnectionSnapshot | null;
   };
   labels?: GameInitialSetupLabels;
   createdAt: string;
@@ -308,6 +382,16 @@ export interface SkillCheckResult {
   criticalSuccess: boolean;
   criticalFailure: boolean;
   rollMode: "advantage" | "disadvantage" | "normal";
+  /** How the reported total was calculated from the dice. */
+  resolution: "sum" | "successes";
+  /**
+   * Dice notation actually rolled (e.g. "1d20", "6d10"). Absent on results from
+   * before this field existed, and on the built-in resolver's own output where
+   * it is always "1d20" — readers should default to that. Non-d20 values only
+   * arrive from a GM-declared [skill_check: dice="..."] tag, which is how
+   * non-d20 systems (pool systems like V20) reach the dice card intact.
+   */
+  dice?: string;
 }
 
 // ── Combat ──
@@ -435,6 +519,9 @@ export interface GameCombatStateSnapshot {
   dialogueCues: CombatDialogueCue[];
   /** ID of the assistant message whose `[combat:]` tag opened this encounter. */
   startMessageId: string | null;
+  /** Encounter tier for context-bound combat music (#5161). Optional so
+   *  snapshots from older clients stay valid. */
+  musicTier?: string | null;
 }
 
 /** Post-combat summary handed to the GM for narration. */
@@ -686,6 +773,8 @@ export type GameStoryboardKeyframeStatus =
   | "complete"
   | "failed";
 
+export type StoryboardAnimationSuitability = "suitable" | "simplify" | "subtle" | "regenerate";
+
 export interface GameStoryboardMediaRef {
   id: string;
   url: string;
@@ -703,11 +792,12 @@ export interface GameTurnStoryboardKeyframe {
   sectionStartIndex: number | null;
   sectionEndIndex: number | null;
   anchorQuote: string;
-  anchorKind: "narration" | "dialogue" | "readable" | "system" | "";
+  anchorKind: "narration" | "dialogue" | "readable" | "system" | "user" | "assistant" | "";
   narrationBeat: string;
   mangaPanelPrompt: string;
   imagePrompt: string;
   videoPrompt: string;
+  animationSuitability: StoryboardAnimationSuitability | "";
   characters: string[];
   continuityNotes: string;
   cameraMotion: string;

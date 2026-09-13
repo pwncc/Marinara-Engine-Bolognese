@@ -3,18 +3,22 @@
 // ──────────────────────────────────────────────
 import { logger } from "../../lib/logger.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { getEmbeddingRequestTimeoutMs, isProviderLocalUrlsEnabled } from "../../config/runtime-config.js";
+import {
+  getChatGenerationTimeoutMs,
+  getEmbeddingRequestTimeoutMs,
+  isProviderLocalUrlsEnabled,
+} from "../../config/runtime-config.js";
 import { requestHeadersWithIdentityEncoding, safeFetch, type SafeFetchOptions } from "../../utils/security.js";
 import type { GenerationParameterSendKey, GenerationParameterSendMap } from "@marinara-engine/shared";
 
 /**
- * Shared undici Agent with a 5-minute headers timeout (time to first byte)
- * and a finite inter-chunk body timeout to prevent half-open streams from
- * hanging indefinitely while still allowing long-running healthy streams.
+ * Shared undici Agent settings. The headers timeout (time to first byte) follows
+ * CHAT_GENERATION_TIMEOUT_MS so slow local models get the same budget on background
+ * generation (Noodle, agents) as on the chat routes. The inter-chunk body timeout
+ * stays finite so half-open streams cannot hang forever.
  */
-const LLM_HEADERS_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 const LLM_BODY_TIMEOUT = 120 * 1000; // 2 minutes between body chunks
-const llmAgentOptions = { bodyTimeout: LLM_BODY_TIMEOUT, headersTimeout: LLM_HEADERS_TIMEOUT };
+const llmAgentOptions = () => ({ bodyTimeout: LLM_BODY_TIMEOUT, headersTimeout: getChatGenerationTimeoutMs() });
 const llmRequestTimeout = new AsyncLocalStorage<number>();
 
 /** Scope a provider request timeout without changing background/agent generation behavior. */
@@ -45,9 +49,7 @@ export function llmFetch(
     maxResponseBytes: 50 * 1024 * 1024,
     agentOptions:
       init?.agentOptions ??
-      (requestTimeoutMs
-        ? { bodyTimeout: requestTimeoutMs, headersTimeout: requestTimeoutMs }
-        : llmAgentOptions),
+      (requestTimeoutMs ? { bodyTimeout: requestTimeoutMs, headersTimeout: requestTimeoutMs } : llmAgentOptions()),
     bufferResponse,
     decodeCompressedResponse: init?.decodeCompressedResponse ?? bufferResponse,
   });
@@ -55,6 +57,70 @@ export function llmFetch(
 
 export function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * Structured HTTP failure from a provider call. Plain `Error`s only carry the status in their
+ * message text, so a 429 is not distinguishable from any other failure without regexing strings.
+ * Providers throw this on `!response.ok` so retry/throttle logic above them can detect a rate
+ * limit and honour `Retry-After`.
+ */
+export class LLMHttpError extends Error {
+  readonly status: number;
+  readonly retryAfterMs?: number;
+  constructor(message: string, options: { status: number; retryAfterMs?: number }) {
+    super(message);
+    this.name = "LLMHttpError";
+    this.status = options.status;
+    this.retryAfterMs = options.retryAfterMs;
+  }
+}
+
+/**
+ * Parse an HTTP `Retry-After` header into milliseconds. Accepts either a delta-seconds integer
+ * (`"12"`) or an HTTP date (`"Wed, 21 Oct 2026 07:28:00 GMT"`). Returns undefined when absent or
+ * unparseable so callers fall back to their own backoff.
+ */
+export function parseRetryAfterMs(headerValue: string | null | undefined): number | undefined {
+  if (!headerValue) return undefined;
+  const trimmed = headerValue.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number.parseInt(trimmed, 10);
+    return Number.isFinite(seconds) ? seconds * 1000 : undefined;
+  }
+  const dateMs = Date.parse(trimmed);
+  if (Number.isNaN(dateMs)) return undefined;
+  const deltaMs = dateMs - Date.now();
+  return deltaMs > 0 ? deltaMs : 0;
+}
+
+/** Read the status + Retry-After off a Response and build a typed rate-limit-aware error. */
+export function llmHttpErrorFromResponse(message: string, response: Response): LLMHttpError {
+  return new LLMHttpError(message, {
+    status: response.status,
+    retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after")),
+  });
+}
+
+/** Accept either an OpenAI-compatible API base URL or its full embeddings endpoint. */
+export function resolveEmbeddingEndpointUrl(baseUrl: string): string {
+  const endpoint = new URL(baseUrl.trim());
+  const pathname = endpoint.pathname.replace(/\/+$/u, "");
+  endpoint.pathname = /\/embeddings$/iu.test(pathname) ? pathname : `${pathname}/embeddings`;
+  return endpoint.toString();
+}
+
+/**
+ * True when an error is a provider rate-limit / transient-overload the caller should pause and
+ * retry rather than surface: HTTP 429 (rate limited) or 529 (Anthropic "overloaded").
+ */
+export function isRateLimitError(error: unknown): error is LLMHttpError {
+  if (!(error instanceof LLMHttpError)) return false;
+  // 429 (rate limited) and 529 (Anthropic "overloaded") are always retryable. Some gateways signal
+  // intentional throttling with 503 plus a Retry-After; treat that as retryable too, but let a bare
+  // 503 (likely a real outage, not throttling) propagate.
+  if (error.status === 429 || error.status === 529) return true;
+  return error.status === 503 && typeof error.retryAfterMs === "number";
 }
 
 export interface ChatMessage {
@@ -120,6 +186,8 @@ export interface ChatOptions {
   stop?: string[];
   /** Tool/function definitions for function calling */
   tools?: LLMToolDefinition[];
+  /** OpenAI-compatible tool selection policy for the current provider round. */
+  toolChoice?: "auto" | "required";
   /** Enable provider-native prompt caching when supported */
   enableCaching?: boolean;
   /** Anthropic only: use 1-hour prompt-cache TTL instead of the default 5-minute TTL */
@@ -134,8 +202,12 @@ export interface ChatOptions {
   onToken?: (chunk: string) => void | Promise<void>;
   /** Enable extended thinking (reasoning models) */
   enableThinking?: boolean;
-  /** Reasoning effort level for models that support it */
-  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max";
+  /**
+   * Reasoning effort level for models that support it.
+   * `none` is an explicit request to disable thinking; `undefined` leaves the
+   * provider/model default untouched.
+   */
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max";
   /** When true, previous provider-native reasoning state is not reused. */
   excludePastReasoning?: boolean;
   /** Output verbosity for GPT-5+ models */
@@ -146,6 +218,12 @@ export interface ChatOptions {
   serviceTier?: "flex" | "priority" | null;
   /** Abort signal — when triggered, the in-flight LLM request should be cancelled. */
   signal?: AbortSignal;
+  /**
+   * Invoked when a rate-limit-aware retry pauses before re-attempting the request (proxy 429 /
+   * per-connection throttle). Callers (e.g. Professor Mari) use this to surface a "paused,
+   * resuming in Ns" indicator instead of appearing to hang.
+   */
+  onRateLimitPause?: (info: { attempt: number; delayMs: number; reason: "rate_limit" | "throttle" }) => void;
   /** Callback to receive the full response parts (for providers that return structured metadata like Gemini thought signatures) */
   onResponseParts?: (parts: unknown[]) => void;
   /** OpenRouter: preferred provider for model routing */
@@ -415,11 +493,21 @@ export function fitMessagesToContext(
       : Math.max(1, Math.min(requestedMaxTokens, Math.max(1, usableWindow - reservedInputFloor)));
   let inputBudget = Math.max(0, usableWindow - (maxTokens ?? 0));
 
+  // Single-shot prompts (Noodle refreshes, summarizers, other one-off builders) carry no
+  // messages marked as history, so there is nothing in them that is safe to drop: the trimmer
+  // below would delete the prompt body itself and leave only the trailing instruction. Give the
+  // output budget back instead, and let the later passes handle a prompt that still cannot fit.
+  const hasRemovableHistory = messages.some((message) => message.contextKind === "history");
+
   // If the requested output budget consumes nearly the whole context window,
   // make room for the prompt before trimming. Otherwise, prefer trimming old
   // history first so a large-but-valid response budget does not collapse to the
   // 128-token floor just because the prompt is slightly over budget.
-  if (estimatedTokensBefore > inputBudget && maxTokens !== undefined && inputBudget <= reservedInputFloor) {
+  if (
+    estimatedTokensBefore > inputBudget &&
+    maxTokens !== undefined &&
+    (inputBudget <= reservedInputFloor || !hasRemovableHistory)
+  ) {
     const minimumOutputBudget = Math.min(MIN_OUTPUT_BUDGET_TOKENS, Math.max(1, usableWindow - 1));
     const headroom = Math.min(OUTPUT_BUDGET_REDUCTION_HEADROOM_TOKENS, Math.max(0, usableWindow - 1));
     const maxTokensThatFitPrompt = Math.max(1, usableWindow - estimatedTokensBefore - headroom);
@@ -445,7 +533,7 @@ export function fitMessagesToContext(
 
   const fittedMessages = cloneMessages(messages);
   let estimatedTokensAfter = estimateMessagesTokens(fittedMessages);
-  const hasAnnotatedHistory = fittedMessages.some((message) => message.contextKind === "history");
+  const hasAnnotatedHistory = hasRemovableHistory;
 
   while (estimatedTokensAfter > inputBudget && fittedMessages.length > 1) {
     const block = findOldestRemovableConversationBlock(fittedMessages, "history");
@@ -682,23 +770,32 @@ export abstract class BaseLLMProvider {
 
     let result: IteratorResult<string, LLMUsage | void>;
     try {
-      result = await gen.next();
-    } catch (error) {
-      return returnPartialOnStreamFailure(error);
-    }
-    while (!result.done) {
-      content += result.value;
-      if (options.onToken) {
-        await options.onToken(result.value);
-      }
       try {
         result = await gen.next();
       } catch (error) {
         return returnPartialOnStreamFailure(error);
       }
+      while (!result.done) {
+        content += result.value;
+        if (options.onToken) {
+          await options.onToken(result.value);
+        }
+        try {
+          result = await gen.next();
+        } catch (error) {
+          return returnPartialOnStreamFailure(error);
+        }
+      }
+      const usage = result.value || undefined;
+      return { content, toolCalls: [], finishReason: usage?.finishReason ?? "stop", usage };
+    } finally {
+      // Close the generator on every exit. A manual `next()` loop does not forward an early
+      // return the way `yield*` would, so an `onToken` throw would leave the stream suspended
+      // and an admission wrapper around it would never run its finally, leaking the slot.
+      await gen.return(undefined).catch((closeError: unknown) => {
+        logger.warn(closeError, "Failed to close the completion stream");
+      });
     }
-    const usage = result.value || undefined;
-    return { content, toolCalls: [], finishReason: usage?.finishReason ?? "stop", usage };
   }
 
   /**
@@ -713,7 +810,7 @@ export abstract class BaseLLMProvider {
       "Content-Type": "application/json",
       Authorization: `Bearer ${this.apiKey}`,
     };
-    const res = await llmFetch(`${this.baseUrl}/embeddings`, {
+    const res = await llmFetch(resolveEmbeddingEndpointUrl(this.baseUrl), {
       method: "POST",
       headers,
       body: JSON.stringify({ input: texts, model }),
@@ -723,7 +820,7 @@ export abstract class BaseLLMProvider {
     });
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`Embedding request failed (${res.status}): ${sanitizeApiError(body)}`);
+      throw llmHttpErrorFromResponse(`Embedding request failed (${res.status}): ${sanitizeApiError(body)}`, res);
     }
     const json = await res.json();
     return parseEmbeddingResponse(json);

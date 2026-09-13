@@ -36,7 +36,7 @@ pnpm dev
 Useful entry points:
 
 - `pnpm dev` starts the server and client with hot reload.
-- `pnpm dev:server` starts only the API server.
+- `pnpm dev:server` builds the shared package, then starts only the API server. If shared source changes while it is running, rerun `pnpm build:shared` and restart the server; the server watcher intentionally ignores shared build output.
 - `pnpm dev:client` starts only the Vite frontend.
 - `start.bat`, `start.sh`, and `start-termux.sh` run the launcher flow, including git-based auto-update and optional browser auto-open.
 
@@ -46,16 +46,19 @@ Copy `.env.example` to `.env` when you need to change ports, HTTPS settings, or 
 
 Marinara Engine uses two long-lived branches:
 
-| Branch    | Role                                                                                           |
-| --------- | ---------------------------------------------------------------------------------------------- |
-| `staging` | Active development. All feature branches, bug fixes, and documentation PRs should target this. |
-| `main`    | Release branch. Updated by maintainers as part of the release flow; do not target it directly. |
+| Branch    | Role                                                                                                      |
+| --------- | --------------------------------------------------------------------------------------------------------- |
+| `staging` | Active development and testing. This is the only target for feature, bug-fix, and documentation PRs.      |
+| `main`    | Stable release branch. Only `SpicyMarinara` may promote tested work from `staging` or publish a hotfix.    |
 
 Guidelines:
 
 - **Base your feature branch on `staging`**, not `main`. Run `git checkout staging && git pull` before branching.
 - **Open PRs against `staging`**. The GitHub web UI defaults to `main` (the repo's default branch); change the base to `staging` when filing the PR.
-- Do not target `main` directly unless a maintainer explicitly asks for a mainline-only change (e.g. release hotfix).
+- Every PR must pass the required GitHub checks and complete its CodeRabbit review before merge. These gates cannot be bypassed by developers.
+- PRs authored by active Pasta-Devs organization members or owners do not require a separate human approval. Organization members with repository merge permission may merge a ready PR into `staging` after the automated gates pass.
+- Outside and first-time contributors may submit only to `staging` and need an approving review from repository owner `SpicyMarinara` in addition to the automated gates. Approval from another Pasta-Devs member does not satisfy this gate.
+- Only `SpicyMarinara` may update or merge into `main`. Normal releases are promoted from the same repository's tested `staging` branch; direct mainline work is reserved for an owner-owned `hotfix/*` branch in this repository.
 - Update checks and installation guides continue to track `main`, since end users install from released versions.
 
 ## Repo Layout
@@ -72,6 +75,20 @@ Official downloadable agent and capability-package sources live in the separate 
 
 Marinara Engine owns the host integration: package loading, capability APIs and shared contracts, Engine UI/settings, storage, provider/model routing, orchestration, and compatibility handling. A fix can therefore mention or affect a downloadable agent while still belonging in Engine when it changes only how the host loads, configures, or executes the package. Determine the owning repository before opening an issue, branch, or PR, and split cross-repository changes when both package content and host integration need updates.
 
+The Engine update channel also selects the official Agent channel. Stable Engine builds use Marinara-Agents `main`; a git installation on Engine `staging` automatically reads the matching catalog and artifacts from Marinara-Agents `staging`. This lets Agent changes be tested end to end before the owner promotes both repositories to `main`.
+
+## Prompt Leaf Content Is Verbatim (Decision + Threat Model)
+
+**Invariant:** what the model receives inside a prompt section equals what the user typed. Prompt *leaf* content — character card fields, persona, lorebook entries, memories, scene text, example dialogue — is passed to the model **verbatim**. Do not HTML-escape `<`, `>`, or `&` in this content. Users legitimately organize cards and lorebooks with angle-bracket / HTML-style tags (`<thinking>`, `<scenario>`, `<div>`), and those must reach the model as written.
+
+**Why this is safe.** Marinara is a local, single-user tool. The person who authors or imports a card is the same person any "injection" in that card would target — so the worst realistic outcome of an unescaped tag is the model role-playing something odd, which the user sees in their own chat and fixes by editing their own card. That is a rare, self-inflicted, self-correcting annoyance, not a security boundary. An LLM also does not parse the prompt as an XML document, so a stray `<` cannot "break out" of a section the way it would in a real parser — escaping it only corrupts text. Escaping traded that non-threat for a constant, real harm (mangled cards, broken roleplay HTML, wasted tokens).
+
+**Structure is separate from content.** The framework's own section wrappers (`<description>…</description>`, `<last_message>…`, etc.) are emitted by `wrapContent` *around* leaf content, from fixed section names. Verbatim content therefore cannot alter structural tags; it only changes what sits inside them.
+
+**What stays escaped (do not "harmonize" these back into the leaf path).** The agent value/attribute escapers — `escapeXml` / `escapeXmlAttribute` in `agent-executor.ts` and the local escaper in `knowledge-router.ts` — escape dynamic values into XML *attributes* and into strict, machine-parsed agent output (world-state documents, entry catalogs). Those are genuinely parsed downstream, where a stray `"` or `<` breaks an attribute or element, so they must stay escaped. Note that `agent-executor.ts` also escapes some of the same card fields into element *content* of that parsed document — a different consumer with different rules. It is **not** a reason to re-escape the main prompt path.
+
+**If you are about to re-add escaping here: don't.** It has been tried repeatedly (see the flip-flop history in `CHANGELOG.md` and the header comment in `packages/server/src/services/prompt/prompt-escaping.ts`), it corrupts legitimate cards, and it protects against nothing in this deployment model. If a future multi-tenant or shared-marketplace deployment ever changes the threat model, the correct response is a validation/consent step at the import boundary — not silent per-token escaping of everyone's content at prompt-assembly time. Check with a maintainer before changing this.
+
 ## Validation
 
 Baseline validation:
@@ -80,21 +97,33 @@ Baseline validation:
 pnpm check
 ```
 
-This runs the Impeccable project-context guard, workspace lint/type checks, and the production build.
+This runs the Impeccable project-context guard, localization checks, Prettier verification, workspace lint/type checks, and the production build.
+
+Run the individual formatting and lint checks while iterating:
+
+```bash
+pnpm format:check
+pnpm lint
+```
+
+Use `pnpm format` to apply Prettier to the maintained TypeScript and TSX source scope.
 
 Useful follow-up checks:
 
 ```bash
 pnpm version:check
+pnpm regression
 pnpm regression:prompt
-pnpm smoke:ui
+pnpm regression:ui
 ```
 
 Regression guards:
 
+- `pnpm regression` (or `pnpm regression:node`) builds the shared package once, discovers the complete Node regression set from the filesystem, and runs it serially. Pull requests and staging pushes run this complete lane on a hosted runner.
 - `pnpm regression:prompt` runs fast deterministic checks for prompt assembly, lorebook keyword matching, macros, summaries, and mode-specific generation gates.
-- `pnpm smoke:ui` runs the Playwright browser smoke suite against isolated temporary app data.
-- `pnpm regression` runs both lanes.
+- `pnpm regression:ui` runs the Playwright browser suite across desktop Chromium, Android-sized Chromium, and iPhone-sized WebKit; `pnpm smoke:ui` remains a compatibility alias for the same full UI lane. Pull requests and staging pushes run the same projects independently on hosted runners.
+  Each run clears `.tmp/playwright-data` and starts separate desktop and mobile app servers so their mutable fixtures cannot overlap. Stop any process already using the configured Playwright ports before running it; existing fixture state is disposable and the suite does not reuse a running development server.
+- `pnpm test` checks the Windows installer layout, then runs the Node regression lane. It does not run the UI lane; invoke `pnpm regression:ui` explicitly for browser validation.
 
 These checks are intentionally small and do not replace manual verification. When you change behavior, include the manual verification you performed and add or update a regression guard for the bug class when practical.
 
@@ -167,12 +196,14 @@ The overlay is not a substitute for this guide. When instructions conflict, foll
 ## Pull Request Expectations
 
 - Target the `staging` branch. The GitHub UI defaults to `main`; change the base before submitting. See [Branches](#branches).
+- Wait for every required check and the CodeRabbit review to complete. Outside and first-time contributors must also obtain an approving review from `SpicyMarinara`.
 - Link the issue or feature request your PR addresses. If there isn't one yet, open one first (see [Before You Open a Pull Request](#before-you-open-a-pull-request)).
 - Keep PRs focused. Separate unrelated refactors from user-facing fixes or documentation work.
 - Explain the why clearly in the PR description. Reviewers should understand the user problem, regression, or tradeoff being addressed, not just the implementation summary.
 - Update documentation in the same PR when behavior changes affect installation, updates, release flow, launchers, or platform-specific behavior.
 - Include screenshots or short recordings for UI changes.
 - Call out manual validation clearly, especially for launcher, installer, or Android wrapper changes.
+- Add a concise user-focused entry under the appropriate `CHANGELOG.md` `[Unreleased]` heading for every bug fix, behavior change, or new feature. Purely mechanical changes with no product or contributor-workflow impact may omit one.
 - Avoid version drift. If your PR intentionally bumps a release, update every version-bearing file in one pass.
 
 ## Documentation Rules
@@ -185,6 +216,33 @@ The overlay is not a substitute for this guide. When instructions conflict, foll
 - `docs/TROUBLESHOOTING.md` collects common user-facing issues and fixes.
 - `docs/FAQ.md` is the user-facing FAQ for common questions like LAN access.
 - If a change makes any existing doc misleading, fix that doc in the same PR.
+
+### Translated documentation
+
+- Translations of `docs/` live on the [`docs-i18n`](https://github.com/Pasta-Devs/Marinara-Engine/tree/docs-i18n) branch as one folder per language (`es/`, …), mirroring the English folder and file names 1:1, each with a generated `manifest.json`. The app downloads the selected language pack into its data folder on demand (Settings → General → Documentation Language); guides without a translation fall back to English with an `EN` badge, so features are never blocked on translations.
+- When a PR adds, renames, deletes, or meaningfully edits a file under `docs/`, update every language folder on `docs-i18n` to match — or, if you cannot translate, open a follow-up issue titled `[docs-i18n] <affected paths>` so translators can catch up. Renames and deletions MUST be mirrored on `docs-i18n`: a translation left at an old path is silently ignored by the app.
+- This applies to AI-assisted PRs too. If an AI assistant writes or updates a feature, instruct it that the English docs change lands in the same PR and the translated packs (or the `[docs-i18n]` follow-up issue) must cover every language currently on `docs-i18n`.
+- Translate prose, headings, table text, and link text only. Code blocks, inline code, file paths, URLs, and link targets (including `#fragments`) stay byte-identical to English, and every file keeps its leading `# ` heading. Per-language conventions, in both cases with in-app UI labels kept in English bold plus a one-time native-language gloss:
+  - Spanish: neutral international Spanish ("tú", no regionalisms).
+  - German: natural standard High German (lowercase "du", en dashes `–`, Duden-style compound hyphenation for English loanwords such as "Lorebook-Eintrag"; mode names Conversation/Roleplay/Game Mode stay English).
+  - French: natural standard French (tutoiement; no anglicisms or colloquialisms like "l'appli"/"checker"; plain ASCII spaces before `:` `;` `!` `?` and straight quotes/apostrophes — never `«»` or non-breaking spaces, which break the substring search and copy-paste; en dashes `–` for parentheticals, accents kept on capitals such as `É`; mode names Conversation/Roleplay/Game Mode stay English).
+  - Brazilian Portuguese (`pt-br`): natural Brazilian Portuguese, never European forms ("você" with its imperative — "Clique", "Abra"; arquivo/salvar/tela/usuário — never ficheiro/guardar/ecrã/utilizador; current Acordo Ortográfico spelling; straight quotes and en dashes; mode names Conversation/Roleplay/Game Mode stay English).
+  - Polish: natural Polish ("ty" with 2nd-person imperatives — "Kliknij", "Otwórz"; avoid reader-gendering past-tense forms; product names stay UNDECLINED with a carrier noun where the case demands — "w aplikacji Marinara Engine", never "w Marinarze" — while assimilated loanwords decline normally; straight ASCII quotes only, never „…", and no non-breaking spaces; mode names Conversation/Roleplay/Game Mode stay English).
+  - Russian: natural Russian (lowercase "вы" with its imperative — "Нажмите", "Откройте" — matching mainstream Russian software convention and keeping phrasing gender-neutral via plural agreement, never capitalized "Вы" mid-sentence, never "ты"; product names stay in LATIN SCRIPT and undeclined with a carrier noun where the case demands — "в приложении Marinara Engine", never "в Маринаре" — while Cyrillic-assimilated loanwords such as "промпт", "токен", "пресет", and "лорбук" decline normally; en dashes `–` wherever Russian wants тире, never em dashes; straight ASCII quotes only, never «ёлочки», and no non-breaking spaces; "е" instead of "ё" except in "всё/всём/всё-таки"; mode names Conversation/Roleplay/Game Mode stay English).
+  - Japanese: natural Japanese (polite です・ます prose with noun-phrase 体言止め headings and no "あなた" floods — Japanese drops subjects; product names stay in LATIN SCRIPT, never katakanized — "Marinara Engineでは", never "マリナーラ"; katakana loanwords use the modern trailing-ー spelling — "サーバー"/"ユーザー"/"フォルダー", never "サーバ"/"ユーザ"/"フォルダ" — with community-standard terms such as "ロアブック"; ALL Latin letters and digits stay half-width ASCII (full-width "７８６０" never matches a search for `7860`); no ideographic space U+3000, no non-breaking spaces, no space between Japanese and Latin/bold/code spans, text NFC-normalized; 「」 for Japanese quoting while quoted English UI strings stay byte-exact to the app; mode names Conversation/Roleplay/Game Mode stay English).
+  - Korean: natural Korean (the 합니다체 register standard in Korean software with ~하세요 imperatives and noun-phrase headings; never "당신"; product names stay in LATIN SCRIPT — never transcribed — with phonetically correct particle attachment, "Marinara Engine은", "HUD와"; ONE transcription and ONE spacing per term — "메시지" never "메세지", "콘텐츠" never "컨텐츠", "캐릭터 카드" always spaced that way — because either split fragments the substring search; UI-label glosses match the app's shipped Korean UI strings in `ko.json` where they exist; ALL Latin letters and digits half-width ASCII; no ideographic space U+3000, no non-breaking spaces, straight ASCII quotes only (never 낫표 「」), text NFC-normalized — macOS-decomposed Hangul jamo would silently break search; mode names Conversation/Roleplay/Game Mode stay English).
+  - Simplified Chinese (`zh-hans`): natural Simplified Chinese ("你" address, never "您"; SIMPLIFIED CHARACTERS ONLY — a stray traditional form like "個" or "說" silently breaks search for readers typing simplified; the Chinese SillyTavern community's established terms — "世界书" for lorebook, "角色卡", "提示词" for prompt, "立绘" for sprites, "智能体" for agent; product names stay in LATIN SCRIPT; full-width CJK punctuation ，。（） in prose but ALL Latin letters and digits half-width ASCII — full-width "７８６０" never matches a search for `7860`; glosses in half-width parens tight after a bold/Latin label and full-width （） inside pure Chinese prose; curly “” for Chinese-prose quoting while quoted English UI strings stay byte-exact; no ideographic space U+3000, no NBSP, text NFC-normalized; mode names Conversation/Roleplay/Game Mode stay English).
+  - Hindi: natural modern technical Hindi (the Google/Microsoft Hindi register — Devanagari loanwords like "फ़ाइल"/"सर्वर"/"प्रॉम्प्ट", never शुद्ध purisms like "संगणक"; "आप" address with "करें"-style imperatives, never "तू"/"तुम"; ONE transliteration per term with a fixed nukta policy — nukta kept on ज़/फ़ only, so "फ़ाइल" but "खास", because "फ़ाइल" and "फाइल" are different byte strings that split the substring search; international digits 0-9 only — Devanagari "०७८६०" never matches a search for `7860`; the danda "।" ends Hindi sentences (verbatim English strings keep their own punctuation); product names stay in LATIN SCRIPT with postpositions as separate words — "Marinara Engine में"; straight ASCII quotes; text NFC-normalized with no ZWJ/ZWNJ; mode names Conversation/Roleplay/Game Mode stay English).
+- After editing a pack, run `node scripts/docs-i18n/build-manifest.mjs <pack-dir>` to refresh hashes, then `node scripts/docs-i18n/validate-pack.mjs <pack-dir>` from the Engine repo root, before committing to `docs-i18n`.
+
+## Localization
+
+UI translations live in one JSON file per locale and fall back to the canonical English catalog. See
+[`docs/development/localization.md`](docs/development/localization.md) for the translation boundary, file format,
+semantic-key conventions, downloadable Agent handoff, and validation command.
+
+Keep prompts, authored content, identifiers, protocol values, and persisted machine values out of UI localization.
+Run `pnpm localization:check` whenever a locale file or localization key changes.
 
 ## Versioning and Releases
 
@@ -212,11 +270,12 @@ Android policy:
 
 - `versionName` must match the app version.
 - `versionCode` must increase monotonically for every shipped APK.
+- Stable and tagged release APKs require the repository maintainers' configured `ANDROID_SIGNING_*` keystore credentials. These are CI build inputs, never information requested from APK downloaders. The manual pre-alpha workflow may publish a debug-signed APK only as a draft, test-only artifact.
 
 Release-related behavior already in the repo:
 
 - Docker publishing is triggered by `v*` tags.
-- Tagged releases are published from `CHANGELOG.md` by the GitHub release workflow, with a named versioned source ZIP and a temporary Android APK notice prepended so release-page downloaders know the APK still requires Termux.
+- Tagged releases are published from `CHANGELOG.md` by the GitHub release workflow, with a named versioned source ZIP and a temporary Android APK notice prepended so release-page downloaders know the APK still requires Termux. Android releases attach both the versioned APK and the stable `marinara-engine-android.apk` alias used by the one-click latest-download link.
 - The server update check reads the newest GitHub `v*` tag and uses matching release metadata when it exists.
 - Git-based installs can apply updates automatically; Docker installs are prompted with the pull command instead.
 - Pull request CI runs `pnpm check`, `pnpm version:check`, and the tracked-installer guard.
@@ -227,14 +286,14 @@ Standard release flow:
 1. Bump the canonical version in root `package.json`.
 2. Run `pnpm version:sync -- --android-version-code <next-code>` to sync all derived version fields.
 3. Run `pnpm credits:check`; if it reports stale contributor credits, run `pnpm credits:sync` and include the Credits modal update in the release PR.
-4. Update `CHANGELOG.md`.
+4. Update `CHANGELOG.md`; when publishing a stable release, update README's current-stable-release link to the matching tag.
 5. Merge the release-ready `staging` change to `main`.
 6. Create and push the tag `vX.Y.Z` from the `main` commit that contains that exact version bump.
 7. Let the release workflows publish or update the GitHub Release, named source ZIP, Windows installer, Android WebView shell APK, and GHCR container images (`X.Y.Z`, `X.Y`, `X`, `latest`, plus `X.Y.Z-lite` / `lite`) from the matching changelog entry.
 
 Release helpers now in the repo:
 
-- `pnpm version:sync -- --android-version-code <next-code>` updates the derived version files and README release references from the root `package.json` version.
+- `pnpm version:sync -- --android-version-code <next-code>` updates the derived version files from the root `package.json` version. README's current-stable-release link changes only when that release is published.
 - `pnpm version:check` fails when those derived files drift out of sync.
 - `pnpm credits:check` compares the in-app Credits modal with the GitHub contributors list, and `pnpm credits:sync` refreshes it.
 - `pnpm guard:installer-artifacts` fails when tracked installer binaries appear under `win/installer/*.exe`.

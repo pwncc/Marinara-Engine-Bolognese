@@ -13,8 +13,9 @@ import { cn } from "../../../../lib/utils";
 import { visibleText } from "../../lib/tracker-display";
 import { InlineEdit } from "../controls/InlineControls";
 import { TrackerReadabilityVeil } from "../controls/TrackerProfileChrome";
-import { AddRowButton, EmptySection, SectionHeader } from "../controls/SectionControls";
+import { AddRowButton, EmptySection, SectionHeader, TRACKER_SECTION_SHELL_CLASS } from "../controls/SectionControls";
 import { useTrackerLockContext } from "../TrackerLockContext";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 function isLongCustomField(field: CustomTrackerField): boolean {
   const name = visibleText(field.name, "");
@@ -47,8 +48,10 @@ function CustomFieldList({
   deleteMode?: boolean;
   trackerPanelSizeProfile: TrackerPanelSizeProfile;
 }) {
+  const { t: localizeUi } = useUiTranslation();
   const { fieldLocks, lockMode, onToggleFieldLock, onUpdateFieldLocks } = useTrackerLockContext();
-  if (fields.length === 0 && !onUpdate) return <EmptySection>No custom stats tracked.</EmptySection>;
+  if (fields.length === 0 && !onUpdate)
+    return <EmptySection>{localizeUi("ui.trackerPanel.customfieldlist.noCustomStatsTracked")}</EmptySection>;
   const readableValues = trackerPanelSizeProfile !== "compact";
   const useFieldColumns = shouldUseCustomFieldColumns(fields, trackerPanelSizeProfile);
   const updateField = (index: number, updated: CustomTrackerField) => {
@@ -78,7 +81,7 @@ function CustomFieldList({
     <div className="group/statbox relative">
       {fields.length === 0 ? (
         <div className="px-1 py-1">
-          <EmptySection>No custom stats tracked.</EmptySection>
+          <EmptySection>{localizeUi("ui.trackerPanel.customfieldlist.noCustomStatsTracked")}</EmptySection>
         </div>
       ) : (
         <div
@@ -89,6 +92,7 @@ function CustomFieldList({
         >
           {fields.map((field, index) => {
             const allowWrap = readableValues && isLongCustomField(field);
+            const valuePreviewLineCount = trackerPanelSizeProfile === "expanded" ? 4 : 3;
             const valueText = visibleText(field.value, "");
             const numericValue = isNumericCustomFieldValue(valueText);
             const valueTypography = numericValue ? "tabular-nums" : undefined;
@@ -104,8 +108,7 @@ function CustomFieldList({
                 key={`${field.name}-${index}`}
                 className={cn(
                   "group/field relative grid min-h-7 grid-cols-[minmax(5.5rem,0.42fr)_minmax(0,1fr)] items-center gap-2 border-b border-[var(--border)]/28 px-1 py-1 text-[0.6875rem] leading-[0.875rem] transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_3%,transparent)]",
-                  trackerPanelSizeProfile !== "compact" &&
-                    "grid-cols-[minmax(7rem,0.45fr)_minmax(0,1fr)]",
+                  trackerPanelSizeProfile !== "compact" && "grid-cols-[5.5rem_minmax(0,1fr)]",
                   allowWrap && "leading-[0.95rem]",
                   useFieldColumns &&
                     index % 2 === 0 &&
@@ -122,7 +125,7 @@ function CustomFieldList({
                   <InlineEdit
                     value={field.name}
                     onSave={(name) => updateField(index, { ...field, name: name || "Field" })}
-                    placeholder="Field"
+                    placeholder={localizeUi("ui.trackerPanel.charactertrackercard.field")}
                     className={cn("min-w-0 px-0.5 py-0 font-semibold", allowWrap && "min-h-5")}
                     previewLineCount={allowWrap ? 2 : undefined}
                     previewClassName={allowWrap ? "leading-[1.25]" : undefined}
@@ -146,14 +149,13 @@ function CustomFieldList({
                   <InlineEdit
                     value={field.value}
                     onSave={(value) => updateField(index, { ...field, value })}
-                    placeholder="Value"
+                    placeholder={localizeUi("ui.trackerPanel.charactertrackercard.value")}
                     className={cn(
                       "min-w-0 justify-start px-0.5 py-0 text-left",
                       valueTypography,
                       allowWrap ? "min-h-5 leading-[1.15]" : undefined,
                     )}
-                    twoLinePreview={allowWrap}
-                    previewLineCount={allowWrap ? 2 : undefined}
+                    previewLineCount={allowWrap ? valuePreviewLineCount : undefined}
                     previewClassName={allowWrap ? "leading-[1.25]" : undefined}
                     scrollOnHover={!allowWrap}
                     showEditHint={false}
@@ -166,7 +168,11 @@ function CustomFieldList({
                     className={cn(
                       "min-w-0 px-0.5 py-0 text-left text-[var(--foreground)]",
                       valueTypography,
-                      allowWrap ? "line-clamp-2 break-words leading-[1.15]" : "truncate",
+                      allowWrap
+                        ? trackerPanelSizeProfile === "expanded"
+                          ? "line-clamp-4 break-words leading-[1.15]"
+                          : "line-clamp-3 break-words leading-[1.15]"
+                        : "truncate",
                     )}
                   >
                     {visibleText(field.value, "Empty")}
@@ -178,8 +184,10 @@ function CustomFieldList({
                       type="button"
                       onClick={() => removeField(index)}
                       className="flex h-4 w-4 items-center justify-center rounded-full bg-[var(--background)]/85 text-[var(--destructive)] shadow-sm ring-1 ring-[var(--border)]/70 backdrop-blur-sm transition-all hover:bg-[var(--accent)] focus-visible:outline-none focus-visible:ring-[var(--border)] active:scale-90"
-                      title="Remove field"
-                      aria-label={`Remove ${visibleText(field.name, "field")}`}
+                      title={localizeUi("ui.trackerPanel.customfieldlist.removeField")}
+                      aria-label={localizeUi("ui.trackerPanel.charactertrackercard.removeValue1", {
+                        value1: visibleText(field.name, "field"),
+                      })}
                     >
                       <X size="0.5625rem" />
                     </button>
@@ -213,18 +221,19 @@ export function CustomTrackerPanel({
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
 }) {
+  const { t: localizeUi } = useUiTranslation();
   return (
-    <section className="relative z-10 overflow-hidden border-b border-[var(--border)] bg-[var(--tracker-panel-section-background,color-mix(in_srgb,var(--card)_10%,transparent))] shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_5%,transparent)]">
+    <section className={TRACKER_SECTION_SHELL_CLASS}>
       <TrackerReadabilityVeil strength="strong" />
       <div className="relative z-10">
         <SectionHeader
           icon={<SlidersHorizontal size="0.6875rem" />}
-          title="Custom Stats"
+          title={localizeUi("ui.trackerPanel.customtrackerpanel.customStats")}
           action={action}
           addAction={
             addMode ? (
               <AddRowButton
-                title="Add custom stat"
+                title={localizeUi("ui.trackerPanel.customtrackerpanel.addCustomStat")}
                 onClick={() => onUpdateFields([...fields, { name: "New Field", value: "" }])}
                 className="rounded-sm"
               />

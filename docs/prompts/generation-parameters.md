@@ -42,6 +42,8 @@ Together, **Frequency** and **Presence** are the repetition penalties.
 
 **Reasoning Effort** tells a thinking-capable model how much to reason before it answers. A thinking-capable model is one that works through a problem in hidden steps first. The choices are **None**, **Low**, **Medium**, **High**, **Xhigh**, and **Maximum**. If the model does not support the tier you pick, Marinara lowers it to the strongest tier that model allows.
 
+When the parameter switch is on, **None** asks the provider to disable thinking explicitly instead of merely leaving out the effort setting. Marinara sends the provider-specific off control only to models known to support it. Some reasoning-mandatory models cannot turn thinking off and may still return reasoning; choose a non-reasoning model when thinking must be absent. Turning the parameter switch itself off is different: it sends no reasoning preference and leaves the provider's default behavior unchanged.
+
 **Verbosity** controls how long and detailed replies should be. The choices are **None**, **Low**, **Medium**, and **High**. **Low** keeps replies short. **High** encourages longer, more descriptive replies. Only some models use this setting.
 
 ## The Send switch
@@ -78,6 +80,12 @@ The value still shows in the box even when the **Send toggle** is off. It is jus
 **Assistant Prefill** is optional text added at the very start of the AI's reply, right after your message. Most people leave it empty.
 
 Use it only for models that support a prefill or a set opening tag. For example, you might type an opening tag like the one shown in the placeholder to force the model to start in a certain way. If you are not sure you need this, leave it blank.
+
+## Assistant Reasoning Prefill
+
+**Assistant Reasoning Prefill** is optional hidden text added at the very start of the AI's reasoning, before it writes the visible reply. Most people leave it empty.
+
+Use it only for models that support a separate reasoning prefill, such as Kimi K3. You can use it alongside **Assistant Prefill**: one starts the model's hidden reasoning, while the other starts its visible reply. If you are not sure your model supports this, leave it blank.
 
 ## Thinking Tags
 

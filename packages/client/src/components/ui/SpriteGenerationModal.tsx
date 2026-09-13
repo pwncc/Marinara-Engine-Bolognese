@@ -13,6 +13,7 @@ import { useUIStore } from "../../stores/ui.store";
 import { api } from "../../lib/api-client";
 import { ImagePromptReviewModal, type ImagePromptOverride, type ImagePromptReviewItem } from "./ImagePromptReviewModal";
 import { normalizeSpriteExpressionLabel } from "@marinara-engine/shared";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 // ── Types ──
 
@@ -23,8 +24,8 @@ interface SpriteGenerationModalProps {
   entityId: string;
   /** Optional initial mode shown when opening */
   initialSpriteType?: "expressions" | "full-body";
-  /** Existing portrait expression names that full-body generation can mirror */
-  existingExpressionNames?: string[];
+  /** Existing portrait sprites that full-body generation can mirror */
+  existingExpressionSprites?: Array<{ expression: string; url: string }>;
   /** Pre-filled appearance description */
   defaultAppearance?: string;
   /** Pre-filled avatar (base64 data URL) for reference */
@@ -199,7 +200,8 @@ type SpriteType = "expressions" | "full-body";
 
 const DEFAULT_SPRITE_PRESET: PresetKey = "6 (2×3)";
 const MATCHED_FULL_BODY_EXPRESSION_LIMIT = 16;
-const MATCHED_FULL_BODY_BATCH_SIZE = 4;
+// One expression per request keeps the client timeout scoped to one provider generation.
+const MATCHED_FULL_BODY_BATCH_SIZE = 1;
 const SPRITE_GENERATION_REQUEST_TIMEOUT_MS = 305_000;
 const SPRITE_ANIMATED_GENERATION_REQUEST_TIMEOUT_MS = 1_830_000;
 
@@ -555,11 +557,12 @@ export function SpriteGenerationModal({
   onClose,
   entityId,
   initialSpriteType = "expressions",
-  existingExpressionNames = [],
+  existingExpressionSprites = [],
   defaultAppearance,
   defaultAvatarUrl,
   onSpritesGenerated,
 }: SpriteGenerationModalProps) {
+  const { t: localizeUi } = useUiTranslation();
   // Step: 0 = configure, 1 = generating, 2 = preview & label
   const [step, setStep] = useState<0 | 1 | 2>(0);
 
@@ -576,8 +579,8 @@ export function SpriteGenerationModal({
     ...EXPRESSION_PRESETS[DEFAULT_SPRITE_PRESET].expressions,
   ]);
   const [matchExistingExpressions, setMatchExistingExpressions] = useState(false);
-  const [nativeTransparentPng, setNativeTransparentPng] = useState(false);
-  const [noBackground, setNoBackground] = useState(false);
+  const [nativeTransparentPng, setNativeTransparentPng] = useState(true);
+  const [noBackground, setNoBackground] = useState(true);
   const [cleanupStrength, setCleanupStrength] = useState(35);
   const [connectionId, setConnectionId] = useState<string | null>(null);
   const [videoConnectionId, setVideoConnectionId] = useState<string | null>(null);
@@ -586,6 +589,7 @@ export function SpriteGenerationModal({
   const [generatedSheet, setGeneratedSheet] = useState<string | null>(null);
   const [generatedSheets, setGeneratedSheets] = useState<GeneratedSheetPreview[]>([]);
   const [cells, setCells] = useState<SlicedCell[]>([]);
+  const [neutralFullBodyCandidate, setNeutralFullBodyCandidate] = useState<SlicedCell | null>(null);
   const [failedMatchedBatch, setFailedMatchedBatch] = useState<FailedMatchedFullBodyBatch | null>(null);
   const [generationProgress, setGenerationProgress] = useState<string | null>(null);
   const [cleanupApplying, setCleanupApplying] = useState(false);
@@ -627,27 +631,41 @@ export function SpriteGenerationModal({
   }, [connectionsList]);
   const spriteGenerationUnavailable = spriteCapabilities?.spriteGenerationAvailable === false;
   const spriteGenerationReason = spriteCapabilities?.reason ?? "Sprite generation is unavailable on this platform.";
-  const existingPortraitExpressions = useMemo(() => {
+  const existingPortraitSprites = useMemo(() => {
     const seen = new Set<string>();
-    const names: string[] = [];
-    for (const rawName of existingExpressionNames) {
-      const normalized = normalizeSpriteLabel(rawName);
-      if (!normalized || seen.has(normalized)) continue;
-      seen.add(normalized);
-      names.push(normalized);
-    }
-    return names;
-  }, [existingExpressionNames]);
+    return existingExpressionSprites.flatMap((sprite) => {
+      const expression = normalizeSpriteLabel(sprite.expression);
+      if (!expression || !sprite.url || seen.has(expression)) return [];
+      seen.add(expression);
+      return [{ expression, url: sprite.url }];
+    });
+  }, [existingExpressionSprites]);
+  const existingPortraitExpressions = useMemo(
+    () => existingPortraitSprites.map((sprite) => sprite.expression),
+    [existingPortraitSprites],
+  );
   const matchedFullBodyExpressions = useMemo(
-    () => existingPortraitExpressions.slice(0, MATCHED_FULL_BODY_EXPRESSION_LIMIT),
+    () =>
+      ["neutral", ...existingPortraitExpressions.filter((expression) => expression !== "neutral")].slice(
+        0,
+        MATCHED_FULL_BODY_EXPRESSION_LIMIT,
+      ),
     [existingPortraitExpressions],
+  );
+  const matchedPortraitExpressionCount = useMemo(
+    () => matchedFullBodyExpressions.filter((expression) => existingPortraitExpressions.includes(expression)).length,
+    [existingPortraitExpressions, matchedFullBodyExpressions],
   );
   const matchedFullBodyGrid = useMemo(
     () => getMatchedFullBodyGrid(matchedFullBodyExpressions.length),
     [matchedFullBodyExpressions.length],
   );
   const matchedFullBodyBatches = useMemo(
-    () => chunkItems(matchedFullBodyExpressions, MATCHED_FULL_BODY_BATCH_SIZE),
+    () =>
+      chunkItems(
+        matchedFullBodyExpressions.filter((expression) => expression !== "neutral"),
+        MATCHED_FULL_BODY_BATCH_SIZE,
+      ),
     [matchedFullBodyExpressions],
   );
   const matchedFullBodySliceGrid = useMemo(
@@ -753,6 +771,7 @@ export function SpriteGenerationModal({
         setGeneratedSheet(null);
         setGeneratedSheets([]);
         setCells([]);
+        setNeutralFullBodyCandidate(null);
         setFailedMatchedBatch(null);
         setGenerationProgress(null);
         setCleanupApplying(false);
@@ -785,8 +804,8 @@ export function SpriteGenerationModal({
     );
     setMatchExistingExpressions(false);
     setAnimatedPortraits(false);
-    setNativeTransparentPng(false);
-    setNoBackground(false);
+    setNativeTransparentPng(true);
+    setNoBackground(true);
     setAppearance(defaultAppearance ?? "");
     setReferenceImages([]);
     setUseCurrentAvatarReference(!!defaultAvatarUrl);
@@ -794,6 +813,7 @@ export function SpriteGenerationModal({
     setGeneratedSheet(null);
     setGeneratedSheets([]);
     setCells([]);
+    setNeutralFullBodyCandidate(null);
     setFailedMatchedBatch(null);
     setGenerationProgress(null);
     setCleanupApplying(false);
@@ -820,6 +840,7 @@ export function SpriteGenerationModal({
     setGeneratedSheet(null);
     setGeneratedSheets([]);
     setCells([]);
+    setNeutralFullBodyCandidate(null);
     setFailedMatchedBatch(null);
     setGenerationProgress(null);
     setSliceAdjustments(DEFAULT_SLICE_ADJUSTMENTS);
@@ -827,8 +848,8 @@ export function SpriteGenerationModal({
     setFrameAdjustments(DEFAULT_SPRITE_FRAME_ADJUSTMENTS);
     setFramePreviewUrl(null);
     setMatchExistingExpressions(false);
-    setNativeTransparentPng(false);
-    setNoBackground(false);
+    setNativeTransparentPng(true);
+    setNoBackground(true);
     setError(null);
   }, [abortActiveGeneration, defaultAppearance, defaultAvatarUrl, entityId]);
 
@@ -919,7 +940,12 @@ export function SpriteGenerationModal({
   );
 
   const requestGeneratedSheet = useCallback(
-    async (expressions: string[], grid: SpriteGrid, matchedFullBodyMode: boolean): Promise<GenerateSheetResult> => {
+    async (
+      expressions: string[],
+      grid: SpriteGrid,
+      matchedFullBodyMode: boolean,
+      neutralFullBodyReference?: string,
+    ): Promise<GenerateSheetResult> => {
       if (!effectiveConnectionId) throw new Error("Image generation connection is required");
       const signal = generationControllerRef.current?.signal;
       if (signal?.aborted) throw new SpriteGenerationAbortedError();
@@ -936,6 +962,12 @@ export function SpriteGenerationModal({
         nativeTransparentPng,
         noBackground,
         cleanupStrength,
+        neutralFullBodyReference,
+        expressionReferences: matchedFullBodyMode
+          ? existingPortraitSprites
+              .filter((sprite) => expressions.includes(sprite.expression))
+              .map((sprite) => ({ expression: sprite.expression, image: sprite.url }))
+          : undefined,
       };
 
       if (reviewImagePromptsBeforeSend) {
@@ -972,6 +1004,7 @@ export function SpriteGenerationModal({
       nativeTransparentPng,
       noBackground,
       cleanupStrength,
+      existingPortraitSprites,
       openPromptReview,
       reviewImagePromptsBeforeSend,
       spriteType,
@@ -1042,37 +1075,72 @@ export function SpriteGenerationModal({
   );
 
   const generateMatchedFullBodyBatch = useCallback(
-    async (batchExpressions: string[], batchIndex: number, totalBatches: number) => {
+    async (batchExpressions: string[], batchIndex: number, totalBatches: number, neutralFullBodyReference: string) => {
       const grid = getMatchedFullBodyBatchGrid(batchExpressions.length);
       let lastError = "Image generation failed";
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
         if (generationControllerRef.current?.signal.aborted) throw new SpriteGenerationAbortedError();
         setGenerationProgress(
-          `Batch ${batchIndex + 1} of ${totalBatches}${attempt === 1 ? " (retrying once)" : ""}: ${batchExpressions
-            .map((expr) => expr.replace(/_/g, " "))
-            .join(", ")}`,
+          localizeUi(
+            attempt === 1 ? "ui.spriteGeneration.matched.progressRetrying" : "ui.spriteGeneration.matched.progress",
+            {
+              value1: batchIndex + 1,
+              value2: totalBatches,
+              value3: batchExpressions[0]?.replace(/_/g, " ") ?? "",
+            },
+          ),
         );
 
         try {
-          const result = await requestGeneratedSheet(batchExpressions, grid, true);
+          const result = await requestGeneratedSheet(batchExpressions, grid, true, neutralFullBodyReference);
           if (result.failedExpressions?.length) {
             throw new Error(result.failedExpressions.map((entry) => `${entry.expression}: ${entry.error}`).join("; "));
           }
           if (result.cells.length < batchExpressions.length) {
             throw new Error("The provider returned fewer sprites than requested");
           }
-          return createGeneratedSpritesFromResult(result, grid, `Batch ${batchIndex + 1}`);
+          return createGeneratedSpritesFromResult(result, grid, `Sprite ${batchIndex + 1}`);
         } catch (err) {
-          if (isSpriteGenerationAborted(err)) throw err;
+          if (isSpritePromptReviewCancelled(err) || isSpriteGenerationAborted(err)) throw err;
           lastError = getGenerationErrorMessage(err);
         }
       }
 
       throw new Error(lastError);
     },
-    [requestGeneratedSheet],
+    [localizeUi, requestGeneratedSheet],
   );
+
+  const generateNeutralFullBodyCandidate = useCallback(async () => {
+    let lastError = "Image generation failed";
+    const grid = { cols: 1, rows: 1 };
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (generationControllerRef.current?.signal.aborted) throw new SpriteGenerationAbortedError();
+      setGenerationProgress(
+        attempt === 0
+          ? localizeUi("ui.spriteGeneration.neutral.generating")
+          : localizeUi("ui.spriteGeneration.neutral.retrying"),
+      );
+
+      try {
+        const result = await requestGeneratedSheet(["neutral"], grid, true);
+        if (result.failedExpressions?.length) {
+          throw new Error(result.failedExpressions.map((entry) => `${entry.expression}: ${entry.error}`).join("; "));
+        }
+        if (result.cells.length < 1) {
+          throw new Error("The provider did not return the neutral full-body sprite");
+        }
+        return createGeneratedSpritesFromResult(result, grid, "Neutral full-body");
+      } catch (err) {
+        if (isSpritePromptReviewCancelled(err) || isSpriteGenerationAborted(err)) throw err;
+        lastError = getGenerationErrorMessage(err);
+      }
+    }
+
+    throw new Error(lastError);
+  }, [localizeUi, requestGeneratedSheet]);
 
   const runMatchedFullBodyBatches = useCallback(
     async ({
@@ -1080,11 +1148,13 @@ export function SpriteGenerationModal({
       startIndex,
       initialCells,
       initialSheets,
+      neutralFullBodyReference,
     }: {
       batches: string[][];
       startIndex: number;
       initialCells: SlicedCell[];
       initialSheets: GeneratedSheetPreview[];
+      neutralFullBodyReference: string;
     }) => {
       let nextCells = [...initialCells];
       let nextSheets = [...initialSheets];
@@ -1094,14 +1164,19 @@ export function SpriteGenerationModal({
       for (let batchIndex = startIndex; batchIndex < batches.length; batchIndex += 1) {
         if (generationControllerRef.current?.signal.aborted) {
           setGenerationProgress(null);
-          setStep(0);
+          setStep(nextCells.length > 0 ? 2 : 0);
           return;
         }
         const batchExpressions = batches[batchIndex] ?? [];
         if (batchExpressions.length === 0) continue;
 
         try {
-          const generated = await generateMatchedFullBodyBatch(batchExpressions, batchIndex, batches.length);
+          const generated = await generateMatchedFullBodyBatch(
+            batchExpressions,
+            batchIndex,
+            batches.length,
+            neutralFullBodyReference,
+          );
           if (generationControllerRef.current?.signal.aborted) {
             setGenerationProgress(null);
             setStep(0);
@@ -1109,9 +1184,15 @@ export function SpriteGenerationModal({
           }
           nextCells = [...nextCells, ...generated.cells];
           if (generated.sheet) nextSheets = [...nextSheets, generated.sheet];
+          setCells(nextCells);
+          setGeneratedSheets(nextSheets);
+          setGeneratedSheet(nextSheets[0]?.dataUrl ?? null);
         } catch (err) {
           if (isSpritePromptReviewCancelled(err) || isSpriteGenerationAborted(err)) {
-            setStep(0);
+            setCells(nextCells);
+            setGeneratedSheets(nextSheets);
+            setGeneratedSheet(nextSheets[0]?.dataUrl ?? null);
+            setStep(nextCells.length > 0 ? 2 : 0);
             setError(null);
             setGenerationProgress(null);
             return;
@@ -1130,7 +1211,13 @@ export function SpriteGenerationModal({
           setCleanupApplied(noBackground);
           setGenerationProgress(null);
           setStep(2);
-          setError(`Batch ${batchIndex + 1} of ${batches.length} failed after one automatic retry: ${message}`);
+          setError(
+            localizeUi("ui.spriteGeneration.matched.failed", {
+              value1: batchIndex + 1,
+              value2: batches.length,
+              value3: message,
+            }),
+          );
           return;
         }
       }
@@ -1144,7 +1231,7 @@ export function SpriteGenerationModal({
       setError(null);
       setStep(2);
     },
-    [generateMatchedFullBodyBatch, noBackground],
+    [generateMatchedFullBodyBatch, localizeUi, noBackground],
   );
 
   const handleGenerate = useCallback(async () => {
@@ -1161,6 +1248,7 @@ export function SpriteGenerationModal({
     setGeneratedSheet(null);
     setGeneratedSheets([]);
     setCells([]);
+    setNeutralFullBodyCandidate(null);
     setFailedMatchedBatch(null);
     setGenerationProgress(null);
     setCleanupApplied(false);
@@ -1195,12 +1283,17 @@ export function SpriteGenerationModal({
       }
 
       if (fullBodyExpressionMode) {
-        await runMatchedFullBodyBatches({
-          batches: matchedFullBodyBatches,
-          startIndex: 0,
-          initialCells: [],
-          initialSheets: [],
-        });
+        const generated = await generateNeutralFullBodyCandidate();
+        if (controller.signal.aborted) throw new SpriteGenerationAbortedError();
+        const candidate = generated.cells[0];
+        if (!candidate) throw new Error("The provider did not return the neutral full-body sprite");
+        setNeutralFullBodyCandidate(candidate);
+        setGeneratedSheet(generated.sheet?.dataUrl ?? null);
+        setGeneratedSheets(generated.sheet ? [generated.sheet] : []);
+        setCells([]);
+        setCleanupApplied(noBackground);
+        setGenerationProgress(null);
+        setStep(2);
         return;
       }
 
@@ -1245,16 +1338,73 @@ export function SpriteGenerationModal({
     animatedExpressionMode,
     requestGeneratedAnimatedExpressions,
     fullBodyExpressionMode,
-    runMatchedFullBodyBatches,
-    matchedFullBodyBatches,
+    generateNeutralFullBodyCandidate,
     requestGeneratedSheet,
     generationGrid,
     spriteType,
     noBackground,
   ]);
 
+  const handleAcceptNeutralFullBody = useCallback(async () => {
+    if (!neutralFullBodyCandidate || spriteGenerationUnavailable || !effectiveConnectionId) return;
+
+    generationControllerRef.current?.abort();
+    const controller = new AbortController();
+    generationControllerRef.current = controller;
+    const runId = generationRunIdRef.current + 1;
+    generationRunIdRef.current = runId;
+    const acceptedNeutral = {
+      ...neutralFullBodyCandidate,
+      expression: "neutral",
+      selected: true,
+    };
+
+    setNeutralFullBodyCandidate(null);
+    setCells([acceptedNeutral]);
+    setStep(1);
+    setError(null);
+    setGenerationProgress(localizeUi("ui.spriteGeneration.neutral.accepted"));
+
+    try {
+      await runMatchedFullBodyBatches({
+        batches: matchedFullBodyBatches,
+        startIndex: 0,
+        initialCells: [acceptedNeutral],
+        initialSheets: generatedSheets,
+        neutralFullBodyReference: acceptedNeutral.dataUrl,
+      });
+    } catch (err) {
+      if (isSpritePromptReviewCancelled(err) || isSpriteGenerationAborted(err)) {
+        setError(null);
+        setStep(0);
+        return;
+      }
+      setError(getGenerationErrorMessage(err));
+      setStep(2);
+    } finally {
+      if (generationRunIdRef.current === runId && generationControllerRef.current === controller) {
+        generationControllerRef.current = null;
+      }
+    }
+  }, [
+    effectiveConnectionId,
+    generatedSheets,
+    localizeUi,
+    matchedFullBodyBatches,
+    neutralFullBodyCandidate,
+    runMatchedFullBodyBatches,
+    spriteGenerationUnavailable,
+  ]);
+
   const handleRetryFailedMatchedBatch = useCallback(async () => {
     if (!failedMatchedBatch || spriteGenerationUnavailable || !effectiveConnectionId) return;
+
+    const neutralReference = cells.find((cell) => normalizeSpriteLabel(cell.expression) === "neutral")?.dataUrl;
+    if (!neutralReference) {
+      setError(localizeUi("ui.spriteGeneration.neutral.missing"));
+      setStep(2);
+      return;
+    }
 
     generationControllerRef.current?.abort();
     const controller = new AbortController();
@@ -1280,6 +1430,7 @@ export function SpriteGenerationModal({
         startIndex: failedMatchedBatch.batchIndex,
         initialCells: cells,
         initialSheets: generatedSheets,
+        neutralFullBodyReference: neutralReference,
       });
     } finally {
       if (generationRunIdRef.current === runId && generationControllerRef.current === controller) {
@@ -1292,6 +1443,7 @@ export function SpriteGenerationModal({
     failedMatchedBatch,
     generatedSheets,
     matchedFullBodyBatches,
+    localizeUi,
     runMatchedFullBodyBatches,
     spriteGenerationUnavailable,
   ]);
@@ -1300,9 +1452,10 @@ export function SpriteGenerationModal({
     abortActiveGeneration();
     setGenerationProgress(null);
     setPromptReviewSubmitting(false);
-    setStep(0);
+    setNeutralFullBodyCandidate(null);
+    setStep(fullBodyExpressionMode && cells.length > 0 ? 2 : 0);
     setError(null);
-  }, [abortActiveGeneration]);
+  }, [abortActiveGeneration, cells.length, fullBodyExpressionMode]);
 
   const performCleanup = useCallback(
     (cellsToClean: SlicedCell[]) =>
@@ -1648,6 +1801,7 @@ export function SpriteGenerationModal({
       setGeneratedSheet(null);
       setGeneratedSheets([]);
       setCells([]);
+      setNeutralFullBodyCandidate(null);
       setFailedMatchedBatch(null);
       setGenerationProgress(null);
       handleCloseCellFrame();
@@ -1663,6 +1817,7 @@ export function SpriteGenerationModal({
     setGeneratedSheet(null);
     setGeneratedSheets([]);
     setCells([]);
+    setNeutralFullBodyCandidate(null);
     setFailedMatchedBatch(null);
     setGenerationProgress(null);
     handleCloseCellFrame();
@@ -1687,7 +1842,12 @@ export function SpriteGenerationModal({
 
   return (
     <>
-      <Modal open={open} onClose={handleClose} title="Generate Sprites" width="max-w-2xl">
+      <Modal
+        open={open}
+        onClose={handleClose}
+        title={localizeUi("ui.ui.spritegenerationmodal.generateSprites")}
+        width="max-w-2xl"
+      >
         <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleReferenceUpload} />
 
         {/* Step 0: Configuration */}
@@ -1696,8 +1856,10 @@ export function SpriteGenerationModal({
             {/* Sprite Type Tabs */}
             <div className="flex gap-2">
               <button
+                type="button"
+                aria-pressed={spriteType === "expressions"}
                 className={cn(
-                  "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ring-1",
+                  "rounded-md px-3 py-1.5 text-xs font-medium transition-colors ring-1",
                   spriteType === "expressions"
                     ? "bg-[var(--primary)]/15 text-[var(--primary)] ring-[var(--primary)]/40"
                     : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-[var(--border)] hover:ring-[var(--primary)]/20",
@@ -1708,11 +1870,13 @@ export function SpriteGenerationModal({
                   setSelectedExpressions([...EXPRESSION_PRESETS[preset].expressions]);
                 }}
               >
-                Expressions (Portrait)
+                {localizeUi("ui.ui.spritegenerationmodal.expressionsPortrait")}
               </button>
               <button
+                type="button"
+                aria-pressed={spriteType === "full-body"}
                 className={cn(
-                  "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ring-1",
+                  "rounded-md px-3 py-1.5 text-xs font-medium transition-colors ring-1",
                   spriteType === "full-body"
                     ? "bg-[var(--primary)]/15 text-[var(--primary)] ring-[var(--primary)]/40"
                     : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-[var(--border)] hover:ring-[var(--primary)]/20",
@@ -1723,7 +1887,7 @@ export function SpriteGenerationModal({
                   setSelectedExpressions([...FULL_BODY_POSE_PRESETS[preset]]);
                 }}
               >
-                Full-body
+                {localizeUi("ui.ui.spritegenerationmodal.fullBody")}
               </button>
             </div>
             {error && (
@@ -1748,11 +1912,10 @@ export function SpriteGenerationModal({
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5 font-medium">
                     <Film size={13} className="text-[var(--primary)]" />
-                    Generate animated portraits
+                    {localizeUi("ui.ui.spritegenerationmodal.generateAnimatedPortraits")}
                   </span>
                   <span className="mt-0.5 block text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
-                    Uses a Video Generation connection to make short expression clips, converts them to GIFs, and saves
-                    them as portrait sprites.
+                    {localizeUi("ui.ui.spritegenerationmodal.usesAVideoGenerationConnectionToMakeShortExpression")}
                   </span>
                 </span>
               </label>
@@ -1761,13 +1924,15 @@ export function SpriteGenerationModal({
             {/* Generation Connection */}
             <div>
               <label className="mb-1.5 block text-xs font-medium text-[var(--foreground)]">
-                {animatedExpressionMode ? "Video Generation Connection" : "Image Generation Connection"}
+                {animatedExpressionMode
+                  ? localizeUi("ui.ui.callclipgenerationmodal.videoGenerationConnection")
+                  : localizeUi("ui.agents.agenteditor.imageGenerationConnection")}
               </label>
               {activeGenerationConnections.length === 0 ? (
                 <p className="text-xs text-[var(--destructive)]">
-                  No {animatedExpressionMode ? "video" : "image"} generation connections found. Add one in Settings →
-                  Connections with the &quot;{animatedExpressionMode ? "Video Generation" : "Image Generation"}&quot;
-                  provider type.
+                  {animatedExpressionMode
+                    ? localizeUi("ui.ui.spritegenerationmodal.noVideoGenerationConnectionsFound")
+                    : localizeUi("ui.ui.spritegenerationmodal.noImageGenerationConnectionsFound")}
                 </p>
               ) : (
                 <select
@@ -1782,8 +1947,8 @@ export function SpriteGenerationModal({
                   {activeGenerationConnections.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
-                      {c.model ? ` — ${c.model}` : ""}
-                      {isDefaultGenerationConnection(c) ? " (Default)" : ""}
+                      {c.model ? localizeUi("ui.ui.spritegenerationmodal.value1", { value1: c.model }) : ""}
+                      {isDefaultGenerationConnection(c) ? localizeUi("ui.ui.avatargenerationmodal.default") : ""}
                     </option>
                   ))}
                 </select>
@@ -1793,7 +1958,10 @@ export function SpriteGenerationModal({
             {/* Reference Image */}
             <div>
               <label className="mb-1.5 block text-xs font-medium text-[var(--foreground)]">
-                Reference Images <span className="text-[var(--muted-foreground)]">(optional, up to 4)</span>
+                {localizeUi("ui.ui.spritegenerationmodal.referenceImages")}{" "}
+                <span className="text-[var(--muted-foreground)]">
+                  {localizeUi("ui.ui.spritegenerationmodal.optionalUpTo4")}
+                </span>
               </label>
               {hasCurrentAvatarReference && (
                 <label className="mb-2 flex items-center gap-3 rounded-lg bg-[var(--secondary)]/60 p-2.5 text-xs text-[var(--foreground)] ring-1 ring-[var(--border)]/60">
@@ -1811,10 +1979,12 @@ export function SpriteGenerationModal({
                   />
                   <img
                     src={defaultAvatarUrl ?? ""}
-                    alt="Current avatar reference"
+                    alt={localizeUi("ui.ui.avatargenerationmodal.currentAvatarReference")}
                     className="h-12 w-12 rounded-lg object-cover ring-1 ring-[var(--border)]"
                   />
-                  <span className="flex-1">Use current avatar as a reference image</span>
+                  <span className="flex-1">
+                    {localizeUi("ui.ui.spritegenerationmodal.useCurrentAvatarAsAReferenceImage")}
+                  </span>
                 </label>
               )}
               <div className="flex items-start gap-3">
@@ -1823,11 +1993,11 @@ export function SpriteGenerationModal({
                     <div className="relative">
                       <img
                         src={defaultAvatarUrl}
-                        alt="Current avatar reference"
+                        alt={localizeUi("ui.ui.avatargenerationmodal.currentAvatarReference")}
                         className="h-20 w-20 rounded-lg object-cover ring-2 ring-[var(--primary)]/40"
                       />
                       <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[0.5625rem] text-white">
-                        Avatar
+                        {localizeUi("editor.avatar.label")}
                       </span>
                     </div>
                   )}
@@ -1835,7 +2005,7 @@ export function SpriteGenerationModal({
                     <div key={idx} className="group relative">
                       <img
                         src={img}
-                        alt={`Reference ${idx + 1}`}
+                        alt={localizeUi("ui.ui.spritegenerationmodal.referenceValue1", { value1: idx + 1 })}
                         className="h-20 w-20 rounded-lg object-cover ring-1 ring-[var(--border)]"
                       />
                       <button
@@ -1852,14 +2022,14 @@ export function SpriteGenerationModal({
                       className="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-[var(--border)] text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
                     >
                       <ImagePlus size={18} />
-                      <span className="text-[0.5625rem]">Upload</span>
+                      <span className="text-[0.5625rem]">{localizeUi("ui.characters.characterclipcard.upload")}</span>
                     </button>
                   )}
                 </div>
                 <p className="flex-1 text-[0.625rem] text-[var(--muted-foreground)]">
                   {animatedExpressionMode
-                    ? "Video providers use the first available reference image. Keep the avatar checked for the strongest identity anchor."
-                    : "Upload reference images of the character to improve consistency. Multiple angles or the existing avatar work well."}
+                    ? localizeUi("ui.ui.spritegenerationmodal.videoProvidersUseTheFirstAvailableReferenceImageKeep")
+                    : localizeUi("ui.ui.spritegenerationmodal.uploadReferenceImagesOfTheCharacterToImproveConsistency")}
                 </p>
               </div>
             </div>
@@ -1867,12 +2037,12 @@ export function SpriteGenerationModal({
             {/* Appearance Description */}
             <div>
               <label className="mb-1.5 block text-xs font-medium text-[var(--foreground)]">
-                Appearance Description
+                {localizeUi("ui.ui.spritegenerationmodal.appearanceDescription")}
               </label>
               <textarea
                 value={appearance}
                 onChange={(e) => setAppearance(e.target.value)}
-                placeholder="blue eyes, blonde hair, anime style, wearing a hoodie, female, chubby..."
+                placeholder={localizeUi("ui.ui.spritegenerationmodal.blueEyesBlondeHairAnimeStyleWearingAHoodie")}
                 rows={3}
                 className="w-full resize-none rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs text-[var(--foreground)] outline-none ring-1 ring-transparent transition-all placeholder:text-[var(--muted-foreground)] focus:ring-[var(--primary)]/40"
               />
@@ -1892,18 +2062,19 @@ export function SpriteGenerationModal({
               <span className="min-w-0 flex-1">
                 <span className="block font-medium">
                   {animatedExpressionMode
-                    ? "Prefer clean transparent-style background"
-                    : "Transparent sprite background"}
+                    ? localizeUi("ui.ui.spritegenerationmodal.preferCleanTransparentStyleBackground")
+                    : localizeUi("ui.ui.spritegenerationmodal.transparentSpriteBackground")}
                 </span>
                 <span className="mt-0.5 block text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
                   {animatedExpressionMode
-                    ? "Adds a flat transparent-friendly background instruction to the video prompt. GIF transparency is not guaranteed."
-                    : "Uses native transparency when available. Otherwise, Marinara chooses a flat chroma matte that avoids the character's colors, removes it, and cleans color spill around soft edges."}
+                    ? localizeUi("ui.ui.spritegenerationmodal.addsAFlatTransparentFriendlyBackgroundInstructionToThe")
+                    : localizeUi(
+                        "ui.ui.spritegenerationmodal.usesNativeTransparencyWhenAvailableOtherwiseMarinaraChoosesA",
+                      )}
                 </span>
                 {!animatedExpressionMode && selectedModelIsGptImage2 && nativeTransparentPng && (
                   <span className="mt-1 block text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
-                    GPT-Image-2 does not support native transparency right now, so Marinara will use the adaptive matte
-                    fallback.
+                    {localizeUi("ui.ui.spritegenerationmodal.gptImage2DoesNotSupportNativeTransparencyRight")}
                   </span>
                 )}
               </span>
@@ -1914,14 +2085,18 @@ export function SpriteGenerationModal({
               <>
                 {/* Expression Preset */}
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium text-[var(--foreground)]">Expression Count</label>
+                  <label className="mb-1.5 block text-xs font-medium text-[var(--foreground)]">
+                    {localizeUi("ui.ui.spritegenerationmodal.expressionCount")}
+                  </label>
                   <div className="flex flex-wrap gap-2">
                     {(Object.keys(EXPRESSION_PRESETS) as PresetKey[]).map((key) => (
                       <button
                         key={key}
+                        type="button"
                         onClick={() => handlePresetChange(key)}
+                        aria-pressed={preset === key}
                         className={cn(
-                          "rounded-lg px-3 py-1.5 text-xs transition-colors ring-1",
+                          "rounded-md px-3 py-1.5 text-xs transition-colors ring-1",
                           preset === key
                             ? "bg-[var(--primary)]/15 text-[var(--primary)] ring-[var(--primary)]/40"
                             : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-[var(--border)] hover:ring-[var(--primary)]/20",
@@ -1936,15 +2111,18 @@ export function SpriteGenerationModal({
                 {/* Expression Selection */}
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-[var(--foreground)]">
-                    Expressions ({selectedExpressions.length} selected)
+                    {localizeUi("ui.ui.spritegenerationmodal.expressions")}
+                    {selectedExpressions.length} {localizeUi("ui.ui.spritegenerationmodal.selected")}
                   </label>
                   <div className="flex flex-wrap gap-1.5">
                     {ALL_EXPRESSIONS.map((expr) => (
                       <button
                         key={expr}
+                        type="button"
                         onClick={() => toggleExpression(expr)}
+                        aria-pressed={selectedExpressions.includes(expr)}
                         className={cn(
-                          "rounded-full px-2.5 py-1 text-[0.6875rem] capitalize transition-colors",
+                          "rounded-md px-2.5 py-1 text-[0.6875rem] capitalize transition-colors",
                           selectedExpressions.includes(expr)
                             ? "bg-[var(--primary)]/20 text-[var(--primary)] ring-1 ring-[var(--primary)]/40"
                             : "bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
@@ -1956,8 +2134,12 @@ export function SpriteGenerationModal({
                   </div>
                   <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
                     {singleImageMode
-                      ? "Generate one portrait sprite. Pick the expression you want to render."
-                      : `Select exactly ${selectedTargetCount} expressions for a ${EXPRESSION_PRESETS[preset].cols}×${EXPRESSION_PRESETS[preset].rows} grid. Extra or fewer expressions will be adjusted.`}
+                      ? localizeUi("ui.ui.spritegenerationmodal.generateOnePortraitSpritePickTheExpressionYouWant")
+                      : localizeUi("ui.ui.spritegenerationmodal.selectExactlyValue1ExpressionsForAValue2Value3Grid", {
+                          value1: selectedTargetCount,
+                          value2: EXPRESSION_PRESETS[preset].cols,
+                          value3: EXPRESSION_PRESETS[preset].rows,
+                        })}
                   </p>
                 </div>
               </>
@@ -1975,10 +2157,11 @@ export function SpriteGenerationModal({
                       className="mt-0.5 accent-[var(--primary)]"
                     />
                     <span className="min-w-0 flex-1">
-                      <span className="block font-medium">Match existing expression sprites</span>
+                      <span className="block font-medium">
+                        {localizeUi("ui.ui.spritegenerationmodal.matchExistingExpressionSprites")}
+                      </span>
                       <span className="mt-0.5 block text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
-                        Generates idle full-body sprites named after the portrait expressions, saved as full_neutral,
-                        full_happy, and so on.
+                        {localizeUi("ui.ui.spritegenerationmodal.generatesIdleFullBodySpritesNamedAfterThePortrait")}
                       </span>
                     </span>
                   </label>
@@ -1988,15 +2171,18 @@ export function SpriteGenerationModal({
                   <div className="rounded-lg bg-[var(--secondary)]/60 p-2.5 ring-1 ring-[var(--border)]/60">
                     <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                       <span className="text-xs font-medium text-[var(--foreground)]">
-                        Matched expressions ({matchedFullBodyExpressions.length})
+                        {localizeUi("ui.ui.spritegenerationmodal.matchedExpressions")}
+                        {matchedFullBodyExpressions.length})
                       </span>
                       <span className="text-[0.625rem] text-[var(--muted-foreground)]">
-                        {matchedFullBodyBatches.length} batch{matchedFullBodyBatches.length === 1 ? "" : "es"} of up to{" "}
-                        {MATCHED_FULL_BODY_BATCH_SIZE}
+                        {localizeUi("ui.spriteGeneration.matched.requestCount", {
+                          value1: matchedFullBodyBatches.length,
+                        })}
                       </span>
-                      {existingPortraitExpressions.length > matchedFullBodyExpressions.length && (
+                      {existingPortraitExpressions.length > matchedPortraitExpressionCount && (
                         <span className="text-[0.625rem] text-[var(--muted-foreground)]">
-                          First {MATCHED_FULL_BODY_EXPRESSION_LIMIT} used
+                          {localizeUi("ui.ui.spritegenerationmodal.first")} {MATCHED_FULL_BODY_EXPRESSION_LIMIT}{" "}
+                          {localizeUi("ui.ui.spritegenerationmodal.used")}
                         </span>
                       )}
                     </div>
@@ -2011,8 +2197,7 @@ export function SpriteGenerationModal({
                       ))}
                     </div>
                     <p className="mt-2 text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
-                      Each batch generates a 2×2 idle full-body sheet for higher per-sprite resolution and cleaner
-                      slicing. Only the face and mood should change to match the expression name.
+                      {localizeUi("ui.spriteGeneration.matched.referenceFlow")}
                     </p>
                   </div>
                 )}
@@ -2020,14 +2205,18 @@ export function SpriteGenerationModal({
                 {!fullBodyExpressionMode && (
                   <>
                     <div>
-                      <label className="mb-1.5 block text-xs font-medium text-[var(--foreground)]">Pose Count</label>
+                      <label className="mb-1.5 block text-xs font-medium text-[var(--foreground)]">
+                        {localizeUi("ui.ui.spritegenerationmodal.poseCount")}
+                      </label>
                       <div className="flex flex-wrap gap-2">
                         {(Object.keys(EXPRESSION_PRESETS) as PresetKey[]).map((key) => (
                           <button
                             key={key}
+                            type="button"
                             onClick={() => handlePresetChange(key)}
+                            aria-pressed={preset === key}
                             className={cn(
-                              "rounded-lg px-3 py-1.5 text-xs transition-colors ring-1",
+                              "rounded-md px-3 py-1.5 text-xs transition-colors ring-1",
                               preset === key
                                 ? "bg-[var(--primary)]/15 text-[var(--primary)] ring-[var(--primary)]/40"
                                 : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-[var(--border)] hover:ring-[var(--primary)]/20",
@@ -2041,15 +2230,18 @@ export function SpriteGenerationModal({
 
                     <div>
                       <label className="mb-1.5 block text-xs font-medium text-[var(--foreground)]">
-                        Poses ({selectedExpressions.length} selected)
+                        {localizeUi("ui.ui.spritegenerationmodal.poses")}
+                        {selectedExpressions.length} {localizeUi("ui.ui.spritegenerationmodal.selected")}
                       </label>
                       <div className="flex flex-wrap gap-1.5">
                         {ALL_FULL_BODY_POSES.map((pose) => (
                           <button
                             key={pose}
+                            type="button"
                             onClick={() => toggleExpression(pose)}
+                            aria-pressed={selectedExpressions.includes(pose)}
                             className={cn(
-                              "rounded-full px-2.5 py-1 text-[0.6875rem] capitalize transition-colors",
+                              "rounded-md px-2.5 py-1 text-[0.6875rem] capitalize transition-colors",
                               selectedExpressions.includes(pose)
                                 ? "bg-[var(--primary)]/20 text-[var(--primary)] ring-1 ring-[var(--primary)]/40"
                                 : "bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
@@ -2061,8 +2253,12 @@ export function SpriteGenerationModal({
                       </div>
                       <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
                         {singleImageMode
-                          ? "Generate one full-body pose image. Pick the pose you want to render."
-                          : `Select exactly ${selectedTargetCount} general poses for a ${EXPRESSION_PRESETS[preset].cols}×${EXPRESSION_PRESETS[preset].rows} full-body sheet.`}
+                          ? localizeUi("ui.ui.spritegenerationmodal.generateOneFullBodyPoseImagePickThePose")
+                          : localizeUi("ui.ui.spritegenerationmodal.selectExactlyValue1GeneralPosesForAValue2Value3", {
+                              value1: selectedTargetCount,
+                              value2: EXPRESSION_PRESETS[preset].cols,
+                              value3: EXPRESSION_PRESETS[preset].rows,
+                            })}
                       </p>
                     </div>
                   </>
@@ -2076,7 +2272,7 @@ export function SpriteGenerationModal({
                 onClick={handleClose}
                 className="rounded-lg px-3 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] hover:bg-[var(--secondary)]"
               >
-                Cancel
+                {localizeUi("chat.delete.dialog.cancel")}
               </button>
               <button
                 onClick={handleGenerate}
@@ -2092,17 +2288,17 @@ export function SpriteGenerationModal({
                 <Sparkles size={14} />
                 {animatedExpressionMode
                   ? singleImageMode
-                    ? "Generate Animated Portrait"
-                    : "Generate Animated Portraits"
+                    ? localizeUi("ui.ui.spritegenerationmodal.generateAnimatedPortrait")
+                    : localizeUi("ui.ui.spritegenerationmodal.generateAnimatedPortraits_9591e33")
                   : fullBodyExpressionMode
-                    ? "Generate Matched Batches"
+                    ? localizeUi("ui.ui.spritegenerationmodal.generateMatchedBatches")
                     : spriteType === "full-body"
                       ? singleImageMode
-                        ? "Generate Pose"
-                        : "Generate Pose Sheet"
+                        ? localizeUi("ui.ui.spritegenerationmodal.generatePose")
+                        : localizeUi("ui.ui.spritegenerationmodal.generatePoseSheet")
                       : singleImageMode
-                        ? "Generate Sprite"
-                        : "Generate Sheet"}
+                        ? localizeUi("ui.characters.spritestab.generateSprite")
+                        : localizeUi("ui.ui.spritegenerationmodal.generateSheet")}
               </button>
             </div>
           </div>
@@ -2115,28 +2311,28 @@ export function SpriteGenerationModal({
             <div className="text-center">
               <p className="text-sm font-medium">
                 {animatedExpressionMode
-                  ? "Generating animated portrait GIFs..."
+                  ? localizeUi("ui.ui.spritegenerationmodal.generatingAnimatedPortraitGifs")
                   : fullBodyExpressionMode
-                    ? "Generating matched full-body batches..."
+                    ? localizeUi("ui.ui.spritegenerationmodal.generatingMatchedFullBodyBatches")
                     : spriteType === "full-body"
                       ? singleImageMode
-                        ? "Generating full-body pose…"
-                        : "Generating full-body pose sheet…"
+                        ? localizeUi("ui.ui.spritegenerationmodal.generatingFullBodyPose")
+                        : localizeUi("ui.ui.spritegenerationmodal.generatingFullBodyPoseSheet")
                       : singleImageMode
-                        ? "Generating portrait sprite…"
-                        : "Generating expression sheet…"}
+                        ? localizeUi("ui.ui.spritegenerationmodal.generatingPortraitSprite")
+                        : localizeUi("ui.ui.spritegenerationmodal.generatingExpressionSheet")}
               </p>
               {generationProgress && <p className="mt-1 text-xs text-[var(--primary)]">{generationProgress}</p>}
               <p className="mt-1 text-xs text-[var(--muted-foreground)]">
                 {animatedExpressionMode
-                  ? "Each expression becomes a short video first, then Marinara converts it to a GIF sprite."
+                  ? localizeUi("ui.ui.spritegenerationmodal.eachExpressionBecomesAShortVideoFirstThenMarinara")
                   : fullBodyExpressionMode
-                    ? "Each 2×2 batch gets one automatic retry before pausing for your decision."
+                    ? localizeUi("ui.spriteGeneration.matched.automaticRetry")
                     : spriteType === "full-body"
                       ? singleImageMode
-                        ? "This may take 30–60 seconds depending on the provider."
-                        : "This may take 30–60 seconds depending on the provider. The sheet will be sliced into poses after generation."
-                      : "This may take 30–60 seconds depending on the provider."}
+                        ? localizeUi("ui.ui.spritegenerationmodal.thisMayTake3060SecondsDependingOnThe")
+                        : localizeUi("ui.ui.spritegenerationmodal.thisMayTake3060SecondsDependingOnThe_d8728f7")
+                      : localizeUi("ui.ui.spritegenerationmodal.thisMayTake3060SecondsDependingOnThe")}
               </p>
             </div>
             <button
@@ -2144,13 +2340,56 @@ export function SpriteGenerationModal({
               onClick={handleCancelGeneration}
               className="rounded-lg px-3 py-1.5 text-xs text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
             >
-              Cancel
+              {localizeUi("chat.delete.dialog.cancel")}
             </button>
           </div>
         )}
 
+        {/* Neutral full-body approval gate */}
+        {step === 2 && neutralFullBodyCandidate && (
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <h3 className="text-sm font-semibold text-[var(--foreground)]">
+                {localizeUi("ui.spriteGeneration.neutral.reviewTitle")}
+              </h3>
+              <p className="max-w-[70ch] text-xs leading-relaxed text-[var(--muted-foreground)]">
+                {localizeUi("ui.spriteGeneration.neutral.reviewDescription")}
+              </p>
+            </div>
+
+            <div className="mx-auto w-full max-w-sm overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--secondary)]/60 p-3">
+              <div className="mx-auto aspect-[2/3] max-h-[56vh] overflow-hidden rounded-lg bg-[var(--background)] ring-1 ring-[var(--border)]">
+                <img
+                  src={neutralFullBodyCandidate.dataUrl}
+                  alt={localizeUi("ui.spriteGeneration.neutral.previewAlt")}
+                  className="h-full w-full object-contain"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)]/30 pt-4">
+              <button
+                type="button"
+                onClick={handleGenerate}
+                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+              >
+                <RotateCcw size={13} />
+                {localizeUi("ui.spriteGeneration.neutral.regenerate")}
+              </button>
+              <button
+                type="button"
+                onClick={handleAcceptNeutralFullBody}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-1.5 text-xs font-medium text-white transition-colors hover:opacity-90"
+              >
+                <Check size={14} />
+                {localizeUi("ui.spriteGeneration.neutral.useAndContinue")}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Step 2: Preview & Label */}
-        {step === 2 && (
+        {step === 2 && !neutralFullBodyCandidate && (
           <div className="space-y-4">
             {error && (
               <div className="rounded-lg bg-[var(--destructive)]/10 px-3 py-2 text-xs text-[var(--destructive)]">
@@ -2162,14 +2401,16 @@ export function SpriteGenerationModal({
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium text-[var(--foreground)]">
-                      Batch {failedMatchedBatch.batchIndex + 1} of {failedMatchedBatch.totalBatches} paused
+                      {localizeUi("ui.spriteGeneration.matched.paused", {
+                        value1: failedMatchedBatch.batchIndex + 1,
+                        value2: failedMatchedBatch.totalBatches,
+                      })}
                     </p>
                     <p className="mt-1 text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
                       {failedMatchedBatch.expressions.map((expr) => expr.replace(/_/g, " ")).join(", ")}
                     </p>
                     <p className="mt-1 text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
-                      The batch already retried once automatically. Retry it here when the provider is ready; successful
-                      batches above are preserved.
+                      {localizeUi("ui.spriteGeneration.matched.retryHelp")}
                     </p>
                   </div>
                   <button
@@ -2179,7 +2420,7 @@ export function SpriteGenerationModal({
                     className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
                   >
                     <RotateCcw size={13} />
-                    Retry Batch
+                    {localizeUi("ui.spriteGeneration.matched.retry")}
                   </button>
                 </div>
               </div>
@@ -2190,10 +2431,12 @@ export function SpriteGenerationModal({
               <details className="group">
                 <summary className="cursor-pointer text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
                   {generatedSheets.length > 1
-                    ? `View ${generatedSheets.length} generated batch sheets`
+                    ? localizeUi("ui.ui.spritegenerationmodal.viewValue1GeneratedBatchSheets", {
+                        value1: generatedSheets.length,
+                      })
                     : singleImageMode
-                      ? "View generated source image"
-                      : "View full generated sheet"}
+                      ? localizeUi("ui.ui.spritegenerationmodal.viewGeneratedSourceImage")
+                      : localizeUi("ui.ui.spritegenerationmodal.viewFullGeneratedSheet")}
                 </summary>
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
                   {generatedSheets.map((sheet) => (
@@ -2215,7 +2458,9 @@ export function SpriteGenerationModal({
             {canAdjustSlices && !singleImageMode && (
               <div className="rounded-lg bg-[var(--secondary)]/60 p-2.5 ring-1 ring-[var(--border)]/60">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <label className="text-xs font-medium text-[var(--foreground)]">Adjust Slice</label>
+                  <label className="text-xs font-medium text-[var(--foreground)]">
+                    {localizeUi("ui.ui.spritegenerationmodal.adjustSlice")}
+                  </label>
                   <div className="flex gap-2">
                     <button
                       type="button"
@@ -2223,7 +2468,7 @@ export function SpriteGenerationModal({
                       disabled={sliceApplying}
                       className="rounded-lg px-2.5 py-1 text-[0.6875rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:text-[var(--foreground)] disabled:opacity-50"
                     >
-                      Reset
+                      {localizeUi("ui.characters.charactercliptrimmodal.reset")}
                     </button>
                     <button
                       type="button"
@@ -2231,7 +2476,9 @@ export function SpriteGenerationModal({
                       disabled={sliceApplying}
                       className="rounded-lg bg-[var(--primary)] px-2.5 py-1 text-[0.6875rem] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
                     >
-                      {sliceApplying ? "Applying..." : "Apply Slice"}
+                      {sliceApplying
+                        ? localizeUi("ui.ui.spritegenerationmodal.applying")
+                        : localizeUi("ui.ui.spritegenerationmodal.applySlice")}
                     </button>
                   </div>
                 </div>
@@ -2282,7 +2529,9 @@ export function SpriteGenerationModal({
                         key={`row-cut-${index}`}
                         className="flex items-center gap-2 text-[0.6875rem] text-[var(--muted-foreground)]"
                       >
-                        <span className="w-28 shrink-0 text-[var(--foreground)]">Row cut {index + 1}</span>
+                        <span className="w-28 shrink-0 text-[var(--foreground)]">
+                          {localizeUi("ui.ui.spritegenerationmodal.rowCut")} {index + 1}
+                        </span>
                         <input
                           type="range"
                           min={-12}
@@ -2300,7 +2549,9 @@ export function SpriteGenerationModal({
                         key={`col-cut-${index}`}
                         className="flex items-center gap-2 text-[0.6875rem] text-[var(--muted-foreground)]"
                       >
-                        <span className="w-28 shrink-0 text-[var(--foreground)]">Column cut {index + 1}</span>
+                        <span className="w-28 shrink-0 text-[var(--foreground)]">
+                          {localizeUi("ui.ui.spritegenerationmodal.columnCut")} {index + 1}
+                        </span>
                         <input
                           type="range"
                           min={-12}
@@ -2316,8 +2567,9 @@ export function SpriteGenerationModal({
                   </div>
                 )}
                 <p className="mt-2 text-[0.625rem] text-[var(--muted-foreground)]">
-                  Use this when the generated sheet has borders, gutters, or uneven spacing. Applying re-slices the
-                  original source sheet{generatedSheets.length === 1 ? "" : "s"} without regenerating.
+                  {localizeUi("ui.ui.spritegenerationmodal.useThisWhenTheGeneratedSheetHasBordersGutters")}
+                  {generatedSheets.length === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s")}{" "}
+                  {localizeUi("ui.ui.spritegenerationmodal.withoutRegenerating")}
                 </p>
               </div>
             )}
@@ -2326,8 +2578,7 @@ export function SpriteGenerationModal({
             <div>
               {animatedExpressionMode ? (
                 <div className="mb-3 rounded-lg bg-[var(--secondary)]/60 p-2.5 text-xs text-[var(--muted-foreground)] ring-1 ring-[var(--border)]/60">
-                  Animated portrait sprites are saved as looping GIFs. Static background cleanup, sheet slicing, and
-                  frame cropping are skipped for GIF output.
+                  {localizeUi("ui.ui.spritegenerationmodal.animatedPortraitSpritesAreSavedAsLoopingGifsStatic")}
                 </div>
               ) : (
                 <div className="mb-3 rounded-lg bg-[var(--secondary)]/60 p-2.5">
@@ -2345,12 +2596,14 @@ export function SpriteGenerationModal({
                         }}
                         className="accent-[var(--primary)]"
                       />
-                      Transparent background
+                      {localizeUi("ui.ui.spritegenerationmodal.transparentBackground")}
                     </label>
                     {noBackground && (
                       <>
                         <div className="flex min-w-52 flex-1 items-center gap-2">
-                          <span className="text-[0.6875rem] text-[var(--muted-foreground)]">Soft</span>
+                          <span className="text-[0.6875rem] text-[var(--muted-foreground)]">
+                            {localizeUi("ui.characters.spritestab.soft")}
+                          </span>
                           <input
                             type="range"
                             min={0}
@@ -2360,16 +2613,22 @@ export function SpriteGenerationModal({
                             onChange={(e) => setCleanupStrength(Number(e.target.value))}
                             className="w-full accent-[var(--primary)]"
                           />
-                          <span className="text-[0.6875rem] text-[var(--muted-foreground)]">Aggressive</span>
+                          <span className="text-[0.6875rem] text-[var(--muted-foreground)]">
+                            {localizeUi("ui.characters.spritestab.aggressive")}
+                          </span>
                         </div>
                         <span className="text-[0.6875rem] text-[var(--muted-foreground)]">{cleanupStrength}</span>
                         <button
                           onClick={handleApplyCleanup}
                           disabled={cleanupApplying || cells.length === 0}
                           className="rounded-lg bg-[var(--primary)] px-2.5 py-1 text-[0.6875rem] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
-                          title="Rerun automatic matte cleanup"
+                          title={localizeUi("ui.ui.spritegenerationmodal.rerunAutomaticMatteCleanup")}
                         >
-                          {cleanupApplying ? "Applying..." : cleanupApplied ? "Reapply Cleanup" : "Apply Cleanup"}
+                          {cleanupApplying
+                            ? localizeUi("ui.ui.spritegenerationmodal.applying")
+                            : cleanupApplied
+                              ? localizeUi("ui.ui.spritegenerationmodal.reapplyCleanup")
+                              : localizeUi("ui.ui.spritewandcleanupeditor.applyCleanup")}
                         </button>
                         {cleanupApplied && (
                           <button
@@ -2377,15 +2636,14 @@ export function SpriteGenerationModal({
                             disabled={cleanupApplying}
                             className="rounded-lg px-2.5 py-1 text-[0.6875rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:text-[var(--foreground)]"
                           >
-                            Use Original
+                            {localizeUi("ui.ui.spritegenerationmodal.useOriginal")}
                           </button>
                         )}
                       </>
                     )}
                   </div>
                   <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                    Cleanup is applied after generation when enabled. It preserves native alpha, removes flat chroma or
-                    legacy white mattes, and uses AI only as an optional fallback for complex backgrounds.
+                    {localizeUi("ui.ui.spritegenerationmodal.cleanupIsAppliedAfterGenerationWhenEnabledItPreserves")}
                   </p>
                 </div>
               )}
@@ -2403,14 +2661,16 @@ export function SpriteGenerationModal({
                       <div className="flex items-center justify-between gap-2">
                         <span className="inline-flex min-w-0 items-center gap-1.5 text-xs font-medium text-[var(--foreground)]">
                           <Crop size={14} className="shrink-0 text-[var(--primary)]" />
-                          <span className="truncate capitalize">Frame {activeFrameCell.expression}</span>
+                          <span className="truncate capitalize">
+                            {localizeUi("ui.characters.spritestab.frame")} {activeFrameCell.expression}
+                          </span>
                         </span>
                         <button
                           type="button"
                           onClick={handleCloseCellFrame}
                           className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-                          aria-label="Close frame editor"
-                          title="Close"
+                          aria-label={localizeUi("ui.ui.spriteframeeditor.closeFrameEditor")}
+                          title={localizeUi("capabilities.actions.close")}
                         >
                           <X size={14} />
                         </button>
@@ -2441,7 +2701,7 @@ export function SpriteGenerationModal({
                           className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[0.6875rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:text-[var(--foreground)]"
                         >
                           <RotateCcw size={12} />
-                          Reset
+                          {localizeUi("ui.characters.charactercliptrimmodal.reset")}
                         </button>
                         <button
                           type="button"
@@ -2450,7 +2710,7 @@ export function SpriteGenerationModal({
                           className="inline-flex items-center gap-1 rounded-lg bg-[var(--primary)] px-2.5 py-1 text-[0.6875rem] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
                         >
                           {frameApplying ? <Loader2 size={12} className="animate-spin" /> : <Crop size={12} />}
-                          Apply Frame
+                          {localizeUi("ui.ui.spriteframeeditor.applyFrame")}
                         </button>
                       </div>
                     </div>
@@ -2458,18 +2718,18 @@ export function SpriteGenerationModal({
                 </div>
               )}
               <label className="mb-2 block text-xs font-medium text-[var(--foreground)]">
-                Review & Label{" "}
+                {localizeUi("ui.ui.spritegenerationmodal.reviewLabel")}{" "}
                 {animatedExpressionMode
-                  ? "Animated Portraits"
+                  ? localizeUi("ui.ui.spritegenerationmodal.animatedPortraits")
                   : fullBodyExpressionMode
-                    ? "Full-body Expressions"
+                    ? localizeUi("ui.ui.spritegenerationmodal.fullBodyExpressions")
                     : spriteType === "full-body"
-                      ? "Poses"
-                      : "Sprites"}{" "}
-                ({selectedCount} selected)
+                      ? localizeUi("ui.ui.spritegenerationmodal.poses_bcddeb2")
+                      : localizeUi("editor.tabs.sprites")}{" "}
+                ({selectedCount} {localizeUi("ui.ui.spritegenerationmodal.selected")}
               </label>
               <p className="mb-3 text-[0.625rem] text-[var(--muted-foreground)]">
-                Click an item to toggle selection. Assign or edit names as needed. Only selected items will be saved.
+                {localizeUi("ui.ui.spritegenerationmodal.clickAnItemToToggleSelectionAssignOrEdit")}
               </p>
               <div
                 className="grid gap-3"
@@ -2515,7 +2775,9 @@ export function SpriteGenerationModal({
                           value={normalizedExpression}
                           onChange={(e) => handleCellRename(i, e.target.value)}
                           className="w-full rounded bg-[var(--secondary)] px-2 py-1 text-center text-[0.6875rem] capitalize text-[var(--foreground)] outline-none focus:ring-1 focus:ring-[var(--primary)]/40"
-                          aria-label={`Assign expression for sprite ${i + 1}`}
+                          aria-label={localizeUi("ui.ui.spritegenerationmodal.assignExpressionForSpriteValue1", {
+                            value1: i + 1,
+                          })}
                         >
                           {cellAssignmentOptions.map((option) => (
                             <option key={option} value={option}>
@@ -2528,7 +2790,9 @@ export function SpriteGenerationModal({
                           onChange={(e) => handleCellRename(i, e.target.value)}
                           onBlur={() => handleCellRenameBlur(i)}
                           className="w-full rounded bg-[var(--secondary)]/70 px-2 py-1 text-center text-[0.625rem] text-[var(--muted-foreground)] outline-none focus:text-[var(--foreground)] focus:ring-1 focus:ring-[var(--primary)]/40"
-                          aria-label={`Sprite filename for ${cell.expression}`}
+                          aria-label={localizeUi("ui.ui.spritegenerationmodal.spriteFilenameForValue1", {
+                            value1: cell.expression,
+                          })}
                         />
                         {!animatedExpressionMode && (
                           <div className="flex justify-center">
@@ -2540,8 +2804,10 @@ export function SpriteGenerationModal({
                                 activeFrameIndex === i &&
                                   "bg-[var(--primary)] text-white ring-[var(--primary)] hover:bg-[var(--primary)] hover:text-white",
                               )}
-                              aria-label={`Frame ${cell.expression}`}
-                              title="Frame sprite"
+                              aria-label={localizeUi("ui.ui.spritegenerationmodal.frameValue1", {
+                                value1: cell.expression,
+                              })}
+                              title={localizeUi("ui.ui.spritegenerationmodal.frameSprite")}
                             >
                               <Crop size={13} />
                             </button>
@@ -2561,7 +2827,7 @@ export function SpriteGenerationModal({
                 className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] hover:bg-[var(--secondary)]"
               >
                 <ArrowLeft size={14} />
-                Regenerate
+                {localizeUi("ui.agents.secretplotpanel.regenerate")}
               </button>
               <button
                 onClick={handleSave}
@@ -2571,13 +2837,16 @@ export function SpriteGenerationModal({
                 {saving ? (
                   <>
                     <Loader2 size={14} className="animate-spin" />
-                    Saving…
+                    {localizeUi("chat.settings.inlineEditor.saving")}
                   </>
                 ) : (
                   <>
                     <Check size={14} />
-                    Save {selectedCount} {animatedExpressionMode ? "GIF Sprite" : "Sprite"}
-                    {selectedCount === 1 ? "" : "s"}
+                    {localizeUi("ui.noodle.noodlehome.save")} {selectedCount}{" "}
+                    {animatedExpressionMode
+                      ? localizeUi("ui.ui.spritegenerationmodal.gifSprite")
+                      : localizeUi("ui.ui.spritegenerationmodal.sprite")}
+                    {selectedCount === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s")}
                   </>
                 )}
               </button>

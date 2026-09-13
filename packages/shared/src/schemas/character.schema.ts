@@ -51,6 +51,8 @@ export const characterExtensionsSchema = z
     depth_prompt: depthPromptSchema.default({}),
     backstory: z.string().default(""),
     appearance: z.string().default(""),
+    /** Marinara Engine: retain card revisions and advance the visible version on edits. */
+    versioningEnabled: z.boolean().default(true),
     // Conversation-mode-only fields (optional — absent on non-convo cards).
     convoDisplayName: z.string().optional(),
     convoDisplayNameInCard: z.boolean().optional(),
@@ -80,19 +82,21 @@ export const characterBookEntrySchema = z
   })
   .passthrough();
 
-export const characterBookSchema = z.object({
-  name: z.string().default(""),
-  description: z.string().default(""),
-  scan_depth: z.number().default(2),
-  token_budget: z.number().default(512),
-  recursive_scanning: z.boolean().default(false),
-  extensions: z.record(z.unknown()).default({}),
-  entries: z.array(characterBookEntrySchema).default([]),
-});
+export const characterBookSchema = z
+  .object({
+    name: z.string().default(""),
+    description: z.string().default(""),
+    scan_depth: z.number().default(2),
+    token_budget: z.number().default(512),
+    recursive_scanning: z.boolean().default(false),
+    extensions: z.record(z.unknown()).default({}),
+    entries: z.array(characterBookEntrySchema).default([]),
+  })
+  .passthrough();
 
 export const characterDataSchema = z
   .object({
-    name: z.string().min(1),
+    name: z.string().trim().min(1),
     description: z.string().default(""),
     personality: z.string().default(""),
     scenario: z.string().default(""),
@@ -103,7 +107,7 @@ export const characterDataSchema = z
     post_history_instructions: z.string().default(""),
     tags: z.array(z.string()).default([]),
     creator: z.string().default(""),
-    character_version: z.string().default(""),
+    character_version: z.string().default("1.0"),
     alternate_greetings: z.array(z.string()).default([]),
     extensions: characterExtensionsSchema.default({}),
     character_book: characterBookSchema.nullable().default(null),
@@ -120,8 +124,18 @@ export const createCharacterSchema = z.object({
   data: characterDataSchema,
 });
 
+const updateCharacterExtensionsSchema = characterExtensionsSchema.partial().extend({
+  // Zod 3 short-circuits these optional wrappers before applying the nested
+  // schema defaults. Revalidate this omission behavior before upgrading to Zod 4.
+  depth_prompt: depthPromptSchema.partial().optional(),
+  convoBehavior: convoBehaviorConfigSchema.partial().optional(),
+});
+
 export const updateCharacterSchema = z.object({
-  data: characterDataSchema.partial(),
+  data: characterDataSchema.partial().extend({
+    extensions: updateCharacterExtensionsSchema.optional(),
+    character_book: characterBookSchema.partial().nullable().optional(),
+  }),
 });
 
 export const createGroupSchema = z.object({

@@ -18,7 +18,7 @@ You can move the data folder to another location by setting `DATA_DIR` yourself.
 
 Inside the data folder, your data is split into a `storage` folder and several asset folders.
 
-The `storage` folder holds your text data: characters, chats, messages, lorebooks, presets, and connections. Marinara saves these as files here, so this is the folder that holds most of your work.
+The `storage` folder holds your text data: characters, chats, messages, lorebooks, presets, and connections. Marinara saves each table as smaller ownership-grouped files—for example, one chat's messages or one lorebook's entries—so changing one item does not rewrite an ever-growing global JSON file. During the one-time upgrade from older storage, Marinara preserves the original table files beside the new folders with a `.pre-shard` suffix.
 
 Your images, audio, and other media files live in their own folders, each named for what it holds. The main asset folders are:
 
@@ -49,6 +49,11 @@ Some advanced setups provide the key through an `ENCRYPTION_KEY` environment var
 On Android, the server's data folder usually sits in app storage that you cannot reach without root access. This means you cannot simply copy the folder off the phone.
 
 To get a copy of your data on Android, use the **Download Backup** button. You can find it in **Settings**, on the **Advanced** tab, in the **Backup & Export** section. This creates a single zip file with your data. The zip includes the `.encryption-key` file when one exists. This is the most reliable way to save your data from a phone.
+
+The same section can keep 1 to 9999 rotating daily, weekly, or monthly automatic archives in `backups/` inside the
+data folder. The newest is `marinara-automatic-backup.zip`, and retained older automatic archives are timestamped.
+This limit applies only to automatic backups. Copy important backups somewhere outside the app's storage too, because
+uninstalling or resetting the app can remove both the live data and its local automatic backups.
 
 For the full backup and restore steps on every platform, see [Backing Up and Restoring Marinara](backup-and-restore.md).
 

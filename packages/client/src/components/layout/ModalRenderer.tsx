@@ -2,9 +2,14 @@
 // ModalRenderer: Maps store modal types → components
 // ──────────────────────────────────────────────
 import { lazy, Suspense } from "react";
-import type { AvatarCropValue } from "../../lib/utils";
 import { useUIStore } from "../../stores/ui.store";
-import type { LorebookCategory, LorebookScope, Message, ScenePromptPreferences } from "@marinara-engine/shared";
+import {
+  normalizeAvatarCrop,
+  type LorebookCategory,
+  type LorebookScope,
+  type Message,
+  type ScenePromptPreferences,
+} from "@marinara-engine/shared";
 
 const CreateCharacterModal = lazy(() =>
   import("../modals/CreateCharacterModal").then((module) => ({ default: module.CreateCharacterModal })),
@@ -58,6 +63,11 @@ const ScenePromptPreferencesModal = lazy(() =>
 );
 const CharacterStatusModal = lazy(() =>
   import("../modals/CharacterStatusModal").then((module) => ({ default: module.CharacterStatusModal })),
+);
+const StartCharacterChatModal = lazy(() =>
+  import("../modals/StartCharacterChatModal").then((module) => ({
+    default: module.StartCharacterChatModal,
+  })),
 );
 
 export function ModalRenderer() {
@@ -151,7 +161,7 @@ export function ModalRenderer() {
             } | null) ?? null
           }
           avatarUrl={(modal?.props?.avatarUrl as string | null) ?? null}
-          avatarCrop={(modal?.props?.avatarCrop as AvatarCropValue | null) ?? null}
+          avatarCrop={normalizeAvatarCrop(modal?.props?.avatarCrop)}
           displayName={(modal?.props?.displayName as string | null) ?? null}
           nameColor={(modal?.props?.nameColor as string | null) ?? null}
           status={(modal?.props?.status as "online" | "idle" | "dnd" | "offline" | null) ?? null}
@@ -168,6 +178,16 @@ export function ModalRenderer() {
           sourceLabel={(modal?.props?.sourceLabel as string | null) ?? null}
           onSubmit={modal?.props?.onSubmit as (preferences: ScenePromptPreferences) => void}
           onCancel={modal?.props?.onCancel as (() => void) | undefined}
+        />
+      );
+      break;
+    case "start-character-chat":
+      content = (
+        <StartCharacterChatModal
+          open
+          onClose={closeModal}
+          characterId={(modal?.props?.characterId as string) ?? ""}
+          characterName={(modal?.props?.characterName as string) ?? ""}
         />
       );
       break;

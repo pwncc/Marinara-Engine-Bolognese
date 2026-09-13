@@ -6,7 +6,7 @@ import { fileTable, text, integer } from "../file-schema.js";
 export const chatFolders = fileTable("chat_folders", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
-  mode: text("mode", { enum: ["conversation", "roleplay", "visual_novel", "game"] }).notNull(),
+  mode: text("mode", { enum: ["conversation", "roleplay", "game"] }).notNull(),
   color: text("color").notNull().default(""),
   sortOrder: integer("sort_order").notNull().default(0),
   collapsed: text("collapsed").notNull().default("false"),
@@ -17,7 +17,7 @@ export const chatFolders = fileTable("chat_folders", {
 export const chats = fileTable("chats", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
-  mode: text("mode", { enum: ["conversation", "roleplay", "visual_novel", "game"] }).notNull(),
+  mode: text("mode", { enum: ["conversation", "roleplay", "game"] }).notNull(),
   /** JSON array of character IDs */
   characterIds: text("character_ids").notNull().default("[]"),
   /** Groups related chats together (like ST "chat files" per character) */
@@ -35,6 +35,21 @@ export const chats = fileTable("chats", {
   sortOrder: integer("sort_order").notNull().default(0),
   /** Timestamp of the newest saved message; null until the chat has messages. */
   lastMessageAt: text("last_message_at"),
+  /** Pre-computed semantic embedding of the chat's name/tags/summary (JSON float[]), null until vectorized (#4768) */
+  embedding: text("embedding"),
+  /**
+   * High-water mark of the chat's monotonic write ordinal (#5406). Every ordinal handed to a
+   * game_engine_state row (`write_ordinal`) or to the metadata mirror
+   * (`metadata.metadataWriteOrdinals`) is allocated by bumping this one counter, so a client
+   * holding a value from either store can totally order the two. Null until the chat's first
+   * allocation.
+   *
+   * Not the sole floor: a metadata blob can be moved into a chat whose counter never handed its
+   * stamps out (branching, a game session carry, a restore), so allocation takes the max of this
+   * counter and the chat's own mirror. See `writeOrdinalFloor` / `allocateWriteOrdinal` in
+   * chats.storage.ts for the monotonicity argument.
+   */
+  writeOrdinalCounter: integer("write_ordinal_counter"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -111,6 +126,8 @@ export const memoryChunks = fileTable("memory_chunks", {
   content: text("content").notNull(),
   /** JSON-serialized float[] embedding (null until vectorized) */
   embedding: text("embedding"),
+  /** Stable provider/model/profile identity for the stored embedding */
+  embeddingSpaceId: text("embedding_space_id"),
   /** How many messages were grouped into this chunk */
   messageCount: integer("message_count").notNull(),
   /** Non-null for imported chunks; they should not advance local chunk cursors. */

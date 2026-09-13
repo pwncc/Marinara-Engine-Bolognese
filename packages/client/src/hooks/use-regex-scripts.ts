@@ -6,7 +6,6 @@ import { api } from "../lib/api-client";
 
 const regexKeys = {
   all: ["regex-scripts"] as const,
-  detail: (id: string) => ["regex-scripts", id] as const,
 };
 
 export interface RegexScriptRow {
@@ -21,6 +20,7 @@ export interface RegexScriptRow {
   promptOnly: string;
   applyMode?: string | null;
   targetCharacterIds: string;
+  targetPromptPresetIds: string;
   order: number;
   minDepth: number | null;
   maxDepth: number | null;
@@ -35,18 +35,20 @@ export function useRegexScripts() {
   });
 }
 
-export function useRegexScript(id: string | null) {
-  return useQuery({
-    queryKey: regexKeys.detail(id ?? ""),
-    queryFn: () => api.get<RegexScriptRow>(`/regex-scripts/${id}`),
-    enabled: !!id,
-  });
-}
-
 export function useCreateRegexScript() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (data: Record<string, unknown>) => api.post<RegexScriptRow>("/regex-scripts", data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: regexKeys.all });
+    },
+  });
+}
+
+export function useImportRegexScript() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) => api.post<RegexScriptRow>("/regex-scripts/import", data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: regexKeys.all });
     },

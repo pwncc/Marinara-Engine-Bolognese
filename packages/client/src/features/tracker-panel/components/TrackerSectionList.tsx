@@ -1,31 +1,41 @@
-import { useCallback } from "react";
+import { useCallback, type ReactNode } from "react";
 import { RefreshCw, Sparkles } from "lucide-react";
-import type { GameState, Persona, PresentCharacter } from "@marinara-engine/shared";
+import type {
+  GameState,
+  InventoryTrackerGroup,
+  InventoryTrackerRow,
+  Persona,
+  PresentCharacter,
+} from "@marinara-engine/shared";
 import { useUpdateAgent, type AgentConfigRow } from "../../../hooks/use-agents";
 import type { GameStatePatchField } from "../../../hooks/use-game-state-patcher";
 import type {
   TrackerPanelCollapsedSections,
   TrackerPanelSide,
   TrackerPanelSizeProfile,
+  TrackerStatDisplayMode,
   TrackerTemperatureUnit,
   TrackerThoughtBubbleDisplay,
 } from "../../../stores/ui.store";
 import { useFeaturedCharacterCards } from "../hooks/use-featured-character-cards";
+import type { StatIconLookup } from "../hooks/use-stat-icons";
 import { useTrackerMutations } from "../hooks/use-tracker-mutations";
 import { useTrackerRerun } from "../hooks/use-tracker-rerun";
+import type { PersonaPortraitSaveSnapshot } from "../hooks/use-persona-portrait-save";
+import { buildInventoryTrackerEditPatch } from "../lib/inventory-tracker-edit";
 import { TRACKER_SECTION_AGENT_TYPES, TRACKER_SECTION_RERUN_TITLES } from "../lib/tracker-panel.constants";
 import type { TrackerPanelSection, TrackerSpriteLookup } from "../tracker-panel.types";
 import { SectionIconButton } from "./controls/SectionControls";
 import { CharacterTrackerPanel } from "./sections/CharacterTrackerPanel";
 import { CustomTrackerPanel } from "./sections/CustomTrackerPanel";
 import { PersonaInventoryPanel } from "./sections/PersonaInventoryPanel";
+import { InventoryTrackerPanel } from "./sections/InventoryTrackerPanel";
 import { QuestTrackerPanel } from "./sections/quest-tracker/QuestTrackerPanel";
 import { WorldStatePanel } from "./sections/WorldStatePanel";
 
 export function TrackerSectionList({
   activeChatId,
   activePersona,
-  autoGenerateCharacterAvatars,
   characterSpriteLookup,
   characterTrackerConfig,
   characterTrackerSettings,
@@ -38,22 +48,27 @@ export function TrackerSectionList({
   orderedTrackerSections,
   patchField,
   patchPlayerStats,
+  patchPlayerStatsMany,
   resolveSpriteCharacterId,
   spriteExpressions,
   trackerPanelCollapsedSections,
   trackerPanelSide,
   trackerPanelSizeProfile,
   trackerPanelThoughtBubbleDisplay,
+  trackerStatDisplayMode,
   trackerPanelDockedThoughtsAlwaysVisible,
   trackerTemperatureUnit,
   toggleTrackerPanelSectionCollapsed,
   deleteMode,
   addMode,
-  hideMode,
+  queuePersonaPortraitSave,
+  flushPersonaPortraitSave,
+  resolveStatIcon,
+  beforeCustomSections,
+  afterCustomSections,
 }: {
   activeChatId: string;
   activePersona: Persona | null;
-  autoGenerateCharacterAvatars: boolean;
   characterSpriteLookup: TrackerSpriteLookup;
   characterTrackerConfig: AgentConfigRow | null;
   characterTrackerSettings: Record<string, unknown>;
@@ -66,20 +81,31 @@ export function TrackerSectionList({
   orderedTrackerSections: TrackerPanelSection[];
   patchField: (field: GameStatePatchField, value: unknown) => void;
   patchPlayerStats: (field: keyof NonNullable<GameState["playerStats"]>, value: unknown) => void;
+  patchPlayerStatsMany: (
+    patch:
+      | Partial<NonNullable<GameState["playerStats"]>>
+      | ((current: NonNullable<GameState["playerStats"]>) => Partial<NonNullable<GameState["playerStats"]>>),
+  ) => void;
   resolveSpriteCharacterId: (character: PresentCharacter) => string | null;
   spriteExpressions: Record<string, string>;
   trackerPanelCollapsedSections: TrackerPanelCollapsedSections;
   trackerPanelSide: TrackerPanelSide;
   trackerPanelSizeProfile: TrackerPanelSizeProfile;
   trackerPanelThoughtBubbleDisplay: TrackerThoughtBubbleDisplay;
+  trackerStatDisplayMode: TrackerStatDisplayMode;
   trackerPanelDockedThoughtsAlwaysVisible: boolean;
   trackerTemperatureUnit: TrackerTemperatureUnit;
   toggleTrackerPanelSectionCollapsed: (section: TrackerPanelSection) => void;
   deleteMode: boolean;
   addMode: boolean;
-  hideMode: boolean;
+  queuePersonaPortraitSave: (snapshot: PersonaPortraitSaveSnapshot) => void;
+  flushPersonaPortraitSave: (personaId: string) => void;
+  resolveStatIcon: StatIconLookup;
+  beforeCustomSections?: ReactNode;
+  afterCustomSections?: ReactNode;
 }) {
   const updateAgent = useUpdateAgent();
+  const autoGenerateCharacterAvatars = characterTrackerSettings.autoGenerateAvatars === true;
   const { featuredCharacterCards, removeFeaturedCharacterCard, toggleFeaturedCharacterCard } =
     useFeaturedCharacterCards({
       activeChatId,
@@ -100,30 +126,37 @@ export function TrackerSectionList({
       : null;
   const personaStats = Array.isArray(currentGameState.personaStats) ? currentGameState.personaStats : [];
   const presentCharacters = Array.isArray(currentGameState.presentCharacters) ? currentGameState.presentCharacters : [];
-  const inventory = Array.isArray(playerStats?.inventory) ? playerStats.inventory : [];
   const quests = Array.isArray(playerStats?.activeQuests) ? playerStats.activeQuests : [];
   const customFields = Array.isArray(playerStats?.customTrackerFields) ? playerStats.customTrackerFields : [];
+  const inventoryTrackerCurrencies = Array.isArray(playerStats?.inventoryTrackerCurrencies)
+    ? playerStats.inventoryTrackerCurrencies
+    : [];
+  const inventoryTrackerEquipped = Array.isArray(playerStats?.inventoryTrackerEquipped)
+    ? playerStats.inventoryTrackerEquipped
+    : [];
+  const inventoryTrackerInventory = Array.isArray(playerStats?.inventoryTrackerInventory)
+    ? playerStats.inventoryTrackerInventory
+    : [];
+  // Editing one group can rewrite two, so this must land as a single patch.
+  const editInventoryTracker = (group: InventoryTrackerGroup, rows: InventoryTrackerRow[]) =>
+    patchPlayerStatsMany((current) => buildInventoryTrackerEditPatch(current, group, rows));
   const {
     addCharacter,
-    addInventoryItem,
     addPersonaStat,
     addQuest,
     avatarFileInputRef,
     handleAvatarFileInputChange,
     openAvatarUpload,
     removeCharacter,
-    removeInventoryItem,
     removeQuest,
     savePersonaStatus,
     updateCharacter,
     updateCustomFields,
-    updateInventoryItem,
     updatePersonaStats,
     updateQuest,
   } = useTrackerMutations({
     activeChatId,
     customFields,
-    inventory,
     personaStats,
     presentCharacters,
     quests,
@@ -200,23 +233,22 @@ export function TrackerSectionList({
             persona={activePersona}
             status={playerStats?.status ?? ""}
             trackerPanelSide={trackerPanelSide}
-            trackerPanelSizeProfile={trackerPanelSizeProfile}
+            statDisplayMode={trackerStatDisplayMode}
+            resolveStatIcon={resolveStatIcon}
             spriteExpression={
               expressionSpritesEnabled && activePersona
                 ? (spriteExpressions[activePersona.id] ?? spriteExpressions[activePersona.name] ?? "neutral")
                 : undefined
             }
             personaStats={personaStats}
-            inventory={inventory}
             action={renderRerunAction("persona")}
             onSaveStatus={savePersonaStatus}
             onUpdatePersonaStats={updatePersonaStats}
             onAddPersonaStat={addPersonaStat}
-            onAddInventoryItem={addInventoryItem}
-            onUpdateInventoryItem={updateInventoryItem}
-            onRemoveInventoryItem={removeInventoryItem}
             deleteMode={deleteMode}
             addMode={addMode}
+            queuePersonaPortraitSave={queuePersonaPortraitSave}
+            flushPersonaPortraitSave={flushPersonaPortraitSave}
             collapsed={isPanelCollapsed("persona")}
             onToggleCollapsed={() => toggleTrackerPanelSectionCollapsed("persona")}
           />
@@ -236,6 +268,8 @@ export function TrackerSectionList({
             trackerPanelSide={trackerPanelSide}
             trackerPanelSizeProfile={trackerPanelSizeProfile}
             thoughtBubbleDisplay={trackerPanelThoughtBubbleDisplay}
+            statDisplayMode={trackerStatDisplayMode}
+            resolveStatIcon={resolveStatIcon}
             dockedThoughtsAlwaysVisible={trackerPanelDockedThoughtsAlwaysVisible}
             action={renderCharacterHeaderAction()}
             onUpdateCharacter={updateCharacter}
@@ -245,7 +279,6 @@ export function TrackerSectionList({
             onToggleFeatured={toggleFeaturedCharacterCard}
             deleteMode={deleteMode}
             addMode={addMode}
-            hideMode={hideMode}
             collapsed={isPanelCollapsed("characters")}
             onToggleCollapsed={() => toggleTrackerPanelSectionCollapsed("characters")}
           />
@@ -264,6 +297,23 @@ export function TrackerSectionList({
             trackerPanelSizeProfile={trackerPanelSizeProfile}
             collapsed={isPanelCollapsed("quests")}
             onToggleCollapsed={() => toggleTrackerPanelSectionCollapsed("quests")}
+          />
+        );
+      case "inventory":
+        return (
+          <InventoryTrackerPanel
+            key="inventory"
+            currencies={inventoryTrackerCurrencies}
+            equipped={inventoryTrackerEquipped}
+            inventory={inventoryTrackerInventory}
+            action={renderRerunAction("inventory")}
+            onUpdateCurrencies={(rows) => editInventoryTracker("currencies", rows)}
+            onUpdateEquipped={(rows) => editInventoryTracker("equipped", rows)}
+            onUpdateInventory={(rows) => editInventoryTracker("inventory", rows)}
+            deleteMode
+            addMode={addMode}
+            collapsed={isPanelCollapsed("inventory")}
+            onToggleCollapsed={() => toggleTrackerPanelSectionCollapsed("inventory")}
           />
         );
       case "custom":
@@ -294,7 +344,14 @@ export function TrackerSectionList({
         className="hidden"
         onChange={handleAvatarFileInputChange}
       />
-      {orderedTrackerSections.map((section) => renderTrackerSection(section))}
+      {orderedTrackerSections.map((section) => (
+        <div key={section} className="contents">
+          {section === "custom" ? beforeCustomSections : null}
+          {renderTrackerSection(section)}
+        </div>
+      ))}
+      {!orderedTrackerSections.includes("custom") ? beforeCustomSections : null}
+      {afterCustomSections}
     </>
   );
 }

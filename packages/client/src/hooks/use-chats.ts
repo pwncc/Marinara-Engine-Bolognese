@@ -11,14 +11,17 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api } from "../lib/api-client";
+import { api, ApiError } from "../lib/api-client";
 import { useChatStore } from "../stores/chat.store";
 import { useAgentStore } from "../stores/agent.store";
 import { useGameStateStore } from "../stores/game-state.store";
 import { useEncounterStore } from "../stores/encounter.store";
 import { useUIStore } from "../stores/ui.store";
 import { clearBrowserRuntimeCaches } from "../lib/browser-runtime";
-import { ApiError } from "../lib/api-client";
+import { shouldRefetchMessagesOnReconnect } from "../lib/message-page-cache";
+import { normalizeHydratedMessage } from "../lib/message-hydration";
+import { isMessageHidden } from "../lib/message-visibility";
+import { copyLocalSpriteVisualSettings } from "../components/chat/local-sprite-visual-settings";
 import { lorebookKeys } from "./use-lorebooks";
 import { achievementKeys, trackAchievementEvent } from "./use-achievements";
 import type {
@@ -33,9 +36,11 @@ import type {
   MessageSwipe,
   DaySummaryEntry,
   WeekSummaryEntry,
+  HomeFeedSnapshot,
 } from "@marinara-engine/shared";
 
 import { useRollingBackfillStore } from "../stores/backfill.store";
+import { homeFeedKeys } from "./use-home-feed";
 
 export const chatKeys = {
   all: ["chats"] as const,
@@ -43,12 +48,14 @@ export const chatKeys = {
   detail: (id: string) => [...chatKeys.all, "detail", id] as const,
   messages: (chatId: string) => [...chatKeys.all, "messages", chatId] as const,
   messageCount: (chatId: string) => [...chatKeys.all, "messageCount", chatId] as const,
+  messagePeek: (chatId: string) => [...chatKeys.all, "messagePeek", chatId] as const,
   memories: (chatId: string) => [...chatKeys.all, "memories", chatId] as const,
   notes: (chatId: string) => [...chatKeys.all, "notes", chatId] as const,
   group: (groupId: string) => [...chatKeys.all, "group", groupId] as const,
 };
 
 const RECENT_MESSAGE_CONTENT_EDIT_TTL_MS = 5 * 60 * 1000;
+const MESSAGE_CONTENT_UPDATE_RETRY_DELAY_MS = 300;
 const chatMetadataMutationVersions = new Map<string, number>();
 const chatMetadataFieldVersions = new Map<string, Map<string, number>>();
 
@@ -57,9 +64,48 @@ interface RecentMessageContentEdit {
   content: string;
   activeSwipeIndex: number | null;
   updatedAt: number;
+  revision: number;
 }
 
 const recentMessageContentEdits = new Map<string, RecentMessageContentEdit>();
+let recentMessageContentEditRevision = 0;
+const messageContentUpdateQueues = new Map<string, Promise<void>>();
+
+function shouldRetryMessageContentUpdate(error: unknown) {
+  if (error instanceof ApiError) {
+    return error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
+  }
+  return error instanceof TypeError;
+}
+
+async function patchMessageContent(chatId: string | null, messageId: string, content: string) {
+  try {
+    return await api.patch<Message>(`/chats/${chatId}/messages/${messageId}`, { content });
+  } catch (error) {
+    if (!shouldRetryMessageContentUpdate(error)) throw error;
+    // Keep the retry inside the queued operation so a newer edit cannot be
+    // persisted first and then overwritten by this older content.
+    await new Promise((resolve) => setTimeout(resolve, MESSAGE_CONTENT_UPDATE_RETRY_DELAY_MS));
+    return api.patch<Message>(`/chats/${chatId}/messages/${messageId}`, { content });
+  }
+}
+
+function enqueueMessageContentUpdate(chatId: string | null, messageId: string, content: string) {
+  const queueKey = `${chatId ?? ""}:${messageId}`;
+  const previous = messageContentUpdateQueues.get(queueKey) ?? Promise.resolve();
+  const request = previous.catch(() => undefined).then(() => patchMessageContent(chatId, messageId, content));
+  const settled = request.then(
+    () => undefined,
+    () => undefined,
+  );
+  messageContentUpdateQueues.set(queueKey, settled);
+  void settled.finally(() => {
+    if (messageContentUpdateQueues.get(queueKey) === settled) {
+      messageContentUpdateQueues.delete(queueKey);
+    }
+  });
+  return request;
+}
 
 function pruneRecentMessageContentEdits(now = Date.now()) {
   for (const [messageId, edit] of recentMessageContentEdits) {
@@ -85,28 +131,52 @@ export function rememberRecentMessageContentEdit(
   activeSwipeIndex?: number | null,
 ) {
   pruneRecentMessageContentEdits();
+  const revision = ++recentMessageContentEditRevision;
   recentMessageContentEdits.set(messageId, {
     chatId,
     content,
     activeSwipeIndex: activeSwipeIndex ?? null,
     updatedAt: Date.now(),
+    revision,
   });
+  return revision;
 }
 
-export function forgetRecentMessageContentEdit(chatId: string, messageId: string) {
+function confirmRecentMessageContentEdit(
+  chatId: string,
+  messageId: string,
+  revision: number,
+  content: string,
+  activeSwipeIndex?: number | null,
+) {
   const edit = recentMessageContentEdits.get(messageId);
-  if (edit?.chatId === chatId) {
-    recentMessageContentEdits.delete(messageId);
-  }
+  if (!edit || edit.chatId !== chatId || edit.revision !== revision) return false;
+  recentMessageContentEdits.set(messageId, {
+    ...edit,
+    content,
+    activeSwipeIndex: activeSwipeIndex ?? edit.activeSwipeIndex,
+    updatedAt: Date.now(),
+  });
+  return true;
+}
+
+export function forgetRecentMessageContentEdit(chatId: string, messageId: string, revision?: number) {
+  const edit = recentMessageContentEdits.get(messageId);
+  if (edit?.chatId !== chatId || (revision !== undefined && edit.revision !== revision)) return false;
+  recentMessageContentEdits.delete(messageId);
+  return true;
 }
 
 export function preserveRecentMessageContentEdit(chatId: string, message: Message): Message {
   pruneRecentMessageContentEdits();
-  const edit = recentMessageContentEdits.get(message.id);
-  if (!edit || edit.chatId !== chatId) return message;
-  if (edit.activeSwipeIndex !== null && edit.activeSwipeIndex !== (message.activeSwipeIndex ?? 0)) return message;
-  if (message.content === edit.content) return message;
-  return { ...message, content: edit.content };
+  const normalizedMessage = normalizeHydratedMessage(message);
+  const edit = recentMessageContentEdits.get(normalizedMessage.id);
+  if (!edit || edit.chatId !== chatId) return normalizedMessage;
+  if (edit.activeSwipeIndex !== null && edit.activeSwipeIndex !== normalizedMessage.activeSwipeIndex) {
+    return normalizedMessage;
+  }
+  if (normalizedMessage.content === edit.content) return normalizedMessage;
+  return { ...normalizedMessage, content: edit.content };
 }
 
 export function applyRecentMessageContentEditsToData(
@@ -214,11 +284,39 @@ export function useChatMessages(chatId: string | null, pageSize: number = 0, ena
       if (pageSize <= 0 || lastPage.length < pageSize) return undefined;
       const oldestLoaded = lastPage[0];
       if (!oldestLoaded) return undefined;
-      return typeof oldestLoaded.rowid === "number"
-        ? `${oldestLoaded.createdAt}|${oldestLoaded.rowid}`
-        : oldestLoaded.createdAt;
+      return `${oldestLoaded.createdAt}|${encodeURIComponent(oldestLoaded.id)}`;
     },
     enabled: !!chatId && enabled,
+    // #4703: a reconnect refetch re-drains every loaded page back-to-back, so
+    // a scrolled-back chat on a flaky mobile connection re-downloads its whole
+    // loaded history per network flap. Allow it only while the cache is
+    // shallow; deep caches still resync via the stale-gated refetchOnMount,
+    // the post-generation refresh, and explicit invalidations.
+    refetchOnReconnect: (query) => shouldRefetchMessagesOnReconnect(query.state.data?.pages.length ?? 0),
+  });
+}
+
+/**
+ * Newest messages of a chat as one flat window, for read-only consumers
+ * (sidebar hover peek, the Director secret-plot panel).
+ *
+ * Deliberately does NOT share `chatKeys.messages` — that key ignores page size, so writing
+ * a short slice into it would leave ChatArea's paginated view starting from a truncated
+ * cache the next time that chat is opened. The reverse direction is just as important
+ * (#4721): merely OBSERVING the shared key with a different pageSize overwrites the
+ * transcript query's option closures (queryFn limit, getNextPageParam), because React
+ * Query keeps one options set per key and the last observer wins. Read-only windows
+ * belong here, keyed by their limit.
+ */
+export function useChatMessagePeek(chatId: string | null, limit = 4, enabled = false) {
+  return useQuery({
+    queryKey: [...chatKeys.messagePeek(chatId ?? ""), limit],
+    queryFn: ({ signal }) =>
+      api
+        .get<Message[]>(`/chats/${chatId}/messages?limit=${limit}`, { signal })
+        .then((messages) => messages.map(normalizeHydratedMessage)),
+    enabled: !!chatId && enabled,
+    staleTime: 15_000,
   });
 }
 
@@ -363,6 +461,12 @@ function upsertCachedChat(rows: Chat[] | undefined, chat: Chat): Chat[] | undefi
   return rows.map((row) => (row.id === chat.id ? chat : row));
 }
 
+function removeChatsFromHomeFeed(snapshot: HomeFeedSnapshot | undefined, ids: ReadonlySet<string>) {
+  if (!snapshot) return snapshot;
+  const recentChats = snapshot.recentChats.filter(({ chat }) => !ids.has(chat.id));
+  return recentChats.length === snapshot.recentChats.length ? snapshot : { ...snapshot, recentChats };
+}
+
 function normalizeChatMetadataValue(raw: unknown): Chat["metadata"] {
   if (!raw) return {} as Chat["metadata"];
   if (typeof raw === "string") {
@@ -461,6 +565,7 @@ export function useCreateChat() {
         qc.setQueryData<Chat[]>(chatKeys.list(), (existing) => upsertCachedChat(existing, chat));
       }
       qc.invalidateQueries({ queryKey: chatKeys.list() });
+      qc.invalidateQueries({ queryKey: homeFeedKeys.all });
       void trackAchievementEvent("chat_created")
         .finally(() => qc.invalidateQueries({ queryKey: achievementKeys.all }))
         .catch(() => undefined);
@@ -481,43 +586,76 @@ export function useDeleteChat() {
     onMutate: async (input) => {
       const id = getDeleteChatId(input);
       const providedGroupId = getDeleteChatGroupId(input);
+      const cachedList = qc.getQueryData<Chat[]>(chatKeys.list());
+      const cachedProvidedGroup = providedGroupId
+        ? qc.getQueryData<Chat[]>(chatKeys.group(providedGroupId))
+        : undefined;
+      const cachedDetail = qc.getQueryData<Chat>(chatKeys.detail(id));
+      const cachedHomeFeed = qc.getQueryData<HomeFeedSnapshot>(homeFeedKeys.snapshot());
+      const deletedChat =
+        cachedList?.find((chat) => chat.id === id) ??
+        cachedProvidedGroup?.find((chat) => chat.id === id) ??
+        cachedDetail ??
+        cachedHomeFeed?.recentChats.find(({ chat }) => chat.id === id)?.chat ??
+        null;
+      const groupId = deletedChat?.groupId ?? providedGroupId;
       await qc.cancelQueries({ queryKey: chatKeys.list() });
-      if (providedGroupId) {
-        await qc.cancelQueries({ queryKey: chatKeys.group(providedGroupId) });
+      await qc.cancelQueries({ queryKey: homeFeedKeys.all });
+      await qc.cancelQueries({ queryKey: chatKeys.detail(id), exact: true });
+      const affectedGroupIds = Array.from(
+        new Set([providedGroupId, groupId].filter((value): value is string => Boolean(value))),
+      );
+      for (const affectedGroupId of affectedGroupIds) {
+        await qc.cancelQueries({ queryKey: chatKeys.group(affectedGroupId) });
       }
       const previous = qc.getQueryData<Chat[]>(chatKeys.list());
-      const previousGroup = providedGroupId ? qc.getQueryData<Chat[]>(chatKeys.group(providedGroupId)) : undefined;
-      const deletedChat = previous?.find((c) => c.id === id) ?? previousGroup?.find((c) => c.id === id) ?? null;
-      const groupId = deletedChat?.groupId ?? providedGroupId;
+      const previousHomeFeed = qc.getQueryData<HomeFeedSnapshot>(homeFeedKeys.snapshot());
+      const previousGroups = affectedGroupIds.map((affectedGroupId) => ({
+        groupId: affectedGroupId,
+        chats: qc.getQueryData<Chat[]>(chatKeys.group(affectedGroupId)),
+      }));
 
       qc.setQueryData<Chat[]>(chatKeys.list(), (old) => old?.filter((c) => c.id !== id));
+      qc.setQueryData<HomeFeedSnapshot>(homeFeedKeys.snapshot(), (old) => removeChatsFromHomeFeed(old, new Set([id])));
+      qc.removeQueries({ queryKey: chatKeys.detail(id), exact: true });
 
-      if (groupId) {
-        qc.setQueryData<Chat[]>(chatKeys.group(groupId), (old) => old?.filter((c) => c.id !== id));
+      for (const affectedGroupId of affectedGroupIds) {
+        qc.setQueryData<Chat[]>(chatKeys.group(affectedGroupId), (old) => old?.filter((c) => c.id !== id));
       }
 
-      return { previous, previousGroup, groupId };
+      return { previous, previousDetail: cachedDetail, previousHomeFeed, previousGroups, affectedGroupIds };
     },
-    onError: (_err, _id, context) => {
+    onError: (_err, input, context) => {
+      const id = getDeleteChatId(input);
       if (context?.previous) {
         qc.setQueryData(chatKeys.list(), context.previous);
       } else {
         qc.invalidateQueries({ queryKey: chatKeys.list() });
       }
-      if (context?.groupId) {
-        if (context.previousGroup) {
-          qc.setQueryData(chatKeys.group(context.groupId), context.previousGroup);
+      if (context?.previousDetail !== undefined) {
+        qc.setQueryData(chatKeys.detail(id), context.previousDetail);
+      }
+      if (context?.previousHomeFeed) qc.setQueryData(homeFeedKeys.snapshot(), context.previousHomeFeed);
+      for (const previousGroup of context?.previousGroups ?? []) {
+        if (previousGroup.chats !== undefined) {
+          qc.setQueryData(chatKeys.group(previousGroup.groupId), previousGroup.chats);
         } else {
-          qc.invalidateQueries({ queryKey: chatKeys.group(context.groupId) });
+          qc.removeQueries({ queryKey: chatKeys.group(previousGroup.groupId), exact: true });
         }
       }
       toast.error("Couldn't delete the conversation. It has been restored.");
     },
-    onSettled: (_data, _err, input, context) => {
-      const groupId = context?.groupId ?? getDeleteChatGroupId(input);
+    onSettled: (_data, error, input, context) => {
+      const id = getDeleteChatId(input);
+      const affectedGroupIds =
+        context?.affectedGroupIds ?? [getDeleteChatGroupId(input)].filter((value): value is string => Boolean(value));
       qc.invalidateQueries({ queryKey: chatKeys.list() });
-      if (groupId) {
-        qc.invalidateQueries({ queryKey: chatKeys.group(groupId) });
+      qc.invalidateQueries({ queryKey: homeFeedKeys.all });
+      if (!error) {
+        qc.removeQueries({ queryKey: chatKeys.detail(id), exact: true });
+      }
+      for (const affectedGroupId of affectedGroupIds) {
+        qc.invalidateQueries({ queryKey: chatKeys.group(affectedGroupId) });
       }
     },
   });
@@ -534,21 +672,36 @@ export function useDeleteChatGroup() {
     onMutate: async (input) => {
       const groupId = typeof input === "string" ? input : input.groupId;
       await qc.cancelQueries({ queryKey: chatKeys.list() });
+      await qc.cancelQueries({ queryKey: homeFeedKeys.all });
+      await qc.cancelQueries({ queryKey: chatKeys.group(groupId) });
       const previous = qc.getQueryData<Chat[]>(chatKeys.list());
+      const previousGroup = qc.getQueryData<Chat[]>(chatKeys.group(groupId));
+      const previousHomeFeed = qc.getQueryData<HomeFeedSnapshot>(homeFeedKeys.snapshot());
+      const removedIds = new Set([
+        ...(previous?.filter((chat) => chat.groupId === groupId).map((chat) => chat.id) ?? []),
+        ...(previousGroup?.map((chat) => chat.id) ?? []),
+        ...(previousHomeFeed?.recentChats.filter(({ chat }) => chat.groupId === groupId).map(({ chat }) => chat.id) ??
+          []),
+      ]);
 
       qc.setQueryData<Chat[]>(chatKeys.list(), (old) => old?.filter((c) => c.groupId !== groupId));
       qc.setQueryData<Chat[]>(chatKeys.group(groupId), []);
+      qc.setQueryData<HomeFeedSnapshot>(homeFeedKeys.snapshot(), (old) => removeChatsFromHomeFeed(old, removedIds));
 
-      return { previous, groupId };
+      return { previous, previousGroup, previousHomeFeed, groupId };
     },
     onError: (_err, _input, context) => {
       if (context?.previous) qc.setQueryData(chatKeys.list(), context.previous);
-      if (context?.groupId) {
+      if (context?.previousHomeFeed) qc.setQueryData(homeFeedKeys.snapshot(), context.previousHomeFeed);
+      if (context?.groupId && context.previousGroup) {
+        qc.setQueryData(chatKeys.group(context.groupId), context.previousGroup);
+      } else if (context?.groupId) {
         qc.invalidateQueries({ queryKey: chatKeys.group(context.groupId) });
       }
     },
     onSettled: (_data, _err, _input, context) => {
       qc.invalidateQueries({ queryKey: chatKeys.list() });
+      qc.invalidateQueries({ queryKey: homeFeedKeys.all });
       if (context?.groupId) {
         qc.invalidateQueries({ queryKey: chatKeys.group(context.groupId) });
       }
@@ -590,26 +743,6 @@ export function useUpdateChat() {
         );
       }
       qc.invalidateQueries({ queryKey: [...chatKeys.all, "group"] });
-    },
-  });
-}
-
-export function useTouchChat() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => api.post<Chat>(`/chats/${id}/touch`, {}),
-    onMutate: async (id) => {
-      const updatedAt = new Date().toISOString();
-      qc.setQueryData<Chat[]>(chatKeys.list(), (existing) =>
-        existing
-          ?.map((chat) => (chat.id === id ? { ...chat, updatedAt } : chat))
-          .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
-      );
-      qc.setQueryData<Chat>(chatKeys.detail(id), (existing) => (existing ? { ...existing, updatedAt } : existing));
-    },
-    onSuccess: (chat, id) => {
-      if (chat) qc.setQueryData<Chat>(chatKeys.detail(id), chat);
-      qc.invalidateQueries({ queryKey: chatKeys.list() });
     },
   });
 }
@@ -666,7 +799,7 @@ export function useUpdateChatMetadata() {
             vars.id,
             base.metadata,
             data.metadata,
-            context?.version ?? (chatMetadataMutationVersions.get(vars.id) ?? 0),
+            context?.version ?? chatMetadataMutationVersions.get(vars.id) ?? 0,
           ),
           updatedAt: data.updatedAt,
         });
@@ -676,20 +809,6 @@ export function useUpdateChatMetadata() {
       qc.invalidateQueries({ queryKey: chatKeys.list() });
       qc.invalidateQueries({ queryKey: [...chatKeys.all, "group"] });
       qc.invalidateQueries({ queryKey: lorebookKeys.active(vars.id) });
-    },
-  });
-}
-
-export function useMarkAutonomousUnread() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ chatId, characterId, count }: { chatId: string; characterId?: string | null; count?: number }) =>
-      api.post<Chat>(`/chats/${chatId}/autonomous-unread`, { characterId: characterId ?? null, count }),
-    onSuccess: (data, vars) => {
-      if (data) {
-        qc.setQueryData(chatKeys.detail(vars.chatId), data);
-      }
-      qc.invalidateQueries({ queryKey: chatKeys.list() });
     },
   });
 }
@@ -727,8 +846,9 @@ export function useUpdateChatSummaries() {
 
 export type SummaryEntryOperation =
   | { operation: "replace"; entry: Partial<ChatSummaryEntry> & { id: string; content: string } }
-  | { operation: "delete"; entryId: string }
-  | { operation: "toggle"; entryId: string; enabled: boolean };
+  | { operation: "delete"; entryId?: string; entryIds?: string[] }
+  | { operation: "toggle"; entryId: string; enabled: boolean }
+  | { operation: "reorder"; entryIds: string[] };
 
 function useSummaryEntryMutation() {
   const qc = useQueryClient();
@@ -767,8 +887,9 @@ export function useDeleteSummaryEntry() {
   const mutation = useSummaryEntryMutation();
   return {
     ...mutation,
-    mutate: (input: { chatId: string; entryId: string }) => mutation.mutate({ ...input, operation: "delete" }),
-    mutateAsync: (input: { chatId: string; entryId: string }) =>
+    mutate: (input: { chatId: string; entryId?: string; entryIds?: string[] }) =>
+      mutation.mutate({ ...input, operation: "delete" }),
+    mutateAsync: (input: { chatId: string; entryId?: string; entryIds?: string[] }) =>
       mutation.mutateAsync({ ...input, operation: "delete" }),
   };
 }
@@ -781,6 +902,16 @@ export function useToggleSummaryEntry() {
       mutation.mutate({ ...input, operation: "toggle" }),
     mutateAsync: (input: { chatId: string; entryId: string; enabled: boolean }) =>
       mutation.mutateAsync({ ...input, operation: "toggle" }),
+  };
+}
+
+export function useReorderSummaryEntries() {
+  const mutation = useSummaryEntryMutation();
+  return {
+    ...mutation,
+    mutate: (input: { chatId: string; entryIds: string[] }) => mutation.mutate({ ...input, operation: "reorder" }),
+    mutateAsync: (input: { chatId: string; entryIds: string[] }) =>
+      mutation.mutateAsync({ ...input, operation: "reorder" }),
   };
 }
 
@@ -807,166 +938,157 @@ export interface RollingSummaryBackfillInput {
 export function useRollingSummaryBackfill() {
   const qc = useQueryClient();
 
-  const startBackfill = useCallback(async (input: RollingSummaryBackfillInput) => {
-    const { chatId, summaryEntries, batchSize, maxMessagesPerBatch, promptTemplateId } = input;
+  const startBackfill = useCallback(
+    async (input: RollingSummaryBackfillInput) => {
+      const { chatId, summaryEntries, batchSize, maxMessagesPerBatch, promptTemplateId } = input;
 
-    const store = useRollingBackfillStore.getState();
-    if (store.status === "running") return;
-    
-    // Flip to "running" synchronously before any await
-    store.startBackfill(chatId);
+      const store = useRollingBackfillStore.getState();
+      if (store.status === "running") return;
 
-    let allMessages: Array<{ id: string; role: string; extra?: unknown }>;
-    try {
-      allMessages = await api.get(`/chats/${chatId}/messages`);
-    } catch {
-      useRollingBackfillStore.getState().stopBackfill();
-      toast.error("Could not start backfill: failed to load messages.");
-      return;
-    }
-    if (!Array.isArray(allMessages) || allMessages.length === 0) {
-      useRollingBackfillStore.getState().stopBackfill();
-      return;
-    }
+      // Flip to "running" synchronously before any await
+      store.startBackfill(chatId);
 
-    const messageIds = allMessages.map((m) => m.id);
-    const totalMessageCount = messageIds.length;
-
-    const summarizedIds = new Set<string>();
-    for (const entry of summaryEntries) {
-      if (Array.isArray(entry.messageIds)) {
-        for (const id of entry.messageIds) summarizedIds.add(id);
-      }
-    }
-
-    const isMessageHidden = (msg: { extra?: unknown }) => {
-      let extra = msg.extra;
-      if (typeof extra === "string") {
-        try {
-          extra = JSON.parse(extra);
-        } catch {
-          return false;
-        }
-      }
-      return !!extra && typeof extra === "object" && (extra as any).hiddenFromAI === true;
-    };
-
-    const safeBatchSize = Math.max(1, Math.min(totalMessageCount, batchSize));
-    const batches: Array<{ rangeStart: number; rangeEnd: number }> = [];
-    let cursor = 0;
-    while (cursor < totalMessageCount) {
-      while (cursor < totalMessageCount) {
-        const msg = allMessages[cursor]!;
-        if (summarizedIds.has(msg.id) || isMessageHidden(msg)) {
-          cursor++;
-        } else {
-          break;
-        }
-      }
-      if (cursor >= totalMessageCount) break;
-
-      let userCount = 0;
-      let msgCount = 0;
-      let endCursor = cursor;
-      while (endCursor < totalMessageCount && userCount < safeBatchSize && msgCount < maxMessagesPerBatch) {
-        const msg = allMessages[endCursor]!;
-        if (!isMessageHidden(msg)) {
-          if (msg.role === "user") {
-            userCount++;
-          }
-          msgCount++;
-        }
-        endCursor++;
-      }
-
-      batches.push({ rangeStart: cursor + 1, rangeEnd: endCursor });
-      cursor = endCursor;
-    }
-
-    if (batches.length === 0) {
-      useRollingBackfillStore.getState().stopBackfill();
-      toast.info("Everything is already summarized.");
-      return;
-    }
-
-    const abortController = new AbortController();
-    useRollingBackfillStore.setState({ abortController });
-
-    const currentStore = useRollingBackfillStore.getState();
-    currentStore.setTotalBatches(batches.length);
-
-    const debugMode = useUIStore.getState().debugMode;
-
-    console.warn(
-      `[Backfill] Starting — ${batches.length} batch(es) covering ${totalMessageCount} messages` +
-        (debugMode ? "" : " (enable Advanced > Debug Mode for per-batch logs)"),
-    );
-
-    let failedBatches = 0;
-
-    for (let i = 0; i < batches.length; i++) {
-      if (abortController.signal.aborted) break;
-
-      const batch = batches[i]!;
-      currentStore.updateProgress(i + 1, batch.rangeStart, batch.rangeEnd);
-
-      if (debugMode) {
-        console.warn(
-          `[Backfill] Batch ${i + 1}/${batches.length}: messages ${batch.rangeStart}-${batch.rangeEnd}`,
-        );
-      }
-
+      let allMessages: Array<{ id: string; role: string; extra?: unknown }>;
       try {
-        const result = await api.post<{
-          summary: string | null;
-          entry: ChatSummaryEntry | null;
-          entries: ChatSummaryEntry[];
-          messageIds: string[];
-          hideMessageIds: string[];
-        }>(
-          `/chats/${chatId}/generate-summary`,
-          { rangeStartIndex: batch.rangeStart, rangeEndIndex: batch.rangeEnd, promptTemplateId },
-          { signal: abortController.signal },
-        );
+        allMessages = await api.get(`/chats/${chatId}/messages`);
+      } catch {
+        useRollingBackfillStore.getState().stopBackfill();
+        toast.error("Could not start backfill: failed to load messages.");
+        return;
+      }
+      if (!Array.isArray(allMessages) || allMessages.length === 0) {
+        useRollingBackfillStore.getState().stopBackfill();
+        return;
+      }
 
-        const existing = qc.getQueryData<Chat>(chatKeys.detail(chatId));
-        if (existing) {
-          syncCachedChat(qc, {
-            ...existing,
-            metadata: {
-              ...(normalizeChatMetadataValue(existing.metadata) as Record<string, unknown>),
-              summary: result.summary,
-              summaryEntries: result.entries,
-            } as Chat["metadata"],
-          });
-        }
-        qc.invalidateQueries({ queryKey: chatKeys.detail(chatId) });
+      const messageIds = allMessages.map((m) => m.id);
+      const totalMessageCount = messageIds.length;
 
-        if (debugMode) {
-          console.warn(`[Backfill] Batch ${i + 1} complete`);
+      const summarizedIds = new Set<string>();
+      for (const entry of summaryEntries) {
+        if (Array.isArray(entry.messageIds)) {
+          for (const id of entry.messageIds) summarizedIds.add(id);
         }
-      } catch (err) {
+      }
+
+      const safeBatchSize = Math.max(1, Math.min(totalMessageCount, batchSize));
+      const batches: Array<{ rangeStart: number; rangeEnd: number }> = [];
+      let cursor = 0;
+      while (cursor < totalMessageCount) {
+        while (cursor < totalMessageCount) {
+          const msg = allMessages[cursor]!;
+          if (summarizedIds.has(msg.id) || isMessageHidden(msg)) {
+            cursor++;
+          } else {
+            break;
+          }
+        }
+        if (cursor >= totalMessageCount) break;
+
+        let userCount = 0;
+        let msgCount = 0;
+        let endCursor = cursor;
+        while (endCursor < totalMessageCount && userCount < safeBatchSize && msgCount < maxMessagesPerBatch) {
+          const msg = allMessages[endCursor]!;
+          if (!isMessageHidden(msg)) {
+            if (msg.role === "user") {
+              userCount++;
+            }
+            msgCount++;
+          }
+          endCursor++;
+        }
+
+        batches.push({ rangeStart: cursor + 1, rangeEnd: endCursor });
+        cursor = endCursor;
+      }
+
+      if (batches.length === 0) {
+        useRollingBackfillStore.getState().stopBackfill();
+        toast.info("Everything is already summarized.");
+        return;
+      }
+
+      const abortController = new AbortController();
+      useRollingBackfillStore.setState({ abortController });
+
+      const currentStore = useRollingBackfillStore.getState();
+      currentStore.setTotalBatches(batches.length);
+
+      const debugMode = useUIStore.getState().debugMode;
+
+      console.warn(
+        `[Backfill] Starting — ${batches.length} batch(es) covering ${totalMessageCount} messages` +
+          (debugMode ? "" : " (enable Advanced > Debug Mode for per-batch logs)"),
+      );
+
+      let failedBatches = 0;
+
+      for (let i = 0; i < batches.length; i++) {
         if (abortController.signal.aborted) break;
-        failedBatches++;
+
+        const batch = batches[i]!;
+        currentStore.updateProgress(i + 1, batch.rangeStart, batch.rangeEnd);
+
         if (debugMode) {
-          console.warn(`[Backfill] Batch ${i + 1} failed:`, err);
+          console.warn(`[Backfill] Batch ${i + 1}/${batches.length}: messages ${batch.rangeStart}-${batch.rangeEnd}`);
+        }
+
+        try {
+          const result = await api.post<{
+            summary: string | null;
+            entry: ChatSummaryEntry | null;
+            entries: ChatSummaryEntry[];
+            messageIds: string[];
+            hideMessageIds: string[];
+          }>(
+            `/chats/${chatId}/generate-summary`,
+            { rangeStartIndex: batch.rangeStart, rangeEndIndex: batch.rangeEnd, promptTemplateId },
+            { signal: abortController.signal },
+          );
+
+          const existing = qc.getQueryData<Chat>(chatKeys.detail(chatId));
+          if (existing) {
+            syncCachedChat(qc, {
+              ...existing,
+              metadata: {
+                ...(normalizeChatMetadataValue(existing.metadata) as Record<string, unknown>),
+                summary: result.summary,
+                summaryEntries: result.entries,
+              } as Chat["metadata"],
+            });
+          }
+          qc.invalidateQueries({ queryKey: chatKeys.detail(chatId) });
+
+          if (debugMode) {
+            console.warn(`[Backfill] Batch ${i + 1} complete`);
+          }
+        } catch (err) {
+          if (abortController.signal.aborted) break;
+          failedBatches++;
+          if (debugMode) {
+            console.warn(`[Backfill] Batch ${i + 1} failed:`, err);
+          }
         }
       }
-    }
 
-    if (abortController.signal.aborted) {
-      useRollingBackfillStore.setState({ status: "idle", abortController: null });
-      console.warn(`[Backfill] Stopped`);
-    } else {
-      currentStore.stopBackfill();
-      if (failedBatches > 0) {
-        console.warn(`[Backfill] Done — ${batches.length - failedBatches}/${batches.length} batch(es) succeeded, ${failedBatches} failed`);
-        toast.error(`Backfill finished with ${failedBatches} failed batch(es).`);
+      if (abortController.signal.aborted) {
+        useRollingBackfillStore.setState({ status: "idle", abortController: null });
+        console.warn(`[Backfill] Stopped`);
       } else {
-        console.warn(`[Backfill] Done — ${batches.length} batch(es) completed`);
+        currentStore.stopBackfill();
+        if (failedBatches > 0) {
+          console.warn(
+            `[Backfill] Done — ${batches.length - failedBatches}/${batches.length} batch(es) succeeded, ${failedBatches} failed`,
+          );
+          toast.error(`Backfill finished with ${failedBatches} failed batch(es).`);
+        } else {
+          console.warn(`[Backfill] Done — ${batches.length} batch(es) completed`);
+        }
       }
-    }
-  }, [qc]);
+    },
+    [qc],
+  );
 
   const stopBackfill = useCallback(() => {
     useRollingBackfillStore.getState().stopBackfill();
@@ -978,11 +1100,18 @@ export function useRollingSummaryBackfill() {
 export function useCreateMessage(chatId: string | null) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: { role: string; content: string; characterId?: string | null; extra?: Record<string, unknown> }) =>
-      api.post<Message>(`/chats/${chatId}/messages`, data),
+    mutationFn: (data: {
+      role: string;
+      content: string;
+      characterId?: string | null;
+      extra?: Record<string, unknown>;
+    }) => api.post<Message>(`/chats/${chatId}/messages`, data),
     onSuccess: () => {
       if (chatId) {
         qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
+        // Peek windows (sidebar hover, secret-plot panel) cache the same rows
+        // under their own limit-keyed queries — keep them live too (#4721).
+        qc.invalidateQueries({ queryKey: chatKeys.messagePeek(chatId) });
         qc.invalidateQueries({ queryKey: chatKeys.messageCount(chatId) });
         qc.invalidateQueries({ queryKey: chatKeys.list() });
         qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
@@ -998,6 +1127,7 @@ export function useDeleteMessage(chatId: string | null) {
     onSuccess: () => {
       if (chatId) {
         qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
+        qc.invalidateQueries({ queryKey: chatKeys.messagePeek(chatId) });
         qc.invalidateQueries({ queryKey: chatKeys.messageCount(chatId) });
         qc.invalidateQueries({ queryKey: chatKeys.list() });
         qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
@@ -1015,6 +1145,7 @@ export function useDeleteMessages(chatId: string | null) {
     onSuccess: () => {
       if (chatId) {
         qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
+        qc.invalidateQueries({ queryKey: chatKeys.messagePeek(chatId) });
         qc.invalidateQueries({ queryKey: chatKeys.messageCount(chatId) });
         qc.invalidateQueries({ queryKey: chatKeys.list() });
         qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
@@ -1030,15 +1161,17 @@ export function useUpdateMessage(chatId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ messageId, content }: { messageId: string; content: string }) =>
-      api.patch<Message>(`/chats/${chatId}/messages/${messageId}`, { content }),
+      enqueueMessageContentUpdate(chatId, messageId, content),
     onMutate: async ({ messageId, content }) => {
       if (!chatId) return;
       // Cancel in-flight refetches (e.g. from generation events) so they
-      // don't overwrite the optimistic value with stale server data.
-      await qc.cancelQueries({ queryKey: chatKeys.messages(chatId) });
+      // don't overwrite the optimistic value with stale server data. Do not
+      // await cancellation before painting the edit: leaving edit mode must
+      // never reveal the old message while the cancellation promise settles.
+      const cancellation = qc.cancelQueries({ queryKey: chatKeys.messages(chatId) }, { revert: false });
       const previous = qc.getQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId));
       const previousMessage = findCachedMessage(previous, messageId);
-      rememberRecentMessageContentEdit(chatId, messageId, content, previousMessage?.activeSwipeIndex);
+      const revision = rememberRecentMessageContentEdit(chatId, messageId, content, previousMessage?.activeSwipeIndex);
       qc.setQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId), (old) => {
         if (!old?.pages) return old;
         return {
@@ -1046,19 +1179,34 @@ export function useUpdateMessage(chatId: string | null) {
           pages: old.pages.map((page) => page.map((msg) => (msg.id === messageId ? { ...msg, content } : msg))),
         };
       });
-      return { previous };
+      await cancellation;
+      return { previous, revision };
     },
-    onSuccess: (updated, { messageId, content }) => {
-      if (chatId) {
-        rememberRecentMessageContentEdit(chatId, messageId, updated?.content ?? content, updated?.activeSwipeIndex);
+    onSuccess: (updated, { messageId, content }, context) => {
+      if (chatId && context) {
+        confirmRecentMessageContentEdit(
+          chatId,
+          messageId,
+          context.revision,
+          updated?.content ?? content,
+          updated?.activeSwipeIndex,
+        );
       }
     },
     onError: (_err, _vars, context) => {
-      if (chatId) {
-        forgetRecentMessageContentEdit(chatId, _vars.messageId);
-      }
-      if (chatId && context?.previous) {
+      const shouldRollback =
+        !!chatId && !!context && forgetRecentMessageContentEdit(chatId, _vars.messageId, context.revision);
+      if (chatId && shouldRollback && context?.previous) {
         qc.setQueryData(chatKeys.messages(chatId), context.previous);
+        const revertedMessage = findCachedMessage(context.previous, _vars.messageId);
+        if (revertedMessage) {
+          rememberRecentMessageContentEdit(
+            chatId,
+            _vars.messageId,
+            revertedMessage.content,
+            revertedMessage.activeSwipeIndex,
+          );
+        }
       }
     },
     onSettled: () => {
@@ -1070,6 +1218,7 @@ export function useUpdateMessage(chatId: string | null) {
         const { streamingChatId, isStreaming } = useChatStore.getState();
         if (isStreaming && streamingChatId === chatId) return;
         qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
+        qc.invalidateQueries({ queryKey: chatKeys.messagePeek(chatId) });
         qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
       }
     },
@@ -1119,52 +1268,6 @@ export function useUpdateMessageExtra(chatId: string | null) {
         qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
         qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
       }
-    },
-  });
-}
-
-export function useBulkSetMessagesHiddenFromAI() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ chatId, messageIds, hidden }: { chatId: string; messageIds: string[]; hidden: boolean }) =>
-      api.patch<{ updated: number }>(`/chats/${chatId}/messages/bulk-hidden`, { messageIds, hidden }),
-    onMutate: async ({ chatId, messageIds, hidden }) => {
-      await qc.cancelQueries({ queryKey: chatKeys.messages(chatId) });
-      const previous = qc.getQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId));
-      const idSet = new Set(messageIds);
-
-      qc.setQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId), (old) => {
-        if (!old?.pages) return old;
-        return {
-          ...old,
-          pages: old.pages.map((page) =>
-            page.map((msg) => {
-              if (!idSet.has(msg.id)) return msg;
-              let currentExtra: Record<string, unknown> = {};
-              try {
-                currentExtra =
-                  typeof msg.extra === "string"
-                    ? JSON.parse(msg.extra)
-                    : ((msg.extra ?? {}) as unknown as Record<string, unknown>);
-              } catch {
-                currentExtra = {};
-              }
-              return { ...msg, extra: { ...currentExtra, hiddenFromAI: hidden } as unknown as Message["extra"] };
-            }),
-          ),
-        };
-      });
-
-      return { previous };
-    },
-    onError: (_err, vars, context) => {
-      if (context?.previous) {
-        qc.setQueryData(chatKeys.messages(vars.chatId), context.previous);
-      }
-    },
-    onSettled: (_data, _err, vars) => {
-      qc.invalidateQueries({ queryKey: chatKeys.messages(vars.chatId) });
-      qc.invalidateQueries({ queryKey: lorebookKeys.active(vars.chatId) });
     },
   });
 }
@@ -1291,6 +1394,7 @@ export function useBranchChat() {
       api.post<Chat>(`/chats/${chatId}/branch`, { upToMessageId }),
     onSuccess: (newChat, { chatId }) => {
       if (newChat) {
+        copyLocalSpriteVisualSettings(chatId, newChat.id);
         qc.setQueryData(chatKeys.detail(newChat.id), newChat);
         qc.setQueryData<Chat[]>(chatKeys.list(), (existing) => syncCachedBranch(existing, chatId, newChat));
 
@@ -1322,6 +1426,7 @@ export type GenerateSummaryInput = {
   rangeEndMessageId?: string;
   rangeStartIndex?: number;
   rangeEndIndex?: number;
+  summaryEntryIds?: string[];
   promptTemplateId?: string | null;
 };
 
@@ -1335,6 +1440,7 @@ export function useGenerateSummary() {
       rangeEndMessageId,
       rangeStartIndex,
       rangeEndIndex,
+      summaryEntryIds,
       promptTemplateId,
     }: GenerateSummaryInput) =>
       api.post<{
@@ -1350,6 +1456,7 @@ export function useGenerateSummary() {
         rangeEndMessageId,
         rangeStartIndex,
         rangeEndIndex,
+        summaryEntryIds,
         promptTemplateId,
       }),
     onSuccess: (data, vars) => {
@@ -1396,15 +1503,6 @@ export function useClearAllData() {
   });
 }
 
-/** Fetch swipes for a message */
-export function useSwipes(chatId: string | null, messageId: string | null) {
-  return useQuery({
-    queryKey: [...chatKeys.all, "swipes", messageId ?? ""],
-    queryFn: () => api.get<MessageSwipe[]>(`/chats/${chatId}/messages/${messageId}/swipes`),
-    enabled: !!chatId && !!messageId,
-  });
-}
-
 /** Set the active swipe for a message */
 export function useSetActiveSwipe(chatId: string | null) {
   const qc = useQueryClient();
@@ -1433,8 +1531,9 @@ export function useSetActiveSwipe(chatId: string | null) {
         qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
         return;
       }
+      const normalizedUpdated = normalizeHydratedMessage(updated);
       qc.setQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId), (old) =>
-        replaceCachedMessage(old, messageId, (msg) => ({ ...msg, ...updated })),
+        replaceCachedMessage(old, messageId, (msg) => ({ ...msg, ...normalizedUpdated })),
       );
       qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
     },
@@ -1459,6 +1558,21 @@ export function useDeleteSwipe(chatId: string | null) {
       qc.invalidateQueries({ queryKey: [...chatKeys.all, "swipes", messageId] });
       // Server resyncs the body/mood ledger after swipe deletion.
       qc.invalidateQueries({ queryKey: chatKeys.detail(chatId) });
+    },
+  });
+}
+
+/** Keep the selected swipe and delete every alternate from the parent message. */
+export function useDeleteOtherSwipes(chatId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ messageId, index }: { messageId: string; index: number }) =>
+      api.delete<Message>(`/chats/${chatId}/messages/${messageId}/swipes/others/${index}`),
+    onSuccess: (_data, { messageId }) => {
+      if (!chatId) return;
+      qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
+      qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
+      qc.invalidateQueries({ queryKey: [...chatKeys.all, "swipes", messageId] });
     },
   });
 }

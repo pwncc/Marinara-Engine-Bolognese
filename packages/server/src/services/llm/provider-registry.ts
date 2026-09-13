@@ -9,6 +9,8 @@ import { GrokSubscriptionProvider } from "./providers/grok-subscription.provider
 import { GoogleProvider } from "./providers/google.provider.js";
 import type { BaseLLMProvider } from "./base-provider.js";
 import { withConnectionDefaultParameters } from "./connection-default-provider.js";
+import { withConnectionAdmissionProvider } from "../generation/connection-admission.js";
+import { withRateLimitAwareProvider } from "./rate-limit-aware-provider.js";
 
 export function normalizeCohereOpenAIBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, "");
@@ -48,6 +50,8 @@ export function createLLMProvider(
   treatAsLocalEndpoint?: boolean,
   /** Stored connection defaults. Custom Parameters are bound to every text request made by this provider. */
   defaultParameters?: unknown,
+  /** Configured connection ID for direct foreground calls. Fallback wrappers admit their providers separately. */
+  connectionId?: string,
 ): BaseLLMProvider {
   const normalizedMaxContext =
     typeof maxContext === "number" && Number.isFinite(maxContext) && maxContext > 0
@@ -65,6 +69,7 @@ export function createLLMProvider(
     case "nanogpt":
     case "xai":
     case "mistral":
+    case "arli":
       resolved = new OpenAIProvider(
         baseUrl,
         apiKey,
@@ -134,7 +139,13 @@ export function createLLMProvider(
       );
       break;
     case "google":
-      resolved = new GoogleProvider(baseUrl, apiKey, normalizedMaxContext, openrouterProvider, normalizedMaxTokensOverride);
+      resolved = new GoogleProvider(
+        baseUrl,
+        apiKey,
+        normalizedMaxContext,
+        openrouterProvider,
+        normalizedMaxTokensOverride,
+      );
       break;
     case "google_vertex":
       resolved = new GoogleProvider(
@@ -159,5 +170,9 @@ export function createLLMProvider(
       );
       break;
   }
-  return withConnectionDefaultParameters(resolved, defaultParameters);
+  const configured = withConnectionDefaultParameters(resolved, defaultParameters);
+  if (!connectionId) return configured;
+  // Pace + pause/resume outside the admission (concurrency) gate so a proxy 429 retries the same
+  // connection before any fallback decision, and the per-connection throttle applies to everyone.
+  return withRateLimitAwareProvider(withConnectionAdmissionProvider(configured, connectionId), connectionId);
 }

@@ -15,6 +15,7 @@ import { InlineEdit } from "../../controls/InlineControls";
 import { useTrackerLockContext } from "../../TrackerLockContext";
 import { getQuestTextWrapClass, type QuestTextLineCount } from "./quest-layout";
 import { QuestObjectiveRow } from "./QuestObjectiveRow";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 const QUEST_CARD_CLASS =
   "group/quest relative mx-1 overflow-hidden rounded-sm border border-[var(--border)]/30 bg-[var(--tracker-panel-card-background,color-mix(in_srgb,var(--background)_22%,transparent))] shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_5%,transparent)]";
@@ -57,6 +58,7 @@ export function QuestRow({
   addMode?: boolean;
   textLineCount?: QuestTextLineCount;
 }) {
+  const { t: localizeUi } = useUiTranslation();
   const { fieldLocks, lockMode, onToggleFieldLock, onUpdateFieldLocks } = useTrackerLockContext();
   const completed = quest.objectives.filter((objective) => objective.completed).length;
   const totalObjectives = quest.objectives.length;
@@ -129,24 +131,22 @@ export function QuestRow({
             title={
               lockMode
                 ? questCompletedLocked
-                  ? "Unlock quest completion"
-                  : "Lock quest completion"
+                  ? localizeUi("ui.trackerPanel.questrow.unlockQuestCompletion")
+                  : localizeUi("ui.trackerPanel.questrow.lockQuestCompletion")
                 : quest.completed
-                  ? "Mark incomplete"
-                  : "Mark complete"
+                  ? localizeUi("ui.chat.questcardeditable.markIncomplete")
+                  : localizeUi("ui.chat.questcardeditable.markComplete")
             }
             aria-label={
               lockMode
                 ? questCompletedLocked
-                  ? "Unlock quest completion"
-                  : "Lock quest completion"
+                  ? localizeUi("ui.trackerPanel.questrow.unlockQuestCompletion")
+                  : localizeUi("ui.trackerPanel.questrow.lockQuestCompletion")
                 : quest.completed
-                  ? "Mark quest incomplete"
-                  : "Mark quest complete"
+                  ? localizeUi("ui.trackerPanel.questrow.markQuestIncomplete")
+                  : localizeUi("ui.trackerPanel.questrow.markQuestComplete")
             }
-            aria-pressed={
-              lockMode ? questCompletedLocked : undefined
-            }
+            aria-pressed={lockMode ? questCompletedLocked : undefined}
           >
             {lockMode ? (
               questCompletedLocked ? (
@@ -170,8 +170,8 @@ export function QuestRow({
           <InlineEdit
             value={quest.name}
             onSave={(name) => onUpdate({ ...quest, name: name || "Quest" })}
-            placeholder="Quest"
-            title={`Quest: ${questTitle}`}
+            placeholder={localizeUi("ui.trackerPanel.questrow.quest")}
+            title={localizeUi("ui.trackerPanel.questrow.questValue1", { value1: questTitle })}
             showEditHint={false}
             fitPreview={!wrapsText}
             previewLineCount={previewLineCount}
@@ -201,8 +201,10 @@ export function QuestRow({
             type="button"
             onClick={onRemove}
             className={QUEST_REMOVE_BUTTON_CLASS}
-            title="Remove quest"
-            aria-label={`Remove ${visibleText(quest.name, "quest")}`}
+            title={localizeUi("ui.trackerPanel.questrow.removeQuest")}
+            aria-label={localizeUi("ui.trackerPanel.charactertrackercard.removeValue1", {
+              value1: visibleText(quest.name, "quest"),
+            })}
           >
             <X size="0.625rem" />
           </button>
@@ -211,10 +213,7 @@ export function QuestRow({
 
       <div className={QUEST_PROGRESS_TRACK_CLASS}>
         <div
-          className={cn(
-            QUEST_PROGRESS_FILL_CLASS,
-            quest.completed ? "bg-emerald-300/85" : "bg-emerald-400/70",
-          )}
+          className={cn(QUEST_PROGRESS_FILL_CLASS, quest.completed ? "bg-emerald-300/85" : "bg-emerald-400/70")}
           style={{ width: `${completionPercent}%` }}
         />
       </div>
@@ -243,11 +242,11 @@ export function QuestRow({
               type="button"
               onClick={addObjective}
               className={ADD_OBJECTIVE_BUTTON_CLASS}
-              title="Add objective"
-              aria-label="Add objective"
+              title={localizeUi("ui.trackerPanel.questrow.addObjective")}
+              aria-label={localizeUi("ui.trackerPanel.questrow.addObjective")}
             >
               <Plus size="0.625rem" className="justify-self-center" />
-              <span className="truncate font-medium">Objective</span>
+              <span className="truncate font-medium">{localizeUi("ui.trackerPanel.questobjectiverow.objective")}</span>
             </button>
           )}
         </div>

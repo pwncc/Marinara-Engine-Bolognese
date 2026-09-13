@@ -18,6 +18,12 @@ import {
 import { ConversationMessageActions } from "./ConversationMessageActions";
 import { MessageReactions } from "./MessageReactions";
 import { ReactionAddButton } from "./ReactionAddButton";
+import {
+  MESSAGE_SELECTION_CHECKBOX_CLASS,
+  MESSAGE_SELECTION_CHECKBOX_SELECTED_CLASS,
+  MESSAGE_SELECTION_SURFACE_CLASS,
+} from "./message-selection-styles";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 export function ConversationMessageGrouped({
   ctx,
@@ -26,6 +32,7 @@ export function ConversationMessageGrouped({
   ctx: MessageRenderContext;
   msgRef: RefObject<HTMLDivElement | null>;
 }) {
+  const { t: localizeUi } = useUiTranslation();
   const {
     message,
     extra,
@@ -40,6 +47,9 @@ export function ConversationMessageGrouped({
     groupedSegments,
     visibleSegments,
     charByName,
+    charIdByName,
+    selfCharacterId,
+    galleryIndex,
     mentionNames,
     emojiMap,
     stickerMap,
@@ -63,7 +73,9 @@ export function ConversationMessageGrouped({
     isHiddenFromAI,
     canRegenerate,
     isLastAssistantMessage,
-    thinking,
+    hasReasoning,
+    reasoningSummaryUnavailable,
+    thinkingButtonRef,
     generationReplay,
     isGuided,
     regenerateButtonTitle,
@@ -81,6 +93,7 @@ export function ConversationMessageGrouped({
     resolveReactorName,
     onPickSegmentReaction,
     onToggleReactionEntry,
+    onRemoveCharacterReaction,
     onToggleSelect,
     isBubbleStyle,
   } = ctx;
@@ -114,13 +127,15 @@ export function ConversationMessageGrouped({
     <div
       ref={msgRef}
       data-component="ConversationMessage.Grouped"
+      data-message-id={message.id}
+      data-message-role={message.role}
       className={cn(
         "relative px-4 py-0.5 transition-colors hover:bg-[var(--secondary)]/30",
         isBubbleStyle && "hover:bg-transparent",
         !noHoverGroup && "group",
-        isGrouped ? "mt-0" : "mt-3",
+        isGrouped ? "mt-0" : "mt-0.5",
         isStreaming && "bg-[var(--secondary)]/20",
-        multiSelectMode && isSelected && "bg-[var(--destructive)]/10",
+        multiSelectMode && isSelected && MESSAGE_SELECTION_SURFACE_CLASS,
       )}
       onClick={handleMobileTap}
     >
@@ -131,19 +146,22 @@ export function ConversationMessageGrouped({
             type="button"
             role="checkbox"
             aria-checked={isSelected}
-            aria-label={isSelected ? "Deselect message" : "Select message"}
+            aria-label={
+              isSelected
+                ? localizeUi("ui.chat.chatmessage.deselectMessage")
+                : localizeUi("ui.chat.chatmessage.selectMessage")
+            }
             onClick={(e) => {
               e.stopPropagation();
               onToggleSelect?.();
             }}
             className={cn(
-              "h-5 w-5 rounded border-2 flex items-center justify-center transition-colors cursor-pointer",
-              isSelected
-                ? "border-[var(--destructive)] bg-[var(--destructive)]"
-                : "border-[var(--muted-foreground)]/40 bg-[var(--secondary)]",
+              MESSAGE_SELECTION_CHECKBOX_CLASS,
+              "flex items-center justify-center",
+              isSelected && MESSAGE_SELECTION_CHECKBOX_SELECTED_CLASS,
             )}
           >
-            {isSelected && <span className="text-white text-xs font-bold">✓</span>}
+            {isSelected && <span className="text-xs font-bold text-[var(--marinara-chat-chrome-panel-bg)]">✓</span>}
           </button>
         </div>
       )}
@@ -151,7 +169,7 @@ export function ConversationMessageGrouped({
       {hiddenFromAIHeader && !isHiddenCollapsed && (
         <div className="mb-1 flex items-center gap-1 pl-14 text-[0.6875rem] text-amber-500/80">
           {hiddenFromAIHeader}
-          <span>Hidden from AI</span>
+          <span>{localizeUi("ui.chat.conversationmessagegrouped.hiddenFromAi")}</span>
         </div>
       )}
 
@@ -162,6 +180,9 @@ export function ConversationMessageGrouped({
       ) : (
         (groupedSegments ?? []).slice(0, visibleSegments).map((grp, i) => {
           const segChar = grp.speaker && charByName ? charByName.get(normalizeTextForMatch(grp.speaker)) : null;
+          const segSelfId =
+            (grp.speaker && charIdByName ? charIdByName.get(normalizeTextForMatch(grp.speaker)) : null) ??
+            selfCharacterId;
           const segAvatar = segChar?.avatarUrl ?? null;
           const segAvatarCropStyle = getAvatarCropStyle(segChar?.avatarCrop);
           const segName = segChar?.convoDisplayName?.trim() || segChar?.name || grp.speaker || "";
@@ -180,7 +201,9 @@ export function ConversationMessageGrouped({
           const segAddButton =
             !hideActions && onPickSegmentReaction && grp.speaker && segHasText ? (
               <ReactionAddButton
-                onPick={(emoji, imageUrl) => onPickSegmentReaction({ segment: i, speaker: grp.speaker }, emoji, imageUrl)}
+                onPick={(emoji, imageUrl) =>
+                  onPickSegmentReaction({ segment: i, speaker: grp.speaker }, emoji, imageUrl)
+                }
                 className={segAddButtonClass}
               />
             ) : null;
@@ -190,6 +213,7 @@ export function ConversationMessageGrouped({
                 reactions={segReactions}
                 resolveReactorName={resolveReactorName}
                 onToggle={onToggleReactionEntry}
+                onRemoveCharacter={onRemoveCharacterReaction}
               />
             ) : null;
 
@@ -211,6 +235,8 @@ export function ConversationMessageGrouped({
                   emojiMap={emojiMap}
                   stickerMap={stickerMap}
                   onImageOpen={(url) => onImageOpen(url)}
+                  selfCharacterId={selfCharacterId}
+                  galleryIndex={galleryIndex}
                 />
               </div>
             );
@@ -224,47 +250,49 @@ export function ConversationMessageGrouped({
                   {...cardCssProps}
                   className={["animate-[fadeSlideIn_0.4s_ease-out]", i > 0 && "mt-2"].filter(Boolean).join(" ")}
                 >
-                <div className="flex items-end gap-2">
-                  <div className="relative h-8 w-8 shrink-0 overflow-hidden rounded-full bg-[var(--accent)]">
-                    {segAvatar ? (
-                      <img
-                        src={segAvatar}
-                        alt={segName}
-                        loading="lazy"
-                        className="h-full w-full object-cover"
-                        style={segAvatarCropStyle}
-                      />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs font-bold text-[var(--muted-foreground)]">
-                        {segName[0]?.toUpperCase()}
-                      </div>
-                    )}
-                  </div>
-                  <div className="min-w-0 max-w-[min(32rem,calc(100%-2.5rem))]">
-                    <div className="mb-0.5 flex items-baseline gap-2">
-                      <span className="truncate text-[0.75rem] font-semibold" style={nameColorStyle(segColor)}>
-                        {segName}
-                      </span>
-                      {isFirst && !hideTimestamp && (
-                        <span className="shrink-0 text-[0.625rem] text-[var(--muted-foreground)]/60">
-                          {formatTimestamp(message.createdAt)}
-                        </span>
+                  <div className="flex items-end gap-2">
+                    <div className="relative h-8 w-8 shrink-0 overflow-hidden rounded-full bg-[var(--accent)]">
+                      {segAvatar ? (
+                        <img
+                          src={segAvatar}
+                          alt={segName}
+                          loading="lazy"
+                          className="h-full w-full object-cover"
+                          style={segAvatarCropStyle}
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-xs font-bold text-[var(--muted-foreground)]">
+                          {segName[0]?.toUpperCase()}
+                        </div>
                       )}
-                      {segAddButton}
                     </div>
-                    <div
-                      className="mari-message-bubble texting-bubble texting-bubble-other rounded-2xl px-3.5 py-2 text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap shadow-sm"
-                      style={messageTextStyle}
-                    >
-                      <MessageContent
-                        content={combinedText}
-                        mentionNames={mentionNames}
-                        emojiMap={emojiMap}
-                        stickerMap={stickerMap}
-                        onImageOpen={(url) => onImageOpen(url)}
-                      />
+                    <div className="min-w-0 max-w-[min(32rem,calc(100%-2.5rem))]">
+                      <div className="mb-0.5 flex items-baseline gap-2">
+                        <span className="truncate text-[0.75rem] font-semibold" style={nameColorStyle(segColor)}>
+                          {segName}
+                        </span>
+                        {isFirst && !hideTimestamp && (
+                          <span className="mari-conversation-transcript-chrome-text shrink-0 text-[0.625rem]">
+                            {formatTimestamp(message.createdAt)}
+                          </span>
+                        )}
+                        {segAddButton}
+                      </div>
+                      <div
+                        className="mari-message-bubble texting-bubble texting-bubble-other rounded-2xl px-3.5 py-2 text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap shadow-sm"
+                        style={messageTextStyle}
+                      >
+                        <MessageContent
+                          content={combinedText}
+                          mentionNames={mentionNames}
+                          emojiMap={emojiMap}
+                          stickerMap={stickerMap}
+                          onImageOpen={(url) => onImageOpen(url)}
+                          selfCharacterId={segSelfId}
+                          galleryIndex={galleryIndex}
+                        />
+                      </div>
                     </div>
-                  </div>
                   </div>
                 </div>
                 {segReactionRow && (
@@ -290,73 +318,77 @@ export function ConversationMessageGrouped({
                 {...cardCssProps}
                 className={["animate-[fadeSlideIn_0.4s_ease-out]", i > 0 && "mt-3"].filter(Boolean).join(" ")}
               >
-                    <div className="flex gap-4">
-                      <div className="w-10 flex-shrink-0">
-                        <div className="relative h-10 w-10 overflow-hidden rounded-full bg-[var(--accent)]">
-                          {segAvatar ? (
-                            <img
-                              src={segAvatar}
-                              alt={segName}
-                              loading="lazy"
-                              className="h-full w-full object-cover"
-                              style={segAvatarCropStyle}
-                            />
-                          ) : (
-                            <div className="flex h-full w-full items-center justify-center text-sm font-bold text-[var(--muted-foreground)]">
-                              {segName[0]?.toUpperCase()}
-                            </div>
-                          )}
-                        </div>
-                        {isFirst && (showActions || forceShowActions || showMessageNumbers) && messageIndex != null && (
-                          <span className="mt-0.5 block text-center text-[0.5rem] font-medium text-[var(--muted-foreground)] select-none">
-                            #{messageIndex}
-                          </span>
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline gap-2 mb-0.5">
-                          <span
-                            className="text-[0.9375rem] font-semibold leading-tight hover:underline cursor-default"
-                            style={nameColorStyle(segColor)}
-                          >
-                            {segName}
-                          </span>
-                          {isFirst && !hideTimestamp && (
-                            <span className="text-[0.6875rem] text-[var(--muted-foreground)]/60">
-                              {formatTimestamp(message.createdAt)}
-                            </span>
-                          )}
-                          {segAddButton}
-                        </div>
-                        <div
-                          className="text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap"
-                          style={messageTextStyle}
-                        >
-                          <MessageContent
-                            content={paragraphs[0]!}
-                            mentionNames={mentionNames}
-                            emojiMap={emojiMap}
-                            stickerMap={stickerMap}
-                            onImageOpen={(url) => onImageOpen(url)}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                    {paragraphs.slice(1).map((para, pi) => (
-                      <div
-                        key={pi}
-                        className="pl-14 mt-0.5 text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap"
-                        style={messageTextStyle}
-                      >
-                        <MessageContent
-                          content={para}
-                          mentionNames={mentionNames}
-                          emojiMap={emojiMap}
-                          stickerMap={stickerMap}
-                          onImageOpen={(url) => onImageOpen(url)}
+                <div className="flex gap-4">
+                  <div className="w-10 flex-shrink-0">
+                    <div className="relative h-10 w-10 overflow-hidden rounded-full bg-[var(--accent)]">
+                      {segAvatar ? (
+                        <img
+                          src={segAvatar}
+                          alt={segName}
+                          loading="lazy"
+                          className="h-full w-full object-cover"
+                          style={segAvatarCropStyle}
                         />
-                      </div>
-                    ))}
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-sm font-bold text-[var(--muted-foreground)]">
+                          {segName[0]?.toUpperCase()}
+                        </div>
+                      )}
+                    </div>
+                    {isFirst && (showActions || forceShowActions || showMessageNumbers) && messageIndex != null && (
+                      <span className="mari-conversation-transcript-chrome-text mt-0.5 block text-center text-[0.5rem] font-medium select-none">
+                        #{messageIndex}
+                      </span>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline gap-2 mb-0.5">
+                      <span
+                        className="text-[0.9375rem] font-semibold leading-tight hover:underline cursor-default"
+                        style={nameColorStyle(segColor)}
+                      >
+                        {segName}
+                      </span>
+                      {isFirst && !hideTimestamp && (
+                        <span className="mari-conversation-transcript-chrome-text text-[0.6875rem]">
+                          {formatTimestamp(message.createdAt)}
+                        </span>
+                      )}
+                      {segAddButton}
+                    </div>
+                    <div
+                      className="text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap"
+                      style={messageTextStyle}
+                    >
+                      <MessageContent
+                        content={paragraphs[0]!}
+                        mentionNames={mentionNames}
+                        emojiMap={emojiMap}
+                        stickerMap={stickerMap}
+                        onImageOpen={(url) => onImageOpen(url)}
+                        selfCharacterId={segSelfId}
+                        galleryIndex={galleryIndex}
+                      />
+                    </div>
+                  </div>
+                </div>
+                {paragraphs.slice(1).map((para, pi) => (
+                  <div
+                    key={pi}
+                    className="pl-14 mt-0.5 text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap"
+                    style={messageTextStyle}
+                  >
+                    <MessageContent
+                      content={para}
+                      mentionNames={mentionNames}
+                      emojiMap={emojiMap}
+                      stickerMap={stickerMap}
+                      onImageOpen={(url) => onImageOpen(url)}
+                      selfCharacterId={segSelfId}
+                      galleryIndex={galleryIndex}
+                    />
+                  </div>
+                ))}
               </div>
               {segReactionRow && <div className="mari-message-reactions-row pl-14 mt-1">{segReactionRow}</div>}
             </Fragment>
@@ -368,9 +400,8 @@ export function ConversationMessageGrouped({
           [data-card-css] wrapper so themes retain the reach they had when the
           attribute lived on the block root — but only rendered when it has
           content, so container-styling themes can't paint an empty box. The
-          hover action bar stays OUTSIDE the wrapper: it's chrome (like the chip
-          rows), and its absolute positioning must keep resolving against the
-          relative block root even if a theme makes the wrapper positioned. */}
+          action row stays OUTSIDE the wrapper because it is app chrome, like
+          the reaction chip rows. */}
       {hasTrailingContent && (
         <div {...cardCssProps}>
           {/* Streaming cursor */}
@@ -380,7 +411,10 @@ export function ConversationMessageGrouped({
 
           {!isHiddenCollapsed && (
             <div className="ml-14">
-              <ConversationMessageTranslation translatedText={translatedText} isTranslating={isTranslating} />
+              <ConversationMessageTranslation
+                translatedText={ctx.showTranslationOnly ? null : translatedText}
+                isTranslating={isTranslating}
+              />
             </div>
           )}
 
@@ -413,18 +447,20 @@ export function ConversationMessageGrouped({
       )}
 
       {/* Action bar */}
-      {!hideActions && (
+      {(!hideActions || hasReasoning) && (
         <ConversationMessageActions
-          isBubbleStyle={isBubbleStyle}
           isUser={false}
           showActions={showActions}
-          forceShowActions={forceShowActions}
+          forceShowActions={hideActions && hasReasoning ? true : forceShowActions}
+          thinkingOnly={hideActions && hasReasoning}
           copied={copied}
           translatedText={translatedText}
           isHiddenFromAI={isHiddenFromAI}
           canRegenerate={canRegenerate}
           isLastAssistantMessage={isLastAssistantMessage}
-          thinking={thinking}
+          hasReasoning={hasReasoning}
+          reasoningSummaryUnavailable={reasoningSummaryUnavailable}
+          thinkingButtonRef={thinkingButtonRef}
           generationReplay={generationReplay}
           isGuided={isGuided}
           regenerateButtonTitle={regenerateButtonTitle}

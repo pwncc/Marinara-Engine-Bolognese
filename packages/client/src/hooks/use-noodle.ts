@@ -6,6 +6,7 @@ import { api } from "../lib/api-client";
 import { useUIStore } from "../stores/ui.store";
 import type {
   NoodleAccount,
+  NoodleAccountEditInput,
   NoodleAccountKind,
   NoodleBootstrap,
   NoodleCreateInteractionInput,
@@ -99,7 +100,7 @@ export function useRescheduleNoodleRefresh() {
 export function useUpdateNoodleAccount() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...patch }: { id: string } & Partial<NoodleAccount>) =>
+    mutationFn: ({ id, ...patch }: { id: string } & NoodleAccountEditInput) =>
       api.put<NoodleAccount>(`/noodle/accounts/${id}`, patch),
     onSuccess: (account) => {
       qc.setQueryData<NoodleBootstrap | undefined>(noodleKeys.bootstrap(), (current) =>

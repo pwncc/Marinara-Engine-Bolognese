@@ -2,8 +2,10 @@
 // Tool Executor — Handles built-in + custom function calls
 // ──────────────────────────────────────────────
 import type { LLMToolCall } from "../llm/base-provider.js";
-import vm from "node:vm";
 import { createHash } from "node:crypto";
+import { Worker } from "node:worker_threads";
+import Ajv from "ajv";
+import addFormats from "ajv-formats";
 import {
   getCustomToolTimeoutMs,
   isCustomToolScriptEnabled,
@@ -12,13 +14,74 @@ import {
 import { safeFetch } from "../../utils/security.js";
 import { logger } from "../../lib/logger.js";
 import { normalizeSpotifySearchQuery } from "../spotify/spotify.service.js";
-import { appendChatSummaryEntryToMetadata } from "@marinara-engine/shared";
+import { buildSpotifyCandidateTokens, normalizeSpotifyText } from "../spotify/spotify-query-tokens.js";
+import {
+  appendChatSummaryEntryToMetadata,
+  BUILT_IN_TOOLS,
+  isJsonRecord,
+  SPOTIFY_RECENT_TRACK_HISTORY_LIMIT,
+} from "@marinara-engine/shared";
+
+type ToolExecutionOutcome =
+  | { result: unknown; success: true; httpStatus?: never }
+  | { result: unknown; success: false; httpStatus?: number };
+export type ToolArgumentsValidator = (args: Record<string, unknown>) => string | null;
+
+function createToolArgumentsAjv(): Ajv {
+  const ajv = new Ajv({ strict: false });
+  addFormats(ajv);
+  return ajv;
+}
+
+function createToolArgumentsValidator(
+  parametersSchema: Record<string, unknown>,
+  ajv = createToolArgumentsAjv(),
+): ToolArgumentsValidator {
+  const validate = ajv.compile(parametersSchema);
+  if ("$async" in validate && validate.$async === true) {
+    throw new Error("Async tool parameter schemas are not supported");
+  }
+  return (args) =>
+    validate(args)
+      ? null
+      : ajv.errorsText(validate.errors, {
+          dataVar: "arguments",
+        });
+}
 
 export interface ToolExecutionResult {
   toolCallId: string;
   name: string;
   result: string;
   success: boolean;
+  httpStatus?: number;
+}
+
+export function formatToolExecutionResultForModel(
+  result: Pick<ToolExecutionResult, "result" | "success" | "httpStatus">,
+): string {
+  if (result.success) return result.result;
+
+  let response: unknown = result.result;
+  try {
+    response = JSON.parse(result.result);
+  } catch {
+    // Preserve non-JSON tool output as text inside the failure envelope.
+  }
+
+  const error =
+    isJsonRecord(response) && typeof response.error === "string"
+      ? response.error
+      : result.httpStatus !== undefined
+        ? `Tool request failed with HTTP status ${result.httpStatus}`
+        : "Tool execution failed";
+
+  return JSON.stringify({
+    error,
+    success: false,
+    ...(result.httpStatus !== undefined ? { httpStatus: result.httpStatus } : {}),
+    response,
+  });
 }
 
 /** A custom tool loaded from DB at execution time. */
@@ -29,9 +92,14 @@ export interface CustomToolDef {
   staticResult: string | null;
   scriptBody: string | null;
   includeHiddenContext?: boolean;
+  validateArguments: ToolArgumentsValidator;
 }
 
 export type CustomToolHiddenContext = Record<string, unknown>;
+
+export function createCustomToolArgumentsValidator(parametersSchema: Record<string, unknown>): ToolArgumentsValidator {
+  return createToolArgumentsValidator(parametersSchema);
+}
 
 /** Lorebook search function injected from the route layer. */
 export type LorebookSearchFn = (
@@ -78,9 +146,15 @@ const WEB_SEARCH_MAX_LIMIT = 8;
 const WEB_SEARCH_RESPONSE_MAX_BYTES = 512 * 1024;
 const SPOTIFY_TRACK_INDEX_TTL_MS = 20 * 60_000;
 const SPOTIFY_TRACK_INDEX_CACHE_MAX = 24;
+const builtInToolArgumentsAjv = createToolArgumentsAjv();
+const BUILT_IN_TOOL_VALIDATORS = new Map(
+  BUILT_IN_TOOLS.map((tool) => [
+    tool.name,
+    createToolArgumentsValidator(tool.parameters as unknown as Record<string, unknown>, builtInToolArgumentsAjv),
+  ]),
+);
 const SPOTIFY_TRACK_INDEX_MAX_TRACKS = 2_500;
 const SPOTIFY_TRACK_PAGE_SIZE = 50;
-const SPOTIFY_RECENT_TRACK_HISTORY_LIMIT = 24;
 const SPOTIFY_RECENT_TRACK_PROMPT_LIMIT = 12;
 const SPOTIFY_PLAYBACK_SETTLE_MS = 650;
 const SPOTIFY_PLAYBACK_VERIFY_DELAYS_MS = [0, SPOTIFY_PLAYBACK_SETTLE_MS, 900, 1500, 2500, 4000] as const;
@@ -129,40 +203,6 @@ type SpotifyPlayRequestBody = {
 
 const spotifyTrackIndexCache = new Map<string, SpotifyTrackIndexCacheEntry>();
 
-const SPOTIFY_STOP_WORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "for",
-  "from",
-  "in",
-  "into",
-  "is",
-  "it",
-  "of",
-  "on",
-  "or",
-  "the",
-  "to",
-  "with",
-]);
-
-const SPOTIFY_MOOD_EXPANSIONS: Array<[RegExp, string[]]> = [
-  [
-    /\b(action|battle|boss|chase|combat|danger|duel|fight|war)\b/,
-    ["battle", "combat", "fight", "boss", "war", "intense"],
-  ],
-  [/\b(calm|cozy|gentle|peace|peaceful|rest|safe|soft)\b/, ["calm", "peace", "gentle", "soft", "rest", "serene"]],
-  [/\b(dark|dread|fear|horror|ominous|scary|shadow|terror)\b/, ["dark", "ominous", "shadow", "night", "horror"]],
-  [/\b(grief|lonely|melancholy|sad|sorrow|tragic|tears)\b/, ["sad", "sorrow", "melancholy", "lament", "lonely"]],
-  [/\b(love|romance|romantic|tender|warm)\b/, ["love", "romance", "tender", "heart", "warm"]],
-  [/\b(mystery|secret|sneak|stealth|suspense|tense)\b/, ["mystery", "secret", "stealth", "tension", "suspense"]],
-  [/\b(epic|heroic|triumph|victory)\b/, ["epic", "hero", "triumph", "victory", "theme"]],
-];
-
 export interface ToolExecutionContext {
   gameState?: Record<string, unknown>;
   chatMeta?: Record<string, unknown>;
@@ -190,25 +230,56 @@ export async function executeToolCalls(
 
   for (const call of toolCalls) {
     try {
-      let args: Record<string, unknown>;
+      let parsedArguments: unknown;
       try {
-        args = JSON.parse(call.function.arguments);
+        parsedArguments = JSON.parse(call.function.arguments);
       } catch {
-        args = {};
+        throw new Error(`Invalid arguments for ${call.function.name}: expected valid JSON`);
       }
 
-      const result = await executeSingleTool(call.function.name, args, context);
+      if (!isJsonRecord(parsedArguments)) {
+        throw new Error(`Invalid arguments for ${call.function.name}: expected a JSON object`);
+      }
+
+      const builtInValidator = BUILT_IN_TOOL_VALIDATORS.get(call.function.name);
+      let outcome: ToolExecutionOutcome;
+      if (builtInValidator) {
+        const validationError = builtInValidator(parsedArguments);
+        if (validationError) {
+          throw new Error(`Invalid arguments for ${call.function.name}: ${validationError}`);
+        }
+        outcome = classifyToolExecution(await executeBuiltInTool(call.function.name, parsedArguments, context));
+      } else {
+        const customTool = context?.customTools?.find((tool) => tool.name === call.function.name);
+        if (customTool) {
+          const validationError = customTool.validateArguments(parsedArguments);
+          if (validationError) {
+            throw new Error(`Invalid arguments for ${call.function.name}: ${validationError}`);
+          }
+          outcome = await executeCustomTool(customTool, parsedArguments, context);
+        } else {
+          outcome = {
+            result: {
+              error: `Unknown tool: ${call.function.name}`,
+              available: [...BUILT_IN_TOOL_VALIDATORS.keys()],
+            },
+            success: false,
+          };
+        }
+      }
       results.push({
         toolCallId: call.id,
         name: call.function.name,
-        result: typeof result === "string" ? result : JSON.stringify(result),
-        success: true,
+        result: typeof outcome.result === "string" ? outcome.result : JSON.stringify(outcome.result),
+        success: outcome.success,
+        ...(outcome.httpStatus !== undefined ? { httpStatus: outcome.httpStatus } : {}),
       });
     } catch (err) {
+      const message = err instanceof Error ? err.message : "Tool execution failed";
       results.push({
         toolCallId: call.id,
         name: call.function.name,
-        result: err instanceof Error ? err.message : "Tool execution failed",
+        result: JSON.stringify({ error: message }),
         success: false,
       });
     }
@@ -217,7 +288,17 @@ export async function executeToolCalls(
   return results;
 }
 
-async function executeSingleTool(
+export async function executeToolCallForModel(toolCall: LLMToolCall, context?: ToolExecutionContext): Promise<string> {
+  const [result] = await executeToolCalls([toolCall], context);
+  return result ? formatToolExecutionResultForModel(result) : "Tool execution failed";
+}
+
+function classifyToolExecution(result: unknown): ToolExecutionOutcome {
+  const failed = isJsonRecord(result) && typeof result.error === "string";
+  return failed ? { result, success: false } : { result, success: true };
+}
+
+async function executeBuiltInTool(
   name: string,
   args: Record<string, unknown>,
   context?: ToolExecutionContext,
@@ -262,32 +343,9 @@ async function executeSingleTool(
     case "update_about_me":
       return updateAboutMe(args, context);
     default: {
-      // Try custom tools
-      const custom = context?.customTools?.find((t) => t.name === name);
-      if (custom) return executeCustomTool(custom, args, context);
       return {
         error: `Unknown tool: ${name}`,
-        available: [
-          "roll_dice",
-          "update_game_state",
-          "set_expression",
-          "trigger_event",
-          "search_lorebook",
-          "web_search",
-          "save_lorebook_entry",
-          "edit_chat_message",
-          "read_chat_summary",
-          "append_chat_summary",
-          "read_chat_variable",
-          "write_chat_variable",
-          "update_about_me",
-          "spotify_get_current_playback",
-          "spotify_get_playlists",
-          "spotify_get_playlist_tracks",
-          "spotify_search",
-          "spotify_play",
-          "spotify_set_volume",
-        ],
+        available: [...BUILT_IN_TOOL_VALIDATORS.keys()],
       };
     }
   }
@@ -303,20 +361,68 @@ function getCustomToolHiddenContext(
   return context?.hiddenContext ?? {};
 }
 
+function executeCustomToolScript(
+  scriptBody: string,
+  args: Record<string, unknown>,
+  hiddenContext: CustomToolHiddenContext | undefined,
+  timeoutMs: number,
+): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const workerUrl = new URL(
+      import.meta.url.endsWith(".ts") ? "./custom-tool-script.worker.ts" : "./custom-tool-script.worker.js",
+      import.meta.url,
+    );
+    const worker = new Worker(workerUrl, {
+      workerData: {
+        scriptBody,
+        argsJson: JSON.stringify(args ?? {}),
+        contextJson: JSON.stringify(hiddenContext ?? null),
+        timeoutMs,
+      },
+      resourceLimits: { maxOldGenerationSizeMb: 32, maxYoungGenerationSizeMb: 8, stackSizeMb: 2 },
+    });
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      void worker.terminate();
+      callback();
+    };
+    const timer = setTimeout(
+      () => finish(() => reject(new Error(`Script exceeded ${timeoutMs}ms timeout`))),
+      timeoutMs,
+    );
+    worker.once("message", (message: unknown) => {
+      finish(() => {
+        if (isJsonRecord(message) && message.ok === true) resolve(message.value);
+        else
+          reject(
+            new Error(isJsonRecord(message) && typeof message.error === "string" ? message.error : "Script failed"),
+          );
+      });
+    });
+    worker.once("error", (error) => finish(() => reject(error)));
+    worker.once("exit", (code) => {
+      if (code !== 0) finish(() => reject(new Error(`Script worker exited with code ${code}`)));
+    });
+  });
+}
+
 async function executeCustomTool(
   tool: CustomToolDef,
   args: Record<string, unknown>,
   context?: ToolExecutionContext,
-): Promise<unknown> {
+): Promise<ToolExecutionOutcome> {
   logger.info("[custom-tools] Executing %s custom tool %s", tool.executionType, tool.name);
   const customToolTimeoutMs = getCustomToolTimeoutMs();
   const hiddenContext = getCustomToolHiddenContext(tool, context);
   switch (tool.executionType) {
     case "static":
-      return { result: tool.staticResult ?? "OK", tool: tool.name, args };
+      return classifyToolExecution({ result: tool.staticResult ?? "OK", tool: tool.name, args });
 
     case "webhook": {
-      if (!tool.webhookUrl) return { error: "No webhook URL configured" };
+      if (!tool.webhookUrl) return { result: { error: "No webhook URL configured" }, success: false };
       try {
         const allowLocal = isWebhookLocalUrlsEnabled();
         const res = await safeFetch(tool.webhookUrl, {
@@ -336,52 +442,46 @@ async function executeCustomTool(
           maxResponseBytes: 512 * 1024,
         });
         const text = await res.text();
+        let response: unknown;
         try {
-          return JSON.parse(text);
+          response = JSON.parse(text);
         } catch {
-          return { result: text };
+          response = { result: text };
         }
+        const outcome = classifyToolExecution(response);
+        return res.ok ? outcome : { result: outcome.result, success: false, httpStatus: res.status };
       } catch (err) {
-        return { error: `Webhook call failed: ${err instanceof Error ? err.message : "unknown"}` };
+        return {
+          result: { error: `Webhook call failed: ${err instanceof Error ? err.message : "unknown"}` },
+          success: false,
+        };
       }
     }
 
     case "script": {
       if (!isCustomToolScriptEnabled()) {
         return {
-          error:
-            "Script custom tools are disabled. Set CUSTOM_TOOL_SCRIPT_ENABLED=true to enable trusted in-process script tools.",
+          result: {
+            error:
+              "Script custom tools are disabled. Set CUSTOM_TOOL_SCRIPT_ENABLED=true to enable trusted isolated script tools.",
+          },
+          success: false,
         };
       }
-      if (!tool.scriptBody) return { error: "No script body configured" };
+      if (!tool.scriptBody) return { result: { error: "No script body configured" }, success: false };
       try {
-        // Keep host-realm objects out of the VM context. Script inputs cross the
-        // boundary as JSON so built-ins stay in the VM realm where process,
-        // require, Buffer, and native bindings are not exposed.
-        const sandbox = vm.createContext(Object.create(null));
-        (sandbox as Record<string, unknown>).__argsJson = JSON.stringify(args ?? {});
-        (sandbox as Record<string, unknown>).__ctxJson = JSON.stringify(hiddenContext ?? null);
-        const wrappedScript = [
-          `"use strict";`,
-          `globalThis.args = JSON.parse(__argsJson);`,
-          `globalThis.context = JSON.parse(__ctxJson);`,
-          `globalThis.console = { log: function () {} };`,
-          `(function() {`,
-          `${tool.scriptBody}`,
-          `})();`,
-        ].join("\n");
-        const result = vm.runInContext(wrappedScript, sandbox, {
-          timeout: customToolTimeoutMs,
-          breakOnSigint: true,
-        });
-        return result ?? { result: "OK" };
+        const result = await executeCustomToolScript(tool.scriptBody, args, hiddenContext, customToolTimeoutMs);
+        return classifyToolExecution(result ?? { result: "OK" });
       } catch (err) {
-        return { error: `Script error: ${err instanceof Error ? err.message : "unknown"}` };
+        return {
+          result: { error: `Script error: ${err instanceof Error ? err.message : "unknown"}` },
+          success: false,
+        };
       }
     }
 
     default:
-      return { error: `Unknown execution type: ${tool.executionType}` };
+      return { result: { error: `Unknown execution type: ${tool.executionType}` }, success: false };
   }
 }
 
@@ -607,7 +707,7 @@ async function updateAboutMe(
   context?: ToolExecutionContext,
 ): Promise<Record<string, unknown>> {
   const scope = args.scope === "public" ? "public" : args.scope === "chat" ? "chat" : null;
-  if (!scope) return { error: "update_about_me requires scope \"public\" or \"chat\"" };
+  if (!scope) return { error: 'update_about_me requires scope "public" or "chat"' };
   if (typeof args.content !== "string") return { error: "update_about_me requires a string content" };
   const characterId = context?.callingCharacterId;
   if (!characterId) return { error: "update_about_me could not resolve the calling character" };
@@ -1256,6 +1356,17 @@ async function primeSpotifyPlaybackDevice(
   await wait(SPOTIFY_PLAYBACK_SETTLE_MS);
 }
 
+async function clearSpotifyRepeatBeforePlayback(accessToken: string, deviceId: string | null): Promise<void> {
+  for (const delay of SPOTIFY_REPEAT_RETRY_DELAYS_MS) {
+    if (delay > 0) await wait(delay);
+    const repeat = await applySpotifyRepeatAfterPlay(accessToken, "off", deviceId);
+    if (repeat !== "off") continue;
+    const snapshot = await fetchSpotifyPlaybackSnapshot(accessToken);
+    if (snapshot?.repeatState === "off") return;
+  }
+  logger.debug("[spotify] Repeat-off could not be verified before replacing the playback context");
+}
+
 async function verifyOrNudgeSpotifyPlayback(args: {
   accessToken: string;
   body: SpotifyPlayRequestBody;
@@ -1335,33 +1446,6 @@ function pruneSpotifyTrackCache() {
     if (!oldest) return;
     spotifyTrackIndexCache.delete(oldest);
   }
-}
-
-function normalizeSpotifyText(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function buildSpotifyCandidateTokens(query: string): string[] {
-  const normalized = normalizeSpotifyText(query);
-  const tokens = new Set(
-    normalized
-      .split(/\s+/)
-      .map((token) => token.trim())
-      .filter((token) => token.length > 1 && !SPOTIFY_STOP_WORDS.has(token)),
-  );
-
-  for (const [pattern, expansions] of SPOTIFY_MOOD_EXPANSIONS) {
-    if (pattern.test(normalized)) {
-      expansions.forEach((term) => tokens.add(term));
-    }
-  }
-
-  return Array.from(tokens);
 }
 
 function hashFraction(value: string): number {
@@ -1710,28 +1794,43 @@ async function spotifySearch(
   const limit = clampNumber(args.limit ?? 5, 5, 1, 20);
 
   try {
-    const res = await fetch(
-      `https://api.spotify.com/v1/search?${new URLSearchParams({ q: query, type: "track", limit: String(limit) })}`,
-      {
-        headers: { Authorization: `Bearer ${creds.accessToken}` },
-        signal: AbortSignal.timeout(10_000),
-      },
-    );
-    if (!res.ok) {
-      const body = await res.text();
-      return { error: `Spotify API error (${res.status}): ${body.slice(0, 200)}` };
-    }
-    const data = (await res.json()) as {
-      tracks?: {
-        items?: Array<{ uri: string; name: string; artists: Array<{ name: string }>; album: { name: string } }>;
+    const tracks: Array<{ uri: string; name: string; artist: string; album: string }> = [];
+    while (tracks.length < limit) {
+      // Spotify accepts at most 10 search results per request. Keep Marinara's
+      // useful 20-result contract by paging within the provider limit.
+      const pageSize = Math.min(10, limit - tracks.length);
+      const res = await fetch(
+        `https://api.spotify.com/v1/search?${new URLSearchParams({
+          q: query,
+          type: "track",
+          limit: String(pageSize),
+          offset: String(tracks.length),
+        })}`,
+        {
+          headers: { Authorization: `Bearer ${creds.accessToken}` },
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+      if (!res.ok) {
+        const body = await res.text();
+        return { error: `Spotify API error (${res.status}): ${body.slice(0, 200)}` };
+      }
+      const data = (await res.json()) as {
+        tracks?: {
+          items?: Array<{ uri: string; name: string; artists: Array<{ name: string }>; album: { name: string } }>;
+        };
       };
-    };
-    const tracks = (data.tracks?.items ?? []).map((t) => ({
-      uri: t.uri,
-      name: t.name,
-      artist: t.artists.map((a) => a.name).join(", "),
-      album: t.album.name,
-    }));
+      const page = data.tracks?.items ?? [];
+      tracks.push(
+        ...page.map((track) => ({
+          uri: track.uri,
+          name: track.name,
+          artist: track.artists.map((artist) => artist.name).join(", "),
+          album: track.album.name,
+        })),
+      );
+      if (page.length < pageSize) break;
+    }
     return { query, tracks, count: tracks.length };
   } catch (err) {
     return { error: `Spotify search failed: ${err instanceof Error ? err.message : "unknown"}` };
@@ -1767,7 +1866,16 @@ async function spotifyPlay(
     // If it's a single playlist URI, use context_uri
     const firstUri = uris[0]!;
     const singleTrackUri = uris.length === 1 && firstUri.startsWith("spotify:track:");
+    const allTrackUris = uris.every((uri) => uri.startsWith("spotify:track:"));
     const beforePlayback = await fetchSpotifyPlaybackSnapshot(creds.accessToken);
+    const repeatTrackList =
+      allTrackUris &&
+      uris.length > 1 &&
+      (repeatAfterPlay === "track" ||
+        repeatAfterPlay === "context" ||
+        (repeatAfterPlay === undefined &&
+          (beforePlayback?.repeatState === "track" || beforePlayback?.repeatState === "context")));
+    const effectiveRepeatAfterPlay = repeatTrackList ? "context" : repeatAfterPlay;
     const fallbackDevice = beforePlayback?.deviceId ? null : await findActiveSpotifyPlaybackDevice(creds.accessToken);
     const targetDeviceId = beforePlayback?.deviceId ?? fallbackDevice?.deviceId ?? null;
     const targetDeviceName = beforePlayback?.deviceName ?? fallbackDevice?.deviceName ?? null;
@@ -1786,15 +1894,17 @@ async function spotifyPlay(
       await primeSpotifyPlaybackDevice(creds.accessToken, playDeviceId, targetDeviceName);
     }
 
-    if (singleTrackUri && repeatAfterPlay === "track") {
+    if (singleTrackUri && effectiveRepeatAfterPlay === "track") {
       await applySpotifyRepeatAfterPlay(creds.accessToken, "off", playDeviceId);
+    } else if (repeatTrackList && beforePlayback?.repeatState !== "off") {
+      await clearSpotifyRepeatBeforePlayback(creds.accessToken, playDeviceId);
     }
 
     if (uris.length === 1 && !firstUri.startsWith("spotify:track:")) {
       const body: SpotifyPlayRequestBody = { context_uri: firstUri };
       const play = await requestSpotifyPlayback(creds.accessToken, playDeviceId, body);
       if (!play.ok) return { error: play.error };
-      const repeat = await applySpotifyRepeatAfterPlay(creds.accessToken, repeatAfterPlay, playDeviceId);
+      const repeat = await applySpotifyRepeatAfterPlay(creds.accessToken, effectiveRepeatAfterPlay, playDeviceId);
       const current = await verifyOrNudgeSpotifyPlayback({
         accessToken: creds.accessToken,
         body,
@@ -1836,33 +1946,37 @@ async function spotifyPlay(
       };
     }
 
-    // For track queues, start the first track first, then add the rest with
-    // Spotify's queue endpoint. Sending 3-5 URIs directly to /play is valid,
-    // but Spotify Connect can accept it without reliably starting playback.
-    const allTrackUris = uris.every((uri) => uri.startsWith("spotify:track:"));
-    const playbackUris = allTrackUris && uris.length > 1 ? [firstUri] : uris;
-    const queuedTrackUris = allTrackUris && uris.length > 1 ? uris.slice(1) : [];
+    // A repeatable selection must be sent as one playback context. Spotify's
+    // queue endpoint is one-way: after its appended tracks drain, repeat-track
+    // can only loop the final item. For non-repeating selections, retain the
+    // more reliable first-track + queue path and let verification nudge playback.
+    const splitIntoDisposableQueue = allTrackUris && uris.length > 1 && !repeatTrackList;
+    const playbackUris = splitIntoDisposableQueue ? [firstUri] : uris;
+    const queuedTrackUris = splitIntoDisposableQueue ? uris.slice(1) : [];
     const body: SpotifyPlayRequestBody = { uris: playbackUris, position_ms: 0 };
     const play = await requestSpotifyPlayback(creds.accessToken, playDeviceId, body);
     if (!play.ok) return { error: play.error };
     if (singleTrackUri) await wait(SPOTIFY_PLAYBACK_SETTLE_MS);
-    let repeat = await applySpotifyRepeatAfterPlay(creds.accessToken, repeatAfterPlay, playDeviceId);
+    let repeat = repeatTrackList
+      ? null
+      : await applySpotifyRepeatAfterPlay(creds.accessToken, effectiveRepeatAfterPlay, playDeviceId);
+    const requireFirstUriMatch = singleTrackUri || (allTrackUris && uris.length > 1);
     let current = await verifyOrNudgeSpotifyPlayback({
       accessToken: creds.accessToken,
       body,
       initialDeviceId: playDeviceId,
       targetDeviceId,
       targetDeviceName,
-      expectedTrackUri: singleTrackUri || (allTrackUris && uris.length > 1) ? firstUri : undefined,
+      expectedTrackUri: requireFirstUriMatch ? firstUri : undefined,
       expectedUris: playbackUris,
-      requireFirstUri: singleTrackUri || (allTrackUris && uris.length > 1),
+      requireFirstUri: requireFirstUriMatch,
     });
-    if (singleTrackUri && repeatAfterPlay === "track" && current?.repeatState !== "track") {
-      repeat = await applySpotifyRepeatAfterPlay(creds.accessToken, "track", current?.deviceId ?? playDeviceId, 3);
+    if (singleTrackUri && effectiveRepeatAfterPlay === "track" && current?.repeatState !== "track") {
+      repeat = await applySpotifyRepeatAfterPlay(creds.accessToken, "track", targetDeviceId, 3);
       current = await verifyOrNudgeSpotifyPlayback({
         accessToken: creds.accessToken,
         body,
-        initialDeviceId: current?.deviceId ?? playDeviceId,
+        initialDeviceId: targetDeviceId,
         targetDeviceId,
         targetDeviceName,
         expectedTrackUri: firstUri,
@@ -1870,34 +1984,39 @@ async function spotifyPlay(
         requireFirstUri: true,
       });
     }
-    if (!spotifyPlaybackMatches(current, playbackUris, singleTrackUri || (allTrackUris && uris.length > 1))) {
+    if (repeatTrackList && current?.repeatState !== "context") {
+      for (const delay of SPOTIFY_REPEAT_RETRY_DELAYS_MS) {
+        if (delay > 0) await wait(delay);
+        repeat = await applySpotifyRepeatAfterPlay(creds.accessToken, "context", targetDeviceId);
+        const repeatSnapshot = await fetchSpotifyPlaybackSnapshot(creds.accessToken);
+        if (repeatSnapshot) current = repeatSnapshot;
+        if (spotifyPlaybackMatches(current, playbackUris, true) && current?.repeatState === "context") break;
+      }
+    }
+    const repeatModeVerified = !repeatTrackList || current?.repeatState === "context";
+    if (!repeatModeVerified || !spotifyPlaybackMatches(current, playbackUris, requireFirstUriMatch)) {
       logger.warn(
-        "[spotify] Playback accepted but verification failed device=%s isPlaying=%s currentUri=%s expected=%s",
+        "[spotify] Playback accepted but verification failed device=%s isPlaying=%s currentUri=%s expected=%s repeat=%s",
         current?.deviceName ?? targetDeviceName ?? "unknown",
         current?.isPlaying === true ? "true" : "false",
         current?.trackUri ?? "none",
         playbackUris[0] ?? firstUri,
+        current?.repeatState ?? "unknown",
       );
-      const queuedAfterStart = await queueSpotifyTracks(
-        creds.accessToken,
-        current?.deviceId ?? playDeviceId,
-        queuedTrackUris,
-      );
-      const totalQueued = playbackUris.length + queuedAfterStart;
-      await rememberSpotifyPlayedTracks(context, uris);
+      const currentUri = current?.trackUri ?? null;
+      const error =
+        currentUri === (playbackUris[0] ?? firstUri)
+          ? `Spotify started the selected track, but failed to apply ${effectiveRepeatAfterPlay ?? "the requested"} repeat mode.`
+          : `Spotify playback failed to start the selected track on ${current?.deviceName ?? targetDeviceName ?? "the active device"}.`;
       return {
-        applied: true,
-        playbackPending: true,
-        verification: "pending",
+        error,
+        verification: "failed",
         uris,
         reason,
         repeat,
         repeatState: current?.repeatState ?? repeat ?? null,
-        currentUri: current?.trackUri ?? null,
+        currentUri,
         device: current?.deviceName ?? targetDeviceName,
-        queued: totalQueued,
-        queueRequested: uris.length,
-        display: formatSpotifyPlaybackPendingDisplay(firstUri, reason, current?.deviceName ?? targetDeviceName),
       };
     }
     const queuedAfterStart = await queueSpotifyTracks(

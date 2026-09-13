@@ -4,6 +4,7 @@
 import {
   BaseLLMProvider,
   llmFetch,
+  llmHttpErrorFromResponse,
   sanitizeApiError,
   type ChatCompletionResult,
   type ChatMessage,
@@ -75,6 +76,10 @@ function applyAdaptiveThinkingConfig(
   }
 }
 
+export function supportsAnthropicThinkingDisable(model: string): boolean {
+  return /claude-(?:opus|sonnet)-5(?:$|[-.])/u.test(model.toLowerCase());
+}
+
 type AnthropicRole = "user" | "assistant";
 type AnthropicContentBlock = Record<string, unknown> & {
   type: string;
@@ -131,6 +136,38 @@ function formatAnthropicTools(tools: LLMToolDefinition[] | undefined): Array<Rec
     description: tool.function.description,
     input_schema: tool.function.parameters,
   }));
+}
+
+export function applyAnthropicToolChoice(
+  body: Record<string, unknown>,
+  options: Pick<ChatOptions, "model" | "toolChoice" | "tools">,
+): "applied" | "manual-thinking" | "mythos" | "none" {
+  if (!options.tools?.length) {
+    delete body.tool_choice;
+    return "none";
+  }
+  const setToolChoiceType = (type: "auto" | "any") => {
+    const current = isRecord(body.tool_choice) ? body.tool_choice : {};
+    body.tool_choice = { ...current, type };
+    delete (body.tool_choice as Record<string, unknown>).name;
+  };
+  if (options.toolChoice !== "required") {
+    setToolChoiceType("auto");
+    return "none";
+  }
+
+  if (options.model.toLowerCase().includes("mythos")) {
+    setToolChoiceType("auto");
+    return "mythos";
+  }
+  const thinking = isRecord(body.thinking) ? body.thinking : null;
+  if (thinking?.type === "enabled") {
+    setToolChoiceType("auto");
+    return "manual-thinking";
+  }
+
+  setToolChoiceType("any");
+  return "applied";
 }
 
 function imageContentBlocks(images?: string[]): AnthropicContentBlock[] {
@@ -342,9 +379,18 @@ export class AnthropicProvider extends BaseLLMProvider {
 
     const modelLower = options.model.toLowerCase();
     const isAdaptiveOnly = isClaudeAdaptiveOnlyNoSamplingModel(options.model);
+    const shouldDisableThinking =
+      this.shouldSendParameter(options, "reasoningEffort") &&
+      options.reasoningEffort === "none" &&
+      supportsAnthropicThinkingDisable(options.model);
     if (isAdaptiveOnly) stripAnthropicSamplingParameters(body);
 
-    if (this.shouldSendParameter(options, "reasoningEffort") && options.enableThinking) {
+    if (shouldDisableThinking) {
+      body.thinking = { type: "disabled" };
+    } else if (
+      this.shouldSendParameter(options, "reasoningEffort") &&
+      (options.enableThinking || (isAdaptiveOnly && options.captureReasoning))
+    ) {
       if (isAdaptiveOnly) {
         applyAdaptiveThinkingConfig(body, options, maxTokens);
       } else {
@@ -364,9 +410,22 @@ export class AnthropicProvider extends BaseLLMProvider {
     this.applyCustomParameters(body, options);
     if (isAdaptiveOnly) {
       stripAnthropicSamplingParameters(body);
-      if (this.shouldSendParameter(options, "reasoningEffort") && options.enableThinking) {
+      if (
+        !shouldDisableThinking &&
+        this.shouldSendParameter(options, "reasoningEffort") &&
+        (options.enableThinking || options.captureReasoning)
+      ) {
         applyAdaptiveThinkingConfig(body, options);
       }
+    }
+
+    const toolChoiceResult = applyAnthropicToolChoice(body, options);
+    if (toolChoiceResult === "manual-thinking") {
+      logger.warn(
+        "Anthropic manual extended thinking does not support forced tool use; falling back to automatic tool choice",
+      );
+    } else if (toolChoiceResult === "mythos") {
+      logger.warn("Claude Mythos does not support forced tool use; falling back to automatic tool choice");
     }
 
     const response = await llmFetch(url, {
@@ -383,7 +442,10 @@ export class AnthropicProvider extends BaseLLMProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Anthropic API error ${response.status}: ${sanitizeApiError(errorText)}`);
+      throw llmHttpErrorFromResponse(
+        `Anthropic API error ${response.status}: ${sanitizeApiError(errorText)}`,
+        response,
+      );
     }
 
     const json = (await response.json()) as AnthropicMessageResponse;
@@ -499,12 +561,23 @@ export class AnthropicProvider extends BaseLLMProvider {
     // Strip temperature, top_k, top_p regardless of thinking mode.
     const modelLower = options.model.toLowerCase();
     const isAdaptiveOnly = isClaudeAdaptiveOnlyNoSamplingModel(options.model);
+    const shouldDisableThinking =
+      !suppressModelParameters &&
+      this.shouldSendParameter(options, "reasoningEffort") &&
+      options.reasoningEffort === "none" &&
+      supportsAnthropicThinkingDisable(options.model);
     if (isAdaptiveOnly && !suppressModelParameters) {
       stripAnthropicSamplingParameters(body);
     }
 
     // Enable extended thinking for reasoning models
-    if (!suppressModelParameters && this.shouldSendParameter(options, "reasoningEffort") && options.enableThinking) {
+    if (shouldDisableThinking) {
+      body.thinking = { type: "disabled" };
+    } else if (
+      !suppressModelParameters &&
+      this.shouldSendParameter(options, "reasoningEffort") &&
+      (options.enableThinking || (isAdaptiveOnly && options.captureReasoning))
+    ) {
       const outputMaxTokens = maxTokens ?? 4096;
       if (isAdaptiveOnly) {
         // Adaptive-only Claude models use adaptive thinking (budget_tokens removed).
@@ -532,7 +605,11 @@ export class AnthropicProvider extends BaseLLMProvider {
     this.applyCustomParameters(body, options);
     if (isAdaptiveOnly && !suppressModelParameters) {
       stripAnthropicSamplingParameters(body);
-      if (this.shouldSendParameter(options, "reasoningEffort") && options.enableThinking) {
+      if (
+        !shouldDisableThinking &&
+        this.shouldSendParameter(options, "reasoningEffort") &&
+        (options.enableThinking || options.captureReasoning)
+      ) {
         applyAdaptiveThinkingConfig(body, options);
       }
     }
@@ -551,7 +628,10 @@ export class AnthropicProvider extends BaseLLMProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Anthropic API error ${response.status}: ${sanitizeApiError(errorText)}`);
+      throw llmHttpErrorFromResponse(
+        `Anthropic API error ${response.status}: ${sanitizeApiError(errorText)}`,
+        response,
+      );
     }
 
     if (!options.stream) {

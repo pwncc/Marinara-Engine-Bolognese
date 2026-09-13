@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Fastify App Factory
 // ──────────────────────────────────────────────
-import Fastify from "fastify";
+import Fastify, { LogController } from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
@@ -22,10 +22,12 @@ import { seedDefaultRegexScripts } from "./db/seed-regex.js";
 import { buildAssetManifest, ensureAssetDirs } from "./services/game/asset-manifest.service.js";
 import { recoverGalleryImages } from "./services/storage/gallery-recovery.js";
 import { migrateCharacterExtendedDescriptionsToLorebooks } from "./services/lorebook/extended-descriptions-migration.js";
+import { migrateTtsSettingsToAudioConnection } from "./services/connections/tts-audio-connection-migration.js";
 import { migrateLegacyDefaultAgentPrompts } from "./services/agents/default-prompt-migration.js";
 import { APP_VERSION, resetTurnGameRegistry } from "@marinara-engine/shared";
 import { existsSync } from "fs";
-import { basename, join, resolve, dirname } from "path";
+import { readFile } from "fs/promises";
+import { join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { getBuildCommit, getBuildLabel } from "./config/build-info.js";
 import {
@@ -40,30 +42,67 @@ import { sidecarProcessService } from "./services/sidecar/sidecar-process.servic
 import { startServerAutonomousScheduler } from "./services/conversation/server-autonomous-scheduler.service.js";
 import { startNoodleRefreshScheduler } from "./services/noodle/noodle-refresh-scheduler.service.js";
 import { startWorldEngineScheduler } from "./services/world/world-engine-scheduler.service.js";
-import { serverExtensionRuntime } from "./services/extensions/server-extension-runtime.js";
+import { preparePersonalExtensionTrust } from "./services/setup/personal-extension-trust.js";
+import { personalServerExtensionRuntime } from "./services/extensions/personal-server-extension-runtime.js";
 import { runWithGenerationFallbackNotifier } from "./services/generation/fallback-notification.js";
 import { createReplyFallbackNotifier } from "./routes/generate/fallback-notification.js";
 import { initializeCapabilityAgentRegistry } from "./services/capability-packages/capability-agent-registry.service.js";
 import { capabilityPackageManager } from "./services/capability-packages/package-manager.service.js";
 import { capabilityModuleRuntime } from "./services/capability-packages/capability-module-runtime.service.js";
 import { migrateLegacyCapabilities } from "./services/capability-packages/legacy-capability-migration.js";
+import { createClientStaticOptions } from "./config/client-static-config.js";
+import { hostValidationHook } from "./middleware/host-validation.js";
+import { androidLocalAuthHook, androidLocalLoginRoute } from "./middleware/android-local-auth.js";
+import { arch, platform, release } from "node:os";
+import { execFileSync } from "node:child_process";
+import { getRuntimeMemorySnapshot } from "./utils/runtime-memory.js";
 
 const isLite = process.env.MARINARA_LITE === "true" || process.env.MARINARA_LITE === "1";
-const REVALIDATE_FILES = new Set(["index.html"]);
-const NO_STORE_FILES = new Set(["manifest.json", "sw.js", "registerSW.js"]);
 const MAX_UPLOAD_BYTES = 256 * 1024 * 1024;
+
+function resolveServerOs(): string {
+  const hostPlatform = platform();
+  const hostRelease = release();
+  const hostArch = arch();
+  if (hostPlatform === "darwin") {
+    try {
+      const version = execFileSync("sw_vers", ["-productVersion"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 2_000,
+      }).trim();
+      return `macOS ${version || hostRelease} (${hostArch})`;
+    } catch {
+      return `macOS ${hostRelease} (${hostArch})`;
+    }
+  }
+  if (hostPlatform === "win32") return `Windows ${hostRelease} (${hostArch})`;
+  if (hostPlatform === "android" || process.env.PREFIX?.includes("com.termux")) {
+    return `Android / Termux ${hostRelease} (${hostArch})`;
+  }
+  if (hostPlatform === "linux") return `Linux ${hostRelease} (${hostArch})`;
+  return `${hostPlatform} ${hostRelease} (${hostArch})`;
+}
+
+const SERVER_OS = resolveServerOs();
 
 export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   const hadUserStateBeforeStartup = existsSync(join(getFileStorageDir(), "manifest.json"));
   const app = Fastify({
+    // Restart has its own bounded fallback; normal shutdown must not interrupt active generations.
+    forceCloseConnections: false,
     logger: {
       level: getLogLevel(),
       transport: getNodeEnv() !== "production" ? { target: "pino-pretty", options: { colorize: true } } : undefined,
     },
-    disableRequestLogging: isRequestLoggingDisabled(),
+    logController: new LogController({ disableRequestLogging: isRequestLoggingDisabled() }),
     bodyLimit: MAX_UPLOAD_BYTES, // Large profile imports can include many base64 avatars.
     ...(https && { https }),
   });
+
+  // Reject attacker-controlled DNS names before CORS or loopback trust can
+  // treat a rebound browser request as same-origin local traffic.
+  app.addHook("onRequest", hostValidationHook);
 
   // ── Plugins ──
   // CORS uses a per-request delegator so the trusted set is re-read each
@@ -87,7 +126,7 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
     try {
       const stopResults = await Promise.allSettled([
         capabilityModuleRuntime.stop(),
-        serverExtensionRuntime.stop(),
+        personalServerExtensionRuntime.stop(),
         sidecarProcessService.stop(),
       ]);
       for (const result of stopResults) {
@@ -100,46 +139,27 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
     }
   });
 
-  // Existing installations retain their selected capabilities and receive compatible package updates.
-  // Fresh installs stay empty.
-  let migratedLegacyCapabilities = false;
+  // Existing installations retain their selected capabilities. Downloadable
+  // package updates are offered in the client and never applied at startup.
   if (getNodeEnv() !== "test") {
     try {
       const removedCorePackages = await capabilityPackageManager.pruneNonDownloadableCorePackages();
       if (removedCorePackages.length > 0) {
         app.log.info("Removed obsolete downloadable copies of core features: %s", removedCorePackages.join(", "));
       }
-      const migration = await migrateLegacyCapabilities(db, hadUserStateBeforeStartup);
-      migratedLegacyCapabilities = migration.migrated && migration.complete;
+      await migrateLegacyCapabilities(db, hadUserStateBeforeStartup);
+      const noodleMigration =
+        await capabilityPackageManager.migrateExtractedNoodleAvailability(hadUserStateBeforeStartup);
+      if ("pending" in noodleMigration && noodleMigration.pending) {
+        app.log.debug("Optional Noodle package is not in the active catalog yet; migration remains pending");
+      } else if (noodleMigration.migrated) {
+        app.log.info("Installed the optional Noodle package for an upgraded profile");
+      }
     } catch (error) {
       app.log.warn(error, "Optional package availability migration did not complete; it will retry next startup");
     }
-    if (!migratedLegacyCapabilities) {
-      try {
-        const packageUpdates = await capabilityPackageManager.updateInstalledPackagesToLatest();
-        for (const update of packageUpdates.updated) {
-          app.log.info(
-            "Automatically updated capability package %s from %s to %s",
-            update.id,
-            update.previousVersion,
-            update.version,
-          );
-        }
-        for (const failure of packageUpdates.failures) {
-          app.log.warn(
-            failure.error,
-            "Could not automatically update capability package %s from %s to %s; keeping the installed version",
-            failure.id,
-            failure.previousVersion,
-            failure.version,
-          );
-        }
-      } catch (error) {
-        app.log.warn(error, "Automatic capability package update check failed; installed versions remain available");
-      }
-    }
   }
-  resetTurnGameRegistry(false);
+  resetTurnGameRegistry();
 
   // ── Seed defaults ──
   await seedDefaultPreset(db);
@@ -152,6 +172,11 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   await seedDefaultRegexScripts(db);
   await migrateLegacyDefaultAgentPrompts(db);
   await migrateCharacterExtendedDescriptionsToLorebooks(db);
+  try {
+    await migrateTtsSettingsToAudioConnection(db);
+  } catch (error) {
+    app.log.warn(error, "TTS audio-connection migration did not complete; it will retry next startup");
+  }
   await seedDefaultBackgrounds();
   await seedDefaultGameAssets();
 
@@ -161,6 +186,22 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
 
   // ── Recover orphaned gallery images (files on disk without DB records) ──
   await recoverGalleryImages(db);
+
+  // Legacy extension payloads and any out-of-band code changes are retained as
+  // disabled drafts. Execution always requires approval of the exact hash.
+  const personalExtensionTrust = await preparePersonalExtensionTrust(db);
+  if (personalExtensionTrust.legacyRecordsQuarantined > 0) {
+    app.log.info(
+      "Quarantined %d legacy extension record(s) as Personal Extension drafts",
+      personalExtensionTrust.legacyRecordsQuarantined,
+    );
+  }
+  if (personalExtensionTrust.changedRecordsDisabled > 0) {
+    app.log.warn(
+      "Disabled %d Personal Extension record(s) because stored code changed outside the approval flow",
+      personalExtensionTrust.changedRecordsDisabled,
+    );
+  }
 
   // Keep fallback reporting attached to the originating request even when
   // generation passes through nested services. Streamed routes emit an SSE
@@ -184,6 +225,10 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   // ── CSRF / Origin protection for unsafe API requests ──
   app.addHook("onRequest", csrfProtectionHook);
 
+  // APK-managed Termux installs use a per-install secret so unrelated Android
+  // apps cannot inherit the server's ordinary loopback trust.
+  app.addHook("onRequest", androidLocalAuthHook);
+
   // ── Prevent caching of API JSON responses ──
   // Without explicit Cache-Control, browsers apply heuristic caching which
   // can return stale data when React Query refetches after mutations.
@@ -199,18 +244,30 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   // ── Error Handler ──
   app.setErrorHandler(errorHandler);
 
+  // API file routes use reply.sendFile even when the client build is absent.
+  // Decorate once without exposing a static route; production assets register below.
+  await app.register(fastifyStatic, { serve: false });
+
   // ── Routes ──
   await registerRoutes(app);
+  await androidLocalLoginRoute(app);
 
   // Trusted downloaded server capabilities register while Fastify is still mutable.
   await capabilityModuleRuntime.start(app);
+  // A package can install its own art during activate(), which runs AFTER the boot-time scan above, so
+  // without this its assets stay invisible to everything reading the manifest until the NEXT restart.
+  // Idempotent — the same scan the upload routes already re-run. Guarded because it walks files a package
+  // just wrote: a stale manifest costs that package its art, failing to boot costs the user everything.
+  try {
+    buildAssetManifest();
+  } catch (error) {
+    app.log.warn({ err: error }, "[capability] post-activation asset rescan failed; manifest may be stale");
+  }
+  await personalServerExtensionRuntime.start(db);
   // Server-backed agent definitions are visible only after their runtime reaches
   // functional readiness. Packages without a server entrypoint remain available
   // as soon as their verified files are installed.
   await initializeCapabilityAgentRegistry();
-
-  // ── Server extensions ──
-  await serverExtensionRuntime.start(app, db);
 
   // ── Server-side autonomous conversation scheduler ──
   startServerAutonomousScheduler(app);
@@ -220,6 +277,7 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
 
   // ── Living World engine (character↔character life simulation) ──
   startWorldEngineScheduler(app);
+
 
   // ── Sidecar bootstrap (background, skipped in lite mode) ──
   if (!isLite) {
@@ -233,49 +291,9 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   // ── Serve client build in production ──
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const clientDist = resolve(__dirname, "..", "..", "client", "dist");
-
-  // API routes (galleries, sprites, emojis) rely on the reply.sendFile
-  // decoration even when no client build exists, so register the plugin
-  // decoration-only first. Every sendFile call site passes its own root dir.
-  await app.register(fastifyStatic, {
-    root: __dirname,
-    serve: false,
-  });
-
-  if (existsSync(clientDist)) {
-    await app.register(fastifyStatic, {
-      root: clientDist,
-      prefix: "/",
-      // Wildcard serving resolves files per-request. With `wildcard: false` the
-      // plugin instead registers one route per file that exists AT BOOT — so a
-      // client rebuilt while the server runs produced new hashed bundles that
-      // fell through to the SPA fallback and came back as index.html (a blank
-      // app until the next lucky restart).
-      wildcard: true,
-      maxAge: 0,
-      decorateReply: false,
-      setHeaders(res, filePath) {
-        const fileName = basename(filePath);
-
-        if (REVALIDATE_FILES.has(fileName)) {
-          res.setHeader("Cache-Control", "no-cache, must-revalidate");
-          res.setHeader("Pragma", "no-cache");
-          res.setHeader("Expires", "0");
-          return;
-        }
-
-        if (NO_STORE_FILES.has(fileName)) {
-          res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-          res.setHeader("Pragma", "no-cache");
-          res.setHeader("Expires", "0");
-          return;
-        }
-
-        if (/\.[A-Za-z0-9_-]{8,}\.(css|js)$/.test(fileName)) {
-          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-        }
-      },
-    });
+  const clientIndex = resolve(clientDist, "index.html");
+  if (existsSync(clientIndex)) {
+    await app.register(fastifyStatic, createClientStaticOptions(clientDist));
 
     // SPA fallback — serve index.html for non-API routes
     app.setNotFoundHandler(async (req, reply) => {
@@ -286,10 +304,13 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
       reply.header("Cache-Control", "no-cache, must-revalidate");
       reply.header("Pragma", "no-cache");
       reply.header("Expires", "0");
-      return reply.sendFile("index.html", clientDist);
+      return reply.type("text/html; charset=utf-8").send(await readFile(clientIndex));
     });
   } else {
-    app.log.warn("Client build not found at %s; serving API only. Run `pnpm build` to build the frontend.", clientDist);
+    app.log.warn(
+      "Client build entry not found at %s; serving API only. Run `pnpm build` to build the frontend.",
+      clientIndex,
+    );
   }
 
   // ── Health Check ──
@@ -306,6 +327,8 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
       version: APP_VERSION,
       commit,
       build: getBuildLabel(),
+      serverOs: SERVER_OS,
+      memory: getRuntimeMemorySnapshot(),
       timestamp: new Date().toISOString(),
       capabilityPackages: {
         status: capabilityPackages

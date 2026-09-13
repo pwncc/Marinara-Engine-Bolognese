@@ -9,8 +9,11 @@ import { Modal } from "../ui/Modal";
 import { useAgentStore } from "../../stores/agent.store";
 import { api } from "../../lib/api-client";
 import { chatKeys } from "../../hooks/use-chats";
+import { useCreateCharacter } from "../../hooks/use-characters";
 import { lorebookKeys } from "../../hooks/use-lorebooks";
 import { useGenerate } from "../../hooks/use-generate";
+import { useTranslation as useUiTranslation } from "react-i18next";
+import { characterDataSchema } from "@marinara-engine/shared";
 
 interface Props {
   open: boolean;
@@ -19,15 +22,11 @@ interface Props {
 
 type BusyAction = "accept" | "regenerate" | null;
 
-function describeKind(kind: string) {
-  if (kind === "lorebook_update") return "Lorebook";
-  if (kind === "summary_update") return "Summary";
-  return "Agent Write";
-}
-
 export function AgentWriteApprovalModal({ open, onClose }: Props) {
+  const { t: localizeUi } = useUiTranslation();
   const qc = useQueryClient();
   const { retryAgents } = useGenerate();
+  const createCharacter = useCreateCharacter();
   const pending = useAgentStore((s) => s.pendingAgentWriteApprovals);
   const dismissPendingAgentWriteApproval = useAgentStore((s) => s.dismissPendingAgentWriteApproval);
   const entry = pending[0] ?? null;
@@ -41,15 +40,25 @@ export function AgentWriteApprovalModal({ open, onClose }: Props) {
     setBusyAction(null);
   }, [entry?.id, entry?.text]);
 
-  const queueNote = pending.length > 1 ? ` (${pending.length - 1} more queued)` : "";
-  const kindLabel = describeKind(entry?.kind ?? "");
+  const queueNote =
+    pending.length > 1 ? localizeUi("ui.modals.agentwriteapprovalmodal.moreQueued", { count: pending.length - 1 }) : "";
+  const kindLabel =
+    entry?.kind === "character_card_create"
+      ? localizeUi("ui.modals.agentwriteapprovalmodal.characterCard")
+      : entry?.kind === "lorebook_update"
+        ? localizeUi("ui.modals.agentwriteapprovalmodal.lorebook")
+        : entry?.kind === "summary_update"
+          ? localizeUi("ui.modals.agentwriteapprovalmodal.summary")
+          : localizeUi("ui.modals.agentwriteapprovalmodal.agentWrite");
   const canRegenerate = !!entry?.canRegenerate && !!entry.agentType;
   const placeholder = useMemo(
     () =>
       entry?.kind === "lorebook_update"
         ? "### Entry name\nKeys: key, alias\nTag: optional\n\nLorebook content..."
-        : "Summary text...",
-    [entry?.kind],
+        : entry?.kind === "character_card_create"
+          ? localizeUi("ui.modals.agentwriteapprovalmodal.characterCardJsonPlaceholder")
+          : "Summary text...",
+    [entry?.kind, localizeUi],
   );
 
   if (!entry) return null;
@@ -77,6 +86,26 @@ export function AgentWriteApprovalModal({ open, onClose }: Props) {
     setBusyAction("accept");
     setError(null);
     try {
+      if (entry.kind === "character_card_create") {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text) as unknown;
+        } catch {
+          throw new Error(localizeUi("ui.modals.agentwriteapprovalmodal.invalidCharacterCard"));
+        }
+        const source =
+          parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>).data
+            : null;
+        const validated = characterDataSchema.safeParse(source);
+        if (!validated.success) {
+          throw new Error(localizeUi("ui.modals.agentwriteapprovalmodal.invalidCharacterCard"));
+        }
+        await createCharacter.mutateAsync({ data: validated.data });
+        toast.success(localizeUi("ui.modals.agentwriteapprovalmodal.characterCardCreated"));
+        closeAndAdvance();
+        return;
+      }
       await api.post(`/chats/${entry.chatId}/agent-write-approval/commit`, {
         kind: entry.kind,
         text,
@@ -85,7 +114,7 @@ export function AgentWriteApprovalModal({ open, onClose }: Props) {
         agentType: entry.agentType,
       });
       refreshAffectedData();
-      toast.success(`${kindLabel} update committed`);
+      toast.success(localizeUi("ui.modals.agentwriteapprovalmodal.value1UpdateCommitted", { value1: kindLabel }));
       closeAndAdvance();
     } catch (err) {
       setError(err instanceof Error ? err.message : `Could not commit ${kindLabel.toLowerCase()} update`);
@@ -96,7 +125,9 @@ export function AgentWriteApprovalModal({ open, onClose }: Props) {
 
   const handleRegenerate = async () => {
     if (!entry.agentType) {
-      toast.warning("This proposal cannot be regenerated automatically.");
+      toast.warning(
+        localizeUi("ui.modals.agentwriteapprovalmodal.thisProposalCannotBeRegeneratedAutomatically_1793348"),
+      );
       return;
     }
     setBusyAction("regenerate");
@@ -116,22 +147,46 @@ export function AgentWriteApprovalModal({ open, onClose }: Props) {
   };
 
   return (
-    <Modal open={open} onClose={closeAndAdvance} title={`Review ${kindLabel} Update`} width="max-w-2xl">
+    <Modal
+      open={open}
+      onClose={closeAndAdvance}
+      title={
+        entry.kind === "character_card_create"
+          ? localizeUi("ui.modals.agentwriteapprovalmodal.reviewCharacterCard")
+          : localizeUi("ui.modals.agentwriteapprovalmodal.reviewValue1Update", { value1: kindLabel })
+      }
+      width="max-w-2xl"
+    >
       <div className="flex flex-col gap-3">
         <div className="flex items-start gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[var(--primary)]/12 text-[var(--primary)] ring-1 ring-[var(--primary)]/25">
             <FilePenLine size="1.25rem" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">{entry.title || `${entry.agentName} proposed a change`}</p>
+            <p className="truncate text-sm font-medium">
+              {entry.title ||
+                localizeUi("ui.modals.agentwriteapprovalmodal.agentProposedChange", {
+                  agentName: entry.agentName,
+                })}
+            </p>
             <p className="text-xs text-[var(--muted-foreground)]">
-              {entry.agentName} wants to commit a {kindLabel.toLowerCase()} update{queueNote}.
+              {entry.kind === "character_card_create"
+                ? localizeUi("ui.modals.agentwriteapprovalmodal.agentWantsToCreateCharacterCard", {
+                    agentName: entry.agentName,
+                  })
+                : localizeUi("ui.modals.agentwriteapprovalmodal.agentWantsToCommitUpdate", {
+                    agentName: entry.agentName,
+                    kind: kindLabel.toLowerCase(),
+                  })}
+              {queueNote}.
             </p>
           </div>
         </div>
 
         <label className="flex flex-col gap-1.5">
-          <span className="text-[0.625rem] font-semibold uppercase text-[var(--muted-foreground)]">Proposed Text</span>
+          <span className="text-[0.625rem] font-semibold uppercase text-[var(--muted-foreground)]">
+            {localizeUi("ui.modals.agentwriteapprovalmodal.proposedText")}
+          </span>
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -142,8 +197,9 @@ export function AgentWriteApprovalModal({ open, onClose }: Props) {
 
         {entry.kind === "lorebook_update" && (
           <p className="rounded-lg bg-[var(--background)]/70 px-3 py-2 text-[0.625rem] leading-relaxed text-[var(--muted-foreground)] ring-1 ring-[var(--border)]">
-            Keep each lorebook entry under a <span className="font-mono">###</span> heading. You can edit names, keys,
-            tags, and content before approving.
+            {localizeUi("ui.modals.agentwriteapprovalmodal.keepEachLorebookEntryUnderA")}{" "}
+            <span className="font-mono">###</span>{" "}
+            {localizeUi("ui.modals.agentwriteapprovalmodal.headingYouCanEditNamesKeysTagsAndContent")}
           </p>
         )}
 
@@ -161,21 +217,25 @@ export function AgentWriteApprovalModal({ open, onClose }: Props) {
             className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] disabled:opacity-50"
           >
             <Trash2 size="0.75rem" />
-            Discard
+            {localizeUi("ui.agents.agenteditor.discard")}
           </button>
           <button
             type="button"
             onClick={handleRegenerate}
             disabled={!canRegenerate || busyAction !== null}
             className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] disabled:opacity-50"
-            title={canRegenerate ? "Regenerate this proposal" : "This proposal cannot be regenerated automatically"}
+            title={
+              canRegenerate
+                ? localizeUi("ui.modals.agentwriteapprovalmodal.regenerateThisProposal")
+                : localizeUi("ui.modals.agentwriteapprovalmodal.thisProposalCannotBeRegeneratedAutomatically")
+            }
           >
             {busyAction === "regenerate" ? (
               <Loader2 size="0.75rem" className="animate-spin" />
             ) : (
               <RefreshCw size="0.75rem" />
             )}
-            Regenerate
+            {localizeUi("ui.agents.secretplotpanel.regenerate")}
           </button>
           <button
             type="button"
@@ -184,7 +244,7 @@ export function AgentWriteApprovalModal({ open, onClose }: Props) {
             className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-all hover:opacity-90 disabled:opacity-50"
           >
             {busyAction === "accept" ? <Loader2 size="0.75rem" className="animate-spin" /> : <Check size="0.75rem" />}
-            Accept
+            {localizeUi("ui.modals.agentwriteapprovalmodal.accept")}
           </button>
         </div>
       </div>

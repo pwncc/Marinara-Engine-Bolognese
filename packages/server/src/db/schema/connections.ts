@@ -20,14 +20,18 @@ export const apiConnections = fileTable("api_connections", {
       "openrouter",
       "nanogpt",
       "xai",
+      "arli",
       "custom",
       "image_generation",
       "video_generation",
+      "audio",
     ],
   }).notNull(),
   baseUrl: text("base_url").notNull().default(""),
   /** Encrypted API key */
   apiKeyEncrypted: text("api_key_encrypted").notNull().default(""),
+  /** Imported endpoints stay unavailable until the user reviews and saves them locally. */
+  profileImportReviewRequired: text("profile_import_review_required").notNull().default("false"),
   model: text("model").notNull().default(""),
   imagePath: text("image_path"),
   maxContext: integer("max_context").notNull().default(128000),
@@ -62,18 +66,32 @@ export const apiConnections = fileTable("api_connections", {
   imageService: text("image_service"),
   /** For endpoint-based image services (e.g. RunPod Serverless ComfyUI): the endpoint ID. */
   imageEndpointId: text("image_endpoint_id"),
+  /** Instructions passed to the default language model before image generation. */
+  imagePromptInstructions: text("image_prompt_instructions"),
+  /** OpenAI GPT Image quality for this connection. */
+  imageGenerationQuality: text("image_generation_quality").notNull().default("auto"),
   /** Explicit video backend selection for video-generation connections. */
   videoGenerationSource: text("video_generation_source"),
   /** Video generation: explicitly selected service ID. */
   videoService: text("video_service"),
+  /** Audio backend for audio connections (openai | elevenlabs | pockettts | xai). */
+  audioSource: text("audio_source"),
+  /** Default voice id/name for speech synthesis on this audio connection. */
+  audioVoice: text("audio_voice"),
+  /** Whether this audio connection may generate game sound effects ("true"/"false"). */
+  audioSoundEffects: text("audio_sound_effects").notNull().default("false"),
+  /** Whether this audio connection may generate game music ("true"/"false"). */
+  audioMusic: text("audio_music").notNull().default("false"),
   /** Default generation parameters (stored as JSON) for new chats using this connection */
   defaultParameters: text("default_parameters"),
-  /** Optional prompt preset override for roleplay/visual-novel chats using this connection */
+  /** Optional prompt preset override for Roleplay chats using this connection */
   promptPresetId: text("prompt_preset_id"),
   /** Optional hard cap on max_tokens for the API response (for providers like DeepSeek that have lower limits). */
   maxTokensOverride: integer("max_tokens_override"),
   /** Maximum number of agent LLM jobs Marinara may run at once for this connection. */
   maxParallelJobs: integer("max_parallel_jobs").notNull().default(1),
+  /** Optional cap on outbound requests per minute to this connection (null = unlimited). */
+  maxRequestsPerMinute: integer("max_requests_per_minute"),
   /** Treat as a local/custom endpoint for Professor Mari JSON tool fallback behavior. */
   treatAsLocalEndpoint: text("treat_as_local_endpoint").notNull().default("false"),
   /**

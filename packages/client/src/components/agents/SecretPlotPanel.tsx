@@ -8,7 +8,9 @@ import { useGenerate } from "../../hooks/use-generate";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { cn } from "../../lib/utils";
 import { HelpTooltip } from "../ui/HelpTooltip";
+import { MacroTextarea } from "../ui/MacroTextarea";
 import { SettingsSwitch } from "../panels/settings/SettingControls";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 const AGENT_TYPE = "director";
 const SECRET_PLOT_HELP =
@@ -63,6 +65,7 @@ export function SecretPlotPanel({
   isAgentProcessing: boolean;
   isGenerationBusy?: boolean;
 }) {
+  const { t: localizeUi } = useUiTranslation();
   const qc = useQueryClient();
   const { retryAgents } = useGenerate();
   const [open, setOpen] = useState(false);
@@ -164,9 +167,9 @@ export function SecretPlotPanel({
   const handleRegenerate = useCallback(async () => {
     if (!chatId || !target || isGenerationBusy || rerolling) return;
     const ok = await showConfirmDialog({
-      title: "Regenerate Secret Plot",
-      message: "Replace the current hidden Narrative Director arc for this chat?",
-      confirmLabel: "Regenerate",
+      title: localizeUi("ui.agents.secretplotpanel.regenerateSecretPlot_75a6ece"),
+      message: localizeUi("ui.agents.secretplotpanel.replaceTheCurrentHiddenNarrativeDirectorArcForThis"),
+      confirmLabel: localizeUi("ui.agents.secretplotpanel.regenerate"),
       cancelLabel: "Keep Current Arc",
       tone: "destructive",
     });
@@ -177,11 +180,11 @@ export function SecretPlotPanel({
       await retryAgents(chatId, [AGENT_TYPE], { forMessageId: target.id, secretPlotRerollMode: "full" });
       await qc.invalidateQueries({ queryKey });
       await refetch();
-      toast.success("Secret plot regenerated");
+      toast.success(localizeUi("ui.agents.secretplotpanel.secretPlotRegenerated"));
     } finally {
       setRerolling(false);
     }
-  }, [chatId, target, isGenerationBusy, rerolling, retryAgents, qc, queryKey, refetch]);
+  }, [chatId, target, isGenerationBusy, rerolling, retryAgents, qc, queryKey, refetch, localizeUi]);
 
   if (!chatId) return null;
   const busy = isGenerationBusy || rerolling;
@@ -199,7 +202,7 @@ export function SecretPlotPanel({
             size="0.75rem"
             className={cn("shrink-0 text-[var(--primary)] transition-transform", open ? "rotate-180" : "-rotate-90")}
           />
-          <span className="truncate">Secret plot</span>
+          <span className="truncate">{localizeUi("ui.agents.secretplotpanel.secretPlot")}</span>
           {hasUnsavedChanges && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--primary)]" />}
         </button>
         <HelpTooltip
@@ -213,10 +216,14 @@ export function SecretPlotPanel({
 
       {open && (
         <div className="space-y-2 border-t border-[var(--border)] pt-2 text-[0.625rem]">
-          {isLoading && <p className="mari-chrome-text-muted py-2 text-center">Loading secret plot...</p>}
+          {isLoading && (
+            <p className="mari-chrome-text-muted py-2 text-center">
+              {localizeUi("ui.agents.secretplotpanel.loadingSecretPlot")}
+            </p>
+          )}
           {isError && (
             <p className="rounded-md border border-[var(--destructive)]/25 bg-[var(--destructive)]/10 px-2 py-1.5 text-center text-[var(--destructive)]">
-              Could not load Director memory.
+              {localizeUi("ui.agents.secretplotpanel.couldNotLoadDirectorMemory")}
             </p>
           )}
 
@@ -229,17 +236,25 @@ export function SecretPlotPanel({
                   className="inline-flex min-h-7 items-center gap-1.5 rounded-md border border-[var(--border)]/70 bg-[var(--secondary)]/45 px-2 py-1 text-[0.625rem] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)]"
                 >
                   {revealed ? <EyeOff size="0.6875rem" /> : <Eye size="0.6875rem" />}
-                  {revealed ? "Hide spoilers" : hasArcMemory ? "Reveal spoilers" : "Reveal empty arc"}
+                  {revealed
+                    ? localizeUi("ui.agents.secretplotpanel.hideSpoilers")
+                    : hasArcMemory
+                      ? localizeUi("ui.chat.agentsuitemodal.revealSpoilers")
+                      : localizeUi("ui.agents.secretplotpanel.revealEmptyArc")}
                 </button>
                 <button
                   type="button"
                   disabled={busy || !target}
                   onClick={handleRegenerate}
-                  title={target ? "Regenerate secret plot" : "No assistant message yet"}
+                  title={
+                    target
+                      ? localizeUi("ui.agents.secretplotpanel.regenerateSecretPlot")
+                      : localizeUi("ui.agents.secretplotpanel.noAssistantMessageYet")
+                  }
                   className="inline-flex min-h-7 items-center gap-1.5 rounded-md border border-[var(--border)]/70 bg-[var(--secondary)]/45 px-2 py-1 text-[0.625rem] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--accent)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <RefreshCw size="0.6875rem" className={cn(rerolling && "animate-spin")} />
-                  Regenerate
+                  {localizeUi("ui.agents.secretplotpanel.regenerate")}
                 </button>
                 <button
                   type="button"
@@ -259,7 +274,7 @@ export function SecretPlotPanel({
 
               {!revealed && (
                 <div className="rounded-md border border-dashed border-[var(--border)] px-2 py-2 text-center text-[0.625rem] text-[var(--muted-foreground)]">
-                  Spoilers hidden
+                  {localizeUi("ui.agents.secretplotpanel.spoilersHidden")}
                 </div>
               )}
 
@@ -267,51 +282,60 @@ export function SecretPlotPanel({
                 <div className="space-y-2">
                   <label className="block">
                     <span className="mb-1 block text-[0.5625rem] font-medium text-[var(--muted-foreground)]">
-                      Arc description
+                      {localizeUi("ui.agents.secretplotpanel.arcDescription")}
                     </span>
-                    <textarea
+                    <MacroTextarea
                       value={draft.arcDescription}
-                      onChange={(event) => {
+                      onChange={(value) => {
                         setSaved(false);
-                        setDraft((current) => (current ? { ...current, arcDescription: event.target.value } : current));
+                        setDraft((current) => (current ? { ...current, arcDescription: value } : current));
                       }}
                       rows={3}
+                      title={localizeUi("ui.agents.secretplotpanel.arcDescription")}
+                      ariaLabel={localizeUi("ui.agents.secretplotpanel.arcDescription")}
                       spellCheck={false}
-                      className="w-full resize-y rounded-md border border-[var(--input)] bg-[var(--secondary)]/45 px-2 py-1.5 font-mono text-[0.625rem] leading-relaxed text-[var(--foreground)] outline-none transition-colors focus:border-[var(--ring)] focus:ring-1 focus:ring-[var(--ring)]"
+                      wrapperClassName="min-w-0"
+                      className="mari-chrome-field resize-y !rounded-md bg-[var(--secondary)]/45 px-2 py-1.5 font-mono text-[0.625rem] leading-relaxed"
                     />
                   </label>
                   <label className="block">
                     <span className="mb-1 block text-[0.5625rem] font-medium text-[var(--muted-foreground)]">
-                      Protagonist arc
+                      {localizeUi("ui.agents.secretplotpanel.protagonistArc")}
                     </span>
-                    <textarea
+                    <MacroTextarea
                       value={draft.arcProtagonist}
-                      onChange={(event) => {
+                      onChange={(value) => {
                         setSaved(false);
-                        setDraft((current) => (current ? { ...current, arcProtagonist: event.target.value } : current));
+                        setDraft((current) => (current ? { ...current, arcProtagonist: value } : current));
                       }}
                       rows={2}
+                      title={localizeUi("ui.agents.secretplotpanel.protagonistArc")}
+                      ariaLabel={localizeUi("ui.agents.secretplotpanel.protagonistArc")}
                       spellCheck={false}
-                      className="w-full resize-y rounded-md border border-[var(--input)] bg-[var(--secondary)]/45 px-2 py-1.5 font-mono text-[0.625rem] leading-relaxed text-[var(--foreground)] outline-none transition-colors focus:border-[var(--ring)] focus:ring-1 focus:ring-[var(--ring)]"
+                      wrapperClassName="min-w-0"
+                      className="mari-chrome-field resize-y !rounded-md bg-[var(--secondary)]/45 px-2 py-1.5 font-mono text-[0.625rem] leading-relaxed"
                     />
                   </label>
                   <label className="block">
                     <span className="mb-1 block text-[0.5625rem] font-medium text-[var(--muted-foreground)]">
-                      Character arc
+                      {localizeUi("ui.agents.secretplotpanel.characterArc")}
                     </span>
-                    <textarea
+                    <MacroTextarea
                       value={draft.arcCharacter}
-                      onChange={(event) => {
+                      onChange={(value) => {
                         setSaved(false);
-                        setDraft((current) => (current ? { ...current, arcCharacter: event.target.value } : current));
+                        setDraft((current) => (current ? { ...current, arcCharacter: value } : current));
                       }}
                       rows={2}
+                      title={localizeUi("ui.agents.secretplotpanel.characterArc")}
+                      ariaLabel={localizeUi("ui.agents.secretplotpanel.characterArc")}
                       spellCheck={false}
-                      className="w-full resize-y rounded-md border border-[var(--input)] bg-[var(--secondary)]/45 px-2 py-1.5 font-mono text-[0.625rem] leading-relaxed text-[var(--foreground)] outline-none transition-colors focus:border-[var(--ring)] focus:ring-1 focus:ring-[var(--ring)]"
+                      wrapperClassName="min-w-0"
+                      className="mari-chrome-field resize-y !rounded-md bg-[var(--secondary)]/45 px-2 py-1.5 font-mono text-[0.625rem] leading-relaxed"
                     />
                   </label>
                   <SettingsSwitch
-                    label="Completed"
+                    label={localizeUi("ui.noodle.noodlehome.completed")}
                     checked={draft.arcCompleted}
                     onChange={(checked) => {
                       setSaved(false);

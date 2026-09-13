@@ -492,7 +492,7 @@ Line 2: one short sentence confirming that the local sidecar test succeeded.`,
 }
 
 export async function unloadModel(): Promise<void> {
-  await sidecarProcessService.stop();
+  await sidecarProcessService.unload();
 }
 
 const SCENE_ANALYSIS_SCHEMA = {
@@ -537,6 +537,7 @@ const SCENE_ANALYSIS_SCHEMA = {
             items: { type: "string" as const },
             maxItems: 3,
           },
+          sfxLoopCount: { type: "integer" as const, minimum: 1, maximum: 5 },
           directions: {
             type: "array" as const,
             maxItems: 1,
@@ -649,7 +650,11 @@ const SCENE_ANALYSIS_SCHEMA = {
   required: ["background", "music", "ambient", "weather", "timeOfDay", "reputationChanges", "segmentEffects"] as const,
 };
 
-export async function analyzeScene(systemPrompt: string, userPrompt: string, signal?: AbortSignal): Promise<SceneAnalysis> {
+export async function analyzeScene(
+  systemPrompt: string,
+  userPrompt: string,
+  signal?: AbortSignal,
+): Promise<SceneAnalysis> {
   return withRequestTracking(async () => {
     const raw = await streamChatCompletion({
       messages: [
@@ -672,7 +677,11 @@ export async function analyzeScene(systemPrompt: string, userPrompt: string, sig
   });
 }
 
-export async function runTrackerPrompt(systemPrompt: string, userPrompt: string, signal?: AbortSignal): Promise<string> {
+export async function runTrackerPrompt(
+  systemPrompt: string,
+  userPrompt: string,
+  signal?: AbortSignal,
+): Promise<string> {
   return withRequestTracking(async () => {
     return await streamChatCompletion({
       messages: [

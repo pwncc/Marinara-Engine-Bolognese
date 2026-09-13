@@ -9,13 +9,17 @@ import { resolveValidatedImage, safeFetch } from "../utils/security.js";
 const CT_API_BASE = "https://character-tavern.com/api";
 const CT_CARDS_CDN = "https://ct-cards.storage.character-tavern.com";
 const AVATAR_PROXY_MAX_BYTES = 10 * 1024 * 1024;
+const CARD_DOWNLOAD_MAX_BYTES = 256 * 1024 * 1024;
 const CT_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 // In-memory session cookie store (persists until server restart)
 let ctSessionCookie: string = "";
 
-async function fetchAvatarImage(url: string, signal: AbortSignal): Promise<
+async function fetchAvatarImage(
+  url: string,
+  signal: AbortSignal,
+): Promise<
   | {
       status: "ok";
       buf: Buffer;
@@ -208,13 +212,10 @@ export async function botBrowserChartavernRoutes(app: FastifyInstance) {
     const { author, slug } = req.params;
     if (!author || !slug) throw new Error("Missing author or slug");
 
-    return fetchBotBrowserJson(
-      `${CT_API_BASE}/character/${encodeURIComponent(author)}/${encodeURIComponent(slug)}`,
-      {
-        allowedHosts: ["character-tavern.com"],
-        headers: ctHeaders(),
-      },
-    );
+    return fetchBotBrowserJson(`${CT_API_BASE}/character/${encodeURIComponent(author)}/${encodeURIComponent(slug)}`, {
+      allowedHosts: ["character-tavern.com"],
+      headers: ctHeaders(),
+    });
   });
 
   /** Fetch top tags from CharacterTavern */
@@ -234,11 +235,16 @@ export async function botBrowserChartavernRoutes(app: FastifyInstance) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60_000);
     try {
-      const res = await fetch(`${CT_CARDS_CDN}/${encodeURI(path)}.png`, {
+      const res = await safeFetch(`${CT_CARDS_CDN}/${encodeURI(path)}.png`, {
         signal: controller.signal,
+        policy: { allowedProtocols: ["https:"] },
+        allowedContentTypes: ["image/png", "application/octet-stream"],
+        allowMissingContentType: true,
+        maxResponseBytes: CARD_DOWNLOAD_MAX_BYTES,
       });
       if (!res.ok) throw new Error(`Download failed: ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
+      if (resolveValidatedImage(buf)?.mimeType !== "image/png") throw new Error("Downloaded card is not a PNG image");
       return reply
         .header("Content-Type", "image/png")
         .header("Content-Disposition", `attachment; filename="character.png"`)
@@ -270,7 +276,10 @@ export async function botBrowserChartavernRoutes(app: FastifyInstance) {
           : reply.status(415).send({ error: "Unsupported avatar content type" });
       }
       const image = fallback;
-      return reply.header("Content-Type", image.mimeType).header("Cache-Control", "public, max-age=86400").send(image.buf);
+      return reply
+        .header("Content-Type", image.mimeType)
+        .header("Cache-Control", "public, max-age=86400")
+        .send(image.buf);
     } finally {
       clearTimeout(timeout);
     }

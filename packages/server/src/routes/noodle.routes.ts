@@ -10,7 +10,7 @@ import {
   createNoodlePoll,
   canManageNoodleReply,
   extractNoodleMentionHandles,
-  noodleAccountUpdateSchema,
+  noodleAccountEditSchema,
   noodleBulkInviteSchema,
   noodleCreateInteractionSchema,
   noodleCreatePostSchema,
@@ -116,7 +116,6 @@ import {
 
 const NOODLE_ROUTE_DIR = dirname(fileURLToPath(import.meta.url));
 const CLIENT_PUBLIC_DIR = resolve(NOODLE_ROUTE_DIR, "../../../client/public");
-const NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY = "followingAccountTimestamps";
 const PROFESSOR_MARI_REFERENCE_ASSETS = [
   "sprites/mari/Mari_profile.png",
   "sprites/mari/chibi-professor-mari.png",
@@ -258,6 +257,17 @@ function characterAppearanceFromRow(row: { data: unknown }) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function characterPersonalityFromRow(row: { data: unknown }) {
+  const value = parseRecord(row.data).personality;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function characterImageInstructionsFromRow(row: { data: unknown }) {
+  const extensions = parseRecord(parseRecord(row.data).extensions);
+  const value = extensions.conversationImageInstructions;
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function galleryImageUrl(filePath: string, fallbackChatId: string) {
   const filename = basename(filePath.replace(/\\/g, "/"));
   return `/api/gallery/file/${encodeURIComponent(fallbackChatId)}/${encodeURIComponent(filename)}`;
@@ -283,9 +293,8 @@ function mentionedAccountMetadata(accounts: NoodleAccount[]) {
   };
 }
 
-function generatedProfileSettings(settings: Record<string, unknown>, location: string, bannerUrl: string | null) {
+function generatedProfilePatch(location: string, bannerUrl: string | null) {
   return {
-    ...settings,
     profileGenerated: true,
     location,
     bannerUrl: bannerUrl ?? "",
@@ -456,15 +465,17 @@ async function ensureProfessorMariAccount(
     syncIdentity: true,
   });
   if (
-    account.settings.profileManuallyEdited !== true &&
-    (account.bio !== PROFESSOR_MARI_NOODLE_BIO || !isNoodleProfileGenerated(account) || !account.settings.location)
+    account.settings.profile.profileManuallyEdited !== true &&
+    (account.bio !== PROFESSOR_MARI_NOODLE_BIO ||
+      !isNoodleProfileGenerated(account) ||
+      !account.settings.profile.location)
   ) {
-    await noodle.updateAccount(account.id, {
+    await noodle.updateAccountProfile(account.id, {
       handle: account.handle || "professor_mari",
       displayName: account.displayName || "Professor Mari",
       bio: PROFESSOR_MARI_NOODLE_BIO,
       avatarUrl: account.avatarUrl || row?.avatarPath || "/sprites/mari/Mari_profile.png",
-      settings: generatedProfileSettings(account.settings, "Marinara Engine", null),
+      profile: generatedProfilePatch("Marinara Engine", null),
     });
   }
 }
@@ -1116,12 +1127,12 @@ async function generateMissingNoodleProfiles(input: {
   for (const target of targets) {
     const profile = profileByEntityId.get(target.account.entityId);
     if (!profile) continue;
-    await input.noodle.updateAccount(target.account.id, {
+    await input.noodle.updateAccountProfile(target.account.id, {
       handle: profile.handle,
       displayName: profile.name,
       bio: profile.bio,
       avatarUrl: target.row.avatarPath ?? target.account.avatarUrl,
-      settings: generatedProfileSettings(target.account.settings, profile.location, target.bannerUrl),
+      profile: generatedProfilePatch(profile.location, target.bannerUrl),
     });
   }
 }
@@ -1213,12 +1224,24 @@ async function generateNoodlePostImage(input: {
     }
   }
 
+  let characterPersonality = "";
+  let characterImageInstructions = "";
+  if (input.account.kind === "character") {
+    const authorRow = await input.characters.getById(input.account.entityId);
+    if (authorRow) {
+      characterPersonality = characterPersonalityFromRow(authorRow);
+      characterImageInstructions = characterImageInstructionsFromRow(authorRow);
+    }
+  }
+
   const postPrompt = await loadPrompt(input.promptOverrides, NOODLE_IMAGE_POST, {
     authorName: input.account.displayName,
     postContent: input.postContent,
     draftPrompt: input.draftPrompt,
     userInstructions: input.settings.imageGenerationPrompt,
     characterDescription,
+    characterPersonality,
+    characterImageInstructions,
   });
   const compiledPrompt = compileImagePrompt({
     kind: "illustration",
@@ -1368,40 +1391,49 @@ export async function noodleRoutes(app: FastifyInstance) {
 
   app.put("/accounts/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const parsed = noodleAccountUpdateSchema.safeParse(req.body);
+    const parsed = noodleAccountEditSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     const existing = await noodle.getAccountById(id);
     if (!existing) return reply.code(404).send({ error: "Noodle account not found" });
-    const sourceCharacter = existing.kind === "character" ? await characters.getById(existing.entityId) : null;
-    const avatarCrop = resolveNoodleAvatarCropAfterProfileUpdate({
-      currentAvatarUrl: existing.avatarUrl,
-      nextAvatarUrl: parsed.data.avatarUrl,
-      currentCrop: existing.avatarCrop,
-      sourceAvatarUrl: sourceCharacter?.avatarPath,
-      sourceCrop: sourceCharacter ? characterAvatarCrop(sourceCharacter) : null,
-    });
-    const profileFieldsChanged =
-      existing.kind === "character" &&
-      (parsed.data.handle !== undefined ||
-        parsed.data.displayName !== undefined ||
-        parsed.data.bio !== undefined ||
-        parsed.data.avatarUrl !== undefined ||
-        parsed.data.settings?.avatarCrop !== undefined ||
-        parsed.data.settings?.bannerUrl !== undefined ||
-        parsed.data.settings?.location !== undefined);
-    const updated = await noodle.updateAccount(id, {
-      ...parsed.data,
-      ...(profileFieldsChanged
-        ? {
-            settings: {
-              ...existing.settings,
-              ...parsed.data.settings,
-              ...(avatarCrop !== undefined ? { avatarCrop } : {}),
-              profileManuallyEdited: true,
-            },
-          }
-        : {}),
-    });
+    const { follow, social, profile, invited, ...identity } = parsed.data;
+
+    let updated: NoodleAccount | null = existing;
+    if (follow) {
+      const result = await noodle.updateAccountFollow(id, follow.targetAccountId, follow.followed);
+      updated = result?.account ?? null;
+    }
+    if (updated && social && Object.keys(social).length > 0) {
+      updated = await noodle.patchAccountSettings(id, { subtree: "social", patch: social });
+    }
+    if (updated && invited !== undefined) {
+      updated = await noodle.updateAccount(id, { invited });
+    }
+
+    const identityChanged = Object.values(identity).some((value) => value !== undefined);
+    if (updated && (identityChanged || profile)) {
+      const sourceCharacter = existing.kind === "character" ? await characters.getById(existing.entityId) : null;
+      const avatarCrop = resolveNoodleAvatarCropAfterProfileUpdate({
+        currentAvatarUrl: existing.avatarUrl,
+        nextAvatarUrl: identity.avatarUrl,
+        currentCrop: existing.avatarCrop,
+        sourceAvatarUrl: sourceCharacter?.avatarPath,
+        sourceCrop: sourceCharacter ? characterAvatarCrop(sourceCharacter) : null,
+      });
+      const profileFieldsChanged =
+        existing.kind === "character" &&
+        (identityChanged ||
+          profile?.avatarCrop !== undefined ||
+          profile?.bannerUrl !== undefined ||
+          profile?.location !== undefined);
+      updated = await noodle.updateAccountProfile(id, {
+        ...identity,
+        profile: {
+          ...profile,
+          ...(avatarCrop !== undefined ? { avatarCrop } : {}),
+          ...(profileFieldsChanged ? { profileManuallyEdited: true } : {}),
+        },
+      });
+    }
     if (!updated) return reply.code(404).send({ error: "Noodle account not found" });
     return updated;
   });
@@ -1819,7 +1851,7 @@ export async function noodleRoutes(app: FastifyInstance) {
         accounts: participantAccounts,
         settings,
         selectedGroupCharacterIds,
-        followedAccountIds: new Set(parseStringArray(personaAccount?.settings.followingAccountIds)),
+        followedAccountIds: new Set(personaAccount?.settings.social.followingAccountIds ?? []),
         recentlyActiveAccountIds: new Set(recentCompletedRuns[0]?.activeAccountIds ?? []),
         priorityAccountIds,
       });
@@ -2015,8 +2047,8 @@ export async function noodleRoutes(app: FastifyInstance) {
           account,
         ]),
       );
-      const mutableAccountSettings = new Map(
-        activeAccounts.map((account) => [account.id, { ...account.settings }] as const),
+      const followingByAccountId = new Map(
+        activeAccounts.map((account) => [account.id, new Set(account.settings.social.followingAccountIds ?? [])]),
       );
       const freshPosts = await noodle.listPosts({ since: sinceHoursIso(48), limit: 200 });
       const allowedExistingPostIds = new Set([...freshPosts.map((post) => post.id), ...recalledPostIds]);
@@ -2223,20 +2255,12 @@ export async function noodleRoutes(app: FastifyInstance) {
         const followKey = `${actor.id}:${target.id}`;
         if (seenGeneratedFollows.has(followKey)) continue;
         seenGeneratedFollows.add(followKey);
-        const actorSettings = mutableAccountSettings.get(actor.id) ?? actor.settings;
-        const currentFollowingAccountIds = parseStringArray(actorSettings.followingAccountIds);
-        if (currentFollowingAccountIds.includes(target.id)) continue;
-        const followedAtByAccount = parseRecord(actorSettings[NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY]);
-        const nextSettings = {
-          ...actorSettings,
-          followingAccountIds: [...currentFollowingAccountIds, target.id],
-          [NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY]: {
-            ...followedAtByAccount,
-            [target.id]: new Date().toISOString(),
-          },
-        };
-        mutableAccountSettings.set(actor.id, nextSettings);
-        await noodle.updateAccount(actor.id, { settings: nextSettings });
+        const following =
+          followingByAccountId.get(actor.id) ?? new Set(actor.settings.social.followingAccountIds ?? []);
+        if (following.has(target.id)) continue;
+        following.add(target.id);
+        followingByAccountId.set(actor.id, following);
+        await noodle.updateAccountFollow(actor.id, target.id, true);
         await noodle.createDigest({
           accountIds: [actor.id, target.id],
           content: `${noodleDigestAccountLabel(actor)} followed ${noodleDigestAccountLabel(target)} on Noodle.`,

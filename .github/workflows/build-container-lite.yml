@@ -40,6 +40,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Verify release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/check-release-tag.mjs "$RELEASE_TAG"
 
       - name: Lowercase image name
         id: lower
@@ -77,6 +85,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             BUILD_COMMIT=${{ github.sha }}
+            BUILD_BRANCH=${{ github.ref_name }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.lower.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=lite-${{ matrix.platform }}
@@ -110,6 +119,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Lowercase image name
         id: lower

@@ -94,23 +94,21 @@ function readDailyBudgetMeta(value: unknown): DailyBudgetMeta | null {
   return { date: record.date, counts };
 }
 
-export function getAutonomousDailyBudget(
-  chatMeta: Record<string, unknown>,
-  now: Date = new Date(),
-): DailyBudgetMeta {
+export function getAutonomousDailyBudget(chatMeta: Record<string, unknown>, now: Date = new Date()): DailyBudgetMeta {
   const today = toScheduleDateKey(now);
   const budget = readDailyBudgetMeta(chatMeta.autonomousDailyBudget);
   return budget?.date === today ? budget : { date: today, counts: {} };
 }
 
-function readAutonomousDailyCapOverride(value: unknown): number | null {
+function readAutonomousDailyCapOverride(value: unknown, maximum?: number): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return Math.max(1, Math.min(8, Math.floor(value)));
+  const normalized = Math.max(1, Math.floor(value));
+  return maximum === undefined ? normalized : Math.min(maximum, normalized);
 }
 
 export function dailyCapForCharacter(schedule: WeekSchedule | undefined, chatMeta?: Record<string, unknown>): number {
   const chatCap = chatMeta ? readAutonomousDailyCapOverride(chatMeta.autonomousDailyCapOverride) : null;
-  const characterCap = readAutonomousDailyCapOverride(schedule?.autonomousDailyCapOverride);
+  const characterCap = readAutonomousDailyCapOverride(schedule?.autonomousDailyCapOverride, 8);
   if (chatCap != null && characterCap != null) return Math.min(chatCap, characterCap);
   if (characterCap != null) return characterCap;
   if (chatCap != null) return chatCap;
@@ -130,7 +128,11 @@ export function isAutonomousDailyBudgetExhausted(
   now: Date = new Date(),
 ): boolean {
   const budget = getAutonomousDailyBudget(chatMeta, now);
-  return (budget.counts[characterId] ?? 0) >= dailyCapForCharacter(schedule, chatMeta);
+  const checkInCount =
+    chatMeta.groupChatMode === "individual"
+      ? Object.values(budget.counts).reduce((total, count) => total + count, 0)
+      : (budget.counts[characterId] ?? 0);
+  return checkInCount >= dailyCapForCharacter(schedule, chatMeta);
 }
 
 export function buildAutonomousDailyBudgetPatch(
@@ -478,13 +480,7 @@ export function checkCharacterExchange(
   for (const [charId, schedule] of Object.entries(characterSchedules)) {
     if (charId === lastSpeakerCharId) continue;
 
-    const { status } = getEffectiveCurrentStatus(
-      schedule,
-      statusOverrides[charId],
-      now,
-      "free time",
-      scheduleNow,
-    );
+    const { status } = getEffectiveCurrentStatus(schedule, statusOverrides[charId], now, "free time", scheduleNow);
     if (status === "offline") continue;
     if (status === "dnd") continue; // Busy characters don't join casual exchanges
 

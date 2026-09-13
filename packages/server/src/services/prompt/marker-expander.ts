@@ -4,7 +4,7 @@
 // ──────────────────────────────────────────────
 import type { DB } from "../../db/connection.js";
 import { logger } from "../../lib/logger.js";
-import { formatRpgStatsForPrompt, resolveMacros, stripMacroComments } from "@marinara-engine/shared";
+import { formatRpgStatsForPrompt, isExternallyImportedAgent, resolveMacros } from "@marinara-engine/shared";
 import type {
   CharacterMacroProfile,
   MarkerConfig,
@@ -14,10 +14,13 @@ import type {
   RPGStatsConfig,
   LorebookEntryTimingState,
   MacroContext,
+  ResolveMacroOptions,
 } from "@marinara-engine/shared";
 import { createCharactersStorage } from "../storage/characters.storage.js";
 import { createAgentsStorage } from "../storage/agents.storage.js";
+import { getCustomAgentImportPolicy } from "../agents/custom-agent-import-policy.service.js";
 import { processLorebooks, type LorebookFinalContentResolver, type LorebookScanResult } from "../lorebook/index.js";
+import { cardPromptText } from "./card-text.js";
 import { wrapContent } from "./format-engine.js";
 import { sanitizeExampleDialoguePromptLeaf, sanitizePromptLeaf } from "./prompt-escaping.js";
 import { agentRuns } from "../../db/schema/index.js";
@@ -62,6 +65,8 @@ export interface MarkerContext {
   chatEmbedding?: number[] | null;
   /** Per-lorebook pre-computed embeddings for semantic lorebook matching. */
   semanticEmbeddingsByLorebookId?: ReadonlyMap<string, number[] | null>;
+  /** Provider/model/profile identity used to create semantic query vectors. */
+  semanticEmbeddingSpaceId?: string | null;
   /** Unrelated-text cosine floor used to calibrate clustered embedding models. */
   semanticSimilarityBaseline?: number;
   /** Per-chat ephemeral state overrides for lorebook entries (from chat metadata). */
@@ -88,10 +93,16 @@ export interface MarkerContext {
   updatedEntryTimingStates?: Record<string, LorebookEntryTimingState>;
   /** Cached lorebook scan for all lorebook marker sections in this prompt build. */
   lorebookScanResult?: LorebookScanResult;
+  /** Adds context for character-ID macros found only after lorebook activation. */
+  onLorebookScan?: (result: LorebookScanResult) => Promise<void>;
+  /** True once the activated lorebook callback has completed. */
+  lorebookScanCallbackApplied?: boolean;
   /** True once cached lorebook state/depth side effects have been applied to this marker context. */
   lorebookScanResultApplied?: boolean;
   /** When set, replaces all individual character scenario fields with this shared group scenario. */
   groupScenarioOverrideText?: string | null;
+  /** Include card example dialogue in Character Info when the preset has no dedicated marker for it. */
+  includeExampleDialogueInCharacterMarker?: boolean;
 }
 
 /** Expanded marker result. */
@@ -102,18 +113,55 @@ export interface ExpandedMarker {
   messages?: ChatMLMessage[];
 }
 
-function cardPromptText(value: unknown): string {
-  return typeof value === "string" ? stripMacroComments(value).trim() : "";
+function resolveSanitizedPromptLeaf(
+  value: string,
+  ctx: MarkerContext,
+  macroCtx: MacroContext = ctx.macroCtx,
+  macroOptions?: ResolveMacroOptions,
+): string {
+  return sanitizePromptLeaf(resolveMacros(value, macroCtx, macroOptions), ctx.wrapFormat);
 }
 
-function resolveSanitizedPromptLeaf(value: string, ctx: MarkerContext, macroCtx: MacroContext = ctx.macroCtx): string {
-  return sanitizePromptLeaf(resolveMacros(value, macroCtx), ctx.wrapFormat);
+const DEFAULT_CHARACTER_MARKER_FIELDS = [
+  "description",
+  "personality",
+  "backstory",
+  "appearance",
+  "scenario",
+  "system_prompt",
+];
+
+const CHARACTER_CARD_FIELD_ORDER = new Map(
+  ["description", "personality", "backstory", "appearance", "scenario", "mes_example", "example_dialogue"].map(
+    (field, index) => [field, index],
+  ),
+);
+
+/** Keep selected card sections in the same order as the Character editor. */
+export function orderCharacterMarkerFields(fields: readonly string[]): string[] {
+  return fields
+    .map((field, index) => ({ field, index }))
+    .sort((left, right) => {
+      const leftOrder = CHARACTER_CARD_FIELD_ORDER.get(left.field) ?? Number.POSITIVE_INFINITY;
+      const rightOrder = CHARACTER_CARD_FIELD_ORDER.get(right.field) ?? Number.POSITIVE_INFINITY;
+      return leftOrder - rightOrder || left.index - right.index;
+    })
+    .map(({ field }) => field);
+}
+
+/** Resolve only the card fields explicitly owned by the Character Info marker. */
+export function resolveCharacterMarkerFields(configuredFields: readonly string[] | undefined): string[] {
+  return orderCharacterMarkerFields(configuredFields ?? DEFAULT_CHARACTER_MARKER_FIELDS);
 }
 
 /**
  * Expand a marker section into actual content based on its type and config.
  */
-export async function expandMarker(config: MarkerConfig, ctx: MarkerContext): Promise<ExpandedMarker> {
+export async function expandMarker(
+  config: MarkerConfig,
+  ctx: MarkerContext,
+  macroOptions?: ResolveMacroOptions,
+): Promise<ExpandedMarker> {
   switch (config.type) {
     case "character":
       return expandCharacter(config, ctx);
@@ -126,7 +174,7 @@ export async function expandMarker(config: MarkerConfig, ctx: MarkerContext): Pr
     case "chat_history":
       return expandChatHistory(config, ctx);
     case "chat_summary":
-      return expandChatSummary(ctx);
+      return expandChatSummary(ctx, macroOptions);
     case "dialogue_examples":
       return expandDialogueExamples(config, ctx);
     case "agent_data":
@@ -148,14 +196,15 @@ async function expandCharacter(config: MarkerConfig, ctx: MarkerContext): Promis
     const profile = characterMacroProfileFromData(data);
     const characterMacroContext = macroContextForCharacterProfile(ctx.macroCtx, profile);
 
-    const fields = config.characterFields ?? [
-      "description",
-      "personality",
-      "scenario",
-      "backstory",
-      "appearance",
-      "system_prompt",
-    ];
+    let fields = resolveCharacterMarkerFields(config.characterFields);
+    if (
+      ctx.includeExampleDialogueInCharacterMarker === true &&
+      config.characterFields === undefined &&
+      !fields.includes("mes_example") &&
+      !fields.includes("example_dialogue")
+    ) {
+      fields = orderCharacterMarkerFields([...fields, "mes_example"]);
+    }
 
     const charParts: string[] = [];
     for (const field of fields) {
@@ -312,9 +361,11 @@ async function expandPersona(_config: MarkerConfig, ctx: MarkerContext): Promise
 
 // ── Lorebook / World Info ──────────────────────
 
-async function expandLorebook(config: MarkerConfig, ctx: MarkerContext): Promise<ExpandedMarker> {
-  if (ctx.disableLorebooks === true) return { content: "" };
-
+export async function ensureLorebookScan(ctx: MarkerContext): Promise<LorebookScanResult | null> {
+  if (ctx.disableLorebooks === true) {
+    ctx.macroCtx.outlets = {};
+    return null;
+  }
   const result =
     ctx.lorebookScanResult ??
     (ctx.lorebookScanResult = await processLorebooks(
@@ -332,6 +383,7 @@ async function expandLorebook(config: MarkerConfig, ctx: MarkerContext): Promise
         tokenBudget: ctx.lorebookTokenBudget,
         chatEmbedding: ctx.chatEmbedding ?? null,
         semanticEmbeddingsByLorebookId: ctx.semanticEmbeddingsByLorebookId,
+        semanticEmbeddingSpaceId: ctx.semanticEmbeddingSpaceId,
         semanticSimilarityBaseline: ctx.semanticSimilarityBaseline,
         entryStateOverrides: ctx.entryStateOverrides,
         entryTimingStates: ctx.entryTimingStates,
@@ -340,6 +392,13 @@ async function expandLorebook(config: MarkerConfig, ctx: MarkerContext): Promise
         resolveContent: ctx.resolveLorebookContent,
       },
     ));
+
+  if (ctx.lorebookScanCallbackApplied !== true && ctx.onLorebookScan) {
+    await ctx.onLorebookScan(result);
+    ctx.lorebookScanCallbackApplied = true;
+  }
+
+  ctx.macroCtx.outlets = result.outlets;
 
   if (ctx.lorebookScanResultApplied !== true) {
     ctx.lorebookScanResultApplied = true;
@@ -366,6 +425,13 @@ async function expandLorebook(config: MarkerConfig, ctx: MarkerContext): Promise
       }
     }
   }
+
+  return result;
+}
+
+async function expandLorebook(config: MarkerConfig, ctx: MarkerContext): Promise<ExpandedMarker> {
+  const result = await ensureLorebookScan(ctx);
+  if (!result) return { content: "" };
 
   switch (config.type) {
     case "world_info_before":
@@ -466,8 +532,8 @@ async function expandDialogueExamples(_config: MarkerConfig, ctx: MarkerContext)
 
 // ── Chat Summary ───────────────────────────────
 
-function expandChatSummary(ctx: MarkerContext): ExpandedMarker {
-  return { content: resolveSanitizedPromptLeaf(ctx.chatSummary ?? "", ctx) };
+function expandChatSummary(ctx: MarkerContext, macroOptions?: ResolveMacroOptions): ExpandedMarker {
+  return { content: resolveSanitizedPromptLeaf(ctx.chatSummary ?? "", ctx, ctx.macroCtx, macroOptions) };
 }
 
 // ── Agent Data ─────────────────────────────────
@@ -486,6 +552,7 @@ async function expandAgentData(config: MarkerConfig, ctx: MarkerContext): Promis
     "character-tracker",
     "persona-stats",
     "custom-tracker",
+    "inventory-tracker",
   ]);
   if (AUTO_INJECTED_TRACKERS.has(agentType)) return { content: "" };
 
@@ -499,6 +566,16 @@ async function expandAgentData(config: MarkerConfig, ctx: MarkerContext): Promis
   const agentsStorage = createAgentsStorage(ctx.db);
   const agentConfig = await agentsStorage.getByType(agentType);
   if (!agentConfig) return { content: "" };
+  if (
+    isExternallyImportedAgent(agentConfig.type, agentConfig.settings) &&
+    !(await getCustomAgentImportPolicy(ctx.db)).enabled
+  ) {
+    logger.debug(
+      "[prompt] Skipping externally imported Agent data for %s because custom imports are disabled",
+      agentType,
+    );
+    return { content: "" };
+  }
 
   const latestRuns = await ctx.db
     .select()
@@ -528,6 +605,14 @@ function formatAgentResult(data: unknown): string {
   if (typeof data === "string") return data;
   if (data == null) return "";
   if (typeof data === "object") {
+    const memoryNag = data as { nags_needed?: unknown; nags?: unknown };
+    if (memoryNag.nags_needed === false) return "";
+    if (Array.isArray(memoryNag.nags)) {
+      return memoryNag.nags
+        .filter((nag): nag is string => typeof nag === "string" && nag.trim().length > 0)
+        .map((nag) => `- ${nag.trim()}`)
+        .join("\n");
+    }
     // For objects, produce a readable key-value format
     const entries = Object.entries(data as Record<string, unknown>);
     return entries

@@ -30,9 +30,12 @@ import { postProcessSceneResult, type PostProcessContext } from "../services/sid
 import {
   SIDECAR_EMBEDDING_POOLING_TYPES,
   SIDECAR_RUNTIME_PREFERENCES,
+  SIDECAR_SCENE_ANALYSIS_NARRATION_BUDGET_CHARS,
   SIDECAR_SPEECH_MODELS,
+  sceneAnalysisRequestSchema,
   scoreAmbient,
   scoreMusic,
+  musicAreaSlug,
   type GameActiveState,
   type SidecarDownloadProgress,
   type SidecarQuantization,
@@ -109,12 +112,14 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
 
   const configSchema = z.object({
     useForTrackers: z.boolean().optional(),
+    useAsAgentsDefault: z.boolean().optional(),
     useForGameScene: z.boolean().optional(),
     contextSize: z.number().int().min(512).optional(),
     maxTokens: z.number().int().min(64).optional(),
     temperature: z.number().min(0).max(2).optional(),
     topP: z.number().gt(0).max(1).optional(),
     topK: z.number().int().min(0).max(500).optional(),
+    maxParallelJobs: z.number().int().min(1).max(16).optional(),
     gpuLayers: z.number().int().min(-1).max(1024).optional(),
     enableNativeToolCalls: z.boolean().optional(),
     embeddingPooling: z.enum(SIDECAR_EMBEDDING_POOLING_TYPES).optional(),
@@ -376,7 +381,9 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
   }>("/download", async (req, reply) => {
     if (!requirePrivilegedAccess(req, reply, { feature: "Sidecar model download" })) return;
     if (isInferenceBusy()) {
-      return reply.status(409).send({ error: "Cannot download or switch sidecar models while inference is in progress" });
+      return reply
+        .status(409)
+        .send({ error: "Cannot download or switch sidecar models while inference is in progress" });
     }
     const { quantization } = z.object({ quantization: quantizationSchema }).parse(req.body);
     await handleDownloadSse(reply, async () => {
@@ -391,7 +398,9 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
   }>("/download/custom", async (req, reply) => {
     if (!requirePrivilegedAccess(req, reply, { feature: "Sidecar custom model download" })) return;
     if (isInferenceBusy()) {
-      return reply.status(409).send({ error: "Cannot download or switch sidecar models while inference is in progress" });
+      return reply
+        .status(409)
+        .send({ error: "Cannot download or switch sidecar models while inference is in progress" });
     }
     const body = z
       .object({
@@ -436,52 +445,8 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
 
-  const sceneBodySchema = z.object({
-    narration: z.string().max(16000),
-    playerAction: z.string().max(4000).optional(),
-    context: z.object({
-      currentState: z.string().optional(),
-      availableBackgrounds: z.array(z.string()).optional(),
-      availableSfx: z.array(z.string()).optional(),
-      activeWidgets: z.array(z.unknown()).optional(),
-      trackedNpcs: z.array(z.unknown()).optional(),
-      characterNames: z.array(z.string()).optional(),
-      currentBackground: z.string().nullable().optional(),
-      currentMusic: z.string().nullable().optional(),
-      recentMusic: z.array(z.string()).max(20).optional(),
-      useSpotifyMusic: z.boolean().optional(),
-      availableSpotifyTracks: z
-        .array(
-          z.object({
-            uri: z.string().min(1).max(300),
-            name: z.string().min(1).max(300),
-            artist: z.string().min(1).max(300),
-            album: z.string().max(300).nullable().optional(),
-            position: z.number().nullable().optional(),
-            score: z.number().nullable().optional(),
-          }),
-        )
-        .max(50)
-        .optional(),
-      currentSpotifyTrack: z.string().max(300).nullable().optional(),
-      recentSpotifyTracks: z.array(z.string().max(300)).max(20).optional(),
-      currentAmbient: z.string().nullable().optional(),
-      currentLocation: z.string().nullable().optional(),
-      currentWeather: z.string().nullable().optional(),
-      currentTimeOfDay: z.string().nullable().optional(),
-      genre: z.string().nullable().optional(),
-      setting: z.string().nullable().optional(),
-      worldOverview: z.string().nullable().optional(),
-      canGenerateBackgrounds: z.boolean().optional(),
-      canGenerateIllustrations: z.boolean().optional(),
-      artStylePrompt: z.string().nullable().optional(),
-      imagePromptInstructions: z.string().max(5000).nullable().optional(),
-    }),
-    debugMode: z.boolean().optional().default(false),
-  });
-
   app.post("/analyze-scene", async (req, reply) => {
-    const body = sceneBodySchema.parse(req.body);
+    const body = sceneAnalysisRequestSchema.parse(req.body);
     const requestDebug = body.debugMode === true;
     const debugLogsEnabled = requestDebug || logger.isLevelEnabled("debug");
     const debugLog = (message: string, ...args: any[]) => {
@@ -497,7 +462,12 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
 
     const sceneCtx = body.context as SceneAnalyzerContext;
     const systemPrompt = buildSceneAnalyzerSystemPrompt(sceneCtx);
-    const userPrompt = buildSceneAnalyzerUserPrompt(body.narration, body.playerAction, sceneCtx);
+    const userPrompt = buildSceneAnalyzerUserPrompt(
+      body.narration,
+      body.playerAction,
+      sceneCtx,
+      SIDECAR_SCENE_ANALYSIS_NARRATION_BUDGET_CHARS,
+    );
 
     try {
       if (debugLogsEnabled) {
@@ -517,7 +487,11 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
         debugLog("[debug/game/scene-analysis:sidecar] user prompt:\n%s", userPrompt);
       }
 
-      const raw = await analyzeScene(systemPrompt, userPrompt, createResponseAbortSignal(reply, "Sidecar scene analysis"));
+      const raw = await analyzeScene(
+        systemPrompt,
+        userPrompt,
+        createResponseAbortSignal(reply, "Sidecar scene analysis"),
+      );
       if (debugLogsEnabled) {
         debugLog("[debug/game/scene-analysis:sidecar] parsed model response:\n%s", JSON.stringify(raw, null, 2));
       }
@@ -526,6 +500,8 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
         availableBackgrounds: bgTags,
         availableSfx: sfxTags,
         useSpotifyMusic: !!body.context.useSpotifyMusic,
+        generateSoundEffects: !!body.context.generateSoundEffects,
+        generateMusic: !!body.context.generateMusic,
         availableSpotifyTracks: body.context.availableSpotifyTracks ?? [],
         canGenerateBackgrounds: !!body.context.canGenerateBackgrounds,
         validWidgetIds: new Set(
@@ -551,12 +527,17 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
       if (body.context.useSpotifyMusic) {
         result.music = null;
       } else {
+        // Scoring runs even with music generation enabled (#5161): generated
+        // context tracks are ordinary scoreable library entries now, and the
+        // analyzer no longer writes free-text music prompts.
         const scoredMusic = scoreMusic({
           state: (body.context.currentState as GameActiveState) ?? "exploration",
           weather: result.weather ?? body.context.currentWeather ?? null,
           timeOfDay: result.timeOfDay ?? body.context.currentTimeOfDay ?? null,
           musicGenre: result.musicGenre,
           musicIntensity: result.musicIntensity,
+          locationSlug: musicAreaSlug(body.context.currentLocation),
+          enemyTier: body.context.enemyTier,
           currentMusic: body.context.currentMusic ?? null,
           recentMusic: body.context.recentMusic ?? null,
           availableMusic: musicTags,

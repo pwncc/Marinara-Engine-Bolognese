@@ -3,6 +3,7 @@ import { getAdminSecret, isAdminSecretRequiredOnLoopback } from "../config/runti
 import { isBasicAuthSatisfied } from "./basic-auth.js";
 import { isInIpAllowlist, isLoopbackIp, isTrustedInterfaceRequest } from "./ip-allowlist.js";
 import { safeCompareString } from "../utils/security.js";
+import { isRequestHostTrusted } from "./host-validation.js";
 
 export function isAdminAuthorized(request: FastifyRequest): boolean {
   const adminSecret = getAdminSecret();
@@ -15,8 +16,21 @@ export function isAdminAuthorized(request: FastifyRequest): boolean {
 export function requirePrivilegedAccess(
   request: FastifyRequest,
   reply: FastifyReply,
-  options: { loopbackOnly?: boolean; trustedNetwork?: boolean; feature?: string } = {},
+  options: {
+    loopbackOnly?: boolean;
+    trustedNetwork?: boolean;
+    feature?: string;
+    oneTimeCapabilityAuthorized?: boolean;
+  } = {},
 ): boolean {
+  if (!isRequestHostTrusted(request)) {
+    reply.status(421).send({
+      error: "Untrusted request host",
+      message: "Privileged APIs require an allowed Marinara hostname.",
+    });
+    return false;
+  }
+
   if (!isBasicAuthSatisfied(request)) {
     reply.status(403).send({
       error: "Privileged API requires authenticated access",
@@ -41,11 +55,14 @@ export function requirePrivilegedAccess(
     return true;
   }
 
+  // A route-scoped, single-use capability may replace the reusable admin secret,
+  // but never the trusted-host or normal-authentication checks above.
+  if (options.oneTimeCapabilityAuthorized) return true;
+
   if (!getAdminSecret()) {
     reply.status(403).send({
       error: "ADMIN_SECRET is required for privileged APIs",
-      message:
-        "Set ADMIN_SECRET=<secret> in the server .env and send the same value in the X-Admin-Secret header.",
+      message: "Set ADMIN_SECRET=<secret> in the server .env and send the same value in the X-Admin-Secret header.",
     });
     return false;
   }

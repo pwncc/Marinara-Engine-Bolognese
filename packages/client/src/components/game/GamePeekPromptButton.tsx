@@ -1,4 +1,5 @@
 import { Search } from "lucide-react";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 interface GamePeekPromptButtonProps {
   messageId: string;
@@ -6,11 +7,8 @@ interface GamePeekPromptButtonProps {
   onPeekPrompt: (messageId: string) => void;
 }
 
-export default function GamePeekPromptButton({
-  messageId,
-  className,
-  onPeekPrompt,
-}: GamePeekPromptButtonProps) {
+export default function GamePeekPromptButton({ messageId, className, onPeekPrompt }: GamePeekPromptButtonProps) {
+  const { t: localizeUi } = useUiTranslation();
   return (
     <button
       type="button"
@@ -22,8 +20,8 @@ export default function GamePeekPromptButton({
         onPeekPrompt(messageId);
       }}
       className={className}
-      title="Peek prompt"
-      aria-label="Peek prompt"
+      title={localizeUi("ui.game.gamepeekpromptbutton.peekPrompt")}
+      aria-label={localizeUi("ui.game.gamepeekpromptbutton.peekPrompt")}
     >
       <Search size={11} />
     </button>

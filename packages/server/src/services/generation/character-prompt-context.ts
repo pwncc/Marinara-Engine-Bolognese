@@ -9,11 +9,12 @@ import {
 } from "@marinara-engine/shared";
 import { wrapContent } from "../prompt/format-engine.js";
 import { sanitizeExampleDialoguePromptLeaf, sanitizePromptLeaf } from "../prompt/prompt-escaping.js";
-import { cardPromptText } from "./generation-text-utils.js";
+import { cardPromptText } from "../prompt/card-text.js";
 
 export type CharacterPromptInfo = {
   id: string;
   name: string;
+  world?: string;
   description: string;
   personality: string;
   scenario: string;
@@ -90,9 +91,9 @@ const CHARACTER_FALLBACK_FIELDS: Array<{
 }> = [
   { key: "description", label: "description", macroAliases: ["description"] },
   { key: "personality", label: "personality", macroAliases: ["personality"] },
-  { key: "scenario", label: "scenario", macroAliases: ["scenario"] },
   { key: "backstory", label: "backstory", macroAliases: ["backstory"] },
   { key: "appearance", label: "appearance", macroAliases: ["appearance"] },
+  { key: "scenario", label: "scenario", macroAliases: ["scenario"] },
   { key: "systemPrompt", label: "system_prompt", macroAliases: ["charSysInfo"] },
   { key: "mesExample", label: "example_dialogue", macroAliases: ["example"] },
 ];
@@ -145,6 +146,7 @@ export async function loadCharacterPromptInfo({
     charInfo.push({
       id: cid,
       name: charData.name ?? "Unknown",
+      world: cardPromptText(charData.extensions?.world) || undefined,
       description,
       personality: cardPromptText(charData.personality),
       scenario,

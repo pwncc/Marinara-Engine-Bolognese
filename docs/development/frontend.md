@@ -69,8 +69,8 @@ The only persisted store (localStorage via the Zustand `persist` middleware). It
 
 - Theme: `visualTheme` ("default" or "sillytavern"), the `data-theme` value (dark or light), and custom color overrides.
 - Appearance: `fontSize`, `chatFontSize`, `fontFamily`, custom fonts, and cursor style.
-- Chat display: `boldDialogue`, `showTimestamps`, `showModelName`, `messageGrouping`, and `messagesPerPage`.
-- Text styling: narration font color and opacity, chat font color and opacity, and text stroke.
+- Chat display: `boldDialogue`, `showTimestamps`, `showModelName`, and `messagesPerPage`.
+- Text styling: chat text color, roleplay message background opacity, and text stroke.
 - Streaming: `enableStreaming` and `streamingSpeed`.
 - Conversation theme: gradient colors for message bubbles.
 - Sound: `convoNotificationSound` and `rpNotificationSound`.
@@ -285,7 +285,7 @@ Each resource type has a full-page editor that replaces the chat area:
 
 | Editor            | File                                          | Manages                                                                         |
 | ----------------- | --------------------------------------------- | ------------------------------------------------------------------------------- |
-| Character Editor  | `components/characters/CharacterEditor.tsx`   | Character card fields, avatar, greeting, personality, system prompt, extensions |
+| Character Editor  | `components/characters/CharacterEditor.tsx`   | Character card fields, avatar, greeting, personality, system prompt, metadata   |
 | Lorebook Editor   | `components/lorebooks/LorebookEditor.tsx`     | Lorebook metadata and entries with keys, activation rules, injection settings   |
 | Preset Editor     | `components/presets/PresetEditor.tsx`         | Prompt sections, groups, markers, generation parameters, choice blocks          |
 | Connection Editor | `components/connections/ConnectionEditor.tsx` | API provider, base URL, model, context window, flags                            |
@@ -360,7 +360,6 @@ import { api, ApiError } from "@/lib/api-client";
 | `api.delete(path)`             | `DELETE /api{path}` | Delete resource                       |
 | `api.upload(path, FormData)`   | `POST /api{path}`   | Multipart file upload                 |
 | `api.download(path, filename)` | `GET /api{path}`    | Download plus save-as dialog          |
-| `api.stream(path, body)`       | `POST /api{path}`   | SSE async generator (tokens only)     |
 | `api.streamEvents(path, body)` | `POST /api{path}`   | SSE async generator (all event types) |
 
 Errors throw `ApiError`, which carries `status` and `message` properties.
@@ -390,6 +389,12 @@ Users can create custom themes. Theme definitions are stored on the Marinara ser
 
 Synced theme CSS can request the built-in Accent Pulse engine with `--marinara-theme-accent-pulse: enabled`. Add `--marinara-theme-accent-pulse-source: #a78bfa` (or a gradient) when the pulse should use a specific theme accent instead of the current Appearance accent.
 
+### Personal Extensions
+
+Personal Extensions are server-stored, exact-hash-approved sandboxed code. The Addons UI uses `use-personal-extensions.ts`; `PersonalExtensionInjector.tsx` hosts approved Browser code in a dedicated Worker inside an opaque-origin sandboxed iframe and brokers immutable active-chat context snapshots. The context fields are always present; outside an active chat, `chatId` and `characterId` are `null` and `characterIds` is empty. Bounded active Character-card and selected-Persona fields require separately declared, hash-bound permissions. Server extensions run in a separate Node process inside macOS Seatbelt or Linux Bubblewrap and fail closed when neither backend is available. External sources require the `.env` gate plus the Danger Zone opt-in at listing, approval, and runtime boundaries.
+
+See [Personal Extension Architecture](personal-extensions.md) before changing this feature.
+
 ## Shared package (`packages/shared`)
 
 The frontend imports types, schemas, and constants from `@marinara-engine/shared`.
@@ -400,7 +405,6 @@ Key files in `packages/shared/src/constants/`:
 
 - `defaults.ts`: exports such as `APP_VERSION`, `PROFESSOR_MARI_ID`, `DEFAULT_CONNECTION_ID`, `DEFAULT_GENERATION_PARAMS`, `MAX_FILE_SIZES`, and `LIMITS`. This is the version source and holds default generation settings.
 - `providers.ts`: exports `PROVIDERS`, the API provider configs (OpenAI, Anthropic, Google, and more) with URLs and auth.
-- `chat-modes.ts`: exports `CHAT_MODES`, the definition record for each chat mode.
 - `model-lists.ts`: static model catalogs per provider, plus `IMAGE_GENERATION_SOURCES` for image generation providers.
 - `agent-prompts.ts`: base-only summary and secret-plot prompts plus runtime lookup for prompts supplied by installed agent packages.
 
@@ -411,15 +415,16 @@ All input validation uses Zod schemas from `packages/shared/src/schemas/`. Repre
 | Schema file             | Entities                                                           |
 | ----------------------- | ------------------------------------------------------------------ |
 | `agent.schema.ts`       | AgentConfig create and update, agent phases, result types          |
-| `character.schema.ts`   | Character card, extensions, character books, groups                |
+| `character.schema.ts`   | Character cards, compatibility metadata, character books, groups   |
 | `chat.schema.ts`        | Chat create, message create, generation request                   |
 | `connection.schema.ts`  | API connection create and update                                   |
 | `custom-tool.schema.ts` | Custom tool definitions                                            |
 | `lorebook.schema.ts`    | Lorebook and entry create/update, activation conditions, schedules |
 | `prompt.schema.ts`      | Preset, section, group, choice block, generation parameters        |
 | `regex.schema.ts`       | Regex script create and update                                     |
+| `personal-extension.schema.ts` | Personal Extension drafts, exact-hash approval, rollback, and private storage |
 
-The folder also holds schemas for app settings, chat presets, conversation calls, custom emojis and stickers, extensions, Noodle, and themes.
+The folder also holds schemas for app settings, chat settings profiles, conversation calls, custom emojis and stickers, Noodle, and themes.
 
 ### Types
 
@@ -428,13 +433,14 @@ Entity type definitions live in `packages/shared/src/types/`. A sample of the ke
 | Type file             | Key interfaces                                                                                              |
 | --------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `agent.ts`            | `AgentConfig`, `AgentResult`, `AgentContext`, `ToolDefinition`, `ToolCall`, `ToolResult`, `BUILT_IN_AGENTS` |
-| `character.ts`        | `Character`, `CharacterCardV2`, `CharacterData`, `CharacterExtensions`, `RPGStatsConfig`                    |
+| `character.ts`        | `Character`, `CharacterCardV2`, `CharacterData`, `RPGStatsConfig`                                           |
 | `chat.ts`             | `Chat`, `ChatMetadata`, `Message`, `MessageExtra`, `GenerationInfo`, `StreamEvent`                          |
 | `connection.ts`       | `APIConnection`, `ModelInfo`, `ModelCapabilities`, `ConnectionTestResult`                                   |
 | `combat-encounter.ts` | `CombatPartyMember`, `CombatEnemy`, `CombatActionResult`, `EncounterSettings`                               |
 | `game-state.ts`       | `GameState`, `PresentCharacter`, `PlayerStats`, `QuestProgress`, `InventoryItem`                            |
 | `lorebook.ts`         | `Lorebook`, `LorebookEntry`, `ActivationCondition`, `LorebookSchedule`, `QuestData`                         |
 | `persona.ts`          | `Persona`, `PersonaStatsConfig`                                                                             |
+| `personal-extension.ts` | `PersonalExtension`, runtime metadata, revisions, source, and server runtime state                         |
 | `prompt.ts`           | `PromptPreset`, `PromptSection`, `PromptGroup`, `ChoiceBlock`, `GenerationParameters`                       |
 | `scene.ts`            | `SceneMeta`, `SceneFullPlan`                                                                                |
 | `haptic.ts`           | `HapticDevice`, `HapticStatus`, `HapticDeviceCommand`                                                       |
@@ -527,10 +533,10 @@ Agent memory tools use `/api/agents/memory/:agentType/:chatId`, where `agentType
 | `/api/import/*`                 | SillyTavern and Marinara profile import |
 | `/api/admin/clear-all`          | Full data clear                         |
 | `/api/themes`                   | Synced custom themes                    |
-| `/api/extensions`               | Installed extensions                    |
+| `/api/personal-extensions`      | Sandboxed extension policy, drafts, approval, runtime, and private storage |
 | `/api/app-settings`             | Server-side app settings                |
 | `/api/sidecar`                  | Local model runtime                     |
-| `/api/chat-presets`             | Chat settings presets                   |
+| `/api/chat-presets`             | Chat settings profiles (legacy endpoint name) |
 | `/api/connection-folders`       | Connection folders                      |
 | `/api/prompt-overrides`         | Built-in prompt overrides               |
 | `/api/achievements`             | Achievement unlocks                     |
@@ -580,6 +586,7 @@ The lightweight Engine ships with an empty runtime agent registry. Packages inst
 | `character-tracker`      | post_processing | Tracks character state changes                                    |
 | `persona-stats`          | post_processing | Tracks player persona stat changes                                |
 | `custom-tracker`         | post_processing | Tracks user-defined structured state                              |
+| `inventory-tracker`      | post_processing | Tracks currencies, equipped gear, and carried inventory           |
 | `illustrator`            | post_processing | Generates scene image prompts and media requests                  |
 | `lorebook-keeper`        | post_processing | Auto-creates and updates lorebook entries                         |
 | `card-evolution-auditor` | post_processing | Audits character cards for suggested evolution                    |
@@ -588,10 +595,13 @@ The lightweight Engine ships with an empty runtime agent registry. Packages inst
 | `spotify`                | post_processing | Controls Music DJ playback (Spotify, YouTube, or local music)     |
 | `knowledge-retrieval`    | pre_generation  | Retrieves context from knowledge sources                          |
 | `knowledge-router`       | pre_generation  | Routes relevant lorebook and knowledge entries                    |
+| `long-term-memory`       | feature         | Stores durable memories and recalls relevant context              |
 | `haptic`                 | post_processing | Sends haptic device commands                                      |
 | `cyoa`                   | post_processing | Generates choice prompts                                          |
+| `storyboard`             | post_processing | Plans still or animated Game and Roleplay storyboards             |
 | `conversation-calls`     | feature         | Adds Conversation audio/video calls and related settings          |
 | `hierarchical-maps`      | feature         | Adds Roleplay/Game maps, spatial context, and movement             |
+| `noodle`                 | feature         | Adds the local Noodle and NoodleR social feeds to Home             |
 | `uno`                    | feature         | Adds the Conversation UNO table                                   |
 | `chess`                  | feature         | Adds the Conversation Chess board                                 |
 | `poker`                  | feature         | Adds the Conversation Texas Hold'em table                         |
@@ -603,7 +613,7 @@ The lightweight Engine ships with an empty runtime agent registry. Packages inst
 
 Agents produce typed results that the frontend handles. The `AgentResultType` union in `packages/shared/src/types/agent.ts` includes:
 
-`game_state_update`, `text_rewrite`, `sprite_change`, `echo_message`, `quest_update`, `image_prompt`, `context_injection`, `continuity_check`, `director_event`, `lorebook_update`, `character_card_update`, `background_change`, `character_tracker_update`, `persona_stats_update`, `custom_tracker_update`, `spotify_control`, `youtube_control`, `local_music_control`, `haptic_command`, `cyoa_choices`, `secret_plot`, `game_master_narration`, `party_action`, `game_map_update`, `game_state_transition`, `prompt_patch`, `frontend_theme_update`, and `about_me_update`.
+`game_state_update`, `text_rewrite`, `sprite_change`, `echo_message`, `quest_update`, `image_prompt`, `context_injection`, `continuity_check`, `director_event`, `lorebook_update`, `character_card_update`, `background_change`, `character_tracker_update`, `persona_stats_update`, `custom_tracker_update`, `inventory_tracker_update`, `spotify_control`, `youtube_control`, `local_music_control`, `haptic_command`, `cyoa_choices`, `secret_plot`, `game_master_narration`, `party_action`, `game_map_update`, `game_state_transition`, `prompt_patch`, `frontend_theme_update`, and `about_me_update`.
 
 ## Chat modes
 

@@ -1609,7 +1609,7 @@ async function executeSay(
 
 async function executeGroupAction(
   db: DB,
-  config: WorldEngineConfig,
+  _config: WorldEngineConfig,
   nameById: Map<string, string>,
   selfId: string,
   action: WorldAction,
@@ -1888,26 +1888,49 @@ export async function wakeCharacterMind(
     // one fixed temperature collapse to one voice ("mode collapse" — ten
     // characters writing the same insomnia post). A little spread breaks it.
     const jitteredTemp = Math.max(0.5, Math.min(1.35, config.temperature + (Math.random() - 0.5) * 0.3));
+    // The JSON itself is small; the headroom is for models that think before
+    // answering, since hidden reasoning shares the completion budget.
     const completionOptions = {
       model: resolved.model,
       temperature: jitteredTemp,
-      maxTokens: 1536,
+      maxTokens: 4096,
       stream: false as const,
       responseFormat: { type: "json_object" },
     };
-    let completion;
+    const complete = (options: typeof completionOptions & { reasoningEffort?: "none" }) =>
+      resolved.provider.chatComplete(wakeMessages, options).catch(async (error: unknown) => {
+        // Non-vision model with images attached: retry text-only (labels remain).
+        if (!ctx.visionImages.length || !isUnsupportedNoodleVisionInputError(error)) throw error;
+        logger.debug("[world/mind] Model rejected image input; retrying %s's wake text-only", ctx.self.name);
+        return resolved.provider.chatComplete(
+          wakeMessages.map(({ images: _images, ...message }) => message),
+          options,
+        );
+      });
+    let completion = await complete(completionOptions);
+    if (!completion.content?.trim()) {
+      // A thinking model can spend the whole budget reasoning and return nothing.
+      // One more try with thinking off; models without the toggle ignore it.
+      logger.warn(
+        "[world/mind] %s's wake returned no content (finish=%s, reasoningTokens=%s); retrying without reasoning",
+        ctx.self.name,
+        completion.finishReason,
+        completion.usage?.completionReasoningTokens ?? "n/a",
+      );
+      completion = await complete({ ...completionOptions, reasoningEffort: "none" });
+    }
+    let output: MindOutput;
     try {
-      completion = await resolved.provider.chatComplete(wakeMessages, completionOptions);
+      output = parseMindResponse(completion.content ?? "");
     } catch (error) {
-      // Non-vision model with images attached: retry text-only (labels remain).
-      if (!ctx.visionImages.length || !isUnsupportedNoodleVisionInputError(error)) throw error;
-      logger.debug("[world/mind] Model rejected image input; retrying %s's wake text-only", ctx.self.name);
-      completion = await resolved.provider.chatComplete(
-        wakeMessages.map(({ images: _images, ...message }) => message),
-        completionOptions,
+      const reasoningTokens = completion.usage?.completionReasoningTokens;
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)} (finish=${completion.finishReason}, contentChars=${
+          completion.content?.length ?? 0
+        }, reasoningTokens=${reasoningTokens ?? "n/a"})`,
+        { cause: error },
       );
     }
-    const output = parseMindResponse(completion.content ?? "");
     result.thought = output.thought || null;
 
     // Thoughts follow the body: alone, they drift into the room (the current

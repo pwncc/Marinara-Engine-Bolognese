@@ -6,6 +6,7 @@ import { Modal } from "../ui/Modal";
 import { useCreateCharacter, useUploadAvatar } from "../../hooks/use-characters";
 import { useUIStore } from "../../stores/ui.store";
 import { Loader2, Sparkles, User, Camera } from "lucide-react";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 interface Props {
   open: boolean;
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export function CreateCharacterModal({ open, onClose }: Props) {
+  const { t: localizeUi } = useUiTranslation();
   const createCharacter = useCreateCharacter();
   const uploadAvatar = useUploadAvatar();
   const openCharacterDetail = useUIStore((s) => s.openCharacterDetail);
@@ -84,7 +86,12 @@ export function CreateCharacterModal({ open, onClose }: Props) {
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="Create Character" width="max-w-sm">
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={localizeUi("ui.modals.createcharactermodal.createCharacter")}
+      width="max-w-sm"
+    >
       <div className="flex flex-col items-center gap-4">
         {/* Avatar picker */}
         <button
@@ -93,7 +100,7 @@ export function CreateCharacterModal({ open, onClose }: Props) {
           className="mari-chrome-accent-tile mari-accent-animated group relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-full transition-transform hover:scale-105"
         >
           {avatarDataUrl ? (
-            <img src={avatarDataUrl} alt="Avatar" className="h-full w-full object-cover" />
+            <img src={avatarDataUrl} alt={localizeUi("editor.avatar.label")} className="h-full w-full object-cover" />
           ) : (
             <User size="2.25rem" className="text-current" />
           )}
@@ -105,11 +112,13 @@ export function CreateCharacterModal({ open, onClose }: Props) {
 
         {/* Name */}
         <div className="w-full">
-          <label className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">Name *</label>
+          <label className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">
+            {localizeUi("ui.modals.createcharactermodal.name")}
+          </label>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Character name..."
+            placeholder={localizeUi("ui.modals.createcharactermodal.characterName")}
             autoFocus
             onKeyDown={(e) => {
               if (e.key === "Enter") handleCreate();
@@ -127,7 +136,7 @@ export function CreateCharacterModal({ open, onClose }: Props) {
             }}
             className="rounded-lg px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)]"
           >
-            Cancel
+            {localizeUi("chat.delete.dialog.cancel")}
           </button>
           <button
             onClick={handleCreate}
@@ -139,7 +148,7 @@ export function CreateCharacterModal({ open, onClose }: Props) {
             ) : (
               <Sparkles size="0.75rem" />
             )}
-            Create
+            {localizeUi("ui.modals.createcharactermodal.create")}
           </button>
         </div>
       </div>

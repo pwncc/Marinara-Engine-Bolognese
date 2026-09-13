@@ -72,6 +72,10 @@ export interface SidecarConfig {
   customModelRepo: string | null;
   /** Whether to use the sidecar for tracker agents in roleplay mode. */
   useForTrackers: boolean;
+  /** Whether agents without an explicit connection default to the sidecar.
+   *  Takes the place of a `defaultForAgents` connection row, which the sidecar
+   *  cannot have — it is a pseudo-connection with no stored row (#5539). */
+  useAsAgentsDefault: boolean;
   /** Whether to use the sidecar for game scene analysis (backgrounds, music, weather, effects). */
   useForGameScene: boolean;
   /** Context size for the model. Default 8192. */
@@ -84,6 +88,8 @@ export interface SidecarConfig {
   topP: number;
   /** Top-k sampling limit for local inference. */
   topK: number;
+  /** Maximum local agent requests and llama-server slots that may run in parallel. */
+  maxParallelJobs: number;
   /** GPU layers to offload (-1 = try max GPU offload first, then fall back if startup fails). */
   gpuLayers: number;
   /** Start llama.cpp with Jinja chat templates so OpenAI-compatible native tool calls can work. */
@@ -154,6 +160,8 @@ export interface SceneSegmentEffect {
   background?: string | null;
   music?: string | null;
   sfx?: string[];
+  /** Total sequential plays for each sound effect on this beat. Defaults to 1. */
+  sfxLoopCount?: number;
   ambient?: string | null;
   /** Rare cinematic overlays/visual effects to fire when this narration segment appears. */
   directions?: DirectionCommand[];
@@ -353,12 +361,14 @@ export const SIDECAR_DEFAULT_CONFIG: SidecarConfig = {
   quantization: null,
   customModelRepo: null,
   useForTrackers: false,
+  useAsAgentsDefault: false,
   useForGameScene: true,
   contextSize: 8192,
   maxTokens: 4096,
   temperature: 0.3,
   topP: 0.95,
   topK: 64,
+  maxParallelJobs: 2,
   gpuLayers: -1,
   enableNativeToolCalls: true,
   embeddingPooling: "none",
@@ -402,7 +412,7 @@ export const SIDECAR_MODELS: SidecarModelInfo[] = [
     label: "Gemma 4 E2B — Q8 (Best Quality)",
     filename: "gemma-4-E2B-it-Q8_0.gguf",
     sizeBytes: 5_400_000_000,
-    downloadSizeBytes: 5_048_350_848,
+    downloadSizeBytes: 5_048_352_864,
     ramBytes: 5_800_000_000,
     downloadUrl: "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q8_0.gguf",
   },
@@ -412,7 +422,7 @@ export const SIDECAR_MODELS: SidecarModelInfo[] = [
     label: "Gemma 4 E2B — Q4_K_M (Smaller, Faster)",
     filename: "gemma-4-E2B-it-Q4_K_M.gguf",
     sizeBytes: 3_200_000_000,
-    downloadSizeBytes: 3_106_736_256,
+    downloadSizeBytes: 3_106_738_272,
     ramBytes: 3_600_000_000,
     downloadUrl: "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
   },

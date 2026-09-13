@@ -9,10 +9,14 @@ const BASE = "/api";
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 export const ADMIN_SECRET_STORAGE_KEY = "marinara_admin_secret";
 
-export function getAdminSecretHeader(): Record<string, string> {
+function getAdminSecretHeader(): Record<string, string> {
   if (typeof window === "undefined") return {};
-  const secret = window.localStorage.getItem(ADMIN_SECRET_STORAGE_KEY)?.trim();
-  return secret ? { "X-Admin-Secret": secret } : {};
+  try {
+    const secret = window.localStorage.getItem(ADMIN_SECRET_STORAGE_KEY)?.trim();
+    return secret ? { "X-Admin-Secret": secret } : {};
+  } catch {
+    return {};
+  }
 }
 
 export class ApiError extends Error {
@@ -26,11 +30,24 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Thrown by `streamEvents({ disconnectOnResume })` when an SSE reader makes no
+ * progress for a grace period after the tab resumes. The socket is likely
+ * half-open, so the caller should fall back to a refetch of the server-persisted
+ * result rather than treating it as a real failure.
+ */
+export class StreamResumeDisconnectError extends Error {
+  constructor() {
+    super("Stream disconnected while the tab was in the background");
+    this.name = "StreamResumeDisconnectError";
+  }
+}
+
 export const PRIVILEGED_ACCESS_HINT =
   "This action needs loopback access or admin access. Open the app through localhost, or set ADMIN_SECRET=<secret> in the server .env and paste the same value in Settings → Advanced → Admin Access. Marinara sends it as the X-Admin-Secret header.";
 
 /**
- * Build a user-facing message for a privileged-gated action (extension install,
+ * Build a user-facing message for a privileged-gated action (theme install,
  * Professor Mari workspace mutation, etc.). The privileged gate replies 403 with a
  * terse server message that doesn't tell the user how to recover, so surface the
  * admin-secret hint for 403s; otherwise pass through the server/error message.
@@ -92,6 +109,23 @@ export function getApiErrorMessage(value: unknown, fallback: string): string {
   return fallback;
 }
 
+/** Format the first usable Zod validation issue in an API error payload. */
+export function formatFirstApiValidationIssue(error: unknown, fallback: string): string {
+  if (error instanceof ApiError && isRecord(error.payload) && Array.isArray(error.payload.issues)) {
+    for (const issue of error.payload.issues) {
+      if (!isRecord(issue) || typeof issue.message !== "string" || !issue.message.trim()) continue;
+      const path = Array.isArray(issue.path)
+        ? issue.path.filter((segment) => typeof segment === "string" || typeof segment === "number").join(".")
+        : typeof issue.path === "string"
+          ? issue.path
+          : "";
+      return path ? `${path}: ${issue.message.trim()}` : issue.message.trim();
+    }
+  }
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return fallback;
+}
+
 function getSseDataPayload(line: string): string | null {
   const normalized = line.endsWith("\r") ? line.slice(0, -1) : line;
   if (!normalized.startsWith("data:")) return null;
@@ -129,10 +163,6 @@ async function releaseSseReader(reader: ReadableStreamDefaultReader<Uint8Array>,
   } catch {
     /* lock may already be released */
   }
-}
-
-function getSseErrorMessage(parsed: Record<string, unknown>): string {
-  return typeof parsed.data === "string" ? parsed.data : "Generation error";
 }
 
 export function getJsonRepairRequest(error: unknown): JsonRepairRequest | null {
@@ -279,6 +309,7 @@ async function readDownloadFilename(res: Response, fallbackFilename: string) {
 }
 
 export const api = {
+  /** Return the raw response while still applying shared auth, CSRF, and cache policy. */
   raw: (path: string, init?: RequestInit) => apiFetch(path, init),
 
   get: <T>(path: string, init?: RequestInit) => request<T>(path, init),
@@ -319,11 +350,9 @@ export const api = {
 
   /** Download a POST endpoint as a file (useful for bulk exports). */
   downloadPost: async (path: string, body: unknown, fallbackFilename = "export.bin") => {
-    const res = await fetch(`${BASE}${path}`, {
+    const res = await apiFetch(path, {
       method: "POST",
-      headers: { ...getAdminSecretHeader(), [CSRF_HEADER]: CSRF_HEADER_VALUE, "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      cache: "no-store",
     });
     showGenerationFallbackHeader(res);
     if (!res.ok) {
@@ -336,14 +365,17 @@ export const api = {
   },
 
   /**
-   * Stream an SSE endpoint. Returns an async iterable of parsed events.
+   * Stream an SSE endpoint. Returns an async iterable of all typed events.
    */
-  stream: async function* (path: string, body?: unknown, signal?: AbortSignal): AsyncGenerator<string> {
-    const res = await fetch(`${BASE}${path}`, {
+  streamEvents: async function* (
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+    options?: { disconnectOnResume?: boolean; resumeDisconnectGraceMs?: number },
+  ): AsyncGenerator<{ type: string; data: unknown } & Record<string, unknown>> {
+    const res = await apiFetch(path, {
       method: "POST",
-      headers: { ...getAdminSecretHeader(), [CSRF_HEADER]: CSRF_HEADER_VALUE, "Content-Type": "application/json" },
       body: body !== undefined ? JSON.stringify(body) : undefined,
-      cache: "no-store",
       signal,
     });
     showGenerationFallbackHeader(res);
@@ -353,13 +385,22 @@ export const api = {
       let payload: unknown;
       try {
         const text = await res.text();
-        const json = JSON.parse(text) as unknown;
-        payload = json;
-        if (isRecord(json)) detail = findNestedApiErrorMessage(json.error ?? json.message) || text.slice(0, 200);
-        else detail = text.slice(0, 200);
+        try {
+          const json = JSON.parse(text) as Record<string, unknown>;
+          payload = json;
+          detail =
+            (typeof json.error === "string" && json.error) ||
+            (typeof json.message === "string" && json.message) ||
+            text.slice(0, 200);
+        } catch {
+          detail = text.slice(0, 200) || detail;
+        }
       } catch {
-        /* couldn't parse body */
+        /* couldn't read body */
       }
+      // Carry the parsed body: pre-stream rejections (e.g. a spatial owner-turn
+      // 409) put their machine-readable `code` there, and the generate catch
+      // path forwards it into the synthesized capability event.
       throw new ApiError(res.status, detail, payload);
     }
 
@@ -368,82 +409,53 @@ export const api = {
     let buffer = "";
     let completed = false;
 
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          completed = true;
-          buffer += decoder.decode();
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-        const parsedBuffer = readSseDataPayloads(buffer);
-        buffer = parsedBuffer.rest;
-
-        for (const data of parsedBuffer.payloads) {
-          if (data === "[DONE]") return;
-          const parsed = parseSseJsonPayload(data);
-          if (!parsed) continue;
-          if (parsed.type === "fallback_used") showGenerationFallbackToast(parsed.data);
-          else if (parsed.type === "token" && typeof parsed.data === "string") yield parsed.data;
-          else if (parsed.type === "error") throw new ApiError(500, getSseErrorMessage(parsed), parsed);
-          else if (parsed.type === "done") return;
-        }
+    // A half-open socket can leave reader.read() pending forever, either after a
+    // backgrounded tab resumes or while the page remains visible. Give a healthy
+    // stream enough time to deliver content or the server's 15-second keepalive.
+    const watchPendingRead = options?.disconnectOnResume === true && typeof document !== "undefined";
+    const resumeDisconnectGraceMs = Math.max(0, options?.resumeDisconnectGraceMs ?? 20_000);
+    let readPending = false;
+    let rejectOnResume: ((error: Error) => void) | null = null;
+    let resumeDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    const resumeDisconnect = watchPendingRead
+      ? new Promise<never>((_, reject) => {
+          rejectOnResume = reject;
+        })
+      : null;
+    const clearResumeDisconnectTimer = () => {
+      if (resumeDisconnectTimer === null) return;
+      clearTimeout(resumeDisconnectTimer);
+      resumeDisconnectTimer = null;
+    };
+    const startResumeDisconnectTimer = () => {
+      if (!readPending || document.visibilityState !== "visible" || resumeDisconnectTimer !== null) return;
+      resumeDisconnectTimer = setTimeout(() => {
+        resumeDisconnectTimer = null;
+        rejectOnResume?.(new StreamResumeDisconnectError());
+      }, resumeDisconnectGraceMs);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        clearResumeDisconnectTimer();
+      } else {
+        startResumeDisconnectTimer();
       }
-
-      for (const data of readSseDataPayloads(buffer, true).payloads) {
-        if (data === "[DONE]") return;
-        const parsed = parseSseJsonPayload(data);
-        if (!parsed) continue;
-        if (parsed.type === "fallback_used") showGenerationFallbackToast(parsed.data);
-        else if (parsed.type === "token" && typeof parsed.data === "string") yield parsed.data;
-        else if (parsed.type === "error") throw new ApiError(500, getSseErrorMessage(parsed), parsed);
-        else if (parsed.type === "done") return;
-      }
-    } finally {
-      await releaseSseReader(reader, completed);
-    }
-  },
-
-  /**
-   * Stream an SSE endpoint. Returns an async iterable of all typed events.
-   * Unlike `stream()`, this does NOT filter to only token events.
-   */
-  streamEvents: async function* (
-    path: string,
-    body?: unknown,
-    signal?: AbortSignal,
-  ): AsyncGenerator<{ type: string; data: unknown } & Record<string, unknown>> {
-    const res = await fetch(`${BASE}${path}`, {
-      method: "POST",
-      headers: { ...getAdminSecretHeader(), [CSRF_HEADER]: CSRF_HEADER_VALUE, "Content-Type": "application/json" },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      cache: "no-store",
-      signal,
-    });
-    showGenerationFallbackHeader(res);
-
-    if (!res.ok || !res.body) {
-      let detail = `HTTP ${res.status}`;
-      try {
-        const text = await res.text();
-        const json = JSON.parse(text);
-        detail = json.error || json.message || text.slice(0, 200);
-      } catch {
-        /* couldn't parse body */
-      }
-      throw new ApiError(res.status, detail);
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let completed = false;
+    };
+    if (watchPendingRead) document.addEventListener("visibilitychange", onVisibility);
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const read = reader.read();
+        readPending = true;
+        if (watchPendingRead) startResumeDisconnectTimer();
+        let result: ReadableStreamReadResult<Uint8Array>;
+        try {
+          result = resumeDisconnect ? await Promise.race([read, resumeDisconnect]) : await read;
+        } finally {
+          readPending = false;
+          clearResumeDisconnectTimer();
+        }
+        const { done, value } = result;
         if (done) {
           completed = true;
           buffer += decoder.decode();
@@ -473,15 +485,16 @@ export const api = {
         if (parsed.type === "error") return;
       }
     } finally {
+      if (watchPendingRead) document.removeEventListener("visibilitychange", onVisibility);
+      clearResumeDisconnectTimer();
       await releaseSseReader(reader, completed);
     }
   },
 
   /** Upload a file via multipart/form-data */
   upload: async <T>(path: string, formData: FormData): Promise<T> => {
-    const res = await fetch(`${BASE}${path}`, {
+    const res = await apiFetch(path, {
       method: "POST",
-      headers: { ...getAdminSecretHeader(), [CSRF_HEADER]: CSRF_HEADER_VALUE },
       body: formData,
     });
     showGenerationFallbackHeader(res);

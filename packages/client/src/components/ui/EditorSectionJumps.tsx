@@ -1,19 +1,16 @@
 import type { ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
+import { useLocalizedUiText } from "../../localization/use-localized-ui-text";
 
 export type EditorSectionJump = {
   id: string;
   label: string;
 };
 
-export function EditorSectionJumps({
-  items,
-  className,
-}: {
-  items: readonly EditorSectionJump[];
-  className?: string;
-}) {
+export function EditorSectionJumps({ items, className }: { items: readonly EditorSectionJump[]; className?: string }) {
+  const localize = useLocalizedUiText();
+
   const scrollToSection = (id: string) => {
     const target = document.getElementById(id);
     if (!target) return;
@@ -23,7 +20,7 @@ export function EditorSectionJumps({
   };
 
   return (
-    <nav aria-label="Card sections" className={cn("mari-editor-section-jumps", className)}>
+    <nav aria-label={localize("Card sections")} className={cn("mari-editor-section-jumps", className)}>
       {items.map((item) => (
         <button
           key={item.id}
@@ -31,7 +28,7 @@ export function EditorSectionJumps({
           onClick={() => scrollToSection(item.id)}
           className="mari-editor-section-jump"
         >
-          {item.label}
+          {localize(item.label)}
         </button>
       ))}
     </nav>

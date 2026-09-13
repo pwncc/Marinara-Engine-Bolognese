@@ -64,6 +64,7 @@ import {
   RotateCcw,
   VolumeX,
 } from "lucide-react";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 // `combatant.sprite` is populated either from a real avatar URL (player party,
 // from the character sheet's `avatarUrl`) or from the encounter LLM, which is
@@ -120,6 +121,28 @@ function numberFromUnknown(value: unknown, fallback: number): number {
 
 function normalizeCombatSkillType(value: unknown): CombatSkillType {
   return value === "heal" || value === "buff" || value === "debuff" ? value : "attack";
+}
+
+function combatSkillTargetsAllies(type: CombatSkillType | undefined): boolean {
+  return type === "heal" || type === "buff";
+}
+
+function combatSkillTargetsEnemies(type: CombatSkillType | undefined): boolean {
+  return type === "attack" || type === "debuff";
+}
+
+function combatSkillTypeLabelKey(type: CombatSkillType): string {
+  if (type === "heal") return "ui.game.gamecombatui.heal";
+  if (type === "buff") return "ui.game.gamecombatui.buff";
+  if (type === "debuff") return "ui.game.gamecombatui.debuff";
+  return "ui.game.gamecombatui.atk";
+}
+
+function combatSkillDescriptionKey(type: CombatSkillType): string {
+  if (type === "heal") return "ui.game.gamecombatui.restoresHp";
+  if (type === "buff") return "ui.game.gamecombatui.strengthensAnAlly";
+  if (type === "debuff") return "ui.game.gamecombatui.weakensAnEnemy";
+  return "ui.game.gamecombatui.specialAttack";
 }
 
 function normalizeCombatStatusStat(value: unknown): CombatStatusStat {
@@ -651,6 +674,7 @@ export function GameCombatUI({
   onSpriteSuggestionChange,
   isStreaming,
 }: GameCombatUIProps) {
+  const { t: localizeUi } = useUiTranslation();
   useRenderTimer("game-combat"); // [#3104 diagnostic]
   // Combat state
   const [phase, setPhase] = useState<CombatPhase>("intro");
@@ -1081,7 +1105,7 @@ export function GameCombatUI({
 
     lastAutoPlayedCombatVoiceGroupRef.current = groupKey;
     playCombatVoiceKeys(
-      combatVoiceLines.filter((line, index) => entries[index]?.status === "ready").map((line) => line.voiceKey),
+      combatVoiceLines.filter((_, index) => entries[index]?.status === "ready").map((line) => line.voiceKey),
     );
   }, [combatVoiceLines, combatVoiceVersion, playCombatVoiceKeys, stopCombatVoicePlayback]);
 
@@ -1112,8 +1136,16 @@ export function GameCombatUI({
               type="button"
               onClick={combatVoicePaused ? resumeCombatVoicePlayback : pauseCombatVoicePlayback}
               className="inline-flex h-6 w-6 items-center justify-center rounded-full text-sky-100 transition-colors hover:bg-white/10"
-              title={combatVoicePaused ? "Resume combat voice-over" : "Pause combat voice-over"}
-              aria-label={combatVoicePaused ? "Resume combat voice-over" : "Pause combat voice-over"}
+              title={
+                combatVoicePaused
+                  ? localizeUi("ui.game.gamecombatui.resumeCombatVoiceOver")
+                  : localizeUi("ui.game.gamecombatui.pauseCombatVoiceOver")
+              }
+              aria-label={
+                combatVoicePaused
+                  ? localizeUi("ui.game.gamecombatui.resumeCombatVoiceOver")
+                  : localizeUi("ui.game.gamecombatui.pauseCombatVoiceOver")
+              }
             >
               {combatVoicePaused ? <Play size={12} /> : <Pause size={12} />}
             </button>
@@ -1121,8 +1153,8 @@ export function GameCombatUI({
               type="button"
               onClick={restartCombatVoicePlayback}
               className="inline-flex h-6 w-6 items-center justify-center rounded-full text-sky-100 transition-colors hover:bg-white/10"
-              title="Restart combat voice-over"
-              aria-label="Restart combat voice-over"
+              title={localizeUi("ui.game.gamecombatui.restartCombatVoiceOver")}
+              aria-label={localizeUi("ui.game.gamecombatui.restartCombatVoiceOver")}
             >
               <RotateCcw size={12} />
             </button>
@@ -1130,8 +1162,8 @@ export function GameCombatUI({
               type="button"
               onClick={stopCombatVoicePlayback}
               className="inline-flex h-6 w-6 items-center justify-center rounded-full text-sky-100 transition-colors hover:bg-white/10"
-              title="Stop combat voice-over"
-              aria-label="Stop combat voice-over"
+              title={localizeUi("ui.game.gamecombatui.stopCombatVoiceOver")}
+              aria-label={localizeUi("ui.game.gamecombatui.stopCombatVoiceOver")}
             >
               <VolumeX size={12} />
             </button>
@@ -1141,8 +1173,8 @@ export function GameCombatUI({
             type="button"
             onClick={() => playCombatVoiceKeys(playableCombatVoiceKeys)}
             className="inline-flex h-6 w-6 items-center justify-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
-            title="Play combat voice-over"
-            aria-label="Play combat voice-over"
+            title={localizeUi("ui.game.gamecombatui.playCombatVoiceOver")}
+            aria-label={localizeUi("ui.game.gamecombatui.playCombatVoiceOver")}
             disabled={playableCombatVoiceKeys.length === 0}
           >
             <Play size={12} />
@@ -1205,13 +1237,13 @@ export function GameCombatUI({
   const selectedSkill = activePlayer?.skills?.find((skill) => skill.id === selectedSkillId) ?? null;
   const selectedItemEffect = selectedItemName ? getCombatItemEffect(selectedItemName, combatItemEffects) : undefined;
   const selectingAllyTarget =
-    (selectedAction === "skill" && selectedSkill?.type === "heal") ||
+    (selectedAction === "skill" && combatSkillTargetsAllies(selectedSkill?.type)) ||
     (selectedAction === "item" &&
       combatItemTargetsAllies(selectedItemEffect) &&
       !combatItemTargetsEnemies(selectedItemEffect));
   const selectingEnemyTarget =
     selectedAction === "attack" ||
-    (selectedAction === "skill" && selectedSkill?.type !== "heal") ||
+    (selectedAction === "skill" && combatSkillTargetsEnemies(selectedSkill?.type)) ||
     (selectedAction === "item" && combatItemTargetsEnemies(selectedItemEffect));
   const activeCombatAction =
     phase === "animating" && roundResult && animatingActionIndex >= 0
@@ -1679,8 +1711,8 @@ export function GameCombatUI({
             <div className="absolute inset-x-2 top-2 z-10 flex items-center gap-2 rounded-lg border border-white/10 bg-black/75 px-3 py-2 text-xs text-white/70 backdrop-blur-md">
               <div className="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white" />
               {selectedAction === "custom"
-                ? "The Game Master is adjudicating your maneuver..."
-                : "Resolving actions..."}
+                ? localizeUi("ui.game.gamecombatui.theGameMasterIsAdjudicatingYourManeuver")
+                : localizeUi("ui.game.gamecombatui.resolvingActions")}
             </div>
           )}
 
@@ -1735,7 +1767,7 @@ export function GameCombatUI({
                 onClick={() => onCombatEnd("victory", buildSummary("victory"))}
                 className="rounded-lg bg-amber-500/20 px-6 py-2.5 text-sm font-semibold text-amber-200 ring-1 ring-amber-400/30 transition-colors hover:bg-amber-500/30"
               >
-                Continue
+                {localizeUi("ui.noodle.wizardfooter.continue")}
               </button>
             </div>
           )}
@@ -1748,7 +1780,7 @@ export function GameCombatUI({
                 onClick={() => onCombatEnd("defeat", buildSummary("defeat"))}
                 className="rounded-lg bg-red-500/20 px-6 py-2.5 text-sm font-semibold text-red-200 ring-1 ring-red-400/30 transition-colors hover:bg-red-500/30"
               >
-                Continue
+                {localizeUi("ui.noodle.wizardfooter.continue")}
               </button>
             </div>
           )}
@@ -1810,7 +1842,7 @@ export function GameCombatUI({
                   : "border-white/10 bg-white/5 text-white/55 hover:bg-white/10",
               )}
             >
-              Party
+              {localizeUi("ui.game.gamecombatui.party")}
             </button>
             {combatMechanics.length > 0 && (
               <button
@@ -1823,7 +1855,7 @@ export function GameCombatUI({
                     : "border-white/10 bg-white/5 text-white/55 hover:bg-white/10",
                 )}
               >
-                Mech · {combatMechanics.length}
+                {localizeUi("ui.game.gamecombatui.mech")} {combatMechanics.length}
               </button>
             )}
             {visibleCombatDialogue.length > 0 && (
@@ -1837,7 +1869,7 @@ export function GameCombatUI({
                     : "border-white/10 bg-white/5 text-white/55 hover:bg-white/10",
                 )}
               >
-                Cues
+                {localizeUi("ui.game.gamecombatui.cues")}
               </button>
             )}
             <button
@@ -1850,11 +1882,11 @@ export function GameCombatUI({
                   : "border-white/10 bg-white/5 text-white/55 hover:bg-white/10",
               )}
             >
-              Log
+              {localizeUi("ui.game.gamecombatui.log")}
             </button>
             {turnOrder.length > 0 && (
               <span className="ml-auto shrink-0 truncate rounded bg-white/5 px-2 py-1 text-[0.55rem] font-semibold uppercase tracking-wide text-white/45">
-                Next: {turnOrder[0]?.name ?? "—"}
+                {localizeUi("ui.game.gamecombatui.next")} {turnOrder[0]?.name ?? "—"}
               </span>
             )}
           </div>
@@ -1878,16 +1910,21 @@ export function GameCombatUI({
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-xs font-semibold text-white">{activePlayer.name}</div>
                   <div className="text-[0.55rem] tabular-nums text-white/45">
-                    HP {activePlayer.hp}/{activePlayer.maxHp}
-                    {activePlayer.maxMp ? ` · MP ${activePlayer.mp ?? 0}/${activePlayer.maxMp}` : ""}
+                    {localizeUi("ui.game.gamecharactersheet.hp")} {activePlayer.hp}/{activePlayer.maxHp}
+                    {activePlayer.maxMp
+                      ? localizeUi("ui.game.gamecombatui.mpValue1Value2", {
+                          value1: activePlayer.mp ?? 0,
+                          value2: activePlayer.maxMp,
+                        })
+                      : ""}
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-col items-center gap-0.5 text-center">
                   <span className="min-w-[4.25rem] rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-white/45">
-                    Round {round}
+                    {localizeUi("ui.game.gamecombatui.round")} {round}
                   </span>
                   <span className="min-w-[4.25rem] rounded bg-amber-500/20 px-1.5 py-0.5 text-[0.55rem] font-semibold uppercase tracking-wide text-amber-200">
-                    Your turn
+                    {localizeUi("ui.game.gamecombatui.yourTurn")}
                   </span>
                 </div>
               </div>
@@ -1923,7 +1960,7 @@ export function GameCombatUI({
                 <div className="flex items-center gap-2">
                   <Sparkles size={13} className="text-blue-400" />
                   <div className="text-[0.65rem] text-white/60">
-                    Pick a skill, then a target. Greyed out = not enough MP.
+                    {localizeUi("ui.game.gamecombatui.pickASkillThenATargetGreyedOutNot")}
                   </div>
                 </div>
                 {activePlayer.skills && activePlayer.skills.length > 0 ? (
@@ -1950,7 +1987,8 @@ export function GameCombatUI({
                         >
                           <span className="min-w-0 truncate font-semibold text-white/90">{skill.name}</span>
                           <span className="shrink-0 text-[0.6rem] tabular-nums text-white/45">
-                            {skill.type === "heal" ? "Heal" : "Atk"} · {skill.mpCost} MP
+                            {localizeUi(combatSkillTypeLabelKey(skill.type))} · {skill.mpCost}{" "}
+                            {localizeUi("ui.game.gamecombatui.mp")}
                           </span>
                         </button>
                       );
@@ -1958,7 +1996,7 @@ export function GameCombatUI({
                   </div>
                 ) : (
                   <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/45">
-                    No combat skills are available for this combatant.
+                    {localizeUi("ui.game.gamecombatui.noCombatSkillsAreAvailableForThisCombatant")}
                   </div>
                 )}
                 <button
@@ -1970,7 +2008,7 @@ export function GameCombatUI({
                   }}
                   className="self-start rounded border border-white/15 px-2 py-0.5 text-[0.65rem] text-white/60 hover:bg-white/10 hover:text-white"
                 >
-                  Back
+                  {localizeUi("ui.noodle.noodlerframe.back")}
                 </button>
               </div>
             )}
@@ -1980,7 +2018,9 @@ export function GameCombatUI({
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <Backpack size={13} className="text-green-400" />
-                    <span className="text-[0.65rem] text-white/60">Pick an item to use this turn.</span>
+                    <span className="text-[0.65rem] text-white/60">
+                      {localizeUi("ui.game.gamecombatui.pickAnItemToUseThisTurn")}
+                    </span>
                   </div>
                   {onOpenInventory && (
                     <button
@@ -1988,7 +2028,7 @@ export function GameCombatUI({
                       onClick={onOpenInventory}
                       className="rounded border border-white/15 px-2 py-0.5 text-[0.6rem] text-white/60 hover:bg-white/10 hover:text-white"
                     >
-                      Full inventory
+                      {localizeUi("ui.game.gamecombatui.fullInventory")}
                     </button>
                   )}
                 </div>
@@ -2009,7 +2049,8 @@ export function GameCombatUI({
                             </span>
                             {item.quantity > 1 && (
                               <span className="shrink-0 rounded-full bg-white/10 px-1.5 text-[0.55rem] tabular-nums text-white/60">
-                                x{item.quantity}
+                                {localizeUi("ui.panels.imagedimensionrow.x")}
+                                {item.quantity}
                               </span>
                             )}
                           </div>
@@ -2022,7 +2063,7 @@ export function GameCombatUI({
                   </div>
                 ) : (
                   <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/45">
-                    No items are available in your inventory.
+                    {localizeUi("ui.game.gamecombatui.noItemsAreAvailableInYourInventory")}
                   </div>
                 )}
                 <button
@@ -2034,7 +2075,7 @@ export function GameCombatUI({
                   }}
                   className="self-start rounded border border-white/15 px-2 py-0.5 text-[0.65rem] text-white/60 hover:bg-white/10 hover:text-white"
                 >
-                  Back
+                  {localizeUi("ui.noodle.noodlerframe.back")}
                 </button>
               </div>
             )}
@@ -2043,7 +2084,9 @@ export function GameCombatUI({
               <div className="flex flex-col gap-2 p-2">
                 <div className="flex items-center gap-2">
                   <Zap size={13} className="text-violet-300" />
-                  <span className="text-[0.65rem] text-white/60">Describe what you attempt; the GM resolves it.</span>
+                  <span className="text-[0.65rem] text-white/60">
+                    {localizeUi("ui.game.gamecombatui.describeWhatYouAttemptTheGmResolvesIt")}
+                  </span>
                 </div>
                 <textarea
                   value={customInstruction}
@@ -2061,7 +2104,7 @@ export function GameCombatUI({
                     }
                   }}
                   className="min-h-20 w-full resize-none rounded-lg border border-violet-300/20 bg-violet-500/10 px-2.5 py-2 text-sm leading-relaxed text-white/85 outline-none transition-colors placeholder:text-white/35 focus:border-violet-300/45"
-                  placeholder="I kick sand into the Ruin Guard's cracked lens, trying to blind it for a round."
+                  placeholder={localizeUi("ui.game.gamecombatui.iKickSandIntoTheRuinGuardSCracked")}
                   autoFocus
                 />
                 <div className="flex flex-wrap gap-1.5">
@@ -2071,7 +2114,7 @@ export function GameCombatUI({
                     disabled={!customInstruction.trim() || !onCustomInstruction}
                     className="rounded-lg border border-violet-300/25 bg-violet-500/15 px-3 py-1.5 text-xs font-semibold text-violet-100 transition-colors hover:bg-violet-500/25 disabled:cursor-not-allowed disabled:opacity-45"
                   >
-                    Ask GM
+                    {localizeUi("ui.game.gamecombatui.askGm")}
                   </button>
                   <button
                     type="button"
@@ -2083,7 +2126,7 @@ export function GameCombatUI({
                     }}
                     className="rounded border border-white/15 px-2 py-1 text-xs text-white/60 hover:bg-white/10 hover:text-white"
                   >
-                    Back
+                    {localizeUi("ui.noodle.noodlerframe.back")}
                   </button>
                 </div>
               </div>
@@ -2121,7 +2164,7 @@ export function GameCombatUI({
                       >
                         <span className="min-w-0 truncate font-semibold">{member.name}</span>
                         <span className="shrink-0 text-[0.6rem] tabular-nums text-white/55">
-                          HP {member.hp}/{member.maxHp}
+                          {localizeUi("ui.game.gamecharactersheet.hp")} {member.hp}/{member.maxHp}
                         </span>
                       </button>
                     ))}
@@ -2144,7 +2187,7 @@ export function GameCombatUI({
                       >
                         <span className="min-w-0 truncate font-semibold">{enemy.name}</span>
                         <span className="shrink-0 text-[0.6rem] tabular-nums text-white/55">
-                          HP {enemy.hp}/{enemy.maxHp}
+                          {localizeUi("ui.game.gamecharactersheet.hp")} {enemy.hp}/{enemy.maxHp}
                         </span>
                       </button>
                     ))}
@@ -2167,7 +2210,7 @@ export function GameCombatUI({
                   }}
                   className="self-start rounded border border-white/15 px-2 py-0.5 text-[0.65rem] text-white/60 hover:bg-white/10 hover:text-white"
                 >
-                  Back
+                  {localizeUi("ui.noodle.noodlerframe.back")}
                 </button>
               </div>
             )}
@@ -2196,7 +2239,7 @@ export function GameCombatUI({
                   type="button"
                   onClick={() => setOpenDrawer(null)}
                   className="rounded p-1 text-white/55 hover:bg-white/10 hover:text-white"
-                  aria-label="Close drawer"
+                  aria-label={localizeUi("ui.game.gamecombatui.closeDrawer")}
                 >
                   <X size={14} />
                 </button>
@@ -2238,7 +2281,7 @@ export function GameCombatUI({
                 <div className="space-y-1 pr-1">
                   {combatLogEntries.length === 0 ? (
                     <div className="rounded border border-white/10 bg-white/5 px-2 py-1.5 text-[0.65rem] text-white/45">
-                      No combat events recorded yet.
+                      {localizeUi("ui.game.gamecombatui.noCombatEventsRecordedYet")}
                     </div>
                   ) : (
                     combatLogEntries.map((entry) => (
@@ -2368,7 +2411,9 @@ export function GameCombatUI({
           <div className="flex min-w-0 flex-wrap items-center gap-2">{combatControlsSlot}</div>
           {phase !== "intro" && (
             <div className="shrink-0 rounded-lg border border-white/10 bg-black/65 px-2.5 py-1 text-center shadow-lg backdrop-blur-md">
-              <div className="text-[0.55rem] font-semibold uppercase tracking-widest text-white/40">Round</div>
+              <div className="text-[0.55rem] font-semibold uppercase tracking-widest text-white/40">
+                {localizeUi("ui.game.gamecombatui.round")}
+              </div>
               <div className="text-lg font-bold leading-none tabular-nums text-white">{round}</div>
             </div>
           )}
@@ -2379,7 +2424,7 @@ export function GameCombatUI({
         <div className="relative z-30 shrink-0 border-y border-white/10 bg-black/60 px-3 py-1.5 backdrop-blur-md sm:px-4">
           <div className="flex items-center gap-1 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <span className="mr-1 shrink-0 text-[0.6rem] font-semibold uppercase tracking-widest text-white/50">
-              Turn
+              {localizeUi("ui.game.gamesurfacecomponent.turn")}
             </span>
             {turnOrder.map((entry, i) => {
               const isParty = party.some((p) => p.id === entry.id);
@@ -2413,8 +2458,8 @@ export function GameCombatUI({
               <div className="flex items-center gap-2 text-sm text-white/60">
                 <div className="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white" />
                 {selectedAction === "custom"
-                  ? "The Game Master is adjudicating your maneuver..."
-                  : "Resolving actions..."}
+                  ? localizeUi("ui.game.gamecombatui.theGameMasterIsAdjudicatingYourManeuver")
+                  : localizeUi("ui.game.gamecombatui.resolvingActions")}
               </div>
             )}
             {phase === "animating" && roundResult && animatingActionIndex >= 0 && (
@@ -2438,7 +2483,7 @@ export function GameCombatUI({
               </div>
               <div>
                 <div className="text-xs font-semibold text-white">{activePlayer.name}</div>
-                <div className="text-[0.6rem] text-white/40">Choose action</div>
+                <div className="text-[0.6rem] text-white/40">{localizeUi("ui.game.gamecombatui.chooseAction")}</div>
               </div>
             </div>
 
@@ -2456,7 +2501,7 @@ export function GameCombatUI({
                     playSfx(COMBAT_SFX.menuHover);
                   }}
                   className={cn(
-                    "group flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-all duration-150",
+                    "group flex items-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium transition-all duration-150",
                     actionMenuIndex === i
                       ? "border-[var(--primary)]/50 bg-[var(--primary)]/20 text-white shadow-[0_0_12px_rgba(var(--primary-rgb),0.15)]"
                       : "border-white/10 bg-white/5 text-white/70 hover:border-white/20 hover:bg-white/10 hover:text-white",
@@ -2475,8 +2520,13 @@ export function GameCombatUI({
             <div className="flex items-center gap-2">
               <Sparkles size={14} className="text-blue-400" />
               <div>
-                <div className="text-xs font-semibold text-white">{activePlayer.name}'s Skills</div>
-                <div className="text-[0.65rem] text-white/45">Choose a combat ability, then pick a target.</div>
+                <div className="text-xs font-semibold text-white">
+                  {activePlayer.name}
+                  {localizeUi("ui.game.gamecombatui.sSkills")}
+                </div>
+                <div className="text-[0.65rem] text-white/45">
+                  {localizeUi("ui.game.gamecombatui.chooseACombatAbilityThenPickATarget")}
+                </div>
               </div>
             </div>
 
@@ -2504,14 +2554,18 @@ export function GameCombatUI({
                     >
                       <div className="font-semibold text-white/90">{skill.name}</div>
                       <div className="mt-0.5 text-[0.65rem] text-white/45">
-                        {skill.type === "heal" ? "Restores HP" : "Special attack"} • {skill.mpCost} MP
+                        {localizeUi(combatSkillTypeLabelKey(skill.type))} ·{" "}
+                        {skill.description || localizeUi(combatSkillDescriptionKey(skill.type))} • {skill.mpCost}{" "}
+                        {localizeUi("ui.game.gamecombatui.mp")}
                       </div>
                     </button>
                   );
                 })}
               </div>
             ) : (
-              <div className="text-xs text-white/45">No combat skills are available for this combatant.</div>
+              <div className="text-xs text-white/45">
+                {localizeUi("ui.game.gamecombatui.noCombatSkillsAreAvailableForThisCombatant")}
+              </div>
             )}
 
             <div>
@@ -2524,7 +2578,7 @@ export function GameCombatUI({
                 }}
                 className="rounded border border-white/15 px-2 py-1 text-xs text-white/60 hover:bg-white/10 hover:text-white"
               >
-                Back
+                {localizeUi("ui.noodle.noodlerframe.back")}
               </button>
             </div>
           </div>
@@ -2536,8 +2590,13 @@ export function GameCombatUI({
               <div className="flex items-center gap-2">
                 <Backpack size={14} className="text-green-400" />
                 <div>
-                  <div className="text-xs font-semibold text-white">{activePlayer.name}'s Items</div>
-                  <div className="text-[0.65rem] text-white/45">Choose an item to use this turn.</div>
+                  <div className="text-xs font-semibold text-white">
+                    {activePlayer.name}
+                    {localizeUi("ui.game.gamecombatui.sItems")}
+                  </div>
+                  <div className="text-[0.65rem] text-white/45">
+                    {localizeUi("ui.game.gamecombatui.chooseAnItemToUseThisTurn")}
+                  </div>
                 </div>
               </div>
               {onOpenInventory && (
@@ -2546,7 +2605,7 @@ export function GameCombatUI({
                   onClick={onOpenInventory}
                   className="rounded border border-white/15 px-2 py-1 text-xs text-white/60 hover:bg-white/10 hover:text-white"
                 >
-                  Open Inventory
+                  {localizeUi("ui.game.gamecombatui.openInventory")}
                 </button>
               )}
             </div>
@@ -2568,7 +2627,8 @@ export function GameCombatUI({
                         </span>
                         {item.quantity > 1 && (
                           <span className="shrink-0 rounded-full bg-white/10 px-1.5 py-0.5 text-[0.6rem] tabular-nums text-white/60">
-                            x{item.quantity}
+                            {localizeUi("ui.panels.imagedimensionrow.x")}
+                            {item.quantity}
                           </span>
                         )}
                       </div>
@@ -2581,7 +2641,7 @@ export function GameCombatUI({
               </div>
             ) : (
               <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-xs text-white/45">
-                No items are available in your inventory.
+                {localizeUi("ui.game.gamecombatui.noItemsAreAvailableInYourInventory")}
               </div>
             )}
 
@@ -2595,7 +2655,7 @@ export function GameCombatUI({
                 }}
                 className="rounded border border-white/15 px-2 py-1 text-xs text-white/60 hover:bg-white/10 hover:text-white"
               >
-                Back
+                {localizeUi("ui.noodle.noodlerframe.back")}
               </button>
             </div>
           </div>
@@ -2606,9 +2666,12 @@ export function GameCombatUI({
             <div className="flex items-center gap-2">
               <Zap size={14} className="text-violet-300" />
               <div>
-                <div className="text-xs font-semibold text-white">{activePlayer.name}'s Special Maneuver</div>
+                <div className="text-xs font-semibold text-white">
+                  {activePlayer.name}
+                  {localizeUi("ui.game.gamecombatui.sSpecialManeuver")}
+                </div>
                 <div className="text-[0.65rem] text-white/45">
-                  Describe what you attempt; the GM can apply statuses, elemental effects, or consequences.
+                  {localizeUi("ui.game.gamecombatui.describeWhatYouAttemptTheGmCanApplyStatuses")}
                 </div>
               </div>
             </div>
@@ -2629,7 +2692,7 @@ export function GameCombatUI({
                 }
               }}
               className="min-h-24 w-full resize-none rounded-lg border border-violet-300/20 bg-violet-500/10 px-3 py-2 text-sm leading-relaxed text-white/85 outline-none transition-colors placeholder:text-white/35 focus:border-violet-300/45"
-              placeholder="Example: I kick sand into the Ruin Guard's cracked lens, trying to blind it for a round."
+              placeholder={localizeUi("ui.game.gamecombatui.exampleIKickSandIntoTheRuinGuardS")}
               autoFocus
             />
 
@@ -2640,7 +2703,7 @@ export function GameCombatUI({
                 disabled={!customInstruction.trim() || !onCustomInstruction}
                 className="rounded-lg border border-violet-300/25 bg-violet-500/15 px-3 py-1.5 text-xs font-semibold text-violet-100 transition-colors hover:bg-violet-500/25 disabled:cursor-not-allowed disabled:opacity-45"
               >
-                Ask GM
+                {localizeUi("ui.game.gamecombatui.askGm")}
               </button>
               <button
                 type="button"
@@ -2652,7 +2715,7 @@ export function GameCombatUI({
                 }}
                 className="rounded border border-white/15 px-2 py-1.5 text-xs text-white/60 hover:bg-white/10 hover:text-white"
               >
-                Back
+                {localizeUi("ui.noodle.noodlerframe.back")}
               </button>
             </div>
           </div>
@@ -2691,7 +2754,7 @@ export function GameCombatUI({
                   >
                     <div className="font-semibold text-white/90">{enemy.name}</div>
                     <div className="mt-0.5 text-[0.65rem] tabular-nums text-white/45">
-                      HP {enemy.hp}/{enemy.maxHp}
+                      {localizeUi("ui.game.gamecharactersheet.hp")} {enemy.hp}/{enemy.maxHp}
                     </div>
                   </button>
                 ))}
@@ -2714,7 +2777,7 @@ export function GameCombatUI({
                   >
                     <div className="font-semibold text-white/90">{member.name}</div>
                     <div className="mt-0.5 text-[0.65rem] tabular-nums text-white/45">
-                      HP {member.hp}/{member.maxHp}
+                      {localizeUi("ui.game.gamecharactersheet.hp")} {member.hp}/{member.maxHp}
                     </div>
                   </button>
                 ))}
@@ -2737,7 +2800,7 @@ export function GameCombatUI({
               }}
               className="rounded border border-white/15 px-2 py-0.5 text-xs text-white/60 hover:bg-white/10 hover:text-white"
             >
-              Back
+              {localizeUi("ui.noodle.noodlerframe.back")}
             </button>
           </div>
         )}
@@ -2751,7 +2814,7 @@ export function GameCombatUI({
               onClick={() => onCombatEnd("victory", buildSummary("victory"))}
               className="mt-2 rounded-lg bg-amber-500/20 px-6 py-2 text-sm font-semibold text-amber-200 ring-1 ring-amber-400/30 transition-colors hover:bg-amber-500/30"
             >
-              Continue
+              {localizeUi("ui.noodle.wizardfooter.continue")}
             </button>
           </div>
         )}
@@ -2766,7 +2829,7 @@ export function GameCombatUI({
               onClick={() => onCombatEnd("defeat", buildSummary("defeat"))}
               className="mt-2 rounded-lg bg-red-500/20 px-6 py-2 text-sm font-semibold text-red-200 ring-1 ring-red-400/30 transition-colors hover:bg-red-500/30"
             >
-              Continue
+              {localizeUi("ui.noodle.wizardfooter.continue")}
             </button>
           </div>
         )}
@@ -2776,7 +2839,7 @@ export function GameCombatUI({
           <div className="border-t border-white/5 px-3 py-2 sm:px-4">
             <div className="mb-1 flex items-center gap-1.5 text-[0.6rem] font-semibold uppercase tracking-wide text-white/40">
               <ScrollText size={11} />
-              Combat Log
+              {localizeUi("ui.game.gamecombatui.combatLog")}
             </div>
             <div className="max-h-24 space-y-1 overflow-y-auto pr-1 sm:max-h-32">
               {combatLogEntries.map((entry) => (
@@ -2861,6 +2924,7 @@ function CombatDialoguePanel({
 }
 
 function CombatMechanicsPanel({ mechanics, round }: { mechanics: CombatMechanic[]; round: number }) {
+  const { t: localizeUi } = useUiTranslation();
   const visibleMechanics = mechanics.filter((mechanic) => mechanic.name?.trim() && mechanic.description?.trim());
   if (visibleMechanics.length === 0) return null;
 
@@ -2882,7 +2946,7 @@ function CombatMechanicsPanel({ mechanics, round }: { mechanics: CombatMechanic[
                 <span className="min-w-0 truncate font-semibold">{mechanic.name}</span>
                 {interval > 0 && (
                   <span className="shrink-0 rounded-full bg-white/10 px-1.5 py-0.5 text-[0.55rem] text-white/50">
-                    every {interval}
+                    {localizeUi("ui.game.combatmechanicspanel.every")} {interval}
                   </span>
                 )}
               </div>
@@ -2921,6 +2985,7 @@ function CombatantCard({
   onDismissDialogue?: (line: PartyDialogueLine) => void;
   compact?: boolean;
 }) {
+  const { t: localizeUi } = useUiTranslation();
   const hpPercent = combatant.maxHp > 0 ? (combatant.hp / combatant.maxHp) * 100 : 0;
   const mpPercent = combatant.maxMp && combatant.maxMp > 0 ? ((combatant.mp ?? 0) / combatant.maxMp) * 100 : null;
   const isKo = combatant.hp <= 0;
@@ -2992,7 +3057,7 @@ function CombatantCard({
             <button
               key={`${buildCombatDialogueLineKey(line)}-${index}`}
               type="button"
-              title="Dismiss dialogue"
+              title={localizeUi("ui.game.combatantcard.dismissDialogue")}
               onClick={(event) => {
                 event.stopPropagation();
                 onDismissDialogue(line);
@@ -3074,7 +3139,10 @@ function CombatantCard({
             {combatant.statusEffects.slice(0, 4).map((effect, i) => (
               <div
                 key={`${effect.name}-${effect.turnsLeft}-${i}`}
-                title={`${effect.name} (${effect.turnsLeft} turns)`}
+                title={localizeUi("ui.game.combatantcard.value1Value2Turns", {
+                  value1: effect.name,
+                  value2: effect.turnsLeft,
+                })}
                 className={cn(
                   "relative flex h-5 min-w-5 items-center justify-center rounded-full border px-0.5 text-[0.65rem] shadow-[0_4px_12px_rgba(0,0,0,0.35)] backdrop-blur-sm",
                   effect.modifier > 0
@@ -3119,7 +3187,8 @@ function CombatantCard({
           {combatant.name}
         </span>
         <span className="rounded-full bg-white/10 px-1.5 py-0 text-[0.55rem] tabular-nums text-white/40">
-          Lv.{combatant.level}
+          {localizeUi("ui.game.combatantcard.lv")}
+          {combatant.level}
         </span>
       </div>
 
@@ -3164,7 +3233,10 @@ function CombatantCard({
               backgroundColor: `${ELEMENT_AURA_COLORS[combatant.elementAura.element] ?? "#888"}20`,
               color: ELEMENT_AURA_COLORS[combatant.elementAura.element] ?? "#aaa",
             }}
-            title={`${combatant.elementAura.element} aura (gauge: ${combatant.elementAura.gauge})`}
+            title={localizeUi("ui.game.combatantcard.value1AuraGaugeValue2", {
+              value1: combatant.elementAura.element,
+              value2: combatant.elementAura.gauge,
+            })}
           >
             {combatant.elementAura.element}
           </div>
@@ -3176,6 +3248,7 @@ function CombatantCard({
 
 /** Floating damage number animation. */
 function DamageNumber({ popup }: { popup: DamagePopup }) {
+  const { t: localizeUi } = useUiTranslation();
   return (
     <div
       className={cn(
@@ -3200,7 +3273,11 @@ function DamageNumber({ popup }: { popup: DamagePopup }) {
           {popup.reactionLabel}
         </div>
       )}
-      {popup.isMiss ? "MISS" : popup.isCritical ? `${popup.amount}!` : popup.amount}
+      {popup.isMiss
+        ? localizeUi("ui.game.damagenumber.miss")
+        : popup.isCritical
+          ? localizeUi("ui.game.damagenumber.value1", { value1: popup.amount })
+          : popup.amount}
     </div>
   );
 }

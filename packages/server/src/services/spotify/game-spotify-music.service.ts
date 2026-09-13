@@ -2,7 +2,12 @@
 // Spotify Game Music — deterministic shortlist + playback
 // ──────────────────────────────────────────────
 import { createHash } from "node:crypto";
-import type { SceneSpotifyTrackCandidate, SceneSpotifyTrackSelection } from "@marinara-engine/shared";
+import type {
+  GameSpotifySourceType,
+  SceneSpotifyTrackCandidate,
+  SceneSpotifyTrackSelection,
+} from "@marinara-engine/shared";
+import { normalizeSpotifySourceType } from "@marinara-engine/shared";
 import { logger } from "../../lib/logger.js";
 import type { createAgentsStorage } from "../storage/agents.storage.js";
 import {
@@ -13,10 +18,9 @@ import {
   type SpotifyCredentialError,
   type SpotifyCredentialsResult,
 } from "./spotify.service.js";
+import { buildSpotifyCandidateTokens, normalizeSpotifyText } from "./spotify-query-tokens.js";
 
 type AgentsStorage = ReturnType<typeof createAgentsStorage>;
-
-type GameSpotifySourceType = "liked" | "playlist" | "artist" | "any";
 
 type SpotifyTrackIndexCacheEntry = {
   tracks: SceneSpotifyTrackCandidate[];
@@ -75,40 +79,6 @@ type SpotifyPlaybackDevice = {
   is_restricted?: boolean;
 };
 
-const SPOTIFY_STOP_WORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "for",
-  "from",
-  "in",
-  "into",
-  "is",
-  "it",
-  "of",
-  "on",
-  "or",
-  "the",
-  "to",
-  "with",
-]);
-
-const SPOTIFY_MOOD_EXPANSIONS: Array<[RegExp, string[]]> = [
-  [
-    /\b(action|battle|boss|chase|combat|danger|duel|fight|war)\b/,
-    ["battle", "combat", "fight", "boss", "war", "intense"],
-  ],
-  [/\b(calm|cozy|gentle|peace|peaceful|rest|safe|soft)\b/, ["calm", "peace", "gentle", "soft", "rest", "serene"]],
-  [/\b(dark|dread|fear|horror|ominous|scary|shadow|terror)\b/, ["dark", "ominous", "shadow", "night", "horror"]],
-  [/\b(grief|lonely|melancholy|sad|sorrow|tragic|tears)\b/, ["sad", "sorrow", "melancholy", "lament", "lonely"]],
-  [/\b(love|romance|romantic|tender|warm)\b/, ["love", "romance", "tender", "heart", "warm"]],
-  [/\b(mystery|secret|sneak|stealth|suspense|tense)\b/, ["mystery", "secret", "stealth", "tension", "suspense"]],
-  [/\b(epic|heroic|triumph|victory)\b/, ["epic", "hero", "triumph", "victory", "theme"]],
-];
-
 function isCredentialError(value: SpotifyCredentialsResult | SpotifyCredentialError): value is SpotifyCredentialError {
   return "error" in value;
 }
@@ -119,10 +89,6 @@ function spotifyError(status: number, message: string): never {
 
 export function getGameSpotifyErrorStatus(error: unknown): number {
   return error instanceof GameSpotifyError ? error.status : 500;
-}
-
-function normalizeSourceType(value: unknown): GameSpotifySourceType {
-  return value === "playlist" || value === "artist" || value === "any" || value === "liked" ? value : "liked";
 }
 
 function getGameSpotifySource(meta: Record<string, unknown>):
@@ -138,7 +104,7 @@ function getGameSpotifySource(meta: Record<string, unknown>):
     return { enabled: false, reason: "Spotify music is disabled for this game." };
   }
 
-  const type = normalizeSourceType(meta.gameSpotifySourceType);
+  const type: GameSpotifySourceType = normalizeSpotifySourceType(meta.gameSpotifySourceType);
   const playlistId = typeof meta.gameSpotifyPlaylistId === "string" ? meta.gameSpotifyPlaylistId.trim() : "";
   const playlistName = typeof meta.gameSpotifyPlaylistName === "string" ? meta.gameSpotifyPlaylistName.trim() : "";
   const artist = typeof meta.gameSpotifyArtist === "string" ? meta.gameSpotifyArtist.trim() : "";
@@ -167,33 +133,6 @@ function clampCount(value: unknown, fallback: number, min: number, max: number):
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function normalizeSpotifyText(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function buildSpotifyCandidateTokens(query: string): string[] {
-  const normalized = normalizeSpotifyText(query);
-  const tokens = new Set(
-    normalized
-      .split(/\s+/)
-      .map((token) => token.trim())
-      .filter((token) => token.length > 1 && !SPOTIFY_STOP_WORDS.has(token)),
-  );
-
-  for (const [pattern, expansions] of SPOTIFY_MOOD_EXPANSIONS) {
-    if (pattern.test(normalized)) {
-      expansions.forEach((term) => tokens.add(term));
-    }
-  }
-
-  return Array.from(tokens);
 }
 
 function hashFraction(value: string): number {
@@ -452,27 +391,59 @@ async function fetchSpotifyTrackIndex(
   return { ...entry, cacheStatus: "miss" };
 }
 
+/** Spotify capped GET /search at 10 results per request in February 2026
+ *  (previously 50); larger candidate pools must paginate with `offset`.
+ *  Passing the caller's pool size straight through 400'd deterministically
+ *  for the artist and generic-search Music DJ sources, whose default is 50
+ *  (#5163, Game-mode half). */
+const SPOTIFY_SEARCH_PAGE_LIMIT = 10;
+
 async function searchSpotifyTracks(
   credentials: SpotifyCredentialsResult,
   query: string,
   limit: number,
 ): Promise<SceneSpotifyTrackCandidate[]> {
   const q = normalizeSpotifySearchQuery(query) || "soundtrack";
-  const res = await fetchSpotifyApi(
-    credentials,
-    `/search?${new URLSearchParams({ q, type: "track", limit: String(limit) })}`,
-    { signal: AbortSignal.timeout(15_000) },
-  );
-  if (!res.ok) {
-    const body = await res.text();
-    spotifyError(res.status, `Spotify search failed (${res.status}): ${body.slice(0, 200)}`);
+  const items: Array<{ uri?: string; name?: string; artists?: Array<{ name?: string }>; album?: { name?: string } }> =
+    [];
+  for (let offset = 0; items.length < limit; offset += SPOTIFY_SEARCH_PAGE_LIMIT) {
+    const pageLimit = Math.min(SPOTIFY_SEARCH_PAGE_LIMIT, limit - items.length);
+    let page: typeof items;
+    try {
+      const res = await fetchSpotifyApi(
+        credentials,
+        `/search?${new URLSearchParams({ q, type: "track", limit: String(pageLimit), offset: String(offset) })}`,
+        { signal: AbortSignal.timeout(15_000) },
+      );
+      if (!res.ok) {
+        const body = await res.text();
+        spotifyError(res.status, `Spotify search failed (${res.status}): ${body.slice(0, 200)}`);
+      }
+      const data = (await res.json()) as {
+        tracks?: {
+          items?: Array<{ uri?: string; name?: string; artists?: Array<{ name?: string }>; album?: { name?: string } }>;
+        };
+      };
+      page = data.tracks?.items ?? [];
+    } catch (error) {
+      // Pagination multiplies the transient-failure surface; a later page
+      // dying must not discard the usable results already collected.
+      if (items.length > 0) {
+        logger.warn(
+          error,
+          "Spotify search page at offset %d failed; returning %d partial results",
+          offset,
+          items.length,
+        );
+        break;
+      }
+      throw error;
+    }
+    items.push(...page);
+    // A short page means the catalog ran out for this query.
+    if (page.length < pageLimit) break;
   }
-  const data = (await res.json()) as {
-    tracks?: {
-      items?: Array<{ uri?: string; name?: string; artists?: Array<{ name?: string }>; album?: { name?: string } }>;
-    };
-  };
-  return (data.tracks?.items ?? [])
+  return items
     .map((track, index): SceneSpotifyTrackCandidate | null => {
       if (!track.uri?.startsWith("spotify:track:")) return null;
       return {

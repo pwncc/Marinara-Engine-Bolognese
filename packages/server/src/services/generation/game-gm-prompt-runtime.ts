@@ -15,7 +15,7 @@ import { generatePerceptionHints, formatPerceptionHints, type PerceptionContext 
 import { getMoraleTier, formatMoraleContext } from "../game/morale.service.js";
 import { sidecarModelService } from "../sidecar/sidecar-model.service.js";
 import { isInferenceAvailable as isSidecarInferenceAvailable } from "../sidecar/sidecar-inference.service.js";
-import { cardPromptText } from "./generation-text-utils.js";
+import { cardPromptText } from "../prompt/card-text.js";
 import { buildPartyNpcId, isPartyNpcId } from "./game-party-utils.js";
 
 type PromptMessage = {
@@ -69,8 +69,7 @@ export function resolveGameGmPromptTemplate(
   chatMetadata: Record<string, unknown>,
   setupConfig?: Record<string, unknown> | null,
 ): string | null {
-  const explicitPrompt =
-    typeof chatMetadata.gameSystemPrompt === "string" ? chatMetadata.gameSystemPrompt.trim() : "";
+  const explicitPrompt = typeof chatMetadata.gameSystemPrompt === "string" ? chatMetadata.gameSystemPrompt.trim() : "";
   if (explicitPrompt) return explicitPrompt;
 
   const selectedId =
@@ -110,8 +109,8 @@ function buildLibraryCardParts(data: any, fallbackName = "Unknown"): { name: str
   const backstory = cardPromptText(data.extensions?.backstory || data.backstory);
   const appearance = cardPromptText(data.extensions?.appearance || data.appearance);
   const systemPrompt = cardPromptText(data.system_prompt);
-  if (personality) parts.push(`Personality: ${personality}`);
   if (description) parts.push(`Description: ${description}`);
+  if (personality) parts.push(`Personality: ${personality}`);
   if (backstory) parts.push(`Backstory: ${backstory}`);
   if (appearance) parts.push(`Appearance: ${appearance}`);
   if (systemPrompt) parts.push(`Character System Instructions: ${systemPrompt}`);
@@ -320,12 +319,12 @@ export async function injectGameGmPromptRuntime(args: {
     difficulty: (setupConfig?.difficulty as string) || "normal",
     // Effective combat style: runtime drawer override wins, then the wizard
     // choice, then "classic" for legacy games created before this setting.
-    combatStyle:
-      (args.chatMetadata.gameCombatStyle as string) || (setupConfig?.combatStyle as string) || "classic",
+    combatStyle: (args.chatMetadata.gameCombatStyle as string) || (setupConfig?.combatStyle as string) || "classic",
     genre: (setupConfig?.genre as string) || "fantasy",
     setting: (setupConfig?.setting as string) || "original",
     tone: (setupConfig?.tone as string) || "balanced",
     rating: (setupConfig?.rating as "sfw" | "nsfw") || "sfw",
+    enableQuickTimeEvents: setupConfig?.enableQuickTimeEvents !== false,
     campaignPlan: gameBlueprint?.campaignPlan ?? null,
     canGenerateBackgrounds:
       !!args.chatMetadata.enableSpriteGeneration &&

@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { Download, Pencil, Plus, Regex, Trash2, Upload } from "lucide-react";
 import {
   useRegexScripts,
-  useCreateRegexScript,
+  useImportRegexScript,
   useDeleteRegexScript,
   useUpdateRegexScript,
   type RegexScriptRow,
@@ -18,10 +18,11 @@ import {
 import { useUIStore } from "../../stores/ui.store";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { downloadJsonFile } from "../../lib/download-json";
-import { getFolderImportEntries } from "@marinara-engine/shared";
+import { getFolderImportEntries, isPatternSafe } from "@marinara-engine/shared";
 import { ApiError } from "../../lib/api-client";
 import { cn } from "../../lib/utils";
 import { SettingsSwitch } from "../panels/settings/SettingControls";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 // ── IO helpers (mirror the regex export/import format used by the Presets panel) ──
 function parseBooleanValue(value: unknown, fallback = true) {
@@ -100,7 +101,10 @@ function serializeRegexScript(script: RegexScriptRow) {
     placement: parseStringArray(script.placement),
     flags: script.flags,
     promptOnly: parseBooleanValue(script.promptOnly, false),
-    applyMode: isRegexApplyMode(script.applyMode) ? script.applyMode : readRegexApplyMode(script as unknown as Record<string, unknown>),
+    applyMode: isRegexApplyMode(script.applyMode)
+      ? script.applyMode
+      : readRegexApplyMode(script as unknown as Record<string, unknown>),
+    targetPromptPresetIds: parseStringArray(script.targetPromptPresetIds),
     order: script.order,
     minDepth: script.minDepth,
     maxDepth: script.maxDepth,
@@ -168,6 +172,7 @@ function normalizeRegexImportEntry(entry: unknown, fallbackOrder: number) {
     flags,
     promptOnly: readRegexApplyMode(entry) === "prompt",
     applyMode: readRegexApplyMode(entry),
+    targetPromptPresetIds: parseStringArray(entry.targetPromptPresetIds),
     order: typeof entry.order === "number" ? fallbackOrder + entry.order : fallbackOrder,
     minDepth: parseNullableNumber(entry.minDepth),
     maxDepth: parseNullableNumber(entry.maxDepth),
@@ -181,13 +186,15 @@ export function CharacterRegexSection({
   characterId: string | null;
   characterName?: string;
 }) {
+  const { t: localizeUi } = useUiTranslation();
   const { data: regexScripts } = useRegexScripts();
-  const createRegex = useCreateRegexScript();
+  const importRegex = useImportRegexScript();
   const updateRegex = useUpdateRegexScript();
   const deleteRegex = useDeleteRegexScript();
   const openRegexDetail = useUIStore((s) => s.openRegexDetail);
   const editorDirty = useUIStore((s) => s.editorDirty);
   const [importError, setImportError] = useState<string | null>(null);
+  const [importWarning, setImportWarning] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<string | null>(null);
 
   const scopedScripts = useMemo(() => {
@@ -203,10 +210,11 @@ export function CharacterRegexSection({
     async (id: string, options?: { defaultCharacterIds?: string[] }) => {
       if (editorDirty) {
         const proceed = await showConfirmDialog({
-          title: "Unsaved Changes",
-          message:
-            "This character has unsaved changes. Opening the regex editor leaves the character editor and discards them. Save the character first, or discard and continue.",
-          confirmLabel: "Discard & Continue",
+          title: localizeUi("ui.characters.characterregexsection.unsavedChanges"),
+          message: localizeUi(
+            "ui.characters.characterregexsection.thisCharacterHasUnsavedChangesOpeningTheRegexEditor",
+          ),
+          confirmLabel: localizeUi("ui.characters.characterregexsection.discardContinue"),
           tone: "destructive",
         });
         if (!proceed) return;
@@ -216,7 +224,7 @@ export function CharacterRegexSection({
         ...(characterId ? { returnTo: { characterId, tab: "advanced" } } : {}),
       });
     },
-    [editorDirty, openRegexDetail, characterId],
+    [editorDirty, openRegexDetail, characterId, localizeUi],
   );
 
   const handleCreate = useCallback(() => {
@@ -226,7 +234,7 @@ export function CharacterRegexSection({
 
   const handleExport = useCallback(() => {
     if (scopedScripts.length === 0) {
-      toast.error("No regexes to export");
+      toast.error(localizeUi("ui.characters.characterregexsection.noRegexesToExport"));
       return;
     }
     const safeName =
@@ -243,12 +251,18 @@ export function CharacterRegexSection({
       },
       `${safeName}-regexes.json`,
     );
-    toast.success(`Exported ${scopedScripts.length} regex${scopedScripts.length === 1 ? "" : "es"}`);
-  }, [scopedScripts, characterName]);
+    toast.success(
+      localizeUi("ui.characters.characterregexsection.exportedValue1RegexValue2", {
+        value1: scopedScripts.length,
+        value2: scopedScripts.length === 1 ? "" : localizeUi("ui.lorebooks.lorebookeditor.es"),
+      }),
+    );
+  }, [scopedScripts, characterName, localizeUi]);
 
   const handleImport = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
       setImportError(null);
+      setImportWarning(null);
       setImportSuccess(null);
       const file = event.target.files?.[0];
       if (!file || !characterId) return;
@@ -261,15 +275,10 @@ export function CharacterRegexSection({
 
         let imported = 0;
         const failed: string[] = [];
+        const warnings: string[] = [];
         const orderBase = getNextRegexOrderBase((regexScripts ?? []) as RegexScriptRow[]);
         for (const [index, entry] of entries.entries()) {
           const unsupportedPlacements = getUnsupportedStRegexPlacements(entry);
-          if (unsupportedPlacements.length > 0) {
-            failed.push(
-              `Entry ${index + 1}: unsupported SillyTavern placement ${unsupportedPlacements.join(", ")} was skipped.`,
-            );
-            continue;
-          }
           const normalized = normalizeRegexImportEntry(entry, orderBase + index);
           if (!normalized) {
             failed.push(`Entry ${index + 1}: missing name or find pattern.`);
@@ -277,8 +286,24 @@ export function CharacterRegexSection({
           }
           try {
             // Force-scope every imported script to this character.
-            await createRegex.mutateAsync({ ...normalized, targetCharacterIds: [characterId] });
+            await importRegex.mutateAsync({ ...normalized, targetCharacterIds: [characterId] });
             imported++;
+            if (!isPatternSafe(normalized.findRegex.replace(/\{\{[^}]*\}\}/g, "x"))) {
+              warnings.push(
+                localizeUi("ui.regex.importUnsafePatternWarning", {
+                  value1: index + 1,
+                  value2: normalized.name,
+                }),
+              );
+            }
+            if (unsupportedPlacements.length > 0) {
+              warnings.push(
+                localizeUi("ui.panels.presetspanel.ignoredUnsupportedRegexPlacements", {
+                  value1: index + 1,
+                  value2: unsupportedPlacements.join(", "),
+                }),
+              );
+            }
           } catch (error) {
             failed.push(`Entry ${index + 1} (${normalized.name}): ${describeImportError(error)}`);
           }
@@ -290,6 +315,9 @@ export function CharacterRegexSection({
         if (failed.length > 0) {
           setImportError(`Skipped ${failed.length} regex script${failed.length === 1 ? "" : "s"}. ${failed[0]}`);
         }
+        if (warnings.length > 0) {
+          setImportWarning(warnings.join(" "));
+        }
         if (imported === 0 && failed.length === 0) {
           setImportError("No valid regex scripts found in file.");
         }
@@ -299,23 +327,23 @@ export function CharacterRegexSection({
 
       event.target.value = "";
     },
-    [characterId, createRegex, regexScripts],
+    [characterId, importRegex, regexScripts, localizeUi],
   );
 
   const handleDelete = useCallback(
     async (script: RegexScriptRow) => {
       if (
         await showConfirmDialog({
-          title: "Delete Regex",
-          message: `Delete "${script.name}"?`,
-          confirmLabel: "Delete",
+          title: localizeUi("ui.characters.characterregexsection.deleteRegex_80a90f1"),
+          message: localizeUi("ui.characters.characterregexsection.deleteValue1", { value1: script.name }),
+          confirmLabel: localizeUi("lorebook.editor.batch.delete"),
           tone: "destructive",
         })
       ) {
         deleteRegex.mutate(script.id);
       }
     },
-    [deleteRegex],
+    [deleteRegex, localizeUi],
   );
 
   return (
@@ -323,7 +351,7 @@ export function CharacterRegexSection({
       <div className="flex items-center justify-between gap-2">
         <span className="inline-flex items-center gap-1.5 text-xs font-semibold">
           <Regex size="0.875rem" className="mari-chrome-accent-icon mari-accent-animated" />
-          Regex Scripts
+          {localizeUi("ui.characters.characterregexsection.regexScripts")}
         </span>
         {characterId && (
           <div className="flex items-center gap-1">
@@ -331,13 +359,13 @@ export function CharacterRegexSection({
               type="button"
               onClick={handleCreate}
               className="mari-chrome-accent-text-muted mari-accent-animated rounded-lg p-1.5 transition-colors hover:bg-[var(--marinara-chat-chrome-highlight-bg)] hover:text-[var(--marinara-chat-chrome-button-text-hover)]"
-              title="Create regex"
+              title={localizeUi("ui.characters.characterregexsection.createRegex")}
             >
               <Plus size="0.8125rem" />
             </button>
             <label
               className="mari-chrome-accent-text-muted mari-accent-animated inline-flex cursor-pointer items-center justify-center rounded-lg p-1.5 transition-colors hover:bg-[var(--marinara-chat-chrome-highlight-bg)] hover:text-[var(--marinara-chat-chrome-button-text-hover)]"
-              title="Import regexes from JSON"
+              title={localizeUi("ui.characters.characterregexsection.importRegexesFromJson")}
             >
               <input type="file" accept="application/json" className="hidden" onChange={handleImport} />
               <Upload size="0.8125rem" />
@@ -347,7 +375,7 @@ export function CharacterRegexSection({
               onClick={handleExport}
               disabled={scopedScripts.length === 0}
               className="mari-chrome-accent-text-muted mari-accent-animated rounded-lg p-1.5 transition-colors hover:bg-[var(--marinara-chat-chrome-highlight-bg)] hover:text-[var(--marinara-chat-chrome-button-text-hover)] disabled:cursor-not-allowed disabled:opacity-35"
-              title="Export regexes to JSON"
+              title={localizeUi("ui.characters.characterregexsection.exportRegexesToJson")}
             >
               <Download size="0.8125rem" />
             </button>
@@ -356,21 +384,21 @@ export function CharacterRegexSection({
       </div>
 
       <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-        Find/replace patterns scoped to this character. They stay off the global Presets → Regexes list and apply only
-        when a chat&rsquo;s Scoped Regex Scripts mode includes this character.
+        {localizeUi("ui.characters.characterregexsection.findReplacePatternsScopedToThisCharacterTheyStay")}
       </p>
 
       {!characterId ? (
         <p className="py-1 text-[0.6875rem] text-[var(--muted-foreground)]">
-          Save this character first to add scoped regex scripts.
+          {localizeUi("ui.characters.characterregexsection.saveThisCharacterFirstToAddScopedRegexScripts")}
         </p>
       ) : (
         <>
           {importError && <div className="text-xs text-red-500">{importError}</div>}
+          {importWarning && <div className="text-xs text-amber-500">{importWarning}</div>}
           {importSuccess && <div className="text-xs text-green-500">{importSuccess}</div>}
           {scopedScripts.length === 0 ? (
             <p className="py-1 text-[0.6875rem] text-[var(--muted-foreground)]">
-              No regex scripts for this character yet.
+              {localizeUi("ui.characters.characterregexsection.noRegexScriptsForThisCharacterYet")}
             </p>
           ) : (
             <div className="space-y-1">
@@ -398,7 +426,9 @@ export function CharacterRegexSection({
                             key={placement}
                             className="rounded bg-[var(--secondary)] px-1 py-0.5 text-[0.5rem] text-[var(--muted-foreground)]"
                           >
-                            {placement === "ai_output" ? "AI" : "User"}
+                            {placement === "ai_output"
+                              ? localizeUi("ui.characters.characterregexsection.ai")
+                              : localizeUi("ui.characters.advancedtab.user")}
                           </span>
                         ))}
                         <span className="max-w-[6.25rem] truncate font-mono text-[0.5625rem] text-[var(--muted-foreground)]">
@@ -408,23 +438,27 @@ export function CharacterRegexSection({
                     </button>
                     <SettingsSwitch
                       ariaLabel={enabled ? "Disable regex" : "Enable regex"}
-                      title={enabled ? "Disable regex" : "Enable regex"}
+                      title={
+                        enabled
+                          ? localizeUi("ui.characters.characterregexsection.disableRegex")
+                          : localizeUi("ui.characters.characterregexsection.enableRegex")
+                      }
                       checked={enabled}
                       onChange={(checked) => updateRegex.mutate({ id: script.id, enabled: checked })}
                       className="mt-0.5 shrink-0 p-0 hover:bg-transparent"
                     />
                     <button
                       type="button"
-                      className="mari-chrome-accent-text-muted mari-accent-animated mt-0.5 shrink-0 transition-colors hover:text-[var(--marinara-chat-chrome-button-text-hover)]"
-                      title="Edit regex"
+                      className="mari-chrome-accent-text-muted mari-accent-animated mt-1.5 shrink-0 transition-colors hover:text-[var(--marinara-chat-chrome-button-text-hover)]"
+                      title={localizeUi("ui.characters.characterregexsection.editRegex")}
                       onClick={() => void openEditorGuarded(script.id)}
                     >
                       <Pencil size="0.8125rem" />
                     </button>
                     <button
                       type="button"
-                      className="mt-0.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
-                      title="Delete regex"
+                      className="mt-1.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+                      title={localizeUi("ui.characters.characterregexsection.deleteRegex")}
                       onClick={() => handleDelete(script)}
                     >
                       <Trash2 size="0.8125rem" />

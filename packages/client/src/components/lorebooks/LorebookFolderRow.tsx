@@ -20,12 +20,13 @@ import {
   type MouseEvent as ReactMouseEvent,
   type TouchEvent as ReactTouchEvent,
 } from "react";
-import { ChevronDown, Copy, GripVertical, Trash2 } from "lucide-react";
+import { ChevronDown, CheckSquare2, Copy, GripVertical, Square, Trash2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { confirmNonEmptyFolderDelete } from "../../lib/app-dialogs";
 import { useUpdateLorebookFolder, useDeleteLorebookFolder, useCloneLorebookFolder } from "../../hooks/use-lorebooks";
 import { SettingsSwitch } from "../panels/settings/SettingControls";
 import { canReparentFolder, collectFolderSubtreeIds, type LorebookFolder } from "@marinara-engine/shared";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 interface Props {
   folder: LorebookFolder;
@@ -51,6 +52,12 @@ interface Props {
   onDrop: (e: ReactDragEvent<HTMLDivElement>) => void;
   onDragEnd: () => void;
   onDragHandleTouchStart?: (e: ReactTouchEvent<HTMLButtonElement>, sourceElement: HTMLDivElement | null) => void;
+  /** Batch-select mode: show a select-all checkbox on this folder row. */
+  selectionMode?: boolean;
+  /** True when every entry directly inside this folder is already selected. */
+  allSelected?: boolean;
+  /** Toggle select of all entries directly inside this folder. */
+  onToggleSelectAll?: () => void;
 }
 
 export function LorebookFolderRow({
@@ -71,7 +78,11 @@ export function LorebookFolderRow({
   onDrop,
   onDragEnd,
   onDragHandleTouchStart,
+  selectionMode = false,
+  allSelected = false,
+  onToggleSelectAll,
 }: Props) {
+  const { t: localizeUi } = useUiTranslation();
   const updateFolder = useUpdateLorebookFolder();
   const deleteFolder = useDeleteLorebookFolder();
   const cloneFolder = useCloneLorebookFolder();
@@ -214,7 +225,11 @@ export function LorebookFolderRow({
               ? "cursor-grab hover:bg-[var(--accent)] hover:text-[var(--foreground)] active:cursor-grabbing"
               : "cursor-not-allowed opacity-40",
           )}
-          title={draggable ? "Drag to reorder folder" : "Use Order sort and clear search to reorder"}
+          title={
+            draggable
+              ? localizeUi("ui.lorebooks.lorebookfolderrow.dragToReorderFolder")
+              : localizeUi("ui.lorebooks.lorebookentryrow.useOrderSortAndClearSearchToReorder")
+          }
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => {
             e.stopPropagation();
@@ -238,11 +253,41 @@ export function LorebookFolderRow({
         >
           <GripVertical size="0.875rem" />
         </button>
-
+        {selectionMode && (
+          <button
+            type="button"
+            aria-label={
+              allSelected
+                ? localizeUi("lorebook.editor.batch.deselectAllInFolder")
+                : localizeUi("lorebook.editor.batch.selectAllInFolder")
+            }
+            title={
+              allSelected
+                ? localizeUi("lorebook.editor.batch.deselectAllInFolder")
+                : localizeUi("lorebook.editor.batch.selectAllInFolder")
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleSelectAll?.();
+            }}
+            className={cn(
+              "flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--ring)] sm:h-7 sm:w-7",
+              allSelected
+                ? "mari-chrome-accent-surface mari-accent-animated ring-1"
+                : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+            )}
+          >
+            {allSelected ? <CheckSquare2 size="0.875rem" /> : <Square size="0.875rem" />}
+          </button>
+        )}
         {/* Collapse chevron */}
         <button
           type="button"
-          aria-label={isCollapsed ? "Expand folder" : "Collapse folder"}
+          aria-label={
+            isCollapsed
+              ? localizeUi("ui.lorebooks.lorebookfolderrow.expandFolder")
+              : localizeUi("ui.lorebooks.lorebookfolderrow.collapseFolder")
+          }
           className="flex h-6 w-4 shrink-0 items-center justify-center rounded p-0 text-[var(--muted-foreground)] transition-transform hover:bg-[var(--accent)] hover:text-[var(--foreground)] sm:h-auto sm:w-auto sm:p-0.5"
           onClick={(e) => {
             e.stopPropagation();
@@ -264,8 +309,8 @@ export function LorebookFolderRow({
             ariaLabel={localEnabled ? "Disable folder" : "Enable folder"}
             title={
               localEnabled
-                ? "Folder enabled — entries inside activate normally"
-                : "Folder disabled — entries inside will not activate, regardless of their own toggle"
+                ? localizeUi("ui.lorebooks.lorebookfolderrow.folderEnabledEntriesInsideActivateNormally")
+                : localizeUi("ui.lorebooks.lorebookfolderrow.folderDisabledEntriesInsideWillNotActivateRegardlessOf")
             }
             checked={localEnabled}
             onChange={handleEnabledChange}
@@ -285,7 +330,7 @@ export function LorebookFolderRow({
             }
           }}
           onClick={(e) => e.stopPropagation()}
-          placeholder="Untitled folder"
+          placeholder={localizeUi("ui.lorebooks.lorebookfolderrow.untitledFolder")}
           className="min-w-0 flex-1 truncate bg-transparent px-1 text-sm font-semibold outline-none transition-colors hover:bg-[var(--accent)]/40 focus:bg-[var(--accent)]/40 focus:ring-1 focus:ring-[var(--ring)] rounded"
         />
 
@@ -295,11 +340,11 @@ export function LorebookFolderRow({
             value={localParentId ?? ""}
             onChange={(e) => handleParentChange(e.target.value || null)}
             onClick={(e) => e.stopPropagation()}
-            title="Nest this folder under another folder"
-            aria-label="Parent folder"
+            title={localizeUi("ui.lorebooks.lorebookfolderrow.nestThisFolderUnderAnotherFolder")}
+            aria-label={localizeUi("ui.lorebooks.lorebookfolderrow.parentFolder")}
             className="mari-editor-field shrink-0 max-w-[4.75rem] truncate px-1 py-0.5 text-[0.625rem] text-[var(--marinara-editor-muted)] sm:max-w-[7rem] sm:px-1.5"
           >
-            <option value="">(top level)</option>
+            <option value="">{localizeUi("ui.lorebooks.lorebookfolderrow.topLevel")}</option>
             {parentOptions.map((candidate) => (
               <option key={candidate.id} value={candidate.id}>
                 {candidate.name.trim() || "Untitled folder"}
@@ -311,7 +356,7 @@ export function LorebookFolderRow({
         {/* Entry count badge */}
         <span
           className="mari-editor-chip shrink-0 px-1.5 py-0.5 text-[0.625rem] sm:px-2"
-          title={`${entryCount} entr${entryCount === 1 ? "y" : "ies"} in this folder`}
+          title={localizeUi("ui.lorebooks.lorebookfolderrow.entriesInThisFolder", { count: entryCount })}
         >
           {entryCount}
         </span>
@@ -319,8 +364,8 @@ export function LorebookFolderRow({
         {/* Clone — deep-copies the folder, its entries, and its sub-folders */}
         <button
           type="button"
-          aria-label="Clone folder"
-          title="Clone this folder, its entries, and its sub-folders"
+          aria-label={localizeUi("ui.lorebooks.lorebookfolderrow.cloneFolder")}
+          title={localizeUi("ui.lorebooks.lorebookfolderrow.cloneThisFolderItsEntriesAndItsSubFolders")}
           disabled={cloneFolder.isPending}
           onClick={(e) => {
             e.stopPropagation();
@@ -334,7 +379,7 @@ export function LorebookFolderRow({
         {/* Delete (hover-revealed on desktop, always visible on mobile per the row-action convention) */}
         <button
           type="button"
-          aria-label="Delete folder"
+          aria-label={localizeUi("ui.lorebooks.lorebookfolderrow.deleteFolder")}
           onClick={handleDelete}
           className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] opacity-0 transition-all hover:bg-[var(--accent)] hover:text-[var(--foreground)] group-hover:opacity-100 max-md:opacity-100 sm:p-1"
         >

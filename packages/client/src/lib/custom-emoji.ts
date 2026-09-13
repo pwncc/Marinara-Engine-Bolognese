@@ -32,17 +32,20 @@ export function slugifyCustomName(raw: string): string {
     .slice(0, CUSTOM_NAME_MAX_LENGTH);
 }
 
+/** Match custom emoji names consistently across composer and reaction searches. */
+export function filterCustomEmojisByName<T extends { name: string }>(emojis: T[], query: string): T[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return emojis;
+  return emojis.filter((emoji) => emoji.name.toLowerCase().includes(normalizedQuery));
+}
+
 /** Reject an image whose width or height exceeds the kind's max dimension. */
 export function validateDimensionsForKind(width: number, height: number, kind: CustomKind): CustomKindValidation {
   const max = CUSTOM_KIND_MAX_DIMENSION[kind];
   if (width <= max && height <= max) return { ok: true };
   const label = kind === "emoji" ? "an emoji" : "a sticker";
   let reason = `Too large for ${label} — max ${max}×${max}px (this image is ${width}×${height}).`;
-  if (
-    kind === "emoji" &&
-    width <= CUSTOM_KIND_MAX_DIMENSION.sticker &&
-    height <= CUSTOM_KIND_MAX_DIMENSION.sticker
-  ) {
+  if (kind === "emoji" && width <= CUSTOM_KIND_MAX_DIMENSION.sticker && height <= CUSTOM_KIND_MAX_DIMENSION.sticker) {
     reason += " It fits as a sticker, though.";
   }
   return { ok: false, reason };

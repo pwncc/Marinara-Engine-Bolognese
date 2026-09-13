@@ -1,11 +1,21 @@
 // ──────────────────────────────────────────────
 // Prompt Service — Public exports
 // ──────────────────────────────────────────────
-export { assemblePrompt, type AssemblerInput, type AssemblerOutput } from "./assembler.js";
+export {
+  assemblePrompt,
+  appendFallbackChatSummaryToSystemPrompt,
+  resolveChoiceVariableValue,
+  type AssemblerInput,
+  type AssemblerOutput,
+  type ChoiceOptionValue,
+} from "./assembler.js";
 export { wrapContent, wrapGroup } from "./format-engine.js";
 export { expandMarker, type MarkerContext, type ExpandedMarker } from "./marker-expander.js";
 export {
   buildPromptMacroContext,
+  cloneMacroContextForPreview,
+  resolveMacrosForPreview,
+  normalizeChatMacroVariables,
   collectCharacterAdvancedPromptEntries,
   collectCharacterDepthPromptEntries,
   collectCharacterPostHistoryEntries,
@@ -15,6 +25,7 @@ export {
   resolvePromptIdleDuration,
   resolvePromptLastGenerationType,
   resolveMacrosWithVariableSnapshot,
+  setLorebookEntryCounts,
   resolveCharacterMacroData,
   type CharacterMacroData,
   type MacroResolutionTransaction,

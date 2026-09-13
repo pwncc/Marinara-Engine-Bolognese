@@ -8,6 +8,7 @@ import { useConnections } from "../../hooks/use-connections";
 import { type CharacterCallVideoGenerationInput } from "../../hooks/use-characters";
 import { cn } from "../../lib/utils";
 import { Modal } from "./Modal";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 type VideoGenerationConnectionOption = {
   id: string;
@@ -45,6 +46,7 @@ export function CallClipGenerationModal({
   onClose: () => void;
   onGenerate: (input: CharacterCallVideoGenerationInput) => void | Promise<void>;
 }) {
+  const { t: localizeUi } = useUiTranslation();
   const { data: connectionsList } = useConnections();
   const videoConnections = useMemo(() => {
     if (!connectionsList) return [];
@@ -88,24 +90,34 @@ export function CallClipGenerationModal({
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="Generate Call Clips" width="max-w-lg">
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={localizeUi("ui.ui.callclipgenerationmodal.generateCallClips")}
+      width="max-w-lg"
+    >
       <div className="space-y-4">
         <p className="text-sm leading-relaxed text-[var(--muted-foreground)]">
-          Generate video-call loop clips for {entityName}. Marinara will use the selected video generation connection.
+          {localizeUi("ui.ui.callclipgenerationmodal.generateVideoCallLoopClipsFor")} {entityName}
+          {localizeUi("ui.ui.callclipgenerationmodal.marinaraWillUseTheSelectedVideoGenerationConnection")}
         </p>
 
         <label className="grid gap-1.5 text-xs font-semibold text-[var(--foreground)]">
-          Video Generation Connection
+          {localizeUi("ui.ui.callclipgenerationmodal.videoGenerationConnection")}
           <select
             value={effectiveConnectionId ?? ""}
             onChange={(event) => setConnectionId(event.target.value || null)}
             className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm font-medium text-[var(--foreground)] outline-none focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
           >
-            {videoConnections.length === 0 ? <option value="">No video generation connections</option> : null}
+            {videoConnections.length === 0 ? (
+              <option value="">{localizeUi("ui.ui.callclipgenerationmodal.noVideoGenerationConnections")}</option>
+            ) : null}
             {videoConnections.map((connection) => (
               <option key={connection.id} value={connection.id}>
                 {connection.name || connection.model || "Video connection"}
-                {isDefaultVideoGenerationConnection(connection) ? " (Default)" : ""}
+                {isDefaultVideoGenerationConnection(connection)
+                  ? localizeUi("ui.ui.avatargenerationmodal.default")
+                  : ""}
               </option>
             ))}
           </select>
@@ -113,9 +125,11 @@ export function CallClipGenerationModal({
 
         <label className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/60 px-3 py-2">
           <span className="min-w-0">
-            <span className="block text-xs font-semibold text-[var(--foreground)]">Use avatar as reference</span>
+            <span className="block text-xs font-semibold text-[var(--foreground)]">
+              {localizeUi("ui.ui.callclipgenerationmodal.useAvatarAsReference")}
+            </span>
             <span className="block text-[0.6875rem] text-[var(--muted-foreground)]">
-              Recommended for first and final frame matching.
+              {localizeUi("ui.ui.callclipgenerationmodal.recommendedForFirstAndFinalFrameMatching")}
             </span>
           </span>
           <input
@@ -128,9 +142,11 @@ export function CallClipGenerationModal({
 
         <div className="grid gap-2">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-semibold text-[var(--foreground)]">Clips to generate</span>
+            <span className="text-xs font-semibold text-[var(--foreground)]">
+              {localizeUi("ui.ui.callclipgenerationmodal.clipsToGenerate")}
+            </span>
             <span className="rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
-              {selectedKinds.length} selected
+              {selectedKinds.length} {localizeUi("ui.agents.agenteditor.selected")}
             </span>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -165,9 +181,11 @@ export function CallClipGenerationModal({
         <div className="grid gap-3 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-3">
           <label className="flex items-start justify-between gap-3">
             <span className="min-w-0">
-              <span className="block text-xs font-semibold text-[var(--foreground)]">Custom clip</span>
+              <span className="block text-xs font-semibold text-[var(--foreground)]">
+                {localizeUi("ui.ui.callclipgenerationmodal.customClip")}
+              </span>
               <span className="block text-[0.6875rem] leading-snug text-[var(--muted-foreground)]">
-                Add a named action clip the character can later play with [play_clip="name"].
+                {localizeUi("ui.ui.callclipgenerationmodal.addANamedActionClipTheCharacterCanLater")}
               </span>
             </span>
             <input
@@ -181,22 +199,22 @@ export function CallClipGenerationModal({
           {customClipEnabled ? (
             <div className="grid gap-2">
               <label className="grid gap-1 text-xs font-semibold text-[var(--foreground)]">
-                Clip name
+                {localizeUi("ui.ui.callclipgenerationmodal.clipName")}
                 <input
                   type="text"
                   value={customClipLabel}
                   onChange={(event) => setCustomClipLabel(event.target.value)}
-                  placeholder="Kissing"
+                  placeholder={localizeUi("ui.ui.callclipgenerationmodal.kissing")}
                   maxLength={80}
                   className="rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm font-medium text-[var(--foreground)] outline-none focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
                 />
               </label>
               <label className="grid gap-1 text-xs font-semibold text-[var(--foreground)]">
-                Action
+                {localizeUi("ui.ui.callclipgenerationmodal.action")}
                 <textarea
                   value={customClipPrompt}
                   onChange={(event) => setCustomClipPrompt(event.target.value)}
-                  placeholder="Blow a kiss toward the screen, then return to the starting pose."
+                  placeholder={localizeUi("ui.ui.callclipgenerationmodal.blowAKissTowardTheScreenThenReturnTo")}
                   rows={3}
                   maxLength={800}
                   className="resize-none rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm font-medium text-[var(--foreground)] outline-none focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
@@ -204,7 +222,7 @@ export function CallClipGenerationModal({
               </label>
               {selectedKinds.length === 0 ? (
                 <p className="text-[0.6875rem] leading-snug text-[var(--muted-foreground)]">
-                  Only the custom clip will be generated.
+                  {localizeUi("ui.ui.callclipgenerationmodal.onlyTheCustomClipWillBeGenerated")}
                 </p>
               ) : null}
             </div>
@@ -218,7 +236,7 @@ export function CallClipGenerationModal({
             disabled={generating}
             className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-50"
           >
-            Cancel
+            {localizeUi("chat.delete.dialog.cancel")}
           </button>
           <button
             type="button"
@@ -240,7 +258,7 @@ export function CallClipGenerationModal({
             className="inline-flex items-center gap-2 rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-semibold text-[var(--primary-foreground)] transition-all hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
           >
             {generating ? <Loader2 size="0.875rem" className="animate-spin" /> : <Wand2 size="0.875rem" />}
-            Generate
+            {localizeUi("ui.characters.characterclipcard.generate")}
           </button>
         </div>
       </div>

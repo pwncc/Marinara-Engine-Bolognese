@@ -14,19 +14,24 @@
 // edits trigger a push — transient UI state (modal open, detail panels, etc.)
 // is filtered out via `pickSyncedSettings`.
 import { useEffect } from "react";
-import { normalizeImageStyleProfileSettings, normalizeQuoteFormat } from "@marinara-engine/shared";
+import {
+  normalizeImageStyleProfileSettings,
+  normalizeQuoteFormat,
+  type AppSettingsResponse,
+} from "@marinara-engine/shared";
 import { api } from "../lib/api-client";
 import { normalizeConversationTimeZone } from "../lib/conversation-time-zone";
 import {
+  normalizeTrackerPanelCollapsedSections,
+  normalizeTrackerPanelSectionOrder,
   normalizeTrackerPanelSizeProfile,
+  normalizeTrackerStatDisplayMode,
   normalizeTrackerTemperatureUnit,
   normalizeTrackerThoughtBubbleDisplay,
   normalizeScenePromptPreferences,
   pickSyncedSettings,
   useUIStore,
 } from "../stores/ui.store";
-
-type SettingsResponse = { value: string | null };
 
 const SETTINGS_KEY = "ui";
 const SETTINGS_PATH = `/app-settings/${SETTINGS_KEY}`;
@@ -38,14 +43,31 @@ type SyncedSettingsObject = ReturnType<typeof pickSyncedSettings>;
 type ServerSettingsPayload = SyncedSettingsObject & { __updatedAt?: number };
 type ParsedSettings = Partial<SyncedSettingsObject> & Record<string, unknown>;
 
-const DEVICE_LOCAL_SETTING_KEYS = ["fontSize", "chatFontSize"] as const;
+const LOCAL_ONLY_SETTING_KEYS = [
+  "fontSize",
+  "chatFontSize",
+  "trackerPanelOpen",
+  "impersonatePromptTemplate",
+  "activeImpersonatePromptTemplateId",
+] as const;
 
-export function omitDeviceLocalSettings(settings: ParsedSettings): ParsedSettings {
+export function omitLocalOnlySettings(settings: ParsedSettings): ParsedSettings {
   const sanitized = { ...settings };
-  for (const key of DEVICE_LOCAL_SETTING_KEYS) {
+  for (const key of LOCAL_ONLY_SETTING_KEYS) {
     delete sanitized[key];
   }
   return sanitized;
+}
+
+export function hasMissingSyncedSettings(settings: Record<string, unknown>, expectedKeys: readonly string[]): boolean {
+  return expectedKeys.some((key) => !(key in settings));
+}
+
+export function mergeUndatedSyncedSettings(
+  localSettings: SyncedSettingsObject,
+  serverSettings: ParsedSettings,
+): SyncedSettingsObject {
+  return { ...localSettings, ...serverSettings } as SyncedSettingsObject;
 }
 
 function readLocalUpdatedAt(): number | null {
@@ -152,20 +174,18 @@ export function useSettingsSync() {
         const localFingerprint = serializeSettings(localSettings);
         const defaultFingerprint = serializeSettings(pickSyncedSettings(useUIStore.getInitialState()));
         const localCustomized = hasLocalPersistedUiState() && localFingerprint !== defaultFingerprint;
-        let localUpdatedAt = readLocalUpdatedAt();
-        if (!localUpdatedAt && localCustomized) {
-          localUpdatedAt = Date.now();
-          writeLocalUpdatedAt(localUpdatedAt);
-        }
+        const localUpdatedAt = readLocalUpdatedAt();
+        const hasTrustedLocalTimestamp = localUpdatedAt !== null;
 
-        const data = await api.get<SettingsResponse>(SETTINGS_PATH);
+        const data = await api.get<AppSettingsResponse>(SETTINGS_PATH);
         if (disposed) return;
         if (data.value) {
           try {
             const parsed = parseServerSettingsValue(data.value);
             if (parsed.settings && typeof parsed.settings === "object") {
-              const hadDeviceLocalSettings = DEVICE_LOCAL_SETTING_KEYS.some((key) => key in parsed.settings);
-              parsed.settings = omitDeviceLocalSettings(parsed.settings);
+              const hadLocalOnlySettings = LOCAL_ONLY_SETTING_KEYS.some((key) => key in parsed.settings);
+              const hadMissingSyncedSettings = hasMissingSyncedSettings(parsed.settings, Object.keys(localSettings));
+              parsed.settings = omitLocalOnlySettings(parsed.settings);
 
               // Migrate old flat gradient fields → per-scheme nested (v10 → v11).
               if ("convoGradientFrom" in parsed.settings || "convoGradientTo" in parsed.settings) {
@@ -183,53 +203,123 @@ export function useSettingsSync() {
                 delete parsed.settings.convoGradientFrom;
                 delete parsed.settings.convoGradientTo;
               }
-              parsed.settings.trackerPanelSizeProfile = normalizeTrackerPanelSizeProfile(
-                parsed.settings.trackerPanelSizeProfile,
-                parsed.settings.trackerPanelWidth,
-              );
-              delete parsed.settings.trackerPanelWidth;
-              parsed.settings.trackerPanelThoughtBubbleDisplay = normalizeTrackerThoughtBubbleDisplay(
-                parsed.settings.trackerPanelThoughtBubbleDisplay,
-              );
-              parsed.settings.trackerPanelDockedThoughtsAlwaysVisible =
-                parsed.settings.trackerPanelDockedThoughtsAlwaysVisible === true;
-              parsed.settings.trackerTemperatureUnit = normalizeTrackerTemperatureUnit(
-                parsed.settings.trackerTemperatureUnit,
-              );
-              parsed.settings.quoteFormat = normalizeQuoteFormat(parsed.settings.quoteFormat);
-              parsed.settings.imageStyleProfiles = normalizeImageStyleProfileSettings(
-                parsed.settings.imageStyleProfiles,
-              );
-              parsed.settings.scenePromptPreferences = normalizeScenePromptPreferences(
-                parsed.settings.scenePromptPreferences,
-              );
-              parsed.settings.conversationTimeZone = normalizeConversationTimeZone(
-                parsed.settings.conversationTimeZone,
-              );
+              if ("trackerPanelSizeProfile" in parsed.settings || "trackerPanelWidth" in parsed.settings) {
+                parsed.settings.trackerPanelSizeProfile = normalizeTrackerPanelSizeProfile(
+                  parsed.settings.trackerPanelSizeProfile,
+                  parsed.settings.trackerPanelWidth,
+                );
+                delete parsed.settings.trackerPanelWidth;
+              }
+              // The synced blob predates every section added after it was written, so a
+              // server order captured before a new tracker section shipped would hide
+              // that section forever — `migrate` only normalizes the browser-local copy,
+              // and the `setState` below overwrites it. `staleSyncedShape` forces the
+              // corrected value back to the server; without it the stale array survives
+              // and re-arrives on every other device.
+              let staleSyncedShape = false;
+              if ("trackerPanelSectionOrder" in parsed.settings) {
+                const normalizedOrder = normalizeTrackerPanelSectionOrder(parsed.settings.trackerPanelSectionOrder);
+                if (!Array.isArray(parsed.settings.trackerPanelSectionOrder)) {
+                  staleSyncedShape = true;
+                } else if (
+                  parsed.settings.trackerPanelSectionOrder.length !== normalizedOrder.length ||
+                  normalizedOrder.some(
+                    (section, index) => parsed.settings.trackerPanelSectionOrder?.[index] !== section,
+                  )
+                ) {
+                  staleSyncedShape = true;
+                }
+                parsed.settings.trackerPanelSectionOrder = normalizedOrder;
+              }
+              if ("trackerPanelCollapsedSections" in parsed.settings) {
+                const normalizedCollapsed = normalizeTrackerPanelCollapsedSections(
+                  parsed.settings.trackerPanelCollapsedSections,
+                );
+                if (
+                  JSON.stringify(parsed.settings.trackerPanelCollapsedSections) !== JSON.stringify(normalizedCollapsed)
+                ) {
+                  staleSyncedShape = true;
+                }
+                parsed.settings.trackerPanelCollapsedSections = normalizedCollapsed;
+              }
+              if ("trackerPanelThoughtBubbleDisplay" in parsed.settings) {
+                parsed.settings.trackerPanelThoughtBubbleDisplay = normalizeTrackerThoughtBubbleDisplay(
+                  parsed.settings.trackerPanelThoughtBubbleDisplay,
+                );
+              }
+              if ("trackerStatDisplayMode" in parsed.settings) {
+                parsed.settings.trackerStatDisplayMode = normalizeTrackerStatDisplayMode(
+                  parsed.settings.trackerStatDisplayMode,
+                );
+              }
+              if ("trackerPanelDockedThoughtsAlwaysVisible" in parsed.settings) {
+                parsed.settings.trackerPanelDockedThoughtsAlwaysVisible =
+                  parsed.settings.trackerPanelDockedThoughtsAlwaysVisible === true;
+              }
+              if ("trackerTemperatureUnit" in parsed.settings) {
+                parsed.settings.trackerTemperatureUnit = normalizeTrackerTemperatureUnit(
+                  parsed.settings.trackerTemperatureUnit,
+                );
+              }
+              if ("quoteFormat" in parsed.settings) {
+                parsed.settings.quoteFormat = normalizeQuoteFormat(parsed.settings.quoteFormat);
+              }
+              if ("imageStyleProfiles" in parsed.settings) {
+                parsed.settings.imageStyleProfiles = normalizeImageStyleProfileSettings(
+                  parsed.settings.imageStyleProfiles,
+                );
+              }
+              if ("scenePromptPreferences" in parsed.settings) {
+                parsed.settings.scenePromptPreferences = normalizeScenePromptPreferences(
+                  parsed.settings.scenePromptPreferences,
+                );
+              }
+              if ("conversationTimeZone" in parsed.settings) {
+                parsed.settings.conversationTimeZone = normalizeConversationTimeZone(
+                  parsed.settings.conversationTimeZone,
+                );
+              }
 
               const serverUpdatedAt = parsed.updatedAt;
               const localIsNewer =
-                localUpdatedAt !== null &&
+                hasTrustedLocalTimestamp &&
                 (serverUpdatedAt === null ? localCustomized : localUpdatedAt > serverUpdatedAt);
 
-              if (localIsNewer) {
+              if (!hasTrustedLocalTimestamp) {
+                // An undated browser cache has no trustworthy ordering signal.
+                // Keep its values only for keys absent from the server, then
+                // rewrite the merged complete profile with a real timestamp.
+                useUIStore.setState(mergeUndatedSyncedSettings(localSettings, parsed.settings));
+                lastPushed = serialize();
+                const rewriteUpdatedAt = Date.now();
+                try {
+                  await api.put(SETTINGS_PATH, {
+                    value: buildServerSettingsValue(pickSyncedSettings(useUIStore.getState()), rewriteUpdatedAt),
+                  });
+                  writeLocalUpdatedAt(rewriteUpdatedAt);
+                } catch {
+                  // Best-effort recovery. The in-memory merge still protects
+                  // server-present preferences for this session.
+                }
+              } else if (localIsNewer) {
                 lastPushed = "";
                 pushNow();
               } else {
                 useUIStore.setState(parsed.settings);
                 lastPushed = serialize();
                 if (serverUpdatedAt !== null) writeLocalUpdatedAt(serverUpdatedAt);
-                if (hadDeviceLocalSettings) {
+                if (hadLocalOnlySettings || hadMissingSyncedSettings || staleSyncedShape) {
                   try {
+                    const rewriteUpdatedAt =
+                      hadMissingSyncedSettings || staleSyncedShape ? Date.now() : (serverUpdatedAt ?? Date.now());
                     await api.put(SETTINGS_PATH, {
-                      value: buildServerSettingsValue(
-                        pickSyncedSettings(useUIStore.getState()),
-                        serverUpdatedAt ?? Date.now(),
-                      ),
+                      value: buildServerSettingsValue(pickSyncedSettings(useUIStore.getState()), rewriteUpdatedAt),
                     });
+                    writeLocalUpdatedAt(rewriteUpdatedAt);
                   } catch {
-                    // Cleanup is best-effort; this browser still ignores
-                    // legacy size values from the server blob.
+                    // Rewriting legacy/incomplete blobs is best-effort. This
+                    // browser still ignores removed keys and retains local
+                    // values for newly synced preferences.
                   }
                 }
               }

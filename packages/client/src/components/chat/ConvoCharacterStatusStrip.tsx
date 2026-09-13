@@ -11,6 +11,7 @@ import { getConvoBarDisplayLabel, listConvoBarKeys } from "@marinara-engine/shar
 import { useUIStore } from "../../stores/ui.store";
 import { statusHasContent } from "./convo-character-status-utils";
 import type { CharacterMap } from "./chat-area.types";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 const STRIP_COLLAPSED_KEY = "marinara.convoStatus.stripCollapsed";
 const MAX_CHIP_BARS = 3;
@@ -30,6 +31,7 @@ export function ConvoCharacterStatusStrip({
   statusMap,
   messages,
 }: ConvoCharacterStatusStripProps) {
+  const { t: localizeUi } = useUiTranslation();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(STRIP_COLLAPSED_KEY) === "1");
   const openModal = useUIStore((s) => s.openModal);
 
@@ -82,10 +84,10 @@ export function ConvoCharacterStatusStrip({
           type="button"
           onClick={toggleCollapsed}
           className="flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--card)]/80 px-2 py-0.5 text-[0.6rem] text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
-          title="Show character status"
+          title={localizeUi("ui.chat.convocharacterstatusstrip.showCharacterStatus")}
         >
           <Activity size="0.65rem" />
-          Status
+          {localizeUi("ui.trackerPanel.personainventorypanel.status")}
           <ChevronUp size="0.6rem" />
         </button>
       </div>
@@ -104,8 +106,16 @@ export function ConvoCharacterStatusStrip({
               className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border)]/70 bg-[var(--secondary)]/60 py-0.5 pl-1 pr-2.5 text-left transition-colors hover:border-[var(--primary)]/60 hover:bg-[var(--accent)]/40"
               title={
                 chip.hasStatus
-                  ? `${chip.name}: ${chip.emotion ?? "no emotion set"}${chip.emotionCause ? ` — ${chip.emotionCause}` : ""}\nClick to view & edit`
-                  : `${chip.name}: no status yet — click to set one`
+                  ? localizeUi("ui.chat.convocharacterstatusstrip.value1Value2Value3ClickToViewEdit", {
+                      value1: chip.name,
+                      value2: chip.emotion ?? localizeUi("ui.chat.convocharacterstatusstrip.noEmotionSet"),
+                      value3: chip.emotionCause
+                        ? localizeUi("ui.chat.convocharacterstatusstrip.value1", { value1: chip.emotionCause })
+                        : "",
+                    })
+                  : localizeUi("ui.chat.convocharacterstatusstrip.value1NoStatusYetClickToSetOne", {
+                      value1: chip.name,
+                    })
               }
             >
               {chip.avatarUrl ? (
@@ -129,7 +139,10 @@ export function ConvoCharacterStatusStrip({
                         <span
                           key={bar.key}
                           className="h-1 w-6 overflow-hidden rounded-full bg-[var(--border)]/80"
-                          title={`${bar.label}: ${bar.value}%`}
+                          title={localizeUi("ui.chat.convocharacterstatusstrip.value1Value2", {
+                            value1: bar.label,
+                            value2: bar.value,
+                          })}
                         >
                           <span
                             className="block h-full rounded-full bg-[var(--primary)]/80"
@@ -141,7 +154,9 @@ export function ConvoCharacterStatusStrip({
                   ) : null}
                 </>
               ) : (
-                <span className="text-[0.6rem] text-[var(--muted-foreground)]/70">no status</span>
+                <span className="text-[0.6rem] text-[var(--muted-foreground)]/70">
+                  {localizeUi("ui.chat.convocharacterstatusstrip.noStatus")}
+                </span>
               )}
             </button>
           ))}
@@ -150,8 +165,8 @@ export function ConvoCharacterStatusStrip({
           type="button"
           onClick={toggleCollapsed}
           className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
-          title="Hide status strip"
-          aria-label="Hide status strip"
+          title={localizeUi("ui.chat.convocharacterstatusstrip.hideStatusStrip")}
+          aria-label={localizeUi("ui.chat.convocharacterstatusstrip.hideStatusStrip")}
         >
           <ChevronDown size="0.75rem" />
         </button>

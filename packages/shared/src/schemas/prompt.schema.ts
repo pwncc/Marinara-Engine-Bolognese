@@ -3,6 +3,11 @@
 // ──────────────────────────────────────────────
 import { z } from "zod";
 
+export const managedGenerationParameterValueSchema = z.object({
+  enabled: z.boolean(),
+  value: z.number().finite(),
+});
+
 export const promptRoleSchema = z.enum(["system", "user", "assistant"]);
 
 export const injectionPositionSchema = z.enum(["ordered", "depth"]);
@@ -15,6 +20,7 @@ export const markerTypeSchema = z.enum([
   "persona",
   "chat_history",
   "chat_summary",
+  "id_macro_cards",
   "world_info_before",
   "world_info_after",
   "dialogue_examples",
@@ -47,6 +53,7 @@ export const generationParametersSchema = z.object({
   verbosity: z.enum(["low", "medium", "high"]).nullable().default(null),
   serviceTier: z.enum(["flex", "priority"]).nullable().default(null),
   assistantPrefill: z.string().default(""),
+  assistantReasoningPrefill: z.string().default(""),
   customThinkingTags: z
     .array(
       z.object({
@@ -57,6 +64,7 @@ export const generationParametersSchema = z.object({
     .max(20)
     .default([]),
   customParameters: z.record(z.unknown()).default({}),
+  managedCustomParameters: z.record(managedGenerationParameterValueSchema).default({}),
   enabledParameters: z
     .object({
       temperature: z.boolean().optional(),
@@ -111,21 +119,7 @@ export const createChoiceBlockSchema = z.object({
   optionSort: choiceOptionSortSchema.default("manual"),
 });
 
-export const updateChoiceBlockSchema = z.object({
-  variableName: z
-    .string()
-    .min(1)
-    .max(100)
-    .regex(/^\w+$/, "Variable name must be alphanumeric/underscores only")
-    .optional(),
-  question: z.string().min(1).max(500).optional(),
-  options: z.array(choiceOptionSchema).min(1).optional(),
-  multiSelect: z.boolean().optional(),
-  separator: z.string().max(20).optional(),
-  randomPick: z.boolean().optional(),
-  displayMode: choiceDisplayModeSchema.optional(),
-  optionSort: choiceOptionSortSchema.optional(),
-});
+export const updateChoiceBlockSchema = createChoiceBlockSchema.omit({ presetId: true }).partial();
 
 // ── Groups ──
 
@@ -137,18 +131,14 @@ export const createPromptGroupSchema = z.object({
   enabled: z.boolean().default(true),
 });
 
-export const updatePromptGroupSchema = z.object({
-  name: z.string().min(1).max(200).optional(),
-  parentGroupId: z.string().nullable().optional(),
-  order: z.number().int().optional(),
-  enabled: z.boolean().optional(),
-});
+export const updatePromptGroupSchema = createPromptGroupSchema.omit({ presetId: true }).partial();
 
 // ── Presets ──
 
 export const createPromptPresetSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().default(""),
+  imagePath: z.string().nullable().default(null),
   conversationPrompt: z.string().default(""),
   gamePrompt: z.string().default(""),
   variableGroups: z.array(promptVariableGroupSchema).default([]),
@@ -162,6 +152,7 @@ export const createPromptPresetSchema = z.object({
 export const updatePromptPresetSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().optional(),
+  imagePath: z.string().nullable().optional(),
   conversationPrompt: z.string().optional(),
   gamePrompt: z.string().optional(),
   sectionOrder: z.array(z.string()).optional(),
@@ -192,18 +183,9 @@ export const createPromptSectionSchema = z.object({
   forbidOverrides: z.boolean().default(false),
 });
 
-export const updatePromptSectionSchema = z.object({
-  name: z.string().min(1).max(200).optional(),
-  content: z.string().optional(),
-  role: promptRoleSchema.optional(),
-  enabled: z.boolean().optional(),
-  groupId: z.string().nullable().optional(),
-  markerConfig: markerConfigSchema.nullable().optional(),
-  injectionPosition: injectionPositionSchema.optional(),
-  injectionDepth: z.number().int().min(0).optional(),
-  injectionOrder: z.number().int().optional(),
-  forbidOverrides: z.boolean().optional(),
-});
+export const updatePromptSectionSchema = createPromptSectionSchema
+  .omit({ presetId: true, identifier: true, isMarker: true })
+  .partial();
 
 // ── Exported input types ──
 

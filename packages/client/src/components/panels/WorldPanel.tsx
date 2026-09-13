@@ -54,6 +54,7 @@ import { useCharacters, usePersonas } from "../../hooks/use-characters";
 import { useChatStore } from "../../stores/chat.store";
 import { useUIStore } from "../../stores/ui.store";
 import { cn } from "../../lib/utils";
+import { useTranslation as useUiTranslation } from "react-i18next";
 
 const inputClass =
   "w-full rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2 py-1.5 text-xs outline-none transition-colors focus:border-[var(--primary)]";
@@ -88,7 +89,13 @@ function relativeTime(iso: string): string {
   const ahead = diffMs < 0;
   const mins = Math.round(Math.abs(diffMs) / 60_000);
   const text =
-    mins < 1 ? "now" : mins < 60 ? `${mins}m` : mins < 60 * 24 ? `${Math.round(mins / 60)}h` : `${Math.round(mins / (60 * 24))}d`;
+    mins < 1
+      ? "now"
+      : mins < 60
+        ? `${mins}m`
+        : mins < 60 * 24
+          ? `${Math.round(mins / 60)}h`
+          : `${Math.round(mins / (60 * 24))}d`;
   if (text === "now") return ahead ? "any moment" : "just now";
   return ahead ? `in ${text}` : `${text} ago`;
 }
@@ -172,7 +179,12 @@ function EventRow({ event }: { event: WorldEventRecord }) {
     >
       <span className="mt-0.5 shrink-0">{eventIcon(event.kind)}</span>
       <span className="min-w-0 flex-1">
-        <span className={cn("block text-xs leading-snug", event.kind === "thought" && "italic text-[var(--muted-foreground)]")}>
+        <span
+          className={cn(
+            "block text-xs leading-snug",
+            event.kind === "thought" && "italic text-[var(--muted-foreground)]",
+          )}
+        >
           {event.summary}
         </span>
         <span className="mt-0.5 block text-[0.65rem] text-[var(--muted-foreground)]">
@@ -211,6 +223,7 @@ function BondCard({
   romance: boolean;
   summary: string;
 }) {
+  const { t: localizeUi } = useUiTranslation();
   const [expanded, setExpanded] = useState(false);
   const { data: pair, isLoading } = useWorldPair(expanded ? aId : null, expanded ? bId : null);
 
@@ -239,14 +252,16 @@ function BondCard({
               />
             </span>
             <span className="text-[0.65rem] capitalize text-[var(--muted-foreground)]">
-              {stageLabel} · {score > 0 ? `+${score}` : score}
+              {stageLabel} · {score > 0 ? localizeUi("ui.panels.bondcard.value1", { value1: score }) : score}
             </span>
           </span>
         </span>
       </button>
       {expanded ? (
         <div className="space-y-2 border-t border-[var(--border)]/50 px-2.5 py-2">
-          {summary ? <p className="text-[0.7rem] italic leading-snug text-[var(--muted-foreground)]">{summary}</p> : null}
+          {summary ? (
+            <p className="text-[0.7rem] italic leading-snug text-[var(--muted-foreground)]">{summary}</p>
+          ) : null}
           {isLoading ? (
             <Loader2 size="0.85rem" className="animate-spin text-[var(--muted-foreground)]" />
           ) : (
@@ -254,7 +269,7 @@ function BondCard({
               {pair?.relationship?.milestones.length ? (
                 <div className="space-y-1">
                   <span className="text-[0.65rem] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
-                    Milestones
+                    {localizeUi("ui.panels.bondcard.milestones")}
                   </span>
                   {pair.relationship.milestones.map((milestone, idx) => (
                     <div key={`${milestone.at}-${idx}`} className="flex items-start gap-1.5">
@@ -272,14 +287,16 @@ function BondCard({
               {pair?.events.length ? (
                 <div className="space-y-1">
                   <span className="text-[0.65rem] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
-                    Their story
+                    {localizeUi("ui.panels.bondcard.theirStory")}
                   </span>
                   {pair.events.map((event) => (
                     <EventRow key={event.id} event={event} />
                   ))}
                 </div>
               ) : (
-                <p className="text-[0.7rem] text-[var(--muted-foreground)]">No shared history recorded yet.</p>
+                <p className="text-[0.7rem] text-[var(--muted-foreground)]">
+                  {localizeUi("ui.panels.bondcard.noSharedHistoryRecordedYet")}
+                </p>
               )}
             </>
           )}
@@ -291,13 +308,8 @@ function BondCard({
 
 // ── Config ──
 
-function WorldConfigForm({
-  config,
-  onSaved,
-}: {
-  config: WorldEngineConfig;
-  onSaved: () => void;
-}) {
+function WorldConfigForm({ config, onSaved }: { config: WorldEngineConfig; onSaved: () => void }) {
+  const { t: localizeUi } = useUiTranslation();
   const [draft, setDraft] = useState<WorldEngineConfig>(config);
   const { data: connections } = useConnections();
   const { data: characters } = useCharacters();
@@ -349,10 +361,14 @@ function WorldConfigForm({
   const save = async () => {
     try {
       await updateConfig.mutateAsync(draft);
-      toast.success(draft.enabled ? "World is live — it'll keep simmering on its own" : "World config saved");
+      toast.success(
+        draft.enabled
+          ? localizeUi("ui.panels.worldconfigform.worldIsLiveItLlKeepSimmeringOnIts")
+          : localizeUi("ui.panels.worldconfigform.worldConfigSaved"),
+      );
       onSaved();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save world config");
+      toast.error(err instanceof Error ? err.message : localizeUi("ui.panels.worldconfigform.failedToSaveWorldConfig"));
     }
   };
 
@@ -364,7 +380,7 @@ function WorldConfigForm({
   return (
     <div className="space-y-2.5 rounded-lg border border-[var(--border)]/60 bg-[var(--secondary)]/30 p-2.5">
       <label className="flex items-center justify-between gap-2">
-        <span className="text-xs font-medium">World enabled</span>
+        <span className="text-xs font-medium">{localizeUi("ui.panels.worldconfigform.worldEnabled")}</span>
         <input
           type="checkbox"
           checked={draft.enabled}
@@ -374,20 +390,28 @@ function WorldConfigForm({
       </label>
 
       <label className="block space-y-0.5">
-        <span className="text-[0.65rem] text-[var(--muted-foreground)]">Simulation style</span>
+        <span className="text-[0.65rem] text-[var(--muted-foreground)]">
+          {localizeUi("ui.panels.worldconfigform.simulationStyle")}
+        </span>
         <select
           className={inputClass}
           value={draft.mode}
           onChange={(e) => setDraft({ ...draft, mode: e.target.value === "director" ? "director" : "minds" })}
         >
-          <option value="minds">Character minds — every character is its own AI (natural, emergent)</option>
-          <option value="director">Director — one cheap planning call writes a timeline</option>
+          <option value="minds">
+            {localizeUi("ui.panels.worldconfigform.characterMindsEveryCharacterIsItsOwnAiNatural")}
+          </option>
+          <option value="director">
+            {localizeUi("ui.panels.worldconfigform.directorOneCheapPlanningCallWritesATimeline")}
+          </option>
         </select>
       </label>
 
       {draft.mode === "minds" ? (
         <label className="block space-y-0.5">
-          <span className="text-[0.65rem] text-[var(--muted-foreground)]">World pace</span>
+          <span className="text-[0.65rem] text-[var(--muted-foreground)]">
+            {localizeUi("ui.panels.worldconfigform.worldPace")}
+          </span>
           <select
             className={inputClass}
             value={String(
@@ -399,27 +423,33 @@ function WorldConfigForm({
               }
             }}
           >
-            <option value="2">Bustling — everyone acts every couple of minutes</option>
-            <option value="5">Lively — turns every ~5 minutes</option>
-            <option value="15">Casual — turns every ~15 minutes</option>
-            <option value="45">Relaxed — a slower day-to-day drift</option>
-            <option value="90">Slow life — hours between check-ins</option>
-            <option value="custom">Custom (set below)</option>
+            <option value="2">
+              {localizeUi("ui.panels.worldconfigform.bustlingEveryoneActsEveryCoupleOfMinutes")}
+            </option>
+            <option value="5">{localizeUi("ui.panels.worldconfigform.livelyTurnsEvery5Minutes")}</option>
+            <option value="15">{localizeUi("ui.panels.worldconfigform.casualTurnsEvery15Minutes")}</option>
+            <option value="45">{localizeUi("ui.panels.worldconfigform.relaxedASlowerDayToDayDrift")}</option>
+            <option value="90">{localizeUi("ui.panels.worldconfigform.slowLifeHoursBetweenCheckIns")}</option>
+            <option value="custom">{localizeUi("ui.panels.worldconfigform.customSetBelow")}</option>
           </select>
         </label>
       ) : null}
 
       <label className="block space-y-0.5">
         <span className="text-[0.65rem] text-[var(--muted-foreground)]">
-          Connection ({draft.mode === "minds" ? "each mind thinks with this" : "the director plans with this"})
+          {localizeUi("ui.panels.worldconfigform.connection")}
+          {draft.mode === "minds"
+            ? localizeUi("ui.panels.worldconfigform.eachMindThinksWithThis")
+            : localizeUi("ui.panels.worldconfigform.theDirectorPlansWithThis")}
+          )
         </span>
         <select
           className={inputClass}
           value={draft.connectionId ?? ""}
           onChange={(e) => setDraft({ ...draft, connectionId: e.target.value || null })}
         >
-          <option value="">Not configured</option>
-          <option value="local">Local sidecar (free)</option>
+          <option value="">{localizeUi("ui.panels.worldconfigform.notConfigured")}</option>
+          <option value="local">{localizeUi("ui.panels.worldconfigform.localSidecarFree")}</option>
           {connectionOptions.map((conn) => (
             <option key={conn.id} value={conn.id}>
               {conn.label}
@@ -431,7 +461,9 @@ function WorldConfigForm({
       <div className="grid grid-cols-3 gap-1.5">
         {draft.mode === "minds" ? (
           <label className="block space-y-0.5">
-            <span className="text-[0.65rem] text-[var(--muted-foreground)]">Check-in avg (min)</span>
+            <span className="text-[0.65rem] text-[var(--muted-foreground)]">
+              {localizeUi("ui.panels.worldconfigform.checkInAvgMin")}
+            </span>
             <input
               type="number"
               min={1}
@@ -446,7 +478,9 @@ function WorldConfigForm({
         ) : (
           <>
             <label className="block space-y-0.5">
-              <span className="text-[0.65rem] text-[var(--muted-foreground)]">Window (min)</span>
+              <span className="text-[0.65rem] text-[var(--muted-foreground)]">
+                {localizeUi("ui.panels.worldconfigform.windowMin")}
+              </span>
               <input
                 type="number"
                 min={5}
@@ -457,7 +491,9 @@ function WorldConfigForm({
               />
             </label>
             <label className="block space-y-0.5">
-              <span className="text-[0.65rem] text-[var(--muted-foreground)]">Moments / window</span>
+              <span className="text-[0.65rem] text-[var(--muted-foreground)]">
+                {localizeUi("ui.panels.worldconfigform.momentsWindow")}
+              </span>
               <input
                 type="number"
                 min={1}
@@ -472,7 +508,9 @@ function WorldConfigForm({
           </>
         )}
         <label className="block space-y-0.5">
-          <span className="text-[0.65rem] text-[var(--muted-foreground)]">Daily cap (0 = off)</span>
+          <span className="text-[0.65rem] text-[var(--muted-foreground)]">
+            {localizeUi("ui.panels.worldconfigform.dailyCap0Off")}
+          </span>
           <input
             type="number"
             min={0}
@@ -485,23 +523,28 @@ function WorldConfigForm({
       </div>
       {draft.mode === "minds" ? (
         <p className="text-[0.6rem] leading-snug text-[var(--muted-foreground)]">
-          Everyone gets a turn roughly every {Math.max(1, draft.wakeIntervalMinutes)} min, at offset times — pings
-          (DMs, your messages) answer faster. Budget honesty:{" "}
+          {localizeUi("ui.panels.worldconfigform.everyoneGetsATurnRoughlyEvery")}{" "}
+          {Math.max(1, draft.wakeIntervalMinutes)}{" "}
+          {localizeUi("ui.panels.worldconfigform.minAtOffsetTimesPingsDmsYourMessagesAnswer")}{" "}
           <span className="text-[var(--foreground)]">
-            {(everyone ? characterRows.length : memberSet.size) || 0} characters ×{" "}
-            {Math.max(1, Math.round((24 * 60) / Math.max(1, draft.wakeIntervalMinutes)))} check-ins/day ≈{" "}
+            {(everyone ? characterRows.length : memberSet.size) || 0}{" "}
+            {localizeUi("ui.panels.worldconfigform.characters")}{" "}
+            {Math.max(1, Math.round((24 * 60) / Math.max(1, draft.wakeIntervalMinutes)))}{" "}
+            {localizeUi("ui.panels.worldconfigform.checkInsDay")}{" "}
             {(
               ((everyone ? characterRows.length : memberSet.size) || 0) *
               Math.max(1, Math.round((24 * 60) / Math.max(1, draft.wakeIntervalMinutes)))
             ).toLocaleString()}{" "}
-            model calls/day
+            {localizeUi("ui.panels.worldconfigform.modelCallsDay")}
           </span>{" "}
-          (daily cap still applies).
+          {localizeUi("ui.panels.worldconfigform.dailyCapStillApplies")}
         </p>
       ) : null}
 
       <div className="space-y-1">
-        <span className="text-[0.65rem] text-[var(--muted-foreground)]">Who lives in this world</span>
+        <span className="text-[0.65rem] text-[var(--muted-foreground)]">
+          {localizeUi("ui.panels.worldconfigform.whoLivesInThisWorld")}
+        </span>
         <label className="flex items-center gap-1.5 text-[0.7rem]">
           <input
             type="checkbox"
@@ -511,7 +554,8 @@ function WorldConfigForm({
             }
             className="h-3.5 w-3.5 accent-[var(--primary)]"
           />
-          Everyone ({characterRows.length} characters)
+          {localizeUi("ui.panels.worldconfigform.everyone")}
+          {characterRows.length} {localizeUi("ui.panels.worldconfigform.characters_d1a48da")}
         </label>
         {!everyone ? (
           <div className="max-h-44 space-y-0.5 overflow-y-auto rounded-md border border-[var(--border)]/60 bg-[var(--card)]/40 p-1.5 [scrollbar-width:thin]">
@@ -530,10 +574,14 @@ function WorldConfigForm({
               </label>
             ))}
             {!characterRows.length ? (
-              <p className="px-1 py-0.5 text-[0.65rem] text-[var(--muted-foreground)]">No characters yet.</p>
+              <p className="px-1 py-0.5 text-[0.65rem] text-[var(--muted-foreground)]">
+                {localizeUi("ui.panels.worldconfigform.noCharactersYet")}
+              </p>
             ) : null}
             <p className="px-1 pt-1 text-[0.6rem] leading-snug text-[var(--muted-foreground)]">
-              {memberSet.size < 2 ? "Pick at least two — a world needs company." : `${memberSet.size} in the world.`}
+              {memberSet.size < 2
+                ? localizeUi("ui.panels.worldconfigform.pickAtLeastTwoAWorldNeedsCompany")
+                : localizeUi("ui.panels.worldconfigform.value1InTheWorld", { value1: memberSet.size })}
             </p>
           </div>
         ) : null}
@@ -561,14 +609,14 @@ function WorldConfigForm({
 
       <label className="block space-y-0.5">
         <span className="text-[0.65rem] text-[var(--muted-foreground)]">
-          You in the world (which persona the characters know you as)
+          {localizeUi("ui.panels.worldconfigform.youInTheWorldWhichPersonaTheCharactersKnow")}
         </span>
         <select
           className={inputClass}
           value={draft.userPersonaId ?? ""}
           onChange={(e) => setDraft({ ...draft, userPersonaId: e.target.value || null })}
         >
-          <option value="">(use the globally active persona)</option>
+          <option value="">{localizeUi("ui.panels.worldconfigform.useTheGloballyActivePersona")}</option>
           {((personas ?? []) as Array<{ id: string; name: string }>).map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -579,19 +627,19 @@ function WorldConfigForm({
 
       <label className="block space-y-0.5">
         <span className="text-[0.65rem] text-[var(--muted-foreground)]">
-          Weather city (optional — real weather from this city colors the whole world)
+          {localizeUi("ui.panels.worldconfigform.weatherCityOptionalRealWeatherFromThisCityColors")}
         </span>
         <input
           className={inputClass}
           value={draft.weatherLocation}
           onChange={(e) => setDraft({ ...draft, weatherLocation: e.target.value })}
-          placeholder="e.g. Tokyo, Reykjavik, Austin…"
+          placeholder={localizeUi("ui.panels.worldconfigform.eGTokyoReykjavikAustin")}
         />
       </label>
 
       <label className="block space-y-0.5">
         <span className="text-[0.65rem] text-[var(--muted-foreground)]">
-          Standing directive (optional — e.g. &quot;slow-burn romances only&quot;)
+          {localizeUi("ui.panels.worldconfigform.standingDirectiveOptionalEGSlowBurnRomancesOnly")}
         </span>
         <textarea
           className={cn(inputClass, "min-h-[2.5rem] resize-y")}
@@ -607,7 +655,9 @@ function WorldConfigForm({
         onClick={() => void save()}
         className="w-full rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity disabled:opacity-40"
       >
-        {updateConfig.isPending ? "Saving…" : "Save world settings"}
+        {updateConfig.isPending
+          ? localizeUi("chat.settings.inlineEditor.saving")
+          : localizeUi("ui.panels.worldconfigform.saveWorldSettings")}
       </button>
 
       <button
@@ -615,20 +665,28 @@ function WorldConfigForm({
         disabled={resetWorld.isPending}
         onClick={() => {
           if (
-            !window.confirm(
-              "Reset the world? This permanently deletes all world events, relationships, memories, minds, and every life/DM/group/hangout chat, and clears the Noodle timeline. Characters and settings are kept.",
-            )
+            !window.confirm(localizeUi("ui.panels.worldconfigform.resetTheWorldThisPermanentlyDeletesAllWorldEvents"))
           ) {
             return;
           }
           resetWorld
             .mutateAsync(true)
-            .then((result) => toast.success(`World reset — removed ${result.removedChats} world chats`))
-            .catch((err) => toast.error(err instanceof Error ? err.message : "Reset failed"));
+            .then((result) =>
+              toast.success(
+                localizeUi("ui.panels.worldconfigform.worldResetRemovedValue1WorldChats", {
+                  value1: result.removedChats,
+                }),
+              ),
+            )
+            .catch((err) =>
+              toast.error(err instanceof Error ? err.message : localizeUi("ui.panels.worldconfigform.resetFailed")),
+            );
         }}
         className="w-full rounded-md border border-[var(--destructive)]/50 px-3 py-1.5 text-xs font-medium text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/10 disabled:opacity-40"
       >
-        {resetWorld.isPending ? "Resetting…" : "Reset world (wipe everything)"}
+        {resetWorld.isPending
+          ? localizeUi("ui.panels.worldconfigform.resetting")
+          : localizeUi("ui.panels.worldconfigform.resetWorldWipeEverything")}
       </button>
     </div>
   );
@@ -655,6 +713,7 @@ function openWorldChatById(chatId: string) {
 }
 
 function CityMap() {
+  const { t: localizeUi } = useUiTranslation();
   const { data: city, isLoading } = useWorldCity();
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -686,7 +745,7 @@ function CityMap() {
   if (!nodes.length) {
     return (
       <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-4 text-center text-[0.7rem] leading-relaxed text-[var(--muted-foreground)]">
-        No map yet. As characters set up homes and head out, the city takes shape here.
+        {localizeUi("ui.panels.citymap.noMapYetAsCharactersSetUpHomesAnd")}
       </p>
     );
   }
@@ -706,7 +765,10 @@ function CityMap() {
       onPointerMove={(e) => {
         if (!drag.current) return;
         drag.current.moved = true;
-        setOffset({ x: drag.current.ox + (e.clientX - drag.current.x), y: drag.current.oy + (e.clientY - drag.current.y) });
+        setOffset({
+          x: drag.current.ox + (e.clientX - drag.current.x),
+          y: drag.current.oy + (e.clientY - drag.current.y),
+        });
       }}
       onPointerUp={(e) => {
         drag.current = null;
@@ -719,7 +781,10 @@ function CityMap() {
     >
       <div
         className="absolute inset-0"
-        style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: "center center" }}
+        style={{
+          transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+          transformOrigin: "center center",
+        }}
       >
         {nodes.map(({ place, pos, here }) => (
           <button
@@ -741,9 +806,7 @@ function CityMap() {
             <span
               className={cn(
                 "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[0.6rem] font-medium shadow-sm backdrop-blur-sm transition-colors",
-                here.length
-                  ? "border-emerald-400/60 bg-emerald-400/15"
-                  : "border-[var(--border)] bg-[var(--card)]/80",
+                here.length ? "border-emerald-400/60 bg-emerald-400/15" : "border-[var(--border)] bg-[var(--card)]/80",
                 place.sceneChatId && "hover:border-[var(--primary)]/70",
               )}
             >
@@ -762,13 +825,28 @@ function CityMap() {
       </div>
       {/* Zoom controls */}
       <div className="absolute bottom-2 right-2 flex flex-col overflow-hidden rounded-md border border-[var(--border)] bg-[var(--card)]/90 text-[var(--foreground)] shadow-sm backdrop-blur-sm">
-        <button type="button" onClick={() => zoomBy(1.2)} className="px-2 py-1 text-sm leading-none hover:bg-[var(--secondary)]" title="Zoom in">
+        <button
+          type="button"
+          onClick={() => zoomBy(1.2)}
+          className="px-2 py-1 text-sm leading-none hover:bg-[var(--secondary)]"
+          title={localizeUi("ui.game.mapzoomcontrols.zoomIn")}
+        >
           +
         </button>
-        <button type="button" onClick={() => zoomBy(0.83)} className="border-t border-[var(--border)] px-2 py-1 text-sm leading-none hover:bg-[var(--secondary)]" title="Zoom out">
+        <button
+          type="button"
+          onClick={() => zoomBy(0.83)}
+          className="border-t border-[var(--border)] px-2 py-1 text-sm leading-none hover:bg-[var(--secondary)]"
+          title={localizeUi("ui.game.mapzoomcontrols.zoomOut")}
+        >
           −
         </button>
-        <button type="button" onClick={resetView} className="border-t border-[var(--border)] px-2 py-1 text-[0.6rem] leading-none hover:bg-[var(--secondary)]" title="Reset view">
+        <button
+          type="button"
+          onClick={resetView}
+          className="border-t border-[var(--border)] px-2 py-1 text-[0.6rem] leading-none hover:bg-[var(--secondary)]"
+          title={localizeUi("ui.panels.citymap.resetView")}
+        >
           ⟳
         </button>
       </div>
@@ -779,6 +857,7 @@ function CityMap() {
 // ── City ──
 
 function CityView() {
+  const { t: localizeUi } = useUiTranslation();
   const { data: city, isLoading } = useWorldCity();
   const homeless = (city?.residents ?? []).filter((resident) => !resident.placeId);
   // Select residents to message one, or start a group with several.
@@ -796,11 +875,12 @@ function CityView() {
     const ids = [...selected];
     if (!ids.length) return;
     try {
-      const res = ids.length === 1 ? await createDm.mutateAsync(ids[0]!) : await createGroup.mutateAsync({ characterIds: ids });
+      const res =
+        ids.length === 1 ? await createDm.mutateAsync(ids[0]!) : await createGroup.mutateAsync({ characterIds: ids });
       if (res?.chatId) openWorldChatById(res.chatId);
       setSelected(new Set());
     } catch {
-      toast.error("Couldn't start that chat. Is the Living World enabled?");
+      toast.error(localizeUi("ui.panels.cityview.couldnTStartThatChatIsTheLivingWorld"));
     }
   };
   const startingChat = createDm.isPending || createGroup.isPending;
@@ -814,7 +894,7 @@ function CityView() {
       const res = await goTo.mutateAsync(placeId);
       if (res?.chatId) openWorldChatById(res.chatId);
     } catch {
-      toast.error("Couldn't go there.");
+      toast.error(localizeUi("ui.panels.cityview.couldnTGoThere"));
     }
   };
   const addPlace = async () => {
@@ -824,9 +904,9 @@ function CityView() {
       await createPlace.mutateAsync({ name, kind: newPlaceKind.trim() || undefined });
       setNewPlaceName("");
       setNewPlaceKind("");
-      toast.success(`${name} is on the map.`);
+      toast.success(localizeUi("ui.panels.cityview.value1IsOnTheMap", { value1: name }));
     } catch {
-      toast.error("Couldn't create that place.");
+      toast.error(localizeUi("ui.panels.cityview.couldnTCreateThatPlace"));
     }
   };
 
@@ -840,8 +920,7 @@ function CityView() {
   if (!city?.places.length && !city?.residents.length) {
     return (
       <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-4 text-center text-[0.7rem] leading-relaxed text-[var(--muted-foreground)]">
-        The city is empty. As characters go places, the map fills in — cafes, parks, apartments, wherever life takes
-        them.
+        {localizeUi("ui.panels.cityview.theCityIsEmptyAsCharactersGoPlacesThe")}
       </p>
     );
   }
@@ -853,13 +932,13 @@ function CityView() {
           value={newPlaceName}
           onChange={(e) => setNewPlaceName(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && void addPlace()}
-          placeholder="New place name…"
+          placeholder={localizeUi("ui.panels.cityview.newPlaceName")}
           className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-[var(--muted-foreground)]"
         />
         <input
           value={newPlaceKind}
           onChange={(e) => setNewPlaceKind(e.target.value)}
-          placeholder="kind"
+          placeholder={localizeUi("ui.panels.cityview.kind")}
           className="w-16 bg-transparent text-xs outline-none placeholder:text-[var(--muted-foreground)]"
         />
         <button
@@ -868,7 +947,7 @@ function CityView() {
           onClick={() => void addPlace()}
           className="rounded-md bg-[var(--primary)] px-2 py-0.5 text-[0.65rem] font-semibold text-[var(--primary-foreground)] disabled:opacity-50"
         >
-          Add
+          {localizeUi("ui.panels.appearancesettings.add")}
         </button>
       </div>
       {city.places.map((place) => {
@@ -878,11 +957,13 @@ function CityView() {
           <div key={place.id} className="relative">
             <button
               type="button"
-              onClick={() =>
-                youAreHere ? void goTo.mutateAsync(null) : void goHere(place.id)
-              }
+              onClick={() => (youAreHere ? void goTo.mutateAsync(null) : void goHere(place.id))}
               disabled={goTo.isPending}
-              title={youAreHere ? "Leave this place" : "Go here (people will notice you arrive)"}
+              title={
+                youAreHere
+                  ? localizeUi("ui.panels.cityview.leaveThisPlace")
+                  : localizeUi("ui.panels.cityview.goHerePeopleWillNoticeYouArrive")
+              }
               className={cn(
                 "absolute right-1.5 top-1.5 z-10 rounded-md border px-1.5 py-0.5 text-[0.6rem] font-semibold",
                 youAreHere
@@ -890,47 +971,58 @@ function CityView() {
                   : "border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)] hover:border-[var(--primary)]/60",
               )}
             >
-              {youAreHere ? "You're here · leave" : "Go"}
+              {youAreHere ? localizeUi("ui.panels.cityview.youReHereLeave") : localizeUi("ui.panels.cityview.go")}
             </button>
             <button
               type="button"
               disabled={!place.sceneChatId}
               onClick={() => place.sceneChatId && openWorldChatById(place.sceneChatId)}
-            className={cn(
-              "block w-full rounded-lg border border-[var(--border)]/50 bg-[var(--card)]/50 px-2.5 py-2 text-left",
-              place.sceneChatId && "transition-colors hover:border-[var(--primary)]/50 hover:bg-[var(--accent)]/30",
-            )}
-            title={place.sceneChatId ? "Open this place's scene" : place.description || place.name}
-          >
-            <div className="flex items-center gap-1.5">
-              {place.ownerId ? (
-                <Building2 size="0.75rem" className="shrink-0 text-indigo-400" />
-              ) : (
-                <MapPin size="0.75rem" className="shrink-0 text-teal-400" />
+              className={cn(
+                "block w-full rounded-lg border border-[var(--border)]/50 bg-[var(--card)]/50 px-2.5 py-2 text-left",
+                place.sceneChatId && "transition-colors hover:border-[var(--primary)]/50 hover:bg-[var(--accent)]/30",
               )}
-              <span className="text-xs font-medium">{place.name}</span>
-              <span className="text-[0.6rem] text-[var(--muted-foreground)]">{place.ownerId ? "home" : place.kind}</span>
-              {place.detail > 0 ? (
-                <span className="ml-auto text-[0.55rem] text-[var(--muted-foreground)]">detail {place.detail}</span>
-              ) : null}
-            </div>
-            {place.description ? (
-              <p className="mt-1 text-[0.68rem] leading-snug text-[var(--muted-foreground)]">{place.description}</p>
-            ) : null}
-            {place.tags.length ? (
-              <div className="mt-1 flex flex-wrap gap-1">
-                {place.tags.map((tag) => (
-                  <span key={tag} className="rounded-full bg-[var(--secondary)] px-1.5 py-0.5 text-[0.55rem] text-[var(--muted-foreground)]">
-                    {tag}
+              title={
+                place.sceneChatId
+                  ? localizeUi("ui.panels.cityview.openThisPlaceSScene")
+                  : place.description || place.name
+              }
+            >
+              <div className="flex items-center gap-1.5">
+                {place.ownerId ? (
+                  <Building2 size="0.75rem" className="shrink-0 text-indigo-400" />
+                ) : (
+                  <MapPin size="0.75rem" className="shrink-0 text-teal-400" />
+                )}
+                <span className="text-xs font-medium">{place.name}</span>
+                <span className="text-[0.6rem] text-[var(--muted-foreground)]">
+                  {place.ownerId ? localizeUi("ui.panels.cityview.home") : place.kind}
+                </span>
+                {place.detail > 0 ? (
+                  <span className="ml-auto text-[0.55rem] text-[var(--muted-foreground)]">
+                    {localizeUi("ui.panels.cityview.detail")} {place.detail}
                   </span>
-                ))}
+                ) : null}
               </div>
-            ) : null}
-            {here.length || youAreHere ? (
-              <div className="mt-1 flex items-center gap-1 text-[0.65rem] text-emerald-400">
-                <UsersRound size="0.65rem" /> {[...here, ...(youAreHere ? ["You"] : [])].join(", ")}
-              </div>
-            ) : null}
+              {place.description ? (
+                <p className="mt-1 text-[0.68rem] leading-snug text-[var(--muted-foreground)]">{place.description}</p>
+              ) : null}
+              {place.tags.length ? (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {place.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-full bg-[var(--secondary)] px-1.5 py-0.5 text-[0.55rem] text-[var(--muted-foreground)]"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {here.length || youAreHere ? (
+                <div className="mt-1 flex items-center gap-1 text-[0.65rem] text-emerald-400">
+                  <UsersRound size="0.65rem" /> {[...here, ...(youAreHere ? ["You"] : [])].join(", ")}
+                </div>
+              ) : null}
             </button>
           </div>
         );
@@ -940,10 +1032,12 @@ function CityView() {
         <div className="mt-2 rounded-lg border border-[var(--border)]/50 bg-[var(--card)]/40 px-2.5 py-2">
           <div className="flex items-center justify-between">
             <span className="text-[0.65rem] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
-              Residents
+              {localizeUi("ui.panels.cityview.residents")}
             </span>
             <span className="text-[0.55rem] text-[var(--muted-foreground)]">
-              {selected.size > 0 ? `${selected.size} selected` : "tap to message"}
+              {selected.size > 0
+                ? localizeUi("ui.agents.regexscripteditor.value1Selected", { value1: selected.size })
+                : localizeUi("ui.panels.cityview.tapToMessage")}
             </span>
           </div>
           <div className="mt-1 space-y-0.5">
@@ -962,17 +1056,21 @@ function CityView() {
                   <span
                     className={cn(
                       "flex h-3 w-3 shrink-0 items-center justify-center rounded-full border text-[0.5rem] leading-none",
-                      isSel ? "border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)]" : "border-[var(--border)]",
+                      isSel
+                        ? "border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)]"
+                        : "border-[var(--border)]",
                     )}
                   >
                     {isSel ? "✓" : ""}
                   </span>
                   <span className="font-medium">{resident.name}</span>
-                  {resident.job ? <span className="truncate text-[var(--muted-foreground)]">· {resident.job}</span> : null}
+                  {resident.job ? (
+                    <span className="truncate text-[var(--muted-foreground)]">· {resident.job}</span>
+                  ) : null}
                   <span className="ml-auto flex items-center gap-1.5 text-[var(--muted-foreground)]">
-                    <span title="energy">⚡{resident.needs.energy}</span>
-                    <span title="hunger">🍽{resident.needs.hunger}</span>
-                    <span title="social">💬{resident.needs.social}</span>
+                    <span title={localizeUi("ui.panels.cityview.energy")}>⚡{resident.needs.energy}</span>
+                    <span title={localizeUi("ui.panels.cityview.hunger")}>🍽{resident.needs.hunger}</span>
+                    <span title={localizeUi("ui.panels.cityview.social")}>💬{resident.needs.social}</span>
                     <span className="flex items-center gap-0.5">
                       <Coins size="0.6rem" /> {resident.money}
                     </span>
@@ -990,17 +1088,19 @@ function CityView() {
                 className="flex-1 rounded-md bg-[var(--primary)] px-2 py-1 text-[0.65rem] font-semibold text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
               >
                 {startingChat
-                  ? "Opening…"
+                  ? localizeUi("ui.panels.cityview.opening")
                   : selected.size === 1
-                    ? `Message ${city.residents.find((r) => selected.has(r.characterId))?.name ?? ""}`
-                    : `Start group (${selected.size})`}
+                    ? localizeUi("ui.panels.cityview.messageValue1", {
+                        value1: city.residents.find((r) => selected.has(r.characterId))?.name ?? "",
+                      })
+                    : localizeUi("ui.panels.cityview.startGroupValue1", { value1: selected.size })}
               </button>
               <button
                 type="button"
                 onClick={() => setSelected(new Set())}
                 className="rounded-md border border-[var(--border)] px-2 py-1 text-[0.65rem] text-[var(--muted-foreground)] hover:bg-[var(--secondary)]"
               >
-                Clear
+                {localizeUi("lorebook.editor.batch.clear")}
               </button>
             </div>
           ) : null}
@@ -1009,7 +1109,9 @@ function CityView() {
 
       {homeless.length && city.places.length ? (
         <p className="px-1 text-[0.6rem] text-[var(--muted-foreground)]">
-          {homeless.map((r) => r.name).join(", ")} {homeless.length === 1 ? "is" : "are"} home / not out right now.
+          {homeless.map((r) => r.name).join(", ")}{" "}
+          {homeless.length === 1 ? localizeUi("ui.panels.cityview.is") : localizeUi("ui.panels.cityview.are")}{" "}
+          {localizeUi("ui.panels.cityview.homeNotOutRightNow")}
         </p>
       ) : null}
     </div>
@@ -1019,6 +1121,7 @@ function CityView() {
 // ── Panel ──
 
 export function WorldPanel() {
+  const { t: localizeUi } = useUiTranslation();
   const { data: status } = useWorldStatus();
   const runTick = useRunWorldTick();
   const [tab, setTab] = useState<"timeline" | "map" | "city" | "bonds">("timeline");
@@ -1052,18 +1155,23 @@ export function WorldPanel() {
       } else if (result.ran) {
         const parts: string[] = [];
         if (result.queued > 0) parts.push(`${result.queued} moment${result.queued === 1 ? "" : "s"} planned`);
-        if (result.executedNow > 0) parts.push(`${result.executedNow} action${result.executedNow === 1 ? "" : "s"} happened`);
+        if (result.executedNow > 0)
+          parts.push(`${result.executedNow} action${result.executedNow === 1 ? "" : "s"} happened`);
         const headline = result.narration
           ? result.narration.length > 90
             ? `${result.narration.slice(0, 89)}…`
             : result.narration
           : "The world moved";
-        toast.success(parts.length ? `${headline} (${parts.join(", ")})` : headline);
+        toast.success(
+          parts.length
+            ? localizeUi("ui.panels.ttsconfigcard.value1Value2", { value1: headline, value2: parts.join(", ") })
+            : headline,
+        );
       } else {
-        toast.info(result.skippedReason ?? "Nothing to do right now");
+        toast.info(result.skippedReason ?? localizeUi("ui.panels.worldpanel.nothingToDoRightNow"));
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "World advance failed");
+      toast.error(err instanceof Error ? err.message : localizeUi("ui.panels.worldpanel.worldAdvanceFailed"));
     }
   };
 
@@ -1079,10 +1187,12 @@ export function WorldPanel() {
                 status?.config.enabled ? "bg-emerald-400 shadow-[0_0_6px] shadow-emerald-400/60" : "bg-[var(--border)]",
               )}
             />
-            {status?.config.enabled ? "World is live" : "World is paused"}
+            {status?.config.enabled
+              ? localizeUi("ui.panels.worldpanel.worldIsLive")
+              : localizeUi("ui.panels.worldpanel.worldIsPaused")}
           </span>
           <span className="text-[0.65rem] text-[var(--muted-foreground)]">
-            {status?.provider.ok ? status.provider.label : "no connection"}
+            {status?.provider.ok ? status.provider.label : localizeUi("ui.panels.worldpanel.noConnection")}
           </span>
         </div>
         {status?.atmosphere?.summary ? (
@@ -1096,20 +1206,33 @@ export function WorldPanel() {
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[0.65rem] text-[var(--muted-foreground)]">
           {status?.config.mode === "minds" ? (
             <span>
-              {status.minds.count} mind{status.minds.count === 1 ? "" : "s"}
-              {status.minds.nextWakeAt ? ` · next check-in ${relativeTime(status.minds.nextWakeAt)}` : ""}
+              {status.minds.count} {localizeUi("ui.panels.worldpanel.mind")}
+              {status.minds.count === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s")}
+              {status.minds.nextWakeAt
+                ? localizeUi("ui.panels.worldpanel.nextCheckInValue1", {
+                    value1: relativeTime(status.minds.nextWakeAt),
+                  })
+                : ""}
             </span>
           ) : (
             <span>
-              {status?.timeline.count ?? 0} moment{(status?.timeline.count ?? 0) === 1 ? "" : "s"} queued
-              {status?.timeline.nextRunAt ? ` · next ${relativeTime(status.timeline.nextRunAt)}` : ""}
+              {status?.timeline.count ?? 0} {localizeUi("ui.panels.worldpanel.moment")}
+              {(status?.timeline.count ?? 0) === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s")}{" "}
+              {localizeUi("ui.panels.worldpanel.queued")}
+              {status?.timeline.nextRunAt
+                ? localizeUi("ui.panels.worldpanel.nextValue1", { value1: relativeTime(status.timeline.nextRunAt) })
+                : ""}
             </span>
           )}
           <span>
-            today {status?.state.dailyCount ?? 0}/
+            {localizeUi("ui.panels.worldpanel.today")} {status?.state.dailyCount ?? 0}/
             {(status?.config.dailyActionCap ?? 0) > 0 ? status!.config.dailyActionCap : "∞"}
           </span>
-          {status?.state.lastError ? <span className="text-rose-400">last error: {status.state.lastError}</span> : null}
+          {status?.state.lastError ? (
+            <span className="text-rose-400">
+              {localizeUi("ui.panels.worldpanel.lastError")} {status.state.lastError}
+            </span>
+          ) : null}
         </div>
         <div className="flex gap-1.5 pt-0.5">
           <button
@@ -1117,10 +1240,14 @@ export function WorldPanel() {
             disabled={runTick.isPending || !status?.provider.ok}
             onClick={() => void advance()}
             className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity disabled:opacity-40"
-            title={status?.provider.ok ? "Plan and start the next stretch of world time" : "Configure a connection first"}
+            title={
+              status?.provider.ok
+                ? localizeUi("ui.panels.worldpanel.planAndStartTheNextStretchOfWorldTime")
+                : localizeUi("ui.panels.worldpanel.configureAConnectionFirst")
+            }
           >
             {runTick.isPending ? <Loader2 size="0.75rem" className="animate-spin" /> : <Play size="0.75rem" />}
-            Advance the world
+            {localizeUi("ui.panels.worldpanel.advanceTheWorld")}
           </button>
           <button
             type="button"
@@ -1129,8 +1256,8 @@ export function WorldPanel() {
               "rounded-md border border-[var(--border)] px-2.5 py-1.5 transition-colors hover:bg-[var(--accent)]/40",
               showConfig && "border-[var(--primary)]/60 bg-[var(--primary)]/10",
             )}
-            title="World settings"
-            aria-label="World settings"
+            title={localizeUi("ui.panels.worldpanel.worldSettings")}
+            aria-label={localizeUi("ui.panels.worldpanel.worldSettings")}
           >
             <Settings2 size="0.8rem" />
           </button>
@@ -1156,7 +1283,9 @@ export function WorldPanel() {
             onClick={() => setTab(key)}
             className={cn(
               "flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors",
-              tab === key ? "bg-[var(--card)] shadow-sm" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
+              tab === key
+                ? "bg-[var(--card)] shadow-sm"
+                : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
             )}
           >
             {label}
@@ -1192,9 +1321,9 @@ export function WorldPanel() {
               className={inputClass}
               value={filterCharacterId ?? ""}
               onChange={(e) => setFilterCharacterId(e.target.value || null)}
-              aria-label="Filter timeline by character"
+              aria-label={localizeUi("ui.panels.worldpanel.filterTimelineByCharacter")}
             >
-              <option value="">Everyone</option>
+              <option value="">{localizeUi("ui.panels.worldpanel.everyone")}</option>
               {characterOptions.map((option) => (
                 <option key={option.id} value={option.id}>
                   {option.name}
@@ -1210,8 +1339,7 @@ export function WorldPanel() {
             filteredEvents.map((event) => <EventRow key={event.id} event={event} />)
           ) : (
             <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-4 text-center text-[0.7rem] leading-relaxed text-[var(--muted-foreground)]">
-              Nothing has happened yet. Enable the world (or tap Advance) and life will start trickling in —
-              posts, DMs, plans, and slowly, relationships.
+              {localizeUi("ui.panels.worldpanel.nothingHasHappenedYetEnableTheWorldOrTap")}
             </p>
           )}
         </div>
@@ -1237,7 +1365,7 @@ export function WorldPanel() {
             ))
           ) : (
             <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-4 text-center text-[0.7rem] leading-relaxed text-[var(--muted-foreground)]">
-              Nobody has really met anybody yet. Bonds form on their own as characters cross paths.
+              {localizeUi("ui.panels.worldpanel.nobodyHasReallyMetAnybodyYetBondsFormOn")}
             </p>
           )}
         </div>

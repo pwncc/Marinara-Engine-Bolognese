@@ -1,4 +1,4 @@
-import { normalizeTextForMatch, resolveMacros, type MacroContext } from "@marinara-engine/shared";
+import { normalizeTextForMatch, resolveMacros, type MacroContext, type Persona } from "@marinara-engine/shared";
 
 export interface MacroCharacterData {
   id?: string;
@@ -80,17 +80,15 @@ export function parseCharacterMacroData(
   }
 }
 
-export function parsePersonaMacroData(raw: Record<string, unknown> | null | undefined): MacroPersonaData | null {
-  if (!raw) return null;
-
+function toMacroPersonaData(persona: Persona): MacroPersonaData {
   return {
-    personaId: getString(raw.id),
-    name: getString(raw.name) || "User",
-    description: getString(raw.description),
-    personality: getString(raw.personality),
-    backstory: getString(raw.backstory),
-    appearance: getString(raw.appearance),
-    scenario: getString(raw.scenario),
+    personaId: persona.id,
+    name: persona.name || "User",
+    description: persona.description,
+    personality: persona.personality,
+    backstory: persona.backstory,
+    appearance: persona.appearance,
+    scenario: persona.scenario,
   };
 }
 
@@ -112,17 +110,17 @@ export function selectChatCharacters(
 
 export function selectActivePersona(
   chat: { personaId?: string | null; mode?: string | null } | null | undefined,
-  personas: Array<Record<string, unknown>> | undefined,
+  personas: Persona[] | undefined,
 ): MacroPersonaData | undefined {
   if (!personas?.length) return undefined;
 
   const chatPersonaId = typeof chat?.personaId === "string" ? chat.personaId : null;
   const allowGlobalFallback = chat?.mode !== "game";
   const selectedPersona =
-    (chatPersonaId ? personas.find((persona) => getString(persona.id) === chatPersonaId) : null) ??
-    (allowGlobalFallback ? personas.find((persona) => persona.isActive === true || persona.isActive === "true") : null);
+    (chatPersonaId ? personas.find((persona) => persona.id === chatPersonaId) : null) ??
+    (allowGlobalFallback ? personas.find((persona) => persona.isActive) : null);
 
-  return parsePersonaMacroData(selectedPersona ?? null) ?? undefined;
+  return selectedPersona ? toMacroPersonaData(selectedPersona) : undefined;
 }
 
 export function findCharacterByName(
@@ -201,7 +199,7 @@ export function resolveMessageMacros(
  * Variable-op macros make resolution order-dependent (writes mutate the shared
  * context; reads observe them), so templates containing them are never cached.
  */
-const VARIABLE_OP_MACRO_RE = /\{\{\s*(?:setvar|addvar|incvar|decvar|getvar)\b/i;
+const VARIABLE_OP_MACRO_RE = /\{\{\s*(?:setvar|addvar|addnumvar|incvar|decvar|getvar)\b/i;
 /** Only short templates (regex replacements, trims, patterns) are worth caching. */
 const RESOLVER_CACHE_MAX_TEMPLATE_LENGTH = 2048;
 
@@ -222,8 +220,7 @@ export function createMessageMacroResolver(
   return (template: string) => {
     const touchesVariables = VARIABLE_OP_MACRO_RE.test(template);
     if (touchesVariables) variablesTouched = true;
-    const cacheable =
-      !touchesVariables && !variablesTouched && template.length <= RESOLVER_CACHE_MAX_TEMPLATE_LENGTH;
+    const cacheable = !touchesVariables && !variablesTouched && template.length <= RESOLVER_CACHE_MAX_TEMPLATE_LENGTH;
     if (cacheable) {
       const cached = cache.get(template);
       if (cached !== undefined) return cached;
@@ -238,20 +235,10 @@ export function isPromptPreviewMacro(input: string): boolean {
   return /^\{\{\s*(?:prompt|prompt_preview|preview_prompt)\s*\}\}$/i.test(input.trim());
 }
 
-export function resolveInputMacrosForChat(
-  template: string,
-  chat: { characterIds?: unknown; personaId?: string | null; mode?: string | null } | null | undefined,
-  characters: Array<{ id: string; data: unknown }> | undefined,
-  personas: Array<Record<string, unknown>> | undefined,
-  lastInput?: string,
-): string {
-  return createInputMacroResolverForChat(chat, characters, personas, lastInput)(template);
-}
-
 export function createInputMacroResolverForChat(
   chat: { characterIds?: unknown; personaId?: string | null; mode?: string | null } | null | undefined,
   characters: Array<{ id: string; data: unknown }> | undefined,
-  personas: Array<Record<string, unknown>> | undefined,
+  personas: Persona[] | undefined,
   lastInput?: string,
 ) {
   const chatCharacters = selectChatCharacters(chat, characters);

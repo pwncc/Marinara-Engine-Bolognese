@@ -45,9 +45,7 @@ const ENABLED = readVerboseFlag();
  * top level of a component body (it is a hook).
  */
 export function useRenderTimer(label: string): void {
-  // Clock is only read when enabled; the purity heuristic flags the potential
-  // render-phase read, but it is measurement-only and gated behind ENABLED.
-  // eslint-disable-next-line react-hooks/purity
+  // Clock is only read when enabled; it is measurement-only and gated behind ENABLED.
   const start = ENABLED ? performance.now() : 0;
   useLayoutEffect(() => {
     if (!ENABLED) return;
@@ -125,12 +123,13 @@ export function installLongTaskWarner(): void {
   if (installed || !ENABLED) return;
   installed = true;
 
+  if (typeof PerformanceObserver === "undefined" || !PerformanceObserver.supportedEntryTypes?.includes("longtask")) {
+    return;
+  }
   console.warn(
     `[mari-perf] render diagnostics ON — logging every render + long task ` +
       `(${SLOW_MS}ms+ tagged SLOW). Run \`localStorage.mariPerfVerbose = "0"\` (or remove the key) and reload to disable.`,
   );
-
-  if (typeof PerformanceObserver === "undefined") return;
   try {
     const observer = new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {

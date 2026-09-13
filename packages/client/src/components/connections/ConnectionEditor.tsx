@@ -44,13 +44,16 @@ import {
   ExternalLink,
   ImageIcon,
   Film,
+  Music,
   RotateCcw,
   SlidersHorizontal,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useTranslation, useTranslation as useUiTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { downloadJsonFile, sanitizeExportFilenamePart } from "../../lib/download-json";
+import { prepareImageAttachment } from "../../lib/chat-attachment-images";
 import {
   CONNECTION_EXPORT_WARNING,
   createConnectionExportEnvelope,
@@ -72,6 +75,7 @@ import {
   LOCAL_SIDECAR_CONNECTION_ID,
   MODEL_LISTS,
   IMAGE_GENERATION_SOURCES,
+  ZAI_IMAGE_MODELS,
   VIDEO_GENERATION_SOURCES,
   inferImageSource,
   inferVideoSource,
@@ -80,6 +84,8 @@ import {
   VIDEO_DEFAULTS_STORAGE_KEY,
   COMFYUI_SAMPLER_OPTIONS,
   COMFYUI_SCHEDULER_OPTIONS,
+  COMFYUI_LORA_STRENGTH_MIN,
+  COMFYUI_LORA_STRENGTH_MAX,
   NOVELAI_NOISE_SCHEDULE_OPTIONS,
   NOVELAI_SAMPLER_OPTIONS,
   SD_WEBUI_SAMPLER_OPTIONS,
@@ -92,9 +98,15 @@ import {
   sanitizeImageGenerationProfile,
   sanitizeVideoGenerationProfile,
   suggestImageStyleProfileIdForModel,
+  MAX_IMAGE_PROMPT_INSTRUCTIONS_LENGTH,
+  normalizeImagePromptInstructions,
+  parseConnectionImageCaptioningDefaults,
   type APIProvider,
+  type AudioGenerationSource,
+  type ComfyUiLoraSetting,
   type ImageDefaultsService,
   type ImageGenerationDefaultsProfile,
+  type ImageGenerationQuality,
   type ImageStyleProfileSettings,
   type VideoDefaultsService,
   type VideoGenerationDefaultsProfile,
@@ -116,6 +128,7 @@ const API_KEY_LINKS: Partial<Record<APIProvider, { label: string; url: string }>
   openrouter: { label: "Get your OpenRouter API key", url: "https://openrouter.ai/keys" },
   nanogpt: { label: "Get your NanoGPT API key", url: "https://nano-gpt.com/api" },
   xai: { label: "Get your xAI API key", url: "https://console.x.ai" },
+  arli: { label: "Get your Arli AI API key", url: "https://www.arliai.com/account" },
   video_generation: { label: "Get your Google AI API key", url: "https://aistudio.google.com/apikey" },
 };
 
@@ -130,7 +143,9 @@ const DEFAULT_VIDEO_MODELS: Record<VideoDefaultsService, string> = {
   google_veo: "veo-3.1-generate-preview",
   xai: "grok-imagine-video-1.5",
   openrouter: "google/veo-3.1",
+  atlas: "google/veo3.1/text-to-video",
   seedance: "seedance-2-0",
+  comfyui: "",
 };
 const VIDEO_RESOLUTION_OPTIONS: Array<{ value: VideoResolution; label: string }> = [
   { value: "480p", label: "480p" },
@@ -145,7 +160,14 @@ const VIDEO_REFERENCE_UPLOAD_EXPIRY_OPTIONS: Array<{ value: VideoReferenceUpload
 ];
 
 function videoSourceToDefaultsService(value: string | null | undefined): VideoDefaultsService {
-  return value === "xai" || value === "openrouter" || value === "seedance" || value === "google_veo"
+  if (value === "swarmui") return "comfyui";
+  if (value === "nanogpt") return "openrouter";
+  return value === "xai" ||
+    value === "openrouter" ||
+    value === "atlas" ||
+    value === "seedance" ||
+    value === "google_veo" ||
+    value === "comfyui"
     ? value
     : "gemini_omni";
 }
@@ -163,6 +185,8 @@ function videoSelectionToDefaultsService(
 }
 
 function videoSourceToProviderOption(value: string | null | undefined): string {
+  if (value?.trim() === "swarmui") return "swarmui";
+  if (value?.trim() === "nanogpt") return "nanogpt";
   const service = videoSourceToDefaultsService(value);
   return service === "gemini_omni" || service === "google_veo" ? "google_ai_studio" : service;
 }
@@ -180,6 +204,7 @@ function videoProviderServiceForModel(
 }
 
 function defaultVideoModelForService(value: string | null | undefined): string {
+  if (value === "nanogpt") return "";
   return DEFAULT_VIDEO_MODELS[videoSourceToDefaultsService(value)];
 }
 
@@ -196,14 +221,59 @@ function normalizeEndpointUrlInput(raw: string, label: string): { value: string;
   return { value, error: null };
 }
 
+// Mirrors TTS_SOURCE_DEFAULTS in TTSConfigCard so a fresh audio connection
+// seeds the same base URL / model / voice the legacy TTS settings used.
+const AUDIO_SOURCE_OPTIONS: Array<{
+  id: AudioGenerationSource;
+  name: string;
+  defaultBaseUrl: string;
+  defaultModel: string;
+  defaultVoice: string;
+}> = [
+  {
+    id: "elevenlabs",
+    name: "ElevenLabs",
+    defaultBaseUrl: "https://api.elevenlabs.io",
+    defaultModel: "eleven_multilingual_v2",
+    defaultVoice: "",
+  },
+  {
+    id: "openai",
+    name: "OpenAI-compatible",
+    defaultBaseUrl: "https://api.openai.com/v1",
+    defaultModel: "tts-1",
+    defaultVoice: "alloy",
+  },
+  {
+    id: "pockettts",
+    name: "PocketTTS",
+    defaultBaseUrl: "http://localhost:8000",
+    defaultModel: "pocket-tts",
+    defaultVoice: "alba",
+  },
+  {
+    id: "xai",
+    name: "xAI Voice",
+    defaultBaseUrl: "https://api.x.ai/v1",
+    defaultModel: "grok-tts",
+    defaultVoice: "eve",
+  },
+];
+
 function canProviderTreatAsLocalEndpoint(provider: APIProvider): boolean {
-  return provider !== "image_generation" && provider !== "video_generation" && !isLocalAuthConnectionProvider(provider);
+  return (
+    provider !== "image_generation" &&
+    provider !== "video_generation" &&
+    provider !== "audio" &&
+    !isLocalAuthConnectionProvider(provider)
+  );
 }
 
 function providerSupportsDirectEmbeddingConfig(provider: APIProvider): boolean {
   return (
     provider !== "image_generation" &&
     provider !== "video_generation" &&
+    provider !== "audio" &&
     provider !== "anthropic" &&
     !isLocalAuthConnectionProvider(provider)
   );
@@ -235,6 +305,8 @@ function normalizeMaxParallelJobs(value: unknown): number {
 // ═══════════════════════════════════════════════
 
 export function ConnectionEditor() {
+  const { t: localizeUi } = useUiTranslation();
+  const { t } = useTranslation();
   const connectionDetailId = useUIStore((s) => s.connectionDetailId);
   const closeConnectionDetail = useUIStore((s) => s.closeConnectionDetail);
 
@@ -270,6 +342,7 @@ export function ConnectionEditor() {
   const [localModel, setLocalModel] = useState("");
   const [localMaxContext, setLocalMaxContext] = useState(128000);
   const [localMaxParallelJobs, setLocalMaxParallelJobs] = useState(DEFAULT_MAX_PARALLEL_JOBS);
+  const [localMaxRequestsPerMinute, setLocalMaxRequestsPerMinute] = useState<number | null>(null);
   const [localEnableCaching, setLocalEnableCaching] = useState(false);
   const [localAnthropicExtendedCacheTtl, setLocalAnthropicExtendedCacheTtl] = useState(false);
   const [localCachingAtDepth, setLocalCachingAtDepth] = useState(DEFAULT_CACHING_AT_DEPTH);
@@ -283,15 +356,24 @@ export function ConnectionEditor() {
   const [localComfyuiWorkflow, setLocalComfyuiWorkflow] = useState("");
   const [localImageService, setLocalImageService] = useState<string | null>(null);
   const [localImageEndpointId, setLocalImageEndpointId] = useState("");
+  const [localImagePromptInstructions, setLocalImagePromptInstructions] = useState("");
+  const [localImageGenerationQuality, setLocalImageGenerationQuality] = useState<ImageGenerationQuality>("auto");
   const [localVideoGenerationSource, setLocalVideoGenerationSource] = useState("");
   const [localVideoService, setLocalVideoService] = useState<string | null>(null);
+  const [localAudioSource, setLocalAudioSource] = useState("elevenlabs");
+  const [localAudioVoice, setLocalAudioVoice] = useState("");
+  const [localAudioSoundEffects, setLocalAudioSoundEffects] = useState(false);
+  const [localAudioMusic, setLocalAudioMusic] = useState(false);
   const [localMaxTokensOverride, setLocalMaxTokensOverride] = useState<number | null>(null);
   const [localClaudeFastMode, setLocalClaudeFastMode] = useState(false);
   const [localTreatAsLocalEndpoint, setLocalTreatAsLocalEndpoint] = useState(false);
   const [localDefaultParametersEnabled, setLocalDefaultParametersEnabled] = useState(false);
   const [localDefaultParameters, setLocalDefaultParameters] =
     useState<EditableGenerationParameters>(CONNECTION_PARAMETER_DEFAULTS);
+  const [localImageCaptioningEnabled, setLocalImageCaptioningEnabled] = useState(false);
+  const [localImageCaptioningConnectionId, setLocalImageCaptioningConnectionId] = useState("");
   const [localImageDefaults, setLocalImageDefaults] = useState<ImageGenerationDefaultsProfile | null>(null);
+  const localImageDefaultsRef = useRef<ImageGenerationDefaultsProfile | null>(null);
   const [localVideoDefaults, setLocalVideoDefaults] = useState<VideoGenerationDefaultsProfile | null>(null);
   const [imageDefaultsExpanded, setImageDefaultsExpanded] = useState(false);
   const [videoDefaultsExpanded, setVideoDefaultsExpanded] = useState(false);
@@ -328,9 +410,11 @@ export function ConnectionEditor() {
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   const modelSearchInputRef = useRef<HTMLInputElement>(null);
   const comfyWorkflowTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const fetchScopeRef = useRef(0);
 
   // Remote models fetched from provider API
   const [remoteModels, setRemoteModels] = useState<RemoteConnectionModel[]>([]);
+  const [remoteLoras, setRemoteLoras] = useState<RemoteConnectionModel[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const baseUrlValidation = useMemo(
     () =>
@@ -357,6 +441,9 @@ export function ConnectionEditor() {
     setLocalModel(normalizeGrokCliEditorModel(provider, (c.model as string) ?? ""));
     setLocalMaxContext(normalizeConnectionMaxContext(provider, c.maxContext));
     setLocalMaxParallelJobs(normalizeMaxParallelJobs(c.maxParallelJobs));
+    setLocalMaxRequestsPerMinute(
+      typeof c.maxRequestsPerMinute === "number" && c.maxRequestsPerMinute > 0 ? c.maxRequestsPerMinute : null,
+    );
     setLocalEnableCaching(c.enableCaching === "true" || c.enableCaching === true);
     setLocalAnthropicExtendedCacheTtl(c.anthropicExtendedCacheTtl === "true" || c.anthropicExtendedCacheTtl === true);
     setLocalCachingAtDepth(normalizeCachingAtDepth(c.cachingAtDepth));
@@ -398,16 +485,33 @@ export function ConnectionEditor() {
     setLocalComfyuiWorkflow((c.comfyuiWorkflow as string) ?? "");
     setLocalImageService(imageService);
     setLocalImageEndpointId((c.imageEndpointId as string) ?? "");
+    setLocalImagePromptInstructions((c.imagePromptInstructions as string) ?? "");
+    setLocalImageGenerationQuality(
+      c.imageGenerationQuality === "low" || c.imageGenerationQuality === "medium" || c.imageGenerationQuality === "high"
+        ? c.imageGenerationQuality
+        : "auto",
+    );
     setLocalVideoGenerationSource(videoProviderSource);
     setLocalVideoService(videoDefaultsService);
+    setLocalAudioSource((c.audioSource as string) || "elevenlabs");
+    setLocalAudioVoice((c.audioVoice as string) ?? "");
+    setLocalAudioSoundEffects(c.audioSoundEffects === "true" || c.audioSoundEffects === true);
+    setLocalAudioMusic(c.audioMusic === "true" || c.audioMusic === true);
     setLocalMaxTokensOverride(typeof c.maxTokensOverride === "number" ? (c.maxTokensOverride as number) : null);
     setLocalClaudeFastMode(c.claudeFastMode === "true" || c.claudeFastMode === true);
     setLocalTreatAsLocalEndpoint(c.treatAsLocalEndpoint === "true" || c.treatAsLocalEndpoint === true);
-    setLocalDefaultParametersEnabled(!!parseEditableGenerationParameters(c.defaultParameters));
-    setLocalDefaultParameters(getEditableGenerationParameters(CONNECTION_PARAMETER_DEFAULTS, c.defaultParameters));
-    setLocalImageDefaults(
-      defaultsService ? (storedImageDefaults ?? createDefaultImageGenerationProfile(defaultsService)) : null,
+    const imageCaptioningDefaults = parseConnectionImageCaptioningDefaults(c.defaultParameters);
+    setLocalDefaultParametersEnabled(
+      !!parseEditableGenerationParameters(c.defaultParameters) || Object.keys(imageCaptioningDefaults).length > 0,
     );
+    setLocalDefaultParameters(getEditableGenerationParameters(CONNECTION_PARAMETER_DEFAULTS, c.defaultParameters));
+    setLocalImageCaptioningEnabled(imageCaptioningDefaults.imageCaptioningEnabled === true);
+    setLocalImageCaptioningConnectionId(imageCaptioningDefaults.imageCaptioningConnectionId ?? "");
+    const nextImageDefaults = defaultsService
+      ? (storedImageDefaults ?? createDefaultImageGenerationProfile(defaultsService))
+      : null;
+    localImageDefaultsRef.current = nextImageDefaults;
+    setLocalImageDefaults(nextImageDefaults);
     setLocalVideoDefaults(
       (c.provider as APIProvider) === "video_generation"
         ? storedVideoDefaults
@@ -454,25 +558,47 @@ export function ConnectionEditor() {
       const label = labelMsg + ": " + msg.split("\n")[0];
       return { parseError: true as const, label, charPos };
     }
-    const KNOWN_SUBS = [
-      { token: "%prompt%", label: "%prompt%", critical: true },
-      { token: "%negative_prompt%", label: "%negative_prompt%", critical: false },
-      { token: "%width%", label: "%width%", critical: false },
-      { token: "%height%", label: "%height%", critical: false },
-      { token: "%seed%", label: "%seed%", critical: false },
-      { token: "%model%", label: "%model%", critical: false },
-      { token: "%reference_image%", label: "%reference_image%", critical: false },
-      { token: "%reference_image_name%", label: "%reference_image_name%", critical: false },
-    ];
+    const isSwarmUiVideoWorkflow =
+      (localVideoGenerationSource || localVideoService || inferVideoSource(localModel, localBaseUrl)) === "swarmui";
+    const KNOWN_SUBS =
+      localProvider === "video_generation"
+        ? [
+            { token: "%prompt%", label: "%prompt%", critical: true },
+            { token: "%width%", label: "%width%", critical: false },
+            { token: "%height%", label: "%height%", critical: false },
+            { token: "%seed%", label: "%seed%", critical: false },
+            { token: "%length%", label: "%length%", critical: false },
+            { token: "%length_s%", label: "%length_s%", critical: false },
+            { token: "%fps%", label: "%fps%", critical: false },
+            { token: "%duration_seconds%", label: "%duration_seconds%", critical: false },
+            { token: "%reference_image%", label: "%reference_image%", critical: false },
+            ...(!isSwarmUiVideoWorkflow
+              ? [{ token: "%reference_image_name%", label: "%reference_image_name%", critical: false }]
+              : []),
+          ]
+        : [
+            { token: "%prompt%", label: "%prompt%", critical: true },
+            { token: "%negative_prompt%", label: "%negative_prompt%", critical: false },
+            { token: "%width%", label: "%width%", critical: false },
+            { token: "%height%", label: "%height%", critical: false },
+            { token: "%seed%", label: "%seed%", critical: false },
+            { token: "%model%", label: "%model%", critical: false },
+            { token: "%reference_image%", label: "%reference_image%", critical: false },
+            { token: "%reference_image_name%", label: "%reference_image_name%", critical: false },
+          ];
     const hasReferenceImage = /%reference_image(?:_0[1-4])?%/.test(wf);
     const hasReferenceImageName = /%reference_image_name(?:_0[1-4])?%/.test(wf);
     const missing = KNOWN_SUBS.filter(({ token }) => {
-      if (token === "%reference_image%" && hasReferenceImageName) return false;
-      if (token === "%reference_image_name%" && hasReferenceImage) return false;
+      if (
+        (token === "%reference_image%" || token === "%reference_image_name%") &&
+        (hasReferenceImage || hasReferenceImageName)
+      ) {
+        return false;
+      }
       return !wf.includes(token);
     });
     return { parseError: false as const, missing };
-  }, [localComfyuiWorkflow]);
+  }, [localBaseUrl, localComfyuiWorkflow, localModel, localProvider, localVideoGenerationSource, localVideoService]);
 
   const effectiveImageGenerationSource = useMemo(() => {
     if (localProvider !== "image_generation") return "";
@@ -491,33 +617,68 @@ export function ConnectionEditor() {
       ? localImageGenerationSource || localImageService || effectiveImageGenerationSource
       : "";
   const selectedImageDefaultsService = imageSourceToDefaultsService(selectedImageService);
+  const supportsGptImageQuality =
+    localProvider === "image_generation" &&
+    selectedImageService === "openai" &&
+    /^gpt-image-(?:1|1\.5|2)(?:$|-)/i.test(localModel.trim());
   const selectedVideoService =
     localProvider === "video_generation"
       ? localVideoGenerationSource || localVideoService || effectiveVideoGenerationSource
       : "";
   const selectedVideoProvider = videoSourceToProviderOption(selectedVideoService);
   const selectedVideoDefaultsService = videoSelectionToDefaultsService(selectedVideoService, localModel, localBaseUrl);
+  const swarmUiWorkflowError =
+    (selectedImageService === "swarmui" || selectedVideoProvider === "swarmui") &&
+    /%reference_image_name(?:_0[1-4])?%/.test(localComfyuiWorkflow)
+      ? localizeUi("ui.connections.connectioneditor.swarmuiDoesNotSupportReferenceImageName")
+      : null;
+  const usesComfyUiWorkflow =
+    (localProvider === "image_generation" &&
+      (selectedImageService === "comfyui" ||
+        selectedImageService === "swarmui" ||
+        selectedImageService === "runpod_comfyui")) ||
+    (localProvider === "video_generation" &&
+      (selectedVideoProvider === "comfyui" || selectedVideoProvider === "swarmui"));
   const apiKeyLink =
-    localProvider === "image_generation" && selectedImageService === "venice"
-      ? { label: "Get your Venice API key", url: "https://venice.ai/settings/api" }
-      : localProvider === "video_generation" && selectedVideoDefaultsService === "xai"
-        ? API_KEY_LINKS.xai
-        : localProvider === "video_generation" && selectedVideoDefaultsService === "openrouter"
-          ? API_KEY_LINKS.openrouter
-          : localProvider === "video_generation" && selectedVideoDefaultsService === "seedance"
-            ? { label: "Open Seedance API docs", url: "https://seedance2.ai/api-docs" }
-            : API_KEY_LINKS[localProvider];
+    localProvider === "image_generation" && selectedImageService === "arli"
+      ? { label: t("connections.mediaSources.arli.apiKeyLink"), url: "https://www.arliai.com/docs/api?lang=en" }
+      : localProvider === "image_generation" && selectedImageService === "venice"
+        ? { label: "Get your Venice API key", url: "https://venice.ai/settings/api" }
+        : localProvider === "image_generation" && selectedImageService === "zai"
+          ? { label: t("connections.mediaSources.zai.apiKeyLink"), url: "https://z.ai/manage-apikey/apikey-list" }
+          : (localProvider === "image_generation" && selectedImageService === "atlas") ||
+              (localProvider === "video_generation" && selectedVideoDefaultsService === "atlas")
+            ? {
+                label: t("connections.mediaSources.atlas.apiKeyLink"),
+                url: "https://www.atlascloud.ai/user/api-keys",
+              }
+            : localProvider === "video_generation" && selectedVideoDefaultsService === "xai"
+              ? API_KEY_LINKS.xai
+              : localProvider === "video_generation" && selectedVideoDefaultsService === "openrouter"
+                ? selectedVideoProvider === "nanogpt"
+                  ? API_KEY_LINKS.nanogpt
+                  : API_KEY_LINKS.openrouter
+                : localProvider === "video_generation" && selectedVideoDefaultsService === "seedance"
+                  ? { label: "Open Seedance API docs", url: "https://seedance2.ai/api-docs" }
+                  : localProvider === "video_generation" &&
+                      (selectedVideoProvider === "comfyui" || selectedVideoProvider === "swarmui")
+                    ? undefined
+                    : API_KEY_LINKS[localProvider];
 
   useEffect(() => {
     if (localProvider !== "image_generation" || !selectedImageDefaultsService) {
+      localImageDefaultsRef.current = null;
       setLocalImageDefaults(null);
       return;
     }
-    setLocalImageDefaults((current) =>
-      current?.service === selectedImageDefaultsService
-        ? sanitizeImageGenerationProfile(current, selectedImageDefaultsService)
-        : createDefaultImageGenerationProfile(selectedImageDefaultsService),
-    );
+    setLocalImageDefaults((current) => {
+      const next =
+        current?.service === selectedImageDefaultsService
+          ? sanitizeImageGenerationProfile(current, selectedImageDefaultsService)
+          : createDefaultImageGenerationProfile(selectedImageDefaultsService);
+      localImageDefaultsRef.current = next;
+      return next;
+    });
   }, [localProvider, selectedImageDefaultsService]);
 
   useEffect(() => {
@@ -534,8 +695,11 @@ export function ConnectionEditor() {
 
   // Model list for current provider
   const providerModels = useMemo(() => {
+    if (localProvider === "video_generation" && selectedVideoProvider === "nanogpt") return [];
+    if (localProvider === "image_generation" && selectedImageService === "novelai")
+      return (MODEL_LISTS[localProvider] ?? []).filter((m) => m.id.startsWith("nai-"));
     return MODEL_LISTS[localProvider] ?? [];
-  }, [localProvider]);
+  }, [localProvider, selectedVideoProvider, selectedImageService]);
 
   // Merge known models with remote models (remote first, deduped)
   const allModels = useMemo(() => {
@@ -564,8 +728,10 @@ export function ConnectionEditor() {
   // Clear remote models when provider changes
   useEffect(() => {
     setRemoteModels([]);
+    setRemoteLoras([]);
+    fetchScopeRef.current++;
     setFetchError(null);
-  }, [localProvider]);
+  }, [localProvider, selectedImageService, connectionDetailId]);
 
   useEffect(() => {
     if (!showModelDropdown) return;
@@ -602,6 +768,10 @@ export function ConnectionEditor() {
   const handleSave = useCallback(async () => {
     if (!connectionDetailId) return;
     setSaveError(null);
+    if (swarmUiWorkflowError) {
+      setSaveError(swarmUiWorkflowError);
+      throw new Error(swarmUiWorkflowError);
+    }
     if (baseUrlValidation.error) {
       setSaveError(baseUrlValidation.error);
       throw new Error(baseUrlValidation.error);
@@ -613,7 +783,8 @@ export function ConnectionEditor() {
     }
     const isImageProvider = localProvider === "image_generation";
     const isVideoProvider = localProvider === "video_generation";
-    const isMediaProvider = isImageProvider || isVideoProvider;
+    const isAudioProvider = localProvider === "audio";
+    const isMediaProvider = isImageProvider || isVideoProvider || isAudioProvider;
     const isLocalAuthProvider = isLocalAuthConnectionProvider(localProvider);
     const canTreatAsLocalEndpoint = canProviderTreatAsLocalEndpoint(localProvider);
     const existingEmbeddingModel = (conn as { embeddingModel?: string | null } | undefined)?.embeddingModel ?? "";
@@ -627,6 +798,7 @@ export function ConnectionEditor() {
       model: normalizedModel,
       maxContext: localMaxContext,
       maxParallelJobs: localMaxParallelJobs,
+      maxRequestsPerMinute: localMaxRequestsPerMinute,
       enableCaching: localEnableCaching,
       anthropicExtendedCacheTtl:
         localProvider === "anthropic" && localEnableCaching ? localAnthropicExtendedCacheTtl : false,
@@ -638,15 +810,30 @@ export function ConnectionEditor() {
       promptPresetId: !isMediaProvider ? localPromptPresetId || null : null,
       openrouterProvider: localOpenrouterProvider || null,
       imageGenerationSource: isImageProvider ? localImageGenerationSource || localImageService || null : null,
-      comfyuiWorkflow: isImageProvider ? localComfyuiWorkflow || null : null,
+      comfyuiWorkflow:
+        isImageProvider ||
+        (isVideoProvider && (selectedVideoProvider === "comfyui" || selectedVideoProvider === "swarmui"))
+          ? localComfyuiWorkflow || null
+          : null,
       imageService: isImageProvider ? localImageGenerationSource || localImageService || null : null,
       imageEndpointId:
         isImageProvider && selectedImageService === "runpod_comfyui" ? localImageEndpointId || null : null,
+      imagePromptInstructions: isImageProvider ? normalizeImagePromptInstructions(localImagePromptInstructions) : null,
+      imageGenerationQuality: isImageProvider ? localImageGenerationQuality : "auto",
       videoGenerationSource: isVideoProvider ? selectedVideoProvider || null : null,
-      videoService: isVideoProvider ? selectedVideoDefaultsService : null,
+      videoService: isVideoProvider
+        ? selectedVideoProvider === "swarmui"
+          ? "swarmui"
+          : selectedVideoDefaultsService
+        : null,
       maxTokensOverride: localMaxTokensOverride ?? null,
       claudeFastMode: localClaudeFastMode,
       treatAsLocalEndpoint: canTreatAsLocalEndpoint ? localTreatAsLocalEndpoint : false,
+      audioSource: isAudioProvider ? localAudioSource || null : null,
+      audioVoice: isAudioProvider ? localAudioVoice || null : null,
+      // Only ElevenLabs can generate game sound effects / music today.
+      audioSoundEffects: isAudioProvider && localAudioSource === "elevenlabs" ? localAudioSoundEffects : false,
+      audioMusic: isAudioProvider && localAudioSource === "elevenlabs" ? localAudioMusic : false,
     };
     // Only send API key if user typed a new one
     if (isLocalAuthProvider) {
@@ -657,16 +844,23 @@ export function ConnectionEditor() {
       payload.apiKey = "";
     }
     try {
-      await updateConnection.mutateAsync(payload as { id: string } & Record<string, unknown>);
+      // Persist media/default parameters first. The main connection save runs
+      // last so its query refresh cannot race in an older defaults snapshot.
       if (!isMediaProvider) {
         await saveConnectionDefaults.mutateAsync({
           id: connectionDetailId,
-          params: localDefaultParametersEnabled ? (localDefaultParameters as unknown as Record<string, unknown>) : null,
+          params: localDefaultParametersEnabled
+            ? buildLanguageDefaultParameters(
+                localDefaultParameters,
+                localImageCaptioningEnabled,
+                localImageCaptioningConnectionId,
+              )
+            : null,
         });
       } else if (isImageProvider) {
         const nextImageDefaults =
-          selectedImageDefaultsService && localImageDefaults
-            ? sanitizeImageGenerationProfile(localImageDefaults, selectedImageDefaultsService)
+          selectedImageDefaultsService && localImageDefaultsRef.current
+            ? sanitizeImageGenerationProfile(localImageDefaultsRef.current, selectedImageDefaultsService)
             : null;
         await saveConnectionDefaults.mutateAsync({
           id: connectionDetailId,
@@ -675,7 +869,7 @@ export function ConnectionEditor() {
             nextImageDefaults,
           ),
         });
-      } else {
+      } else if (isVideoProvider) {
         const nextVideoDefaults = localVideoDefaults
           ? sanitizeVideoGenerationProfile({ ...localVideoDefaults, service: selectedVideoDefaultsService })
           : null;
@@ -687,6 +881,7 @@ export function ConnectionEditor() {
           ),
         });
       }
+      await updateConnection.mutateAsync(payload as { id: string } & Record<string, unknown>);
       if (isLocalAuthProvider && localBaseUrl) {
         setLocalBaseUrl("");
       } else if (baseUrlValidation.value !== localBaseUrl.trim()) {
@@ -718,6 +913,7 @@ export function ConnectionEditor() {
     localModel,
     localMaxContext,
     localMaxParallelJobs,
+    localMaxRequestsPerMinute,
     localEnableCaching,
     localAnthropicExtendedCacheTtl,
     localCachingAtDepth,
@@ -732,16 +928,24 @@ export function ConnectionEditor() {
     localComfyuiWorkflow,
     localImageService,
     localImageEndpointId,
+    localImagePromptInstructions,
+    localImageGenerationQuality,
     localMaxTokensOverride,
     localClaudeFastMode,
     localTreatAsLocalEndpoint,
     localDefaultParametersEnabled,
     localDefaultParameters,
+    localImageCaptioningEnabled,
+    localImageCaptioningConnectionId,
+    localAudioSource,
+    localAudioVoice,
+    localAudioSoundEffects,
+    localAudioMusic,
     selectedImageService,
+    swarmUiWorkflowError,
     selectedImageDefaultsService,
     selectedVideoProvider,
     selectedVideoDefaultsService,
-    localImageDefaults,
     localVideoDefaults,
     updateConnection,
     saveConnectionDefaults,
@@ -752,23 +956,25 @@ export function ConnectionEditor() {
     if (!connectionDetailId) return;
     if (
       !(await showConfirmDialog({
-        title: "Delete Connection",
-        message: "Delete this connection?",
-        confirmLabel: "Delete",
+        title: localizeUi("ui.connections.connectioneditor.deleteConnection_bb12f0e"),
+        message: localizeUi("dialog.delete.namedPermanent", {
+          name: conn?.name || localizeUi("ui.connections.connectioneditor.connection"),
+        }),
+        confirmLabel: localizeUi("lorebook.editor.batch.delete"),
         tone: "destructive",
       }))
     ) {
       return;
     }
     deleteConnection.mutate(connectionDetailId, { onSuccess: () => closeConnectionDetail() });
-  }, [connectionDetailId, deleteConnection, closeConnectionDetail]);
+  }, [closeConnectionDetail, conn?.name, connectionDetailId, deleteConnection, localizeUi]);
 
   const handleExportConnection = useCallback(async () => {
     if (!conn) return;
     const confirmed = await showConfirmDialog({
-      title: "Export Connection Data",
+      title: localizeUi("ui.connections.connectioneditor.exportConnectionData"),
       message: CONNECTION_EXPORT_WARNING,
-      confirmLabel: "Export",
+      confirmLabel: localizeUi("ui.characters.spritestab.export"),
       cancelLabel: "Close",
     });
     if (!confirmed) return;
@@ -776,13 +982,14 @@ export function ConnectionEditor() {
     const currentConnection = conn as Record<string, unknown>;
     const isImageProvider = localProvider === "image_generation";
     const isVideoProvider = localProvider === "video_generation";
-    const isMediaProvider = isImageProvider || isVideoProvider;
+    const isAudioProvider = localProvider === "audio";
+    const isMediaProvider = isImageProvider || isVideoProvider || isAudioProvider;
     const isLocalAuthProvider = isLocalAuthConnectionProvider(localProvider);
     const defaultParameters = isImageProvider
       ? buildImageDefaultParameters(
           currentConnection.defaultParameters,
-          selectedImageDefaultsService && localImageDefaults
-            ? sanitizeImageGenerationProfile(localImageDefaults, selectedImageDefaultsService)
+          selectedImageDefaultsService && localImageDefaultsRef.current
+            ? sanitizeImageGenerationProfile(localImageDefaultsRef.current, selectedImageDefaultsService)
             : null,
         )
       : isVideoProvider
@@ -792,12 +999,22 @@ export function ConnectionEditor() {
               ? sanitizeVideoGenerationProfile({ ...localVideoDefaults, service: selectedVideoDefaultsService })
               : null,
           )
-        : localDefaultParametersEnabled
-          ? (localDefaultParameters as unknown as Record<string, unknown>)
-          : null;
+        : isAudioProvider
+          ? null
+          : localDefaultParametersEnabled
+            ? buildLanguageDefaultParameters(
+                localDefaultParameters,
+                localImageCaptioningEnabled,
+                localImageCaptioningConnectionId,
+              )
+            : null;
     const imageService = isImageProvider ? localImageGenerationSource || localImageService || null : null;
     const videoProvider = isVideoProvider ? selectedVideoProvider || null : null;
-    const videoService = isVideoProvider ? selectedVideoDefaultsService : null;
+    const videoService = isVideoProvider
+      ? videoProvider === "swarmui"
+        ? "swarmui"
+        : selectedVideoDefaultsService
+      : null;
     const canTreatAsLocalEndpoint = canProviderTreatAsLocalEndpoint(localProvider);
     const supportsDirectEmbeddings = providerSupportsDirectEmbeddingConfig(localProvider);
     const existingEmbeddingModel = (conn as { embeddingModel?: string | null } | undefined)?.embeddingModel ?? "";
@@ -811,6 +1028,7 @@ export function ConnectionEditor() {
       maxContext: localMaxContext,
       maxTokensOverride: localMaxTokensOverride ?? null,
       maxParallelJobs: localMaxParallelJobs,
+      maxRequestsPerMinute: localMaxRequestsPerMinute,
       treatAsLocalEndpoint: canTreatAsLocalEndpoint ? localTreatAsLocalEndpoint : false,
       promptPresetId: !isMediaProvider ? localPromptPresetId || null : null,
       defaultParameters,
@@ -825,9 +1043,18 @@ export function ConnectionEditor() {
       imageService,
       videoGenerationSource: videoProvider,
       videoService,
+      audioSource: isAudioProvider ? localAudioSource || null : null,
+      audioVoice: isAudioProvider ? localAudioVoice || null : null,
+      audioSoundEffects: isAudioProvider && localAudioSource === "elevenlabs" ? localAudioSoundEffects : false,
+      audioMusic: isAudioProvider && localAudioSource === "elevenlabs" ? localAudioMusic : false,
       imageEndpointId:
         isImageProvider && selectedImageService === "runpod_comfyui" ? localImageEndpointId || null : null,
-      comfyuiWorkflow: isImageProvider ? localComfyuiWorkflow || null : null,
+      imagePromptInstructions: isImageProvider ? normalizeImagePromptInstructions(localImagePromptInstructions) : null,
+      imageGenerationQuality: isImageProvider ? localImageGenerationQuality : "auto",
+      comfyuiWorkflow:
+        isImageProvider || (isVideoProvider && (videoProvider === "comfyui" || videoProvider === "swarmui"))
+          ? localComfyuiWorkflow || null
+          : null,
       claudeFastMode: localClaudeFastMode,
     };
 
@@ -835,7 +1062,11 @@ export function ConnectionEditor() {
       createConnectionExportEnvelope([exportRow]),
       `${sanitizeExportFilenamePart(localName || String(currentConnection.name ?? ""), "connection")}.connection.json`,
     );
-    toast.success(`Exported ${localName || "connection"}`);
+    toast.success(
+      localizeUi("ui.connections.connectioneditor.exportedValue1", {
+        value1: localName || localizeUi("ui.connections.connectioneditor.connection"),
+      }),
+    );
   }, [
     conn,
     localProvider,
@@ -845,10 +1076,13 @@ export function ConnectionEditor() {
     localMaxContext,
     localMaxTokensOverride,
     localMaxParallelJobs,
+    localMaxRequestsPerMinute,
     localTreatAsLocalEndpoint,
     localPromptPresetId,
     localDefaultParametersEnabled,
     localDefaultParameters,
+    localImageCaptioningEnabled,
+    localImageCaptioningConnectionId,
     localEnableCaching,
     localCachingAtDepth,
     localDefaultForAgents,
@@ -861,12 +1095,18 @@ export function ConnectionEditor() {
     selectedVideoProvider,
     selectedImageService,
     localImageEndpointId,
+    localImagePromptInstructions,
+    localImageGenerationQuality,
     localComfyuiWorkflow,
     localClaudeFastMode,
     selectedImageDefaultsService,
     selectedVideoDefaultsService,
-    localImageDefaults,
     localVideoDefaults,
+    localizeUi,
+    localAudioSource,
+    localAudioVoice,
+    localAudioSoundEffects,
+    localAudioMusic,
   ]);
 
   const handleTestConnection = useCallback(async () => {
@@ -1007,6 +1247,8 @@ export function ConnectionEditor() {
 
   const handleFetchModels = useCallback(async () => {
     if (!connectionDetailId) return;
+    const requestScope = fetchScopeRef.current;
+    const requestConnectionId = connectionDetailId;
     setFetchError(null);
     // Save first if dirty so the server has the right baseUrl/apiKey/provider
     if (dirty) {
@@ -1016,10 +1258,13 @@ export function ConnectionEditor() {
         return;
       }
     }
-    fetchModels.mutate(connectionDetailId, {
+    if (fetchScopeRef.current !== requestScope) return;
+    fetchModels.mutate(requestConnectionId, {
       onSuccess: (data) => {
-        const result = data as { models: RemoteConnectionModel[] };
+        if (fetchScopeRef.current !== requestScope) return;
+        const result = data as { models: RemoteConnectionModel[]; loras?: RemoteConnectionModel[] };
         setRemoteModels(result.models);
+        setRemoteLoras(result.loras ?? []);
         setShowModelDropdown(true);
         requestAnimationFrame(() => {
           modelSearchInputRef.current?.focus();
@@ -1027,6 +1272,7 @@ export function ConnectionEditor() {
         });
       },
       onError: (err) => {
+        if (fetchScopeRef.current !== requestScope) return;
         setFetchError(err instanceof Error ? err.message : "Failed to fetch models");
       },
     });
@@ -1079,7 +1325,8 @@ export function ConnectionEditor() {
   const providerDef = PROVIDERS[localProvider];
   const isImageGenerationProvider = localProvider === "image_generation";
   const isVideoGenerationProvider = localProvider === "video_generation";
-  const isMediaGenerationProvider = isImageGenerationProvider || isVideoGenerationProvider;
+  const isAudioProvider = localProvider === "audio";
+  const isMediaGenerationProvider = isImageGenerationProvider || isVideoGenerationProvider || isAudioProvider;
   const isClaudeSubscriptionProvider = localProvider === "claude_subscription";
   const isOpenAIChatGPTProvider = localProvider === "openai_chatgpt";
   const isGrokSubscriptionProvider = localProvider === "grok_subscription";
@@ -1107,7 +1354,9 @@ export function ConnectionEditor() {
   if (!conn) {
     return (
       <div className="mari-editor-shell flex flex-1 items-center justify-center">
-        <p className="mari-editor-empty px-4 py-3 text-sm">Connection not found</p>
+        <p className="mari-editor-empty px-4 py-3 text-sm">
+          {localizeUi("ui.connections.connectioneditor.connectionNotFound")}
+        </p>
       </div>
     );
   }
@@ -1129,40 +1378,46 @@ export function ConnectionEditor() {
             markDirty();
           }}
           className="mari-editor-title-input min-w-0 flex-1 placeholder:text-[var(--marinara-editor-muted)]"
-          placeholder="Connection name…"
+          placeholder={localizeUi("ui.connections.connectioneditor.connectionName")}
         />
         <div className="mari-editor-actions flex shrink-0">
           {saveError && (
             <span className="mari-editor-status mr-2 text-red-400">
-              <AlertCircle size="0.6875rem" /> <span className="max-md:hidden">Save failed</span>
+              <AlertCircle size="0.6875rem" />{" "}
+              <span className="max-md:hidden">{localizeUi("ui.connections.connectioneditor.saveFailed")}</span>
             </span>
           )}
           {savedFlash && !dirty && (
             <span className="mari-editor-status mr-2 text-emerald-400">
-              <Check size="0.6875rem" /> <span className="max-md:hidden">Saved</span>
+              <Check size="0.6875rem" />{" "}
+              <span className="max-md:hidden">{localizeUi("chat.settings.inlineEditor.saved")}</span>
             </span>
           )}
-          {dirty && !saveError && <span className="mari-editor-status mr-2 text-amber-400 max-md:hidden">Unsaved</span>}
+          {dirty && !saveError && (
+            <span className="mari-editor-status mr-2 text-amber-400 max-md:hidden">
+              {localizeUi("ui.connections.connectioneditor.unsaved")}
+            </span>
+          )}
           <button
             onClick={handleSave}
-            disabled={updateConnection.isPending || saveConnectionDefaults.isPending}
+            disabled={updateConnection.isPending || saveConnectionDefaults.isPending || !!swarmUiWorkflowError}
             className="mari-editor-action mari-editor-action--primary inline-flex disabled:opacity-50"
           >
-            <Save size="0.8125rem" /> <span className="max-md:hidden">Save</span>
+            <Save size="0.8125rem" /> <span className="max-md:hidden">{localizeUi("ui.noodle.noodlehome.save")}</span>
           </button>
           <button
             onClick={handleExportConnection}
             className="mari-editor-action inline-flex"
-            title="Export connection"
-            aria-label="Export connection"
+            title={localizeUi("ui.connections.connectioneditor.exportConnection")}
+            aria-label={localizeUi("ui.connections.connectioneditor.exportConnection")}
           >
             <Upload size="0.9375rem" />
           </button>
           <button
             onClick={handleDelete}
             className="mari-editor-action inline-flex"
-            title="Delete connection"
-            aria-label="Delete connection"
+            title={localizeUi("ui.connections.connectioneditor.deleteConnection")}
+            aria-label={localizeUi("ui.connections.connectioneditor.deleteConnection")}
           >
             <Trash2 size="0.9375rem" />
           </button>
@@ -1172,19 +1427,19 @@ export function ConnectionEditor() {
       {/* Unsaved warning */}
       {showUnsavedWarning && (
         <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-500/10 px-4 py-2 text-xs text-amber-400">
-          <span>You have unsaved changes.</span>
+          <span>{localizeUi("ui.connections.connectioneditor.youHaveUnsavedChanges")}</span>
           <div className="flex gap-2">
             <button
               onClick={() => setShowUnsavedWarning(false)}
-              className="rounded-lg px-3 py-1 hover:bg-[var(--accent)]"
+              className="mari-editor-action mari-editor-action--compact inline-flex rounded-lg px-3 py-1"
             >
-              Keep editing
+              {localizeUi("ui.connections.connectioneditor.keepEditing")}
             </button>
             <button
               onClick={() => closeConnectionDetail()}
-              className="rounded-lg px-3 py-1 text-[var(--destructive)] hover:bg-[var(--destructive)]/15"
+              className="mari-editor-action mari-editor-action--accent mari-editor-action--compact inline-flex rounded-lg px-3 py-1"
             >
-              Discard
+              {localizeUi("ui.connections.connectioneditor.discard")}
             </button>
             <button
               onClick={async () => {
@@ -1195,9 +1450,9 @@ export function ConnectionEditor() {
                   // Keep the editor open so the user can fix the failed save.
                 }
               }}
-              className="rounded-lg bg-amber-500/20 px-3 py-1 hover:bg-amber-500/30"
+              className="mari-editor-action mari-editor-action--primary mari-editor-action--compact inline-flex rounded-lg px-3 py-1"
             >
-              Save & close
+              {localizeUi("ui.connections.connectioneditor.saveClose")}
             </button>
           </div>
         </div>
@@ -1219,9 +1474,9 @@ export function ConnectionEditor() {
         <div className="mari-editor-content-inner space-y-6">
           {/* ── Connection Name ── */}
           <FieldGroup
-            label="Connection Name"
+            label={localizeUi("ui.connections.connectioneditor.connectionName_669ca65")}
             icon={<Tag size="0.875rem" className="text-sky-400" />}
-            help="A friendly name to identify this connection. Use something descriptive like 'Claude Sonnet — RP' or 'GPT-4o Main'."
+            help={localizeUi("ui.connections.connectioneditor.aFriendlyNameToIdentifyThisConnectionUseSomething")}
           >
             <input
               value={localName}
@@ -1230,20 +1485,21 @@ export function ConnectionEditor() {
                 markDirty();
               }}
               className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
-              placeholder="e.g. Claude Sonnet — RP"
+              placeholder={localizeUi("ui.connections.connectioneditor.eGClaudeSonnetRp")}
             />
           </FieldGroup>
 
           {/* ── Provider ── */}
           <FieldGroup
-            label="Provider"
+            label={localizeUi("ui.connections.connectioneditor.provider")}
             icon={<Globe size="0.875rem" className="text-sky-400" />}
-            help="The AI service you want to connect to. Each provider has its own models, pricing, and features. OpenAI and Anthropic are the most popular."
+            help={localizeUi("ui.connections.connectioneditor.theAiServiceYouWantToConnectToEach")}
           >
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
               {(Object.entries(PROVIDERS) as [APIProvider, typeof providerDef][]).map(([key, info]) => (
                 <button
                   key={key}
+                  type="button"
                   onClick={() => {
                     if (key === localProvider) return;
                     const defaultModel = MODEL_LISTS[key]?.[0];
@@ -1265,14 +1521,25 @@ export function ConnectionEditor() {
                     setLocalMaxTokensOverride(null);
                     setLocalDefaultParametersEnabled(false);
                     setLocalDefaultParameters(CONNECTION_PARAMETER_DEFAULTS);
+                    if (key === "audio") {
+                      // The provider tile seeds ElevenLabs base URL/model, so
+                      // the audio source must reset to match — otherwise a
+                      // pockettts/openai/xai source survives the switch under
+                      // ElevenLabs endpoints and saves a self-inconsistent row.
+                      setLocalAudioSource("elevenlabs");
+                      setLocalAudioVoice("");
+                      setLocalAudioSoundEffects(false);
+                      setLocalAudioMusic(false);
+                    }
                     // Provider switches must not keep an encrypted key from
                     // the previous provider under the new provider identity.
                     setLocalApiKey("");
                     setClearStoredApiKeyOnSave(true);
                     markDirty();
                   }}
+                  aria-pressed={localProvider === key}
                   className={cn(
-                    "truncate rounded-xl px-3 py-2.5 text-xs font-medium transition-all",
+                    "truncate rounded-md px-3 py-2.5 text-xs font-medium transition-all",
                     localProvider === key
                       ? "bg-sky-400/15 text-sky-400 ring-1 ring-sky-400/30"
                       : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
@@ -1290,23 +1557,26 @@ export function ConnectionEditor() {
               <p className="flex items-start gap-1.5 text-[0.6875rem] text-sky-300">
                 <AlertCircle size="0.75rem" className="mt-px shrink-0" />
                 <span>
-                  Routes chat through your local <strong>Claude Code</strong> install so it bills against your Anthropic{" "}
-                  <strong>Pro / Max</strong> subscription instead of an API key. Prerequisites on the Marinara host:
+                  {localizeUi("ui.connections.connectioneditor.routesChatThroughYourLocal")}{" "}
+                  <strong>{localizeUi("ui.connections.connectioneditor.claudeCode")}</strong>{" "}
+                  {localizeUi("ui.connections.connectioneditor.installSoItBillsAgainstYourAnthropic")}{" "}
+                  <strong>{localizeUi("ui.connections.connectioneditor.proMax")}</strong>{" "}
+                  {localizeUi("ui.connections.connectioneditor.subscriptionInsteadOfAnApiKeyPrerequisitesOnThe")}
                 </span>
               </p>
               <ol className="mt-1.5 ml-4 list-decimal space-y-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
                 <li>
-                  Install Claude Code:{" "}
-                  <code className="rounded bg-[var(--secondary)] px-1">npm i -g @anthropic-ai/claude-code</code>
+                  {localizeUi("ui.connections.connectioneditor.installClaudeCode")}{" "}
+                  <code className="rounded bg-[var(--secondary)] px-1">{"npm i -g @anthropic-ai/claude-code"}</code>
                 </li>
                 <li>
-                  Sign in once: <code className="rounded bg-[var(--secondary)] px-1">claude login</code>
+                  {localizeUi("ui.connections.connectioneditor.signInOnce")}{" "}
+                  <code className="rounded bg-[var(--secondary)] px-1">{"claude login"}</code>
                 </li>
-                <li>API Key and Base URL are not required for this provider.</li>
+                <li>{localizeUi("ui.connections.connectioneditor.apiKeyAndBaseUrlAreNotRequiredFor")}</li>
               </ol>
               <p className="mt-1.5 text-[0.625rem] text-[var(--muted-foreground)]">
-                Subscription auth is the same mechanism Visual Studio Code and other Anthropic-endorsed IDE integrations
-                use. Embeddings are not available on this provider; configure a separate connection for embedding work.
+                {localizeUi("ui.connections.connectioneditor.subscriptionAuthIsTheSameMechanismVisualStudioCode")}
               </p>
             </div>
           )}
@@ -1317,22 +1587,24 @@ export function ConnectionEditor() {
               <p className="flex items-start gap-1.5 text-[0.6875rem] text-sky-300">
                 <AlertCircle size="0.75rem" className="mt-px shrink-0" />
                 <span>
-                  Routes chat through your local <strong>Codex ChatGPT</strong> login so it uses your ChatGPT account
-                  instead of an OpenAI API key. Prerequisites on the Marinara host:
+                  {localizeUi("ui.connections.connectioneditor.routesChatThroughYourLocal")}{" "}
+                  <strong>{localizeUi("ui.connections.connectioneditor.codexChatgpt")}</strong>{" "}
+                  {localizeUi("ui.connections.connectioneditor.loginSoItUsesYourChatgptAccountInsteadOf")}
                 </span>
               </p>
               <ol className="mt-1.5 ml-4 list-decimal space-y-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
                 <li>
-                  Install Codex CLI: <code className="rounded bg-[var(--secondary)] px-1">npm i -g @openai/codex</code>
+                  {localizeUi("ui.connections.connectioneditor.installCodexCli")}{" "}
+                  <code className="rounded bg-[var(--secondary)] px-1">{"npm i -g @openai/codex"}</code>
                 </li>
                 <li>
-                  Sign in once: <code className="rounded bg-[var(--secondary)] px-1">codex login</code>
+                  {localizeUi("ui.connections.connectioneditor.signInOnce")}{" "}
+                  <code className="rounded bg-[var(--secondary)] px-1">{"codex login"}</code>
                 </li>
-                <li>API Key and Base URL are not required for this provider.</li>
+                <li>{localizeUi("ui.connections.connectioneditor.apiKeyAndBaseUrlAreNotRequiredFor")}</li>
               </ol>
               <p className="mt-1.5 text-[0.625rem] text-[var(--muted-foreground)]">
-                Marinara reads the local Codex auth file and refreshes the ChatGPT session when possible. Embeddings are
-                not available on this provider; configure a separate connection for embedding work.
+                {localizeUi("ui.connections.connectioneditor.marinaraReadsTheLocalCodexAuthFileAndRefreshes")}
               </p>
             </div>
           )}
@@ -1343,29 +1615,32 @@ export function ConnectionEditor() {
               <p className="flex items-start gap-1.5 text-[0.6875rem] text-sky-300">
                 <AlertCircle size="0.75rem" className="mt-px shrink-0" />
                 <span>
-                  Routes chat through your local <strong>Grok CLI</strong> install so it uses your signed-in{" "}
-                  <strong>SuperGrok / X Premium+</strong> account instead of an xAI API key. Prerequisites on the
-                  Marinara host:
+                  {localizeUi("ui.connections.connectioneditor.routesChatThroughYourLocal")}{" "}
+                  <strong>{localizeUi("ui.connections.connectioneditor.grokCli")}</strong>{" "}
+                  {localizeUi("ui.connections.connectioneditor.installSoItUsesYourSignedIn")}{" "}
+                  <strong>{localizeUi("ui.connections.connectioneditor.supergrokXPremium")}</strong>{" "}
+                  {localizeUi("ui.connections.connectioneditor.accountInsteadOfAnXaiApiKeyPrerequisitesOn")}
                 </span>
               </p>
               <ol className="mt-1.5 ml-4 list-decimal space-y-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
                 <li>
-                  Install Grok CLI:{" "}
+                  {localizeUi("ui.connections.connectioneditor.installGrokCli")}{" "}
                   <code className="rounded bg-[var(--secondary)] px-1">
-                    curl -fsSL https://x.ai/cli/install.sh | bash
+                    {"curl -fsSL https://x.ai/cli/install.sh | bash"}
                   </code>
                 </li>
                 <li>
-                  Sign in once: <code className="rounded bg-[var(--secondary)] px-1">grok login</code>
+                  {localizeUi("ui.connections.connectioneditor.signInOnce")}{" "}
+                  <code className="rounded bg-[var(--secondary)] px-1">{"grok login"}</code>
                 </li>
-                <li>API Key and Base URL are not required for this provider.</li>
+                <li>{localizeUi("ui.connections.connectioneditor.apiKeyAndBaseUrlAreNotRequiredFor")}</li>
               </ol>
               <p className="mt-1.5 text-[0.625rem] text-[var(--muted-foreground)]">
-                Marinara runs <code className="rounded bg-[var(--secondary)] px-1">grok</code> headlessly with Grok-side
-                tools, memory, web search, plans, and subagents disabled. Embeddings are not available on this provider;
-                configure a separate connection for embedding work. The safest roleplay model is usually{" "}
-                <code className="rounded bg-[var(--secondary)] px-1">grok-composer-2.5-fast</code>; leave the model
-                blank to use the CLI default when unsure.
+                {localizeUi("ui.connections.connectioneditor.marinaraRuns")}{" "}
+                <code className="rounded bg-[var(--secondary)] px-1">{"grok"}</code>{" "}
+                {localizeUi("ui.connections.connectioneditor.headlesslyWithGrokSideToolsMemoryWebSearchPlans")}{" "}
+                <code className="rounded bg-[var(--secondary)] px-1">{"grok-composer-2.5-fast"}</code>
+                {localizeUi("ui.connections.connectioneditor.leaveTheModelBlankToUseTheCliDefault")}
               </p>
             </div>
           )}
@@ -1374,16 +1649,12 @@ export function ConnectionEditor() {
             <div className="rounded-xl bg-sky-400/5 px-3 py-2.5 ring-1 ring-sky-400/30">
               <p className="flex items-start gap-1.5 text-[0.6875rem] text-sky-300">
                 <AlertCircle size="0.75rem" className="mt-px shrink-0" />
-                <span>
-                  Uses Vertex AI&apos;s Gemini endpoint. Set Base URL to your project and location, then paste either a
-                  service account JSON key, an OAuth access token, or a Vertex API key when your project supports API
-                  key auth.
-                </span>
+                <span>{localizeUi("ui.connections.connectioneditor.usesVertexAiSGeminiEndpointSetBaseUrl")}</span>
               </p>
               <p className="mt-1.5 text-[0.625rem] text-[var(--muted-foreground)]">
-                Example Base URL:{" "}
+                {localizeUi("ui.connections.connectioneditor.exampleBaseUrl")}{" "}
                 <code className="rounded bg-[var(--secondary)] px-1">
-                  https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1
+                  {"https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1"}
                 </code>
               </p>
             </div>
@@ -1392,9 +1663,11 @@ export function ConnectionEditor() {
           {/* ── OpenRouter Provider Preference ── */}
           {localProvider === "openrouter" && (
             <FieldGroup
-              label="Preferred Provider"
+              label={localizeUi("ui.connections.connectioneditor.preferredProvider")}
               icon={<Server size="0.875rem" className="text-sky-400" />}
-              help="Choose which backend provider OpenRouter should route your requests to. Leave empty to let OpenRouter choose automatically based on price and availability."
+              help={localizeUi(
+                "ui.connections.connectioneditor.chooseWhichBackendProviderOpenrouterShouldRouteYourRequests",
+              )}
             >
               <input
                 value={localOpenrouterProvider}
@@ -1403,19 +1676,19 @@ export function ConnectionEditor() {
                   markDirty();
                 }}
                 className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
-                placeholder="e.g. Anthropic, Google, Amazon Bedrock…"
+                placeholder={localizeUi("ui.connections.connectioneditor.eGAnthropicGoogleAmazonBedrock")}
               />
               <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                Forces OpenRouter to route through a specific provider. The provider name must match exactly as shown on{" "}
+                {localizeUi("ui.connections.connectioneditor.forcesOpenrouterToRouteThroughASpecificProviderThe")}{" "}
                 <a
                   href="https://openrouter.ai/models"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-sky-400 hover:underline"
                 >
-                  openrouter.ai/models
+                  {localizeUi("ui.connections.connectioneditor.openrouterAiModels")}
                 </a>
-                . Leave empty for automatic routing.
+                {localizeUi("ui.connections.connectioneditor.leaveEmptyForAutomaticRouting")}
               </p>
             </FieldGroup>
           )}
@@ -1424,9 +1697,9 @@ export function ConnectionEditor() {
             <>
               {/* ── API Key ── */}
               <FieldGroup
-                label="API Key"
+                label={localizeUi("ui.connections.connectioneditor.apiKey")}
                 icon={<Key size="0.875rem" className="text-sky-400" />}
-                help="Your authentication key from the AI provider. You can get one from their website. It's like a password that lets Marinara talk to the AI service."
+                help={localizeUi("ui.connections.connectioneditor.yourAuthenticationKeyFromTheAiProviderYouCan")}
               >
                 <input
                   value={localApiKey}
@@ -1436,10 +1709,10 @@ export function ConnectionEditor() {
                   }}
                   type="password"
                   className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
-                  placeholder="••••••••  (leave empty to keep existing key)"
+                  placeholder={localizeUi("ui.connections.connectioneditor.leaveEmptyToKeepExistingKey")}
                 />
                 <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                  Your key is encrypted at rest. Leave blank when editing to keep the existing key.
+                  {localizeUi("ui.connections.connectioneditor.yourKeyIsEncryptedAtRestLeaveBlankWhen")}
                 </p>
                 {apiKeyLink && (
                   <a
@@ -1454,17 +1727,16 @@ export function ConnectionEditor() {
                 )}
                 {localProvider === "custom" && (
                   <p className="mt-1.5 text-[0.625rem] text-[var(--muted-foreground)]">
-                    For local models (Ollama, LM Studio, KoboldCpp, etc.) you can leave this empty — just set the Base
-                    URL below.
+                    {localizeUi("ui.connections.connectioneditor.forLocalModelsOllamaLmStudioKoboldcppEtcYou")}
                   </p>
                 )}
               </FieldGroup>
 
               {/* ── Base URL ── */}
               <FieldGroup
-                label="Base URL"
+                label={localizeUi("ui.connections.connectioneditor.baseUrl")}
                 icon={<Globe size="0.875rem" className="text-sky-400" />}
-                help="The API endpoint URL. Usually auto-filled for known providers. Only change this if you're using a proxy, local server, or custom endpoint."
+                help={localizeUi("ui.connections.connectioneditor.theApiEndpointUrlUsuallyAutoFilledForKnown")}
               >
                 <input
                   value={localBaseUrl}
@@ -1480,7 +1752,7 @@ export function ConnectionEditor() {
                 />
                 {providerDef?.defaultBaseUrl && !localBaseUrl && (
                   <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                    Default: {providerDef.defaultBaseUrl}
+                    {localizeUi("ui.connections.connectioneditor.default")} {providerDef.defaultBaseUrl}
                   </p>
                 )}
                 {baseUrlValidation.error && (
@@ -1488,32 +1760,37 @@ export function ConnectionEditor() {
                 )}
                 {!baseUrlValidation.error && baseUrlValidation.value !== localBaseUrl.trim() && (
                   <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                    Will save as {baseUrlValidation.value}
+                    {localizeUi("ui.connections.connectioneditor.willSaveAs")} {baseUrlValidation.value}
                   </p>
                 )}
                 {localProvider === "custom" && (
                   <p className="mt-1.5 text-[0.625rem] text-[var(--muted-foreground)]">
-                    Local model examples: Ollama →{" "}
-                    <code className="rounded bg-[var(--secondary)] px-1">http://localhost:11434/v1</code> · LM Studio →{" "}
-                    <code className="rounded bg-[var(--secondary)] px-1">http://localhost:1234/v1</code> · KoboldCpp →{" "}
-                    <code className="rounded bg-[var(--secondary)] px-1">http://localhost:5001/v1</code>
+                    {localizeUi("ui.connections.connectioneditor.localModelExamplesOllama")}{" "}
+                    <code className="rounded bg-[var(--secondary)] px-1">{"http://localhost:11434/v1"}</code>{" "}
+                    {localizeUi("ui.connections.connectioneditor.lmStudio")}{" "}
+                    <code className="rounded bg-[var(--secondary)] px-1">{"http://localhost:1234/v1"}</code>{" "}
+                    {localizeUi("ui.connections.connectioneditor.koboldcpp")}{" "}
+                    <code className="rounded bg-[var(--secondary)] px-1">{"http://localhost:5001/v1"}</code>
                   </p>
                 )}
                 <p className="mt-1.5 flex items-start gap-1 text-[0.625rem] text-amber-400/80">
                   <AlertCircle size="0.625rem" className="mt-px shrink-0" />
                   <span>
-                    Only use URLs from providers you trust. A malicious endpoint could intercept your messages and API
-                    keys.
+                    {localizeUi("ui.connections.connectioneditor.onlyUseUrlsFromProvidersYouTrustAMalicious")}
                   </span>
                 </p>
                 {localProvider === "custom" && (
                   <p className="mt-1.5 flex items-start gap-1 text-[0.625rem] text-sky-400/80">
                     <AlertCircle size="0.625rem" className="mt-px shrink-0" />
                     <span>
-                      <strong>Windows users:</strong> If your proxy or local server isn't detected, Windows Defender
-                      Firewall may be blocking the connection. Open{" "}
-                      <em>Windows Security → Firewall & network protection → Allow an app through firewall</em> and add
-                      Node.js or your proxy application.
+                      <strong>{localizeUi("ui.connections.connectioneditor.windowsUsers")}</strong>{" "}
+                      {localizeUi("ui.connections.connectioneditor.ifYourProxyOrLocalServerIsnTDetected")}{" "}
+                      <em>
+                        {localizeUi(
+                          "ui.connections.connectioneditor.windowsSecurityFirewallNetworkProtectionAllowAnAppThrough",
+                        )}
+                      </em>{" "}
+                      {localizeUi("ui.connections.connectioneditor.andAddNodeJsOrYourProxyApplication")}
                     </span>
                   </p>
                 )}
@@ -1524,13 +1801,33 @@ export function ConnectionEditor() {
           {/* ── Image Service (only for image_generation provider) ── */}
           {localProvider === "image_generation" && (
             <FieldGroup
-              label="Service"
+              label={localizeUi("ui.connections.connectioneditor.service")}
               icon={<Globe size="0.875rem" className="text-sky-400" />}
-              help="Pick the backend type once, then point Base URL to any host or port. Provider-specific features such as ComfyUI workflow JSON and checkpoint fetching use this selection."
+              help={localizeUi("ui.connections.connectioneditor.pickTheBackendTypeOnceThenPointBaseUrl")}
             >
               <div className="grid grid-cols-2 gap-1.5">
                 {IMAGE_GENERATION_SOURCES.map((src) => {
                   const isActive = selectedImageService === src.id;
+                  const sourceName =
+                    src.id === "atlas"
+                      ? t("connections.mediaSources.atlas.name")
+                      : src.id === "swarmui"
+                        ? t("connections.mediaSources.swarmui.name")
+                        : src.id === "zai"
+                          ? t("connections.mediaSources.zai.name")
+                          : src.id === "arli"
+                            ? t("connections.mediaSources.arli.name")
+                            : src.name;
+                  const sourceDescription =
+                    src.id === "atlas"
+                      ? t("connections.mediaSources.atlas.imageDescription")
+                      : src.id === "swarmui"
+                        ? t("connections.mediaSources.swarmui.imageDescription")
+                        : src.id === "zai"
+                          ? t("connections.mediaSources.zai.imageDescription")
+                          : src.id === "arli"
+                            ? t("connections.mediaSources.arli.imageDescription")
+                            : src.description;
                   return (
                     <button
                       key={src.id}
@@ -1544,6 +1841,9 @@ export function ConnectionEditor() {
                         if (shouldSeedBaseUrl) {
                           setLocalBaseUrl(src.defaultBaseUrl);
                         }
+                        if (src.id === "zai" && !ZAI_IMAGE_MODELS.some((model) => model.id === localModel.trim())) {
+                          setLocalModel("glm-image");
+                        }
                         markDirty();
                       }}
                       className={cn(
@@ -1554,38 +1854,58 @@ export function ConnectionEditor() {
                       )}
                     >
                       <div className="flex items-center gap-1.5">
-                        <span className="font-medium">{src.name}</span>
+                        <span className="font-medium">{sourceName}</span>
                         {isActive && <Check size="0.625rem" />}
                       </div>
-                      <span className="text-[0.5625rem] opacity-70">{src.description}</span>
+                      <span className="text-[0.5625rem] opacity-70">{sourceDescription}</span>
                     </button>
                   );
                 })}
               </div>
               <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-                Pick the backend type once, then point Base URL to any host or port. Provider-specific features like
-                ComfyUI workflow JSON and checkpoint fetching use this selection, not the default localhost URL.
+                {localizeUi("ui.connections.connectioneditor.pickTheBackendTypeOnceThenPointBaseUrl_cfb1337")}
               </p>
               {selectedImageService === "runpod_comfyui" && (
                 <div className="mt-2 rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-[0.625rem] text-amber-300/80">
-                  <strong>RunPod configuration:</strong> Your endpoint ID goes in the <strong>Endpoint ID</strong> field
-                  below. The API key is your RunPod API token. The workflow JSON is <strong>required</strong> — the
-                  endpoint executes the workflow you supply. Use <code>%prompt%</code> placeholders in the
-                  CLIPTextEncode node.
+                  <strong>{localizeUi("ui.connections.connectioneditor.runpodConfiguration")}</strong>{" "}
+                  {localizeUi("ui.connections.connectioneditor.yourEndpointIdGoesInThe")}{" "}
+                  <strong>{localizeUi("ui.connections.connectioneditor.endpointId")}</strong>{" "}
+                  {localizeUi("ui.connections.connectioneditor.fieldBelowTheApiKeyIsYourRunpodApi")}{" "}
+                  <strong>{localizeUi("ui.connections.connectioneditor.required")}</strong>{" "}
+                  {localizeUi("ui.connections.connectioneditor.theEndpointExecutesTheWorkflowYouSupplyUse")}{" "}
+                  <code>{"%prompt%"}</code>{" "}
+                  {localizeUi("ui.connections.connectioneditor.placeholdersInTheCliptextencodeNode")}
                 </div>
+              )}
+              {selectedImageService === "swarmui" && (
+                <p className="mt-2 text-[0.625rem] text-[var(--muted-foreground)]">
+                  {t("connections.mediaSources.swarmui.authHelp")}
+                </p>
               )}
             </FieldGroup>
           )}
 
           {localProvider === "video_generation" && (
             <FieldGroup
-              label="Video Service"
+              label={localizeUi("ui.connections.connectioneditor.videoService")}
               icon={<Film size="0.875rem" className="text-sky-400" />}
-              help="Pick the video backend. Game Mode uses this service to produce MP4 scene videos."
+              help={localizeUi("ui.connections.connectioneditor.pickTheVideoBackendGameModeUsesThisService")}
             >
               <div className="grid grid-cols-2 gap-1.5">
                 {VIDEO_GENERATION_SOURCES.map((src) => {
                   const isActive = selectedVideoProvider === src.id;
+                  const sourceName =
+                    src.id === "atlas"
+                      ? t("connections.mediaSources.atlas.name")
+                      : src.id === "swarmui"
+                        ? t("connections.mediaSources.swarmui.name")
+                        : src.name;
+                  const sourceDescription =
+                    src.id === "atlas"
+                      ? t("connections.mediaSources.atlas.videoDescription")
+                      : src.id === "swarmui"
+                        ? t("connections.mediaSources.swarmui.videoDescription")
+                        : src.description;
                   return (
                     <button
                       key={src.id}
@@ -1621,33 +1941,146 @@ export function ConnectionEditor() {
                       )}
                     >
                       <div className="flex items-center gap-1.5">
-                        <span className="font-medium">{src.name}</span>
+                        <span className="font-medium">{sourceName}</span>
                         {isActive && <Check size="0.625rem" />}
                       </div>
-                      <span className="text-[0.5625rem] opacity-70">{src.description}</span>
+                      <span className="text-[0.5625rem] opacity-70">{sourceDescription}</span>
                     </button>
                   );
                 })}
               </div>
+              {selectedVideoProvider === "swarmui" && (
+                <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                  {t("connections.mediaSources.swarmui.authHelp")}
+                </p>
+              )}
               <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-                Scene videos are generated from the current game illustration plus the editable scene video prompt
-                template.
+                {localizeUi("ui.connections.connectioneditor.sceneVideosAreGeneratedFromTheCurrentGameIllustration")}
               </p>
+            </FieldGroup>
+          )}
+
+          {/* ── Audio Source (only for audio provider) ── */}
+          {isAudioProvider && (
+            <FieldGroup
+              label={localizeUi("ui.connections.connectioneditor.audioSource")}
+              icon={<Music size="0.875rem" className="text-sky-400" />}
+              help={localizeUi("ui.connections.connectioneditor.pickTheSpeechBackendBaseUrlModelAndVoice")}
+            >
+              <div className="grid grid-cols-2 gap-1.5">
+                {AUDIO_SOURCE_OPTIONS.map((src) => {
+                  const isActive = localAudioSource === src.id;
+                  return (
+                    <button
+                      key={src.id}
+                      onClick={() => {
+                        if (localAudioSource === src.id) return;
+                        const previousSource = AUDIO_SOURCE_OPTIONS.find(
+                          (candidate) => candidate.id === localAudioSource,
+                        );
+                        if (!localBaseUrl || localBaseUrl === previousSource?.defaultBaseUrl) {
+                          setLocalBaseUrl(src.defaultBaseUrl);
+                        }
+                        if (!localModel || localModel === previousSource?.defaultModel) {
+                          setLocalModel(src.defaultModel);
+                        }
+                        if (!localAudioVoice || localAudioVoice === previousSource?.defaultVoice) {
+                          setLocalAudioVoice(src.defaultVoice);
+                        }
+                        setLocalAudioSource(src.id);
+                        markDirty();
+                      }}
+                      className={cn(
+                        "flex flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left text-[0.6875rem] transition-all",
+                        isActive
+                          ? "bg-sky-400/15 text-sky-400 ring-1 ring-sky-400/30"
+                          : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+                      )}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium">{src.name}</span>
+                        {isActive && <Check size="0.625rem" />}
+                      </div>
+                      <span className="text-[0.625rem] opacity-80">
+                        {src.id === "elevenlabs"
+                          ? localizeUi("ui.connections.connectioneditor.speechSoundEffectsAndMusicGeneration")
+                          : src.id === "openai"
+                            ? localizeUi("ui.connections.connectioneditor.openaiOrAnyCompatibleAudioSpeechEndpoint")
+                            : src.id === "pockettts"
+                              ? localizeUi("ui.connections.connectioneditor.localPocketttsServerFreePrivateOffline")
+                              : localizeUi("ui.connections.connectioneditor.xaiGrokVoiceSynthesis")}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <label className="block space-y-1.5">
+                <span className="text-xs font-medium text-[var(--muted-foreground)]">
+                  {localizeUi("ui.connections.connectioneditor.defaultVoice")}
+                </span>
+                <input
+                  value={localAudioVoice}
+                  onChange={(event) => {
+                    setLocalAudioVoice(event.target.value);
+                    markDirty();
+                  }}
+                  className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                  placeholder={
+                    AUDIO_SOURCE_OPTIONS.find((candidate) => candidate.id === localAudioSource)?.defaultVoice ||
+                    localizeUi("ui.connections.connectioneditor.eGAVoiceIdFromYourProvider")
+                  }
+                />
+                <p className="text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
+                  {localizeUi("ui.connections.connectioneditor.voiceIdOrNameUsedWhenNothingMoreSpecific")}
+                </p>
+              </label>
+              {localAudioSource === "elevenlabs" ? (
+                <div className="space-y-2">
+                  <SettingsSwitch
+                    label={localizeUi("ui.connections.connectioneditor.gameSoundEffects")}
+                    description={localizeUi(
+                      "ui.connections.connectioneditor.letGameModeGenerateSoundEffectsWithThisConnection",
+                    )}
+                    checked={localAudioSoundEffects}
+                    onChange={(checked) => {
+                      setLocalAudioSoundEffects(checked);
+                      markDirty();
+                    }}
+                  />
+                  <SettingsSwitch
+                    label={localizeUi("ui.connections.connectioneditor.gameMusic")}
+                    description={localizeUi(
+                      "ui.connections.connectioneditor.letGameModeGenerateMusicWithThisConnection",
+                    )}
+                    checked={localAudioMusic}
+                    onChange={(checked) => {
+                      setLocalAudioMusic(checked);
+                      markDirty();
+                    }}
+                  />
+                </div>
+              ) : (
+                <p className="rounded-xl bg-[var(--secondary)]/40 px-3 py-2 text-[0.625rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)]">
+                  {localizeUi(
+                    "ui.connections.connectioneditor.soundEffectAndMusicGenerationCurrentlyRequiresTheElevenlabs",
+                  )}
+                </p>
+              )}
             </FieldGroup>
           )}
 
           {/* ── Model Selection ── */}
           <FieldGroup
-            label="Model"
+            label={localizeUi("ui.connections.connectioneditor.model")}
             icon={<Server size="0.875rem" className="text-sky-400" />}
-            help="The specific AI model to use. You can pick from the list or type a custom model ID directly."
+            help={localizeUi("ui.connections.connectioneditor.theSpecificAiModelToUseYouCanPick")}
           >
             {/* Standard model dropdown + manual input (used for all providers including image_generation) */}
-            <div ref={modelDropdownRef} className={cn("relative", showModelDropdown && "z-50")}>
+            <div ref={modelDropdownRef} className={cn("relative min-w-0", showModelDropdown && "z-50")}>
               <div
                 onClick={() => setShowModelDropdown(!showModelDropdown)}
                 className={cn(
-                  "relative flex cursor-pointer items-center gap-2 rounded-xl bg-[var(--secondary)] px-3 py-2.5 ring-1 ring-[var(--border)] transition-all hover:ring-[var(--ring)]",
+                  "relative flex min-w-0 cursor-pointer items-center gap-2 rounded-xl bg-[var(--secondary)] px-3 py-2.5 ring-1 ring-[var(--border)] transition-all hover:ring-[var(--ring)]",
                   showModelDropdown && "z-50 ring-sky-400/50",
                 )}
               >
@@ -1657,16 +2090,21 @@ export function ConnectionEditor() {
                     ref={modelSearchInputRef}
                     value={modelSearch}
                     onChange={(e) => setModelSearch(e.target.value)}
-                    className="flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--muted-foreground)]"
-                    placeholder="Search models…"
+                    className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--muted-foreground)]"
+                    placeholder={localizeUi("ui.connections.connectioneditor.searchModels")}
                     autoFocus
                     onClick={(e) => e.stopPropagation()}
                   />
                 ) : (
-                  <span className={cn("flex-1 text-sm", !localModel && "text-[var(--muted-foreground)]")}>
+                  <span
+                    className={cn("min-w-0 flex-1 truncate text-sm", !localModel && "text-[var(--muted-foreground)]")}
+                  >
                     {localModel
                       ? selectedModelInfo
-                        ? `${selectedModelInfo.name} (${selectedModelInfo.id})`
+                        ? localizeUi("ui.connections.connectioneditor.value1Value2", {
+                            value1: selectedModelInfo.name,
+                            value2: selectedModelInfo.id,
+                          })
                         : localModel
                       : emptyModelLabel}
                   </span>
@@ -1683,41 +2121,47 @@ export function ConnectionEditor() {
               {showModelDropdown && (
                 <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-80 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl">
                   {/* Fetch from API button */}
-                  <div className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--card)] p-2">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleFetchModels();
-                      }}
-                      disabled={fetchModels.isPending}
-                      className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-sky-400/10 px-3 py-2 text-xs font-medium text-sky-400 transition-all hover:bg-sky-400/20 active:scale-[0.98] disabled:opacity-50"
-                    >
-                      {fetchModels.isPending ? (
-                        <Loader2 size="0.75rem" className="animate-spin" />
-                      ) : (
-                        <Globe size="0.75rem" />
+                  {!(localProvider === "image_generation" && selectedImageService === "novelai") && (
+                    <div className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--card)] p-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleFetchModels();
+                        }}
+                        disabled={fetchModels.isPending}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-sky-400/10 px-3 py-2 text-xs font-medium text-sky-400 transition-all hover:bg-sky-400/20 active:scale-[0.98] disabled:opacity-50"
+                      >
+                        {fetchModels.isPending ? (
+                          <Loader2 size="0.75rem" className="animate-spin" />
+                        ) : (
+                          <Globe size="0.75rem" />
+                        )}
+                        {fetchModels.isPending
+                          ? localizeUi("ui.connections.connectioneditor.fetching")
+                          : modelFetchButtonLabel}
+                      </button>
+                      {fetchError && (
+                        <p className="mt-1.5 text-[0.625rem] text-[var(--marinara-editor-accent)]">{fetchError}</p>
                       )}
-                      {fetchModels.isPending ? "Fetching…" : modelFetchButtonLabel}
-                    </button>
-                    {fetchError && <p className="mt-1.5 text-[0.625rem] text-[var(--destructive)]">{fetchError}</p>}
-                    {remoteModels.length > 0 && !fetchError && (
-                      <p className="mt-1 text-[0.625rem] text-emerald-400">
-                        {remoteModels.length} model{remoteModels.length !== 1 ? "s" : ""} available from{" "}
-                        {modelFetchSourceLabel}
-                      </p>
-                    )}
-                  </div>
-
+                      {remoteModels.length > 0 && !fetchError && (
+                        <p className="mt-1 text-[0.625rem] text-emerald-400">
+                          {remoteModels.length} {localizeUi("ui.connections.connectioneditor.model_1d06a0d")}
+                          {remoteModels.length !== 1 ? localizeUi("ui.noodle.stageprofileview.s") : ""}{" "}
+                          {localizeUi("ui.connections.connectioneditor.availableFrom")} {modelFetchSourceLabel}
+                        </p>
+                      )}
+                    </div>
+                  )}
                   {localProvider === "custom" ? (
                     <div className="p-3">
                       <p className="mb-2 text-[0.625rem] text-[var(--muted-foreground)]">
-                        Custom endpoints: type the model ID or fetch from API above.
+                        {localizeUi("ui.connections.connectioneditor.customEndpointsTypeTheModelIdOrFetchFrom")}
                       </p>
                       <input
                         value={localModel}
                         onChange={(e) => handleManualModelChange(e.target.value)}
                         className="w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-sm ring-1 ring-[var(--border)] focus:outline-none focus:ring-sky-400/50"
-                        placeholder="model-name-or-path"
+                        placeholder={localizeUi("ui.connections.connectioneditor.modelNameOrPath")}
                       />
                       {/* Show fetched models for custom provider */}
                       {remoteModels.length > 0 && (
@@ -1758,17 +2202,17 @@ export function ConnectionEditor() {
                         }}
                         className="mt-2 w-full rounded-lg bg-sky-400/10 px-3 py-1.5 text-xs font-medium text-sky-400 hover:bg-sky-400/20"
                       >
-                        Done
+                        {localizeUi("lorebook.editor.batch.done")}
                       </button>
                     </div>
                   ) : filteredModels.length === 0 ? (
                     <div className="p-4 text-center text-xs text-[var(--muted-foreground)]">
-                      No models found. Try a different search or type the model ID below.
+                      {localizeUi("ui.connections.connectioneditor.noModelsFoundTryADifferentSearchOrType")}
                       <input
                         value={localModel}
                         onChange={(e) => handleManualModelChange(e.target.value)}
                         className="mt-2 w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-sm ring-1 ring-[var(--border)] focus:outline-none focus:ring-sky-400/50"
-                        placeholder="Custom model ID…"
+                        placeholder={localizeUi("ui.connections.connectioneditor.customModelId")}
                       />
                     </div>
                   ) : (
@@ -1799,7 +2243,7 @@ export function ConnectionEditor() {
                           )}
                           {m.maxOutput > 0 && (
                             <div className="text-[0.5625rem] text-[var(--muted-foreground)]">
-                              {formatContext(m.maxOutput)} out
+                              {formatContext(m.maxOutput)} {localizeUi("ui.connections.connectioneditor.out")}
                             </div>
                           )}
                         </div>
@@ -1812,17 +2256,17 @@ export function ConnectionEditor() {
 
             {/* Manual model ID input below dropdown */}
             {localProvider !== "custom" && (
-              <div className="mt-2 flex items-center gap-2">
+              <div className="mt-2 flex min-w-0 items-center gap-2">
                 <input
                   value={localModel}
                   onChange={(e) => {
                     handleManualModelChange(e.target.value);
                   }}
-                  className="flex-1 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs ring-1 ring-[var(--border)] focus:outline-none focus:ring-[var(--ring)]"
+                  className="min-w-0 flex-1 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs ring-1 ring-[var(--border)] focus:outline-none focus:ring-[var(--ring)]"
                   placeholder={
                     isGrokSubscriptionProvider
-                      ? "Optional: type a Grok CLI model ID, or leave blank for CLI default"
-                      : "Or type model ID directly…"
+                      ? localizeUi("ui.connections.connectioneditor.optionalTypeAGrokCliModelIdOrLeave")
+                      : localizeUi("ui.connections.connectioneditor.orTypeModelIdDirectly")
                   }
                 />
               </div>
@@ -1832,10 +2276,12 @@ export function ConnectionEditor() {
             {selectedModelInfo && (
               <div className="mt-2 flex items-center gap-4 rounded-lg bg-sky-400/5 px-3 py-2 text-[0.6875rem]">
                 <span className="text-[var(--muted-foreground)]">
-                  Context: <strong className="text-sky-400">{formatContext(selectedModelInfo.context)}</strong>
+                  {localizeUi("ui.connections.connectioneditor.context")}{" "}
+                  <strong className="text-sky-400">{formatContext(selectedModelInfo.context)}</strong>
                 </span>
                 <span className="text-[var(--muted-foreground)]">
-                  Max Output: <strong className="text-sky-400">{formatContext(selectedModelInfo.maxOutput)}</strong>
+                  {localizeUi("ui.connections.connectioneditor.maxOutput")}{" "}
+                  <strong className="text-sky-400">{formatContext(selectedModelInfo.maxOutput)}</strong>
                 </span>
               </div>
             )}
@@ -1844,9 +2290,9 @@ export function ConnectionEditor() {
           {/* ── RunPod Endpoint ID ── */}
           {localProvider === "image_generation" && selectedImageService === "runpod_comfyui" && (
             <FieldGroup
-              label="RunPod Endpoint ID"
+              label={localizeUi("ui.connections.connectioneditor.runpodEndpointId")}
               icon={<Server size="0.875rem" className="text-sky-400" />}
-              help="Your RunPod serverless endpoint ID (e.g. 'abc123def456'). This is the unique identifier for your endpoint on RunPod."
+              help={localizeUi("ui.connections.connectioneditor.yourRunpodServerlessEndpointIdEGAbc123def456This")}
             >
               <input
                 type="text"
@@ -1855,85 +2301,162 @@ export function ConnectionEditor() {
                   setLocalImageEndpointId(e.target.value);
                   markDirty();
                 }}
-                placeholder="abc123def456"
+                placeholder={localizeUi("ui.connections.connectioneditor.abc123def456")}
                 className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm outline-none ring-1 ring-[var(--border)] transition-shadow placeholder:text-[var(--muted-foreground)]/50 focus:ring-sky-400/50"
               />
             </FieldGroup>
           )}
 
           {/* ── ComfyUI Workflow ── */}
-          {localProvider === "image_generation" &&
-            (selectedImageService === "comfyui" || selectedImageService === "runpod_comfyui") && (
-              <FieldGroup
-                label={`ComfyUI Workflow (${selectedImageService === "runpod_comfyui" ? "Required" : "Optional"})`}
-                icon={<Zap size="0.875rem" className="text-sky-400" />}
-                help={
-                  selectedImageService === "runpod_comfyui"
-                    ? "Paste your ComfyUI workflow JSON (API format). RunPod needs the full workflow to execute; the endpoint sends this workflow to your serverless endpoint. Use placeholders like %prompt%, %seed%, %width%, %height%, %reference_image%, and %reference_image_01% through %reference_image_04% to let Marinara inject generation parameters."
-                    : "Paste a custom ComfyUI workflow JSON (API format). Use placeholders like %prompt%, %negative_prompt%, %width%, %height%, %seed%, %model%, %steps%, %cfg%, %sampler%, %scheduler%, and %denoise%. For reference images, use %reference_image% / %reference_image_01% through %reference_image_04% to inject base64 strings, or %reference_image_name% / %reference_image_name_01% through %reference_image_name_04% to upload images to ComfyUI's input directory and inject filenames for LoadImage nodes. Leave empty to use the built-in default txt2img workflow."
-                }
-              >
-                <textarea
-                  ref={comfyWorkflowTextareaRef}
-                  value={localComfyuiWorkflow}
-                  onChange={(e) => {
-                    setLocalComfyuiWorkflow(e.target.value);
-                    markDirty();
-                  }}
-                  placeholder='Paste workflow JSON here (exported from ComfyUI via "Save (API Format)")…'
-                  className={cn(
-                    "w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-xs font-mono outline-none ring-1 transition-shadow placeholder:text-[var(--muted-foreground)]/50 min-h-[120px] max-h-[300px] resize-y",
-                    comfyWorkflowValidation?.parseError
-                      ? "ring-red-400/60 focus:ring-red-400"
-                      : "ring-[var(--border)] focus:ring-sky-400/50",
+          {usesComfyUiWorkflow && (
+            <FieldGroup
+              label={localizeUi("ui.connections.connectioneditor.comfyuiWorkflowValue1", {
+                value1:
+                  localProvider === "video_generation" || selectedImageService === "runpod_comfyui"
+                    ? localizeUi("ui.agents.tooleditor.required")
+                    : localizeUi("ui.connections.connectioneditor.optional"),
+              })}
+              icon={<Zap size="0.875rem" className="text-sky-400" />}
+              help={
+                localProvider === "video_generation"
+                  ? selectedVideoProvider === "swarmui"
+                    ? t("connections.mediaSources.swarmui.videoWorkflowHelp")
+                    : localizeUi("ui.connections.connectioneditor.pasteAComfyuiVideoWorkflowInApiFormatUse")
+                  : selectedImageService === "runpod_comfyui"
+                    ? localizeUi("ui.connections.connectioneditor.pasteYourComfyuiWorkflowJsonApiFormatRunpodNeeds")
+                    : selectedImageService === "swarmui"
+                      ? localizeUi("ui.connections.connectioneditor.pasteAComfyuiWorkflowForSwarmui")
+                      : localizeUi("ui.connections.connectioneditor.pasteACustomComfyuiWorkflowJsonApiFormatUse")
+              }
+            >
+              <textarea
+                ref={comfyWorkflowTextareaRef}
+                value={localComfyuiWorkflow}
+                onChange={(e) => {
+                  setLocalComfyuiWorkflow(e.target.value);
+                  markDirty();
+                }}
+                placeholder={localizeUi(
+                  "ui.connections.connectioneditor.pasteWorkflowJsonHereExportedFromComfyuiViaSave",
+                )}
+                className={cn(
+                  "w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-xs font-mono outline-none ring-1 transition-shadow placeholder:text-[var(--muted-foreground)]/50 min-h-[120px] max-h-[300px] resize-y",
+                  comfyWorkflowValidation?.parseError || swarmUiWorkflowError
+                    ? "ring-red-400/60 focus:ring-red-400"
+                    : "ring-[var(--border)] focus:ring-sky-400/50",
+                )}
+              />
+              {swarmUiWorkflowError && (
+                <p className="mt-1 flex items-start gap-1 text-[0.625rem] text-red-400">
+                  <AlertCircle size="0.625rem" className="mt-px shrink-0" />
+                  {swarmUiWorkflowError}
+                </p>
+              )}
+              {comfyWorkflowValidation?.parseError && (
+                <p className="mt-1 flex items-start gap-1 text-[0.625rem] text-red-400">
+                  <AlertCircle size="0.625rem" className="mt-px shrink-0" />
+                  {comfyWorkflowValidation.charPos !== null ? (
+                    <button
+                      onClick={handleJumpToJsonError}
+                      className="underline decoration-dotted cursor-pointer text-left hover:text-red-300"
+                    >
+                      {comfyWorkflowValidation.label}
+                    </button>
+                  ) : (
+                    comfyWorkflowValidation.label
                   )}
-                />
-                {comfyWorkflowValidation?.parseError && (
-                  <p className="mt-1 flex items-start gap-1 text-[0.625rem] text-red-400">
+                </p>
+              )}
+              {comfyWorkflowValidation &&
+                !comfyWorkflowValidation.parseError &&
+                comfyWorkflowValidation.missing.length > 0 && (
+                  <p className="mt-1 flex items-start gap-1 text-[0.625rem] text-amber-400">
                     <AlertCircle size="0.625rem" className="mt-px shrink-0" />
-                    {comfyWorkflowValidation.charPos !== null ? (
-                      <button
-                        onClick={handleJumpToJsonError}
-                        className="underline decoration-dotted cursor-pointer text-left hover:text-red-300"
-                      >
-                        {comfyWorkflowValidation.label}
-                      </button>
-                    ) : (
-                      comfyWorkflowValidation.label
-                    )}
+                    <span>
+                      {comfyWorkflowValidation.missing.some((m) => m.critical) && (
+                        <>
+                          <strong>{localizeUi("ui.connections.connectioneditor.prompt")}</strong>{" "}
+                          {localizeUi("ui.connections.connectioneditor.placeholderNotFoundPromptsWonTBeInjected")}{" "}
+                        </>
+                      )}
+                      {comfyWorkflowValidation.missing.some((m) => !m.critical) && (
+                        <>
+                          {localizeUi("ui.connections.connectioneditor.unused")}{" "}
+                          {comfyWorkflowValidation.missing
+                            .filter((m) => !m.critical)
+                            .map((m) => m.label)
+                            .join(", ")}
+                          .
+                        </>
+                      )}
+                    </span>
                   </p>
                 )}
-                {comfyWorkflowValidation &&
-                  !comfyWorkflowValidation.parseError &&
-                  comfyWorkflowValidation.missing.length > 0 && (
-                    <p className="mt-1 flex items-start gap-1 text-[0.625rem] text-amber-400">
-                      <AlertCircle size="0.625rem" className="mt-px shrink-0" />
-                      <span>
-                        {comfyWorkflowValidation.missing.some((m) => m.critical) && (
-                          <>
-                            <strong>%prompt%</strong> placeholder not found — prompts won&apos;t be injected.{" "}
-                          </>
-                        )}
-                        {comfyWorkflowValidation.missing.some((m) => !m.critical) && (
-                          <>
-                            Unused:{" "}
-                            {comfyWorkflowValidation.missing
-                              .filter((m) => !m.critical)
-                              .map((m) => m.label)
-                              .join(", ")}
-                            .
-                          </>
-                        )}
-                      </span>
-                    </p>
-                  )}
-                <p className="text-[0.55rem] text-[var(--muted-foreground)] mt-1">
-                  Export your workflow from ComfyUI using <strong>Save (API Format)</strong> in the menu. Placeholders
-                  like <code>%prompt%</code>, <code>%steps%</code>, <code>%sampler%</code>, and reference-image
-                  placeholders will be replaced at generation time.
-                </p>
-              </FieldGroup>
-            )}
+              <p className="text-[0.55rem] text-[var(--muted-foreground)] mt-1">
+                {localizeUi("ui.connections.connectioneditor.exportYourWorkflowFromComfyuiUsing")}{" "}
+                <strong>{localizeUi("ui.connections.connectioneditor.saveApiFormat")}</strong>{" "}
+                {localizeUi("ui.connections.connectioneditor.inTheMenu")}{" "}
+                {localProvider === "video_generation" ? (
+                  <>
+                    {localizeUi("ui.connections.connectioneditor.useAVideoOutputNodeSuchAs")}{" "}
+                    <strong>{localizeUi("ui.connections.connectioneditor.savevideo")}</strong>
+                    {localizeUi("ui.connections.connectioneditor.marinaraDownloadsTheMp4ReportedInTheWorkflowS")}{" "}
+                    <code>{"gifs"}</code> {localizeUi("ui.noodle.noodlehome.or")} <code>{"images"}</code>{" "}
+                    {localizeUi("ui.connections.connectioneditor.output")}
+                  </>
+                ) : (
+                  <>
+                    {localizeUi("ui.connections.connectioneditor.placeholdersLike")} <code>{"%prompt%"}</code>,{" "}
+                    <code>{"%steps%"}</code>, <code>{"%sampler%"}</code>
+                    {localizeUi(
+                      "ui.connections.connectioneditor.andReferenceImagePlaceholdersWillBeReplacedAtGeneration",
+                    )}
+                  </>
+                )}
+              </p>
+            </FieldGroup>
+          )}
+
+          {localProvider === "image_generation" && (
+            <FieldGroup
+              label={localizeUi("ui.connections.connectioneditor.imagePromptingInstructions")}
+              icon={<Sparkles size="0.875rem" className="text-sky-400" />}
+              help={localizeUi("ui.connections.connectioneditor.imagePromptingInstructionsHelp")}
+            >
+              <textarea
+                value={localImagePromptInstructions}
+                maxLength={MAX_IMAGE_PROMPT_INSTRUCTIONS_LENGTH}
+                onChange={(event) => {
+                  setLocalImagePromptInstructions(event.target.value);
+                  markDirty();
+                }}
+                placeholder={localizeUi("ui.connections.connectioneditor.imagePromptingInstructionsPlaceholder")}
+                className="w-full min-h-[96px] resize-y rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm outline-none ring-1 ring-[var(--border)] transition-shadow placeholder:text-[var(--muted-foreground)]/50 focus:ring-sky-400/50"
+              />
+            </FieldGroup>
+          )}
+
+          {supportsGptImageQuality && (
+            <FieldGroup
+              label={localizeUi("ui.connections.connectioneditor.gptImageQuality")}
+              icon={<Sparkles size="0.875rem" className="text-sky-400" />}
+              help={localizeUi("ui.connections.connectioneditor.gptImageQualityHelp")}
+            >
+              <select
+                value={localImageGenerationQuality}
+                onChange={(event) => {
+                  setLocalImageGenerationQuality(event.target.value as ImageGenerationQuality);
+                  markDirty();
+                }}
+                className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm outline-none ring-1 ring-[var(--border)] transition-shadow focus:ring-sky-400/50"
+              >
+                <option value="auto">{localizeUi("ui.connections.connectioneditor.imageQualityAuto")}</option>
+                <option value="low">{localizeUi("ui.connections.connectioneditor.imageQualityLow")}</option>
+                <option value="medium">{localizeUi("ui.connections.connectioneditor.imageQualityMedium")}</option>
+                <option value="high">{localizeUi("ui.connections.connectioneditor.imageQualityHigh")}</option>
+              </select>
+            </FieldGroup>
+          )}
 
           {localProvider === "image_generation" && selectedImageDefaultsService && localImageDefaults && (
             <ImageGenerationDefaultsPanel
@@ -1942,14 +2465,22 @@ export function ConnectionEditor() {
               source={selectedImageService}
               value={localImageDefaults}
               styleProfiles={imageStyleProfiles}
+              remoteLoras={remoteLoras}
               expanded={imageDefaultsExpanded}
               onExpandedChange={setImageDefaultsExpanded}
               onChange={(next) => {
-                setLocalImageDefaults(sanitizeImageGenerationProfile(next, selectedImageDefaultsService));
+                const current = localImageDefaultsRef.current;
+                if (!current) return;
+                const resolved = typeof next === "function" ? next(current) : next;
+                const sanitized = sanitizeImageGenerationProfile(resolved, selectedImageDefaultsService);
+                localImageDefaultsRef.current = sanitized;
+                setLocalImageDefaults(sanitized);
                 markDirty();
               }}
               onReset={() => {
-                setLocalImageDefaults(createDefaultImageGenerationProfile(selectedImageDefaultsService));
+                const defaults = createDefaultImageGenerationProfile(selectedImageDefaultsService);
+                localImageDefaultsRef.current = defaults;
+                setLocalImageDefaults(defaults);
                 markDirty();
               }}
             />
@@ -1958,6 +2489,8 @@ export function ConnectionEditor() {
           {localProvider === "video_generation" && localVideoDefaults && (
             <VideoGenerationDefaultsPanel
               value={localVideoDefaults}
+              source={selectedVideoProvider}
+              remoteLoras={remoteLoras}
               expanded={videoDefaultsExpanded}
               onExpandedChange={setVideoDefaultsExpanded}
               onChange={(next) => {
@@ -1974,9 +2507,9 @@ export function ConnectionEditor() {
           {/* ── Max Context ── */}
           {!isMediaGenerationProvider && (
             <FieldGroup
-              label="Max Context Window"
+              label={localizeUi("ui.connections.connectioneditor.maxContextWindow")}
               icon={<Zap size="0.875rem" className="text-sky-400" />}
-              help="The maximum number of tokens this model can process at once (your messages + its reply). This is auto-set when you pick a model from the list."
+              help={localizeUi("ui.connections.connectioneditor.theMaximumNumberOfTokensThisModelCanProcess")}
             >
               <div className="flex items-center gap-3">
                 <DraftNumberInput
@@ -1989,12 +2522,14 @@ export function ConnectionEditor() {
                   }}
                   className="w-40 rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
                 />
-                <span className="text-xs text-[var(--muted-foreground)]">{formatContext(localMaxContext)} tokens</span>
+                <span className="text-xs text-[var(--muted-foreground)]">
+                  {formatContext(localMaxContext)} {localizeUi("ui.connections.connectioneditor.tokens")}
+                </span>
               </div>
               <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
                 {isGrokSubscriptionProvider
-                  ? 'Grok CLI starts at a safer 32k window because very large roleplay prompts can make the local CLI hit its own turn limit. A value you set here is used as-is — raise it gradually, and lower it if requests start failing with "max turns reached".'
-                  : "This is auto-set when selecting a model from the list. Override manually if needed."}
+                  ? localizeUi("ui.connections.connectioneditor.grokCliStartsAtASafer32kWindowBecause")
+                  : localizeUi("ui.connections.connectioneditor.thisIsAutoSetWhenSelectingAModelFrom")}
               </p>
             </FieldGroup>
           )}
@@ -2002,9 +2537,9 @@ export function ConnectionEditor() {
           {/* ── Max Output Tokens Override ── */}
           {!isMediaGenerationProvider && !isLocalAuthProvider && (
             <FieldGroup
-              label="Max Output Tokens Override"
+              label={localizeUi("ui.connections.connectioneditor.maxOutputTokensOverride")}
               icon={<Zap size="0.875rem" className="text-[var(--marinara-chat-chrome-button-text-active)]" />}
-              help="Hard cap on max_tokens for the API response (limiting output size). Use this for providers that enforce a lower limit than what the engine calculates (e.g. DeepSeek caps at 8192). Leave empty to let the engine decide."
+              help={localizeUi("ui.connections.connectioneditor.hardCapOnMaxTokensForTheApiResponse")}
             >
               <div className="flex items-center gap-3">
                 <DraftNumberInput
@@ -2018,12 +2553,15 @@ export function ConnectionEditor() {
                   className="w-40 rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
                 />
                 <span className="text-xs text-[var(--muted-foreground)]">
-                  {localMaxTokensOverride ? `${localMaxTokensOverride.toLocaleString()} tokens max` : "No override"}
+                  {localMaxTokensOverride
+                    ? localizeUi("ui.connections.connectioneditor.value1TokensMax", {
+                        value1: localMaxTokensOverride.toLocaleString(),
+                      })
+                    : localizeUi("ui.connections.connectioneditor.noOverride")}
                 </span>
               </div>
               <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                Set to 0 or leave empty to disable. When set, no request to this connection will exceed this token limit
-                — including batched agent calls.
+                {localizeUi("ui.connections.connectioneditor.setTo0OrLeaveEmptyToDisableWhen")}
               </p>
             </FieldGroup>
           )}
@@ -2031,11 +2569,11 @@ export function ConnectionEditor() {
           {/* ── Agent Parallel Jobs ── */}
           {!isMediaGenerationProvider && (
             <FieldGroup
-              label="Max Parallel Agent Jobs"
+              label={localizeUi("ui.connections.connectioneditor.maxParallelAgentJobs")}
               icon={
                 <SlidersHorizontal size="0.875rem" className="text-[var(--marinara-chat-chrome-button-text-active)]" />
               }
-              help="How many agent LLM requests Marinara may run at once for this connection. Higher values can speed up agent-heavy chats on providers that tolerate parallel calls."
+              help={localizeUi("ui.connections.connectioneditor.howManyAgentLlmRequestsMarinaraMayRunAt")}
             >
               <div className="flex items-center gap-3">
                 <DraftNumberInput
@@ -2050,24 +2588,58 @@ export function ConnectionEditor() {
                   className="w-24 rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
                 />
                 <span className="text-xs text-[var(--muted-foreground)]">
-                  {localMaxParallelJobs === 1 ? "One agent job at a time" : `${localMaxParallelJobs} agent jobs`}
+                  {localMaxParallelJobs === 1
+                    ? localizeUi("ui.connections.connectioneditor.oneAgentJobAtATime")
+                    : localizeUi("ui.connections.connectioneditor.value1AgentJobs", { value1: localMaxParallelJobs })}
                 </span>
               </div>
               <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                Agent batches for the same connection can be split across this many parallel jobs. Set to 1 for the
-                safest provider behavior.
+                {localizeUi("ui.connections.connectioneditor.agentBatchesForTheSameConnectionCanBeSplit")}
               </p>
+            </FieldGroup>
+          )}
+
+          {/* ── Rate Limit (requests per minute) ── */}
+          {!isMediaGenerationProvider && (
+            <FieldGroup
+              label={localizeUi("ui.connections.connectioneditor.maxRequestsPerMinute")}
+              icon={
+                <SlidersHorizontal size="0.875rem" className="text-[var(--marinara-chat-chrome-button-text-active)]" />
+              }
+              help={localizeUi("ui.connections.connectioneditor.maxRequestsPerMinuteHelp")}
+            >
+              <div className="flex items-center gap-3">
+                <DraftNumberInput
+                  value={localMaxRequestsPerMinute ?? 0}
+                  ariaLabel={localizeUi("ui.connections.connectioneditor.maxRequestsPerMinute")}
+                  min={0}
+                  max={600}
+                  selectOnFocus
+                  onCommit={(nextValue) => {
+                    setLocalMaxRequestsPerMinute(nextValue > 0 ? Math.floor(nextValue) : null);
+                    markDirty();
+                  }}
+                  className="w-24 rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                />
+                <span className="text-xs text-[var(--muted-foreground)]">
+                  {localMaxRequestsPerMinute === null
+                    ? localizeUi("ui.connections.connectioneditor.requestsPerMinuteUnlimited")
+                    : localizeUi("ui.connections.connectioneditor.value1RequestsPerMinute", {
+                        value1: localMaxRequestsPerMinute,
+                      })}
+                </span>
+              </div>
             </FieldGroup>
           )}
 
           {canTreatAsLocalEndpoint && (
             <FieldGroup
-              label="Local / Custom Endpoint"
+              label={localizeUi("ui.connections.connectioneditor.localCustomEndpoint")}
               icon={<Server size="0.875rem" className="text-[var(--marinara-chat-chrome-button-text-active)]" />}
-              help="Use this for self-hosted or proxied OpenAI-compatible endpoints, especially custom domains that point at a LAN model server. Professor Mari will use a JSON tool protocol fallback for workspace tools instead of relying only on native tool calls."
+              help={localizeUi("ui.connections.connectioneditor.useThisForSelfHostedOrProxiedOpenaiCompatible")}
             >
               <SettingsSwitch
-                label="Treat as local/custom endpoint"
+                label={localizeUi("ui.connections.connectioneditor.treatAsLocalCustomEndpoint")}
                 checked={localTreatAsLocalEndpoint}
                 onChange={(checked) => {
                   setLocalTreatAsLocalEndpoint(checked);
@@ -2075,8 +2647,7 @@ export function ConnectionEditor() {
                 }}
               />
               <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                Enable this if Professor Mari stops after tool use or your endpoint advertises OpenAI compatibility but
-                does not reliably support tool calls.
+                {localizeUi("ui.connections.connectioneditor.enableThisIfProfessorMariStopsAfterToolUse")}
               </p>
             </FieldGroup>
           )}
@@ -2084,9 +2655,11 @@ export function ConnectionEditor() {
           {/* ── Prompt Preset Override ── */}
           {!isMediaGenerationProvider && (
             <FieldGroup
-              label="Prompt Preset Override"
+              label={localizeUi("ui.connections.connectioneditor.promptPresetOverride")}
               icon={<FileText size="0.875rem" className="mari-chrome-accent-icon mari-accent-animated" />}
-              help="Optional. When roleplay chats use this connection, Marinara assembles this prompt preset instead of the chat's selected prompt preset. Conversation and game mode keep their built-in prompt flows."
+              help={localizeUi(
+                "ui.connections.connectioneditor.optionalWhenRoleplayChatsUseThisConnectionMarinaraAssembles",
+              )}
             >
               <select
                 value={localPromptPresetId}
@@ -2096,7 +2669,7 @@ export function ConnectionEditor() {
                 }}
                 className="mari-preset-native-select w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
               >
-                <option value="">Use chat&apos;s prompt preset</option>
+                <option value="">{localizeUi("ui.connections.connectioneditor.useChatSPromptPreset")}</option>
                 {(allPresets ?? []).map((preset) => (
                   <option key={preset.id} value={preset.id}>
                     {preset.name}
@@ -2104,8 +2677,7 @@ export function ConnectionEditor() {
                 ))}
               </select>
               <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                Use this for models that need a different prompt structure. If this preset has variables, Marinara uses
-                the preset&apos;s saved defaults unless the chat already uses the same preset.
+                {localizeUi("ui.connections.connectioneditor.useThisForModelsThatNeedADifferentPrompt")}
               </p>
             </FieldGroup>
           )}
@@ -2113,12 +2685,14 @@ export function ConnectionEditor() {
           {/* ── Default Chat Parameters ── */}
           {!isMediaGenerationProvider && (
             <FieldGroup
-              label="Default Chat Parameters"
+              label={localizeUi("ui.connections.connectioneditor.defaultChatParameters")}
               icon={<Zap size="0.875rem" className="mari-chrome-accent-icon mari-accent-animated" />}
-              help="Default generation settings for chats that use this connection. Individual chats can still override these in Chat Settings."
+              help={localizeUi(
+                "ui.connections.connectioneditor.defaultGenerationSettingsForChatsThatUseThisConnection",
+              )}
             >
               <SettingsSwitch
-                label="Use custom defaults for this connection"
+                label={localizeUi("ui.connections.connectioneditor.useCustomDefaultsForThisConnection")}
                 checked={localDefaultParametersEnabled}
                 onChange={(checked) => {
                   setLocalDefaultParametersEnabled(checked);
@@ -2128,6 +2702,9 @@ export function ConnectionEditor() {
 
               {localDefaultParametersEnabled ? (
                 <div className="rounded-xl bg-[var(--secondary)]/40 p-3 ring-1 ring-[var(--border)]">
+                  <p className="mb-3 text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
+                    {localizeUi("settings.customGenerationParameters.availabilityHint")}
+                  </p>
                   <GenerationParametersFields
                     value={localDefaultParameters}
                     showOpenRouterServiceTier={localProvider === "openrouter"}
@@ -2137,28 +2714,85 @@ export function ConnectionEditor() {
                       markDirty();
                     }}
                   />
+                  <div className="mt-4 space-y-3 border-t border-[var(--border)] pt-4">
+                    <SettingsSwitch
+                      label={localizeUi("ui.connections.connectioneditor.imageCaptioning")}
+                      description={localizeUi(
+                        "ui.connections.connectioneditor.describeImageAttachmentsBeforeSendingThemToTextOnlyModels",
+                      )}
+                      checked={localImageCaptioningEnabled}
+                      onChange={(checked) => {
+                        setLocalImageCaptioningEnabled(checked);
+                        markDirty();
+                      }}
+                    />
+                    {localImageCaptioningEnabled && (
+                      <label className="block space-y-1.5">
+                        <span className="text-xs font-medium text-[var(--muted-foreground)]">
+                          {localizeUi("ui.connections.connectioneditor.captioningConnection")}
+                        </span>
+                        <select
+                          value={localImageCaptioningConnectionId}
+                          onChange={(event) => {
+                            setLocalImageCaptioningConnectionId(event.target.value);
+                            markDirty();
+                          }}
+                          className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                        >
+                          <option value="">{localizeUi("ui.connections.connectioneditor.useThisConnection")}</option>
+                          {((allConnections ?? []) as Record<string, unknown>[])
+                            .filter(
+                              (connection) =>
+                                connection.id !== connectionDetailId &&
+                                connection.provider !== "image_generation" &&
+                                connection.provider !== "video_generation" &&
+                                connection.provider !== "audio",
+                            )
+                            .map((connection) => (
+                              <option key={connection.id as string} value={connection.id as string}>
+                                {connection.name as string}
+                                {connection.model
+                                  ? localizeUi("ui.connections.connectioneditor.value1", {
+                                      value1: connection.model,
+                                    })
+                                  : ""}
+                              </option>
+                            ))}
+                        </select>
+                        <p className="text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
+                          {localizeUi(
+                            "ui.connections.connectioneditor.chooseADifferentVisionCapableConnectionWhenThisModelCannotSeeImages",
+                          )}
+                        </p>
+                      </label>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <p className="rounded-xl bg-[var(--secondary)]/40 px-3 py-2 text-[0.625rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)]">
-                  This connection is using the mode defaults from conversation, roleplay, and game setup.
+                  {localizeUi("ui.connections.connectioneditor.thisConnectionIsUsingTheModeDefaultsFromConversation")}
                 </p>
               )}
             </FieldGroup>
           )}
 
-          {/* ── Prompt Caching (Anthropic + OpenRouter Claude) ── */}
+          {/* ── Prompt Caching (Anthropic + compatible OpenRouter models) ── */}
           {(localProvider === "anthropic" || localProvider === "openrouter") && (
             <FieldGroup
-              label="Prompt Caching"
+              label={localizeUi("ui.connections.connectioneditor.promptCaching")}
               icon={<Zap size="0.875rem" className="text-[var(--marinara-chat-chrome-button-text-active)]" />}
               help={
                 localProvider === "anthropic"
-                  ? "Enables Anthropic prompt caching, which caches your system prompt and conversation history between requests. Reduces latency and costs for multi-turn conversations. Cache lasts 5 minutes and is refreshed on each use."
-                  : "For OpenRouter Claude models, sends the cache_control flag needed for Anthropic prompt caching. Most non-Claude OpenRouter models cache automatically and do not need this toggle."
+                  ? localizeUi(
+                      "ui.connections.connectioneditor.enablesAnthropicPromptCachingWhichCachesYourSystemPrompt",
+                    )
+                  : localizeUi(
+                      "ui.connections.connectioneditor.enablesExplicitPromptCachingForCompatibleOpenrouterModels",
+                    )
               }
             >
               <SettingsSwitch
-                label="Enable prompt caching"
+                label={localizeUi("ui.connections.connectioneditor.enablePromptCaching")}
                 checked={localEnableCaching}
                 onChange={(checked) => {
                   setLocalEnableCaching(checked);
@@ -2168,13 +2802,15 @@ export function ConnectionEditor() {
               />
               <p className="text-[0.625rem] text-[var(--muted-foreground)] px-2">
                 {localProvider === "anthropic"
-                  ? "Caches the system prompt explicitly and uses automatic caching for conversation history. Read tokens cost 90% less than regular input tokens. Cache writes cost 25% more on first use."
-                  : "On OpenRouter, this currently targets Claude models by adding top-level cache_control. Cache reads are much cheaper than normal prompt tokens, while the first cache write costs more."}
+                  ? localizeUi("ui.connections.connectioneditor.cachesTheSystemPromptExplicitlyAndUsesAutomaticCaching")
+                  : localizeUi(
+                      "ui.connections.connectioneditor.onOpenrouterAddsCacheControlForModelsThatSupportExplicitCaching",
+                    )}
               </p>
               {localProvider === "anthropic" && localEnableCaching && (
                 <div className="mt-2 space-y-2">
                   <SettingsSwitch
-                    label="Extended token caching (1 hour)"
+                    label={localizeUi("ui.connections.connectioneditor.extendedTokenCaching1Hour")}
                     checked={localAnthropicExtendedCacheTtl}
                     onChange={(checked) => {
                       setLocalAnthropicExtendedCacheTtl(checked);
@@ -2182,14 +2818,15 @@ export function ConnectionEditor() {
                     }}
                   />
                   <p className="px-2 text-[0.625rem] text-[var(--muted-foreground)]">
-                    Keeps Anthropic cache entries alive for one hour instead of five minutes. First cache writes cost 2x
-                    the base input token price, so leave this off unless longer reuse matters.
+                    {localizeUi("ui.connections.connectioneditor.keepsAnthropicCacheEntriesAliveForOneHourInstead")}
                   </p>
                   <label className="flex items-center justify-between gap-3 rounded-xl bg-[var(--secondary)]/40 px-3 py-2 ring-1 ring-[var(--border)]">
                     <div className="min-w-0">
-                      <span className="block text-sm font-medium">Cache depth</span>
+                      <span className="block text-sm font-medium">
+                        {localizeUi("ui.connections.connectioneditor.cacheDepth")}
+                      </span>
                       <span className="block text-[0.625rem] text-[var(--muted-foreground)]">
-                        Messages back from the newest turn.
+                        {localizeUi("ui.connections.connectioneditor.messagesBackFromTheNewestTurn")}
                       </span>
                     </div>
                     <DraftNumberInput
@@ -2211,13 +2848,15 @@ export function ConnectionEditor() {
 
           {isVideoGenerationProvider && selectedVideoDefaultsService === "seedance" && localVideoDefaults && (
             <FieldGroup
-              label="Seedance References"
+              label={localizeUi("ui.connections.connectioneditor.seedanceReferences")}
               icon={<Sparkles size="0.875rem" className="text-sky-400" />}
-              help="Controls temporary reference-frame uploads for Seedance video generations using this connection."
+              help={localizeUi(
+                "ui.connections.connectioneditor.controlsTemporaryReferenceFrameUploadsForSeedanceVideoGenerations",
+              )}
             >
               <div className="mx-2 mt-2 space-y-2 rounded-lg bg-[var(--secondary)]/35 p-2 ring-1 ring-[var(--border)]">
                 <SettingsSwitch
-                  label="Upload Seedance reference frames temporarily"
+                  label={localizeUi("ui.connections.connectioneditor.uploadSeedanceReferenceFramesTemporarily")}
                   checked={localVideoDefaults.seedance.temporaryPublicReferenceUploadEnabled}
                   onChange={(checked) => {
                     setLocalVideoDefaults(
@@ -2232,13 +2871,15 @@ export function ConnectionEditor() {
                     );
                     markDirty();
                   }}
-                  description="Uses temporary public links when Seedance needs first/last-frame references and cannot fetch local Marinara URLs."
+                  description={localizeUi(
+                    "ui.connections.connectioneditor.usesTemporaryPublicLinksWhenSeedanceNeedsFirstLast",
+                  )}
                   className="p-1"
                 />
                 {localVideoDefaults.seedance.temporaryPublicReferenceUploadEnabled && (
                   <label className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-[var(--card)]/70 px-2 py-1.5 ring-1 ring-[var(--border)]">
                     <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">
-                      Temporary link lifetime
+                      {localizeUi("ui.connections.connectioneditor.temporaryLinkLifetime")}
                     </span>
                     <select
                       value={localVideoDefaults.seedance.temporaryPublicReferenceUploadExpiry}
@@ -2267,8 +2908,7 @@ export function ConnectionEditor() {
                   </label>
                 )}
                 <p className="px-1 text-[0.55rem] leading-relaxed text-[var(--muted-foreground)]">
-                  Keep this off if you do not want local avatar or gallery reference frames uploaded outside this
-                  Marinara install.
+                  {localizeUi("ui.connections.connectioneditor.keepThisOffIfYouDoNotWantLocal")}
                 </p>
               </div>
             </FieldGroup>
@@ -2277,27 +2917,31 @@ export function ConnectionEditor() {
           {/* ── Claude (Subscription) — Fast Mode toggle ── */}
           {isClaudeSubscriptionProvider && (
             <FieldGroup
-              label="Fast Mode"
+              label={localizeUi("ui.connections.connectioneditor.fastMode")}
               icon={<Zap size="0.875rem" className="text-amber-400" />}
-              help="When enabled, asks the Claude Agent SDK to use its faster routing tier — quicker responses but the SDK may use a smaller model behind the scenes (Sonnet/Haiku) even if you've selected Opus. Currently a no-op on every modern Claude model: Opus 4.7 has no faster variant to route to, and Anthropic dropped support for downgrading on the rest. The toggle is here for the day Anthropic re-enables it. Leave off."
+              help={localizeUi("ui.connections.connectioneditor.whenEnabledAsksTheClaudeAgentSdkToUse")}
             >
               <SettingsSwitch
-                label={<span className="font-medium text-[var(--foreground)]">Use Claude Code fast-mode routing</span>}
+                label={
+                  <span className="font-medium text-[var(--foreground)]">
+                    {localizeUi("ui.connections.connectioneditor.useClaudeCodeFastModeRouting")}
+                  </span>
+                }
                 description={
                   <>
                     <span className="mt-0.5 block text-[var(--muted-foreground)]">
-                      <strong className="text-amber-400">99% of users should leave this off.</strong> Fast mode is
-                      effectively a dead feature today — Claude/Anthropic removed support for downgrading current
-                      models, and Opus 4.7 has no faster variant to route to. Turning it on does nothing useful for
-                      roleplay quality and may add overhead. The toggle exists only so we don&apos;t have to ship a new
-                      release if Anthropic re-enables it. Leave off until that happens.
+                      <strong className="text-amber-400">
+                        {localizeUi("ui.connections.connectioneditor.mostUsersShouldLeaveThisOff")}
+                      </strong>{" "}
+                      {localizeUi("ui.connections.connectioneditor.fastModeIsEffectivelyADeadFeatureTodayClaude")}
                     </span>
                     <span className="mt-1.5 flex items-start gap-1 text-[var(--muted-foreground)]">
                       <AlertCircle size="0.625rem" className="mt-px shrink-0 text-amber-400" />
                       <span>
-                        <strong className="text-amber-400">Doesn&apos;t work on Claude Opus 4.7 yet.</strong> There is
-                        no faster Opus 4.7 variant for the SDK to route to, so this toggle is a no-op when Opus 4.7 is
-                        the selected model.
+                        <strong className="text-amber-400">
+                          {localizeUi("ui.connections.connectioneditor.doesnTWorkOnClaudeOpus47Yet")}
+                        </strong>{" "}
+                        {localizeUi("ui.connections.connectioneditor.thereIsNoFasterOpus47VariantFor")}
                       </span>
                     </span>
                   </>
@@ -2306,10 +2950,11 @@ export function ConnectionEditor() {
                 onChange={async (next) => {
                   if (next) {
                     const confirmed = await showConfirmDialog({
-                      title: "YOU DON'T WANT THIS SETTING ON!",
-                      message:
-                        "Fast mode is effectively a dead feature today — Claude/Anthropic removed support for downgrading current models, and Opus 4.7 has no faster variant for the SDK to route to. Turning this on does nothing useful for roleplay quality and may add overhead. The toggle exists only so we don't have to ship a new release if Anthropic re-enables it.\n\nAre you absolutely sure you want to enable it?",
-                      confirmLabel: "Enable anyway",
+                      title: localizeUi("ui.connections.connectioneditor.youDonTWantThisSettingOn"),
+                      message: localizeUi(
+                        "ui.connections.connectioneditor.fastModeIsEffectivelyADeadFeatureTodayClaude_41c07ae",
+                      ),
+                      confirmLabel: localizeUi("ui.connections.connectioneditor.enableAnyway"),
                       cancelLabel: "Keep it off",
                       tone: "destructive",
                     });
@@ -2328,9 +2973,11 @@ export function ConnectionEditor() {
           {/* ── Embedding Model (for lorebook vectorization) ── */}
           {!isMediaGenerationProvider && (
             <FieldGroup
-              label="Semantic Search (Embeddings)"
+              label={localizeUi("ui.connections.connectioneditor.semanticSearchEmbeddings")}
               icon={<Server size="0.875rem" className="mari-chrome-accent-icon mari-accent-animated" />}
-              help="Optional. Configure the embedding source used for lorebook semantic search and memory recall."
+              help={localizeUi(
+                "ui.connections.connectioneditor.optionalConfigureTheEmbeddingSourceUsedForLorebookSemantic",
+              )}
             >
               {supportsDirectEmbeddingConfig ? (
                 <>
@@ -2341,17 +2988,18 @@ export function ConnectionEditor() {
                       markDirty();
                     }}
                     className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm font-mono ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
-                    placeholder="e.g. text-embedding-3-small"
+                    placeholder={localizeUi("ui.connections.connectioneditor.eGTextEmbedding3Small")}
                   />
                   <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                    Used for lorebook semantic search. Entries matching by meaning (not just keywords) will be included
-                    in the prompt.
+                    {localizeUi(
+                      "ui.connections.connectioneditor.usedForLorebookSemanticSearchEntriesMatchingByMeaning",
+                    )}
                   </p>
 
                   {/* Embedding Base URL Override */}
                   <div className="mt-3 pt-3 border-t border-[var(--border)]">
                     <label className="block text-xs font-medium text-[var(--muted-foreground)] mb-1.5">
-                      Embedding Endpoint URL
+                      {localizeUi("ui.connections.connectioneditor.embeddingEndpointUrl")}
                     </label>
                     <input
                       value={localEmbeddingBaseUrl}
@@ -2363,7 +3011,7 @@ export function ConnectionEditor() {
                         "w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm font-mono ring-1 placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]",
                         embeddingBaseUrlValidation.error ? "ring-[var(--destructive)]" : "ring-[var(--border)]",
                       )}
-                      placeholder="e.g. http://localhost:5002/v1"
+                      placeholder={localizeUi("ui.connections.connectioneditor.eGHttpLocalhost5002V1")}
                     />
                     {embeddingBaseUrlValidation.error && (
                       <p className="mt-1 text-[0.625rem] text-[var(--destructive)]">
@@ -2373,27 +3021,26 @@ export function ConnectionEditor() {
                     {!embeddingBaseUrlValidation.error &&
                       embeddingBaseUrlValidation.value !== localEmbeddingBaseUrl.trim() && (
                         <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                          Will save as {embeddingBaseUrlValidation.value}
+                          {localizeUi("ui.connections.connectioneditor.willSaveAs")} {embeddingBaseUrlValidation.value}
                         </p>
                       )}
                     <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                      Optional. A separate base URL for your embedding backend. Useful when running two instances of
-                      llama.cpp on different ports — one for chat, one for embeddings. Leave empty to use the
-                      connection&apos;s main URL.
+                      {localizeUi("ui.connections.connectioneditor.optionalASeparateBaseUrlForYourEmbeddingBackend")}
                     </p>
                   </div>
                 </>
               ) : (
                 <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                  This provider does not expose embeddings through Marinara. Choose a dedicated embedding connection
-                  below, such as OpenAI-compatible, Google, or the Local Model sidecar.
+                  {localizeUi(
+                    "ui.connections.connectioneditor.thisProviderDoesNotExposeEmbeddingsThroughMarinaraChoose",
+                  )}
                 </p>
               )}
 
               {/* Embedding Connection Override */}
               <div className="mt-3 pt-3 border-t border-[var(--border)]">
                 <label className="block text-xs font-medium text-[var(--muted-foreground)] mb-1.5">
-                  Embedding Connection
+                  {localizeUi("ui.connections.connectioneditor.embeddingConnection")}
                 </label>
                 <select
                   value={localEmbeddingConnectionId}
@@ -2403,28 +3050,33 @@ export function ConnectionEditor() {
                   }}
                   className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
                 >
-                  <option value="">Same as this connection</option>
+                  <option value="">{localizeUi("ui.connections.connectioneditor.sameAsThisConnection")}</option>
                   {import.meta.env.VITE_MARINARA_LITE !== "true" && (
-                    <option value={LOCAL_SIDECAR_CONNECTION_ID}>Local Model (sidecar)</option>
+                    <option value={LOCAL_SIDECAR_CONNECTION_ID}>
+                      {localizeUi("ui.connections.connectioneditor.localModelSidecar")}
+                    </option>
                   )}
                   {((allConnections ?? []) as Record<string, unknown>[])
                     .filter(
                       (c) =>
                         c.id !== connectionDetailId &&
                         c.provider !== "image_generation" &&
-                        c.provider !== "video_generation",
+                        c.provider !== "video_generation" &&
+                        c.provider !== "audio",
                     )
                     .map((c) => (
                       <option key={c.id as string} value={c.id as string}>
                         {c.name as string}
-                        {c.embeddingModel ? ` (${c.embeddingModel})` : ""}
+                        {c.embeddingModel
+                          ? localizeUi("ui.connections.connectioneditor.value1", { value1: c.embeddingModel })
+                          : ""}
                       </option>
                     ))}
                 </select>
                 <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
                   {localEmbeddingConnectionId === LOCAL_SIDECAR_CONNECTION_ID
-                    ? "Uses the built-in Local Model from the Connections panel. The sidecar starts on demand and uses the currently selected local model for embeddings."
-                    : "Use a different connection's API key and base URL for embeddings. The embedding model name above will still be used unless the chosen connection has its own embedding model configured."}
+                    ? localizeUi("ui.connections.connectioneditor.usesTheBuiltInLocalModelFromTheConnections")
+                    : localizeUi("ui.connections.connectioneditor.useADifferentConnectionSApiKeyAndBase")}
                 </p>
               </div>
             </FieldGroup>
@@ -2432,7 +3084,7 @@ export function ConnectionEditor() {
 
           {/* ── Test Section ── */}
           <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 space-y-4">
-            <h3 className="text-sm font-semibold">Connection Tests</h3>
+            <h3 className="text-sm font-semibold">{localizeUi("ui.connections.connectioneditor.connectionTests")}</h3>
             <div className="flex gap-2">
               <button
                 onClick={handleTestConnection}
@@ -2444,7 +3096,7 @@ export function ConnectionEditor() {
                 ) : (
                   <Wifi size="0.8125rem" />
                 )}
-                Test Connection
+                {localizeUi("ui.connections.connectioneditor.testConnection")}
               </button>
               {!isMediaGenerationProvider && (
                 <button
@@ -2457,7 +3109,7 @@ export function ConnectionEditor() {
                   ) : (
                     <MessageSquare size="0.8125rem" />
                   )}
-                  Send Test Message
+                  {localizeUi("ui.connections.connectioneditor.sendTestMessage")}
                 </button>
               )}
               {localProvider === "image_generation" && (
@@ -2465,14 +3117,16 @@ export function ConnectionEditor() {
                   onClick={handleTestImage}
                   disabled={testImageGeneration.isPending}
                   className="mari-chrome-accent-surface mari-accent-animated flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-xs font-medium transition-all active:scale-[0.98] disabled:opacity-50"
-                  title={dirty ? "Save first to test image generation" : undefined}
+                  title={
+                    dirty ? localizeUi("ui.connections.connectioneditor.saveFirstToTestImageGeneration") : undefined
+                  }
                 >
                   {testImageGeneration.isPending ? (
                     <Loader2 size="0.8125rem" className="animate-spin" />
                   ) : (
                     <ImageIcon size="0.8125rem" />
                   )}
-                  Test Image
+                  {localizeUi("ui.connections.connectioneditor.testImage")}
                 </button>
               )}
               {localProvider === "video_generation" && (
@@ -2480,14 +3134,16 @@ export function ConnectionEditor() {
                   onClick={handleTestVideo}
                   disabled={testVideoGeneration.isPending}
                   className="mari-chrome-accent-surface mari-accent-animated flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-xs font-medium transition-all active:scale-[0.98] disabled:opacity-50"
-                  title={dirty ? "Save first to test video generation" : undefined}
+                  title={
+                    dirty ? localizeUi("ui.connections.connectioneditor.saveFirstToTestVideoGeneration") : undefined
+                  }
                 >
                   {testVideoGeneration.isPending ? (
                     <Loader2 size="0.8125rem" className="animate-spin" />
                   ) : (
                     <Film size="0.8125rem" />
                   )}
-                  Test Video
+                  {localizeUi("ui.connections.connectioneditor.testVideo")}
                 </button>
               )}
               {isClaudeSubscriptionProvider && (
@@ -2495,71 +3151,90 @@ export function ConnectionEditor() {
                   onClick={handleDiagnoseClaudeSubscription}
                   disabled={diagnoseClaudeSubscription.isPending || !localModel}
                   className="flex items-center gap-1.5 rounded-xl bg-amber-400/10 px-4 py-2.5 text-xs font-medium text-amber-400 ring-1 ring-amber-400/20 transition-all hover:bg-amber-400/20 active:scale-[0.98] disabled:opacity-50"
-                  title="Verify which model the SDK actually bills against (catches silent fast-mode downgrades)"
+                  title={localizeUi(
+                    "ui.connections.connectioneditor.verifyWhichModelTheSdkActuallyBillsAgainstCatches",
+                  )}
                 >
                   {diagnoseClaudeSubscription.isPending ? (
                     <Loader2 size="0.8125rem" className="animate-spin" />
                   ) : (
                     <AlertCircle size="0.8125rem" />
                   )}
-                  Diagnose Model Routing
+                  {localizeUi("ui.connections.connectioneditor.diagnoseModelRouting")}
                 </button>
               )}
             </div>
 
             <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-              <strong>Test Connection</strong> verifies your API key against the provider catalog or health endpoint.
+              <strong>{localizeUi("ui.connections.connectioneditor.testConnection")}</strong>{" "}
+              {localizeUi("ui.connections.connectioneditor.verifiesYourApiKeyAgainstTheProviderCatalogOr")}
               {!isMediaGenerationProvider && (
                 <>
                   {" "}
-                  <strong>Send Test Message</strong> sends "hi" to the selected model endpoint and shows the response.
+                  <strong>{localizeUi("ui.connections.connectioneditor.sendTestMessage")}</strong>{" "}
+                  {localizeUi("ui.connections.connectioneditor.sendsHiToTheSelectedModelEndpointAndShows")}
                 </>
               )}
               {localProvider === "image_generation" && (
                 <>
                   {" "}
-                  <strong>Test Image</strong> generates a 512×512 test image (requires saving first).
+                  <strong>{localizeUi("ui.connections.connectioneditor.testImage")}</strong>{" "}
+                  {localizeUi("ui.connections.connectioneditor.generatesA10241024TestImageRequiresSavingFirst")}
                 </>
               )}
               {localProvider === "video_generation" && (
                 <>
                   {" "}
-                  <strong>Test Video</strong> generates a short MP4 test clip (requires saving first).
+                  <strong>{localizeUi("ui.connections.connectioneditor.testVideo")}</strong>{" "}
+                  {localizeUi("ui.connections.connectioneditor.generatesAShortMp4TestClipRequiresSavingFirst")}
                 </>
               )}
               {isClaudeSubscriptionProvider && (
                 <>
                   {" "}
-                  <strong>Diagnose Model Routing</strong> sends a real prompt through the Claude Agent SDK and reports
-                  which model it actually billed against. Catches silent fast-mode / cooldown downgrades where you ask
-                  for Opus and quietly get Sonnet.
+                  <strong>{localizeUi("ui.connections.connectioneditor.diagnoseModelRouting")}</strong>{" "}
+                  {localizeUi("ui.connections.connectioneditor.sendsARealPromptThroughTheClaudeAgentSdk")}
                 </>
               )}
             </p>
 
             {/* Connection test result */}
             {testResult && (
-              <TestResultCard label="Connection Test" success={testResult.success} latencyMs={testResult.latencyMs}>
+              <TestResultCard
+                label={localizeUi("ui.connections.connectioneditor.connectionTest")}
+                success={testResult.success}
+                latencyMs={testResult.latencyMs}
+              >
                 {testResult.message}
               </TestResultCard>
             )}
 
             {/* Message test result */}
             {msgResult && (
-              <TestResultCard label="Test Message" success={msgResult.success} latencyMs={msgResult.latencyMs}>
+              <TestResultCard
+                label={localizeUi("ui.connections.connectioneditor.testMessage")}
+                success={msgResult.success}
+                latencyMs={msgResult.latencyMs}
+              >
                 {msgResult.success ? (
                   <div className="mt-1.5 rounded-lg bg-[var(--secondary)] p-2.5 text-xs leading-relaxed">
                     {msgResult.response}
                   </div>
                 ) : (
-                  <span className="text-[var(--destructive)]">{msgResult.error || "No response received"}</span>
+                  <span className="text-[var(--marinara-editor-accent)]">
+                    {msgResult.error || "No response received"}
+                  </span>
                 )}
               </TestResultCard>
             )}
 
             {/* Image test result */}
             {imgTestResult && (
-              <TestResultCard label="Test Image" success={imgTestResult.success} latencyMs={imgTestResult.latencyMs}>
+              <TestResultCard
+                label={localizeUi("ui.connections.connectioneditor.testImage")}
+                success={imgTestResult.success}
+                latencyMs={imgTestResult.latencyMs}
+              >
                 {imgTestResult.success && imgTestResult.base64 && imgTestResult.mimeType ? (
                   <img
                     src={`data:${imgTestResult.mimeType};base64,${imgTestResult.base64}`}
@@ -2575,7 +3250,11 @@ export function ConnectionEditor() {
             )}
 
             {vidTestResult && (
-              <TestResultCard label="Test Video" success={vidTestResult.success} latencyMs={vidTestResult.latencyMs}>
+              <TestResultCard
+                label={localizeUi("ui.connections.connectioneditor.testVideo")}
+                success={vidTestResult.success}
+                latencyMs={vidTestResult.latencyMs}
+              >
                 {vidTestResult.success && vidTestResult.base64 && vidTestResult.mimeType ? (
                   <video
                     src={`data:${vidTestResult.mimeType};base64,${vidTestResult.base64}`}
@@ -2594,15 +3273,19 @@ export function ConnectionEditor() {
             {/* Claude (Subscription) diagnosis result */}
             {claudeDiagResult && (
               <TestResultCard
-                label="Model Routing Diagnosis"
+                label={localizeUi("ui.connections.connectioneditor.modelRoutingDiagnosis")}
                 success={claudeDiagResult.success && !claudeDiagResult.billedDifferent}
                 latencyMs={claudeDiagResult.latencyMs}
               >
                 <div className="mt-1.5 space-y-2">
                   <div className="grid grid-cols-[max-content,1fr] gap-x-3 gap-y-1 text-[0.6875rem]">
-                    <span className="text-[var(--muted-foreground)]">Requested model:</span>
+                    <span className="text-[var(--muted-foreground)]">
+                      {localizeUi("ui.connections.connectioneditor.requestedModel")}
+                    </span>
                     <span className="font-mono">{claudeDiagResult.requestedModel}</span>
-                    <span className="text-[var(--muted-foreground)]">SDK billed against:</span>
+                    <span className="text-[var(--muted-foreground)]">
+                      {localizeUi("ui.connections.connectioneditor.sdkBilledAgainst")}
+                    </span>
                     <span
                       className={cn(
                         "font-mono",
@@ -2623,13 +3306,14 @@ export function ConnectionEditor() {
                             {primary.length > 0 && (
                               <span className="flex flex-col gap-0.5">
                                 <span className="text-[0.5625rem] font-sans uppercase tracking-wide text-emerald-400/80">
-                                  Roleplay generation
+                                  {localizeUi("ui.connections.connectioneditor.roleplayGeneration")}
                                 </span>
                                 {primary.map((u) => (
                                   <span key={u.model}>
                                     {u.model}{" "}
                                     <span className="text-[var(--muted-foreground)]">
-                                      (in {u.inputTokens}, out {u.outputTokens})
+                                      {localizeUi("ui.connections.connectioneditor.in")} {u.inputTokens}
+                                      {localizeUi("ui.connections.connectioneditor.out_bd05dcc")} {u.outputTokens})
                                     </span>
                                   </span>
                                 ))}
@@ -2638,11 +3322,12 @@ export function ConnectionEditor() {
                             {secondary.length > 0 && (
                               <span className="flex flex-col gap-0.5">
                                 <span className="text-[0.5625rem] font-sans uppercase tracking-wide text-[var(--muted-foreground)]">
-                                  SDK session bookkeeping
+                                  {localizeUi("ui.connections.connectioneditor.sdkSessionBookkeeping")}
                                 </span>
                                 {secondary.map((u) => (
                                   <span key={u.model} className="text-[var(--muted-foreground)]">
-                                    {u.model} (in {u.inputTokens}, out {u.outputTokens})
+                                    {u.model} {localizeUi("ui.connections.connectioneditor.in")} {u.inputTokens}
+                                    {localizeUi("ui.connections.connectioneditor.out_bd05dcc")} {u.outputTokens})
                                   </span>
                                 ))}
                               </span>
@@ -2651,7 +3336,9 @@ export function ConnectionEditor() {
                         );
                       })()}
                     </span>
-                    <span className="text-[var(--muted-foreground)]">Fast-mode state:</span>
+                    <span className="text-[var(--muted-foreground)]">
+                      {localizeUi("ui.connections.connectioneditor.fastModeState")}
+                    </span>
                     <span
                       className={cn(
                         "font-mono",
@@ -2665,27 +3352,33 @@ export function ConnectionEditor() {
                   </div>
                   {claudeDiagResult.billedDifferent && (
                     <div className="rounded-lg bg-[var(--destructive)]/10 p-2.5 text-[0.6875rem] text-[var(--destructive)] ring-1 ring-[var(--destructive)]/30">
-                      Silent downgrade detected — you asked for <strong>{claudeDiagResult.requestedModel}</strong> but
-                      the SDK billed <strong>{claudeDiagResult.modelsBilled.join(", ")}</strong>. This is usually caused
-                      by Claude Code being in <code>cooldown</code> after hitting Opus rate limits, or fast mode being
-                      toggled on in your CLI settings. Run <code>claude /model</code> in your terminal to check.
+                      {localizeUi("ui.connections.connectioneditor.silentDowngradeDetectedYouAskedFor")}{" "}
+                      <strong>{claudeDiagResult.requestedModel}</strong>{" "}
+                      {localizeUi("ui.connections.connectioneditor.butTheSdkBilled")}{" "}
+                      <strong>{claudeDiagResult.modelsBilled.join(", ")}</strong>
+                      {localizeUi("ui.connections.connectioneditor.thisIsUsuallyCausedByClaudeCodeBeingIn")}{" "}
+                      <code>{"cooldown"}</code>{" "}
+                      {localizeUi("ui.connections.connectioneditor.afterHittingOpusRateLimitsOrFastModeBeing")}{" "}
+                      <code>{"claude /model"}</code>{" "}
+                      {localizeUi("ui.connections.connectioneditor.inYourTerminalToCheck")}
                     </div>
                   )}
                   {claudeDiagResult.modelUsageDetail.some((u) => u.model !== claudeDiagResult.requestedModel) && (
                     <div className="rounded-lg bg-[var(--secondary)]/50 p-2.5 text-[0.6875rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)]">
-                      <strong className="text-[var(--foreground)]">Why is Haiku in the list?</strong> The Claude Agent
-                      SDK runs a <code>UserPromptSubmit</code> hook on every call that uses its small/fast model (Haiku)
-                      to auto-generate a session title and optional context for the main model. This is Claude Code
-                      session bookkeeping — it&apos;s organic to the subscription path, can&apos;t be cleanly disabled,
-                      and doesn&apos;t serve any of your roleplay output. Your actual response always comes from the
-                      model labeled <em>Roleplay generation</em> above. The Haiku tagalong adds only a few output tokens
-                      per turn and a tiny slice of quota.
+                      <strong className="text-[var(--foreground)]">
+                        {localizeUi("ui.connections.connectioneditor.whyIsHaikuInTheList")}
+                      </strong>{" "}
+                      {localizeUi("ui.connections.connectioneditor.theClaudeAgentSdkRunsA")}{" "}
+                      <code>{"UserPromptSubmit"}</code>{" "}
+                      {localizeUi("ui.connections.connectioneditor.hookOnEveryCallThatUsesItsSmallFast")}{" "}
+                      <em>{localizeUi("ui.connections.connectioneditor.roleplayGeneration")}</em>{" "}
+                      {localizeUi("ui.connections.connectioneditor.aboveTheHaikuTagalongAddsOnlyAFewOutput")}
                     </div>
                   )}
                   {claudeDiagResult.response && (
                     <div className="rounded-lg bg-[var(--secondary)] p-2.5 ring-1 ring-[var(--border)]">
                       <div className="text-[0.5625rem] font-sans uppercase tracking-wide text-[var(--muted-foreground)]">
-                        Model Self Identifies As
+                        {localizeUi("ui.connections.connectioneditor.modelSelfIdentifiesAs")}
                       </div>
                       <div className="mt-0.5 text-sm font-semibold text-[var(--foreground)]">
                         {claudeDiagResult.response}
@@ -2745,6 +3438,7 @@ function TestResultCard({
   latencyMs: number;
   children: React.ReactNode;
 }) {
+  const { t: localizeUi } = useUiTranslation();
   return (
     <div
       className={cn(
@@ -2759,9 +3453,15 @@ function TestResultCard({
           <AlertCircle size="0.8125rem" className="text-[var(--destructive)]" />
         )}
         <span className={success ? "text-emerald-400" : "text-[var(--destructive)]"}>
-          {label}: {success ? "Success" : "Failed"}
+          {label}:{" "}
+          {success
+            ? localizeUi("ui.connections.testresultcard.success")
+            : localizeUi("ui.connections.testresultcard.failed")}
         </span>
-        <span className="ml-auto text-[0.625rem] text-[var(--muted-foreground)]">{latencyMs}ms</span>
+        <span className="ml-auto text-[0.625rem] text-[var(--muted-foreground)]">
+          {latencyMs}
+          {localizeUi("ui.connections.testresultcard.ms")}
+        </span>
       </div>
       <div className="mt-1 whitespace-pre-wrap break-words text-[0.6875rem] text-[var(--foreground)]">{children}</div>
     </div>
@@ -2774,6 +3474,7 @@ function ImageGenerationDefaultsPanel({
   source,
   value,
   styleProfiles,
+  remoteLoras,
   expanded,
   onExpandedChange,
   onChange,
@@ -2784,11 +3485,20 @@ function ImageGenerationDefaultsPanel({
   source?: string | null;
   value: ImageGenerationDefaultsProfile;
   styleProfiles: ImageStyleProfileSettings;
+  remoteLoras: RemoteConnectionModel[];
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
-  onChange: (next: ImageGenerationDefaultsProfile) => void;
+  onChange: (
+    next:
+      | ImageGenerationDefaultsProfile
+      | ((current: ImageGenerationDefaultsProfile) => ImageGenerationDefaultsProfile),
+  ) => void;
   onReset: () => void;
 }) {
+  const { t: localizeUi } = useUiTranslation();
+  const activeServiceRef = useRef(service);
+  const novelAiStylePlateInputRef = useRef<HTMLInputElement>(null);
+  activeServiceRef.current = service;
   const updateSeed = (seed: number) => {
     onChange({ ...value, seed });
   };
@@ -2829,42 +3539,47 @@ function ImageGenerationDefaultsPanel({
     });
   };
 
-  const handleNovelAiStylePlateUpload = (event: ChangeEvent<HTMLInputElement>) => {
+  const handleNovelAiStylePlateUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
     const file = input.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) {
-      toast.error("Choose an image file for the NovelAI style plate.");
+      toast.error(localizeUi("ui.connections.imagegenerationdefaultspanel.chooseAnImageFileForTheNovelaiStylePlate"));
       input.value = "";
       return;
     }
     if (file.size > 10 * 1024 * 1024) {
-      toast.error("The NovelAI style plate must be 10 MB or smaller.");
+      toast.error(localizeUi("ui.connections.imagegenerationdefaultspanel.theNovelaiStylePlateMustBe10MbOr"));
       input.value = "";
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") {
-        updateNovelAi({ styleReferenceImage: reader.result });
-      } else {
-        toast.error("The NovelAI style plate could not be read.");
-      }
+    try {
+      const prepared = await prepareImageAttachment(file, file.name);
+      if (activeServiceRef.current !== "novelai") return;
+      onChange((current) => {
+        const currentNovelAi = current.novelai ?? createDefaultImageGenerationProfile("novelai").novelai!;
+        return {
+          ...current,
+          service: "novelai",
+          novelai: { ...currentNovelAi, styleReferenceImage: prepared.data },
+        };
+      });
+    } catch (error) {
+      console.error("[ConnectionEditor] Failed to prepare NovelAI style plate", error);
+      toast.error(localizeUi("ui.connections.imagegenerationdefaultspanel.theNovelaiStylePlateCouldNotBeRead"));
+    } finally {
       input.value = "";
-    };
-    reader.onerror = () => {
-      toast.error("The NovelAI style plate could not be read.");
-      input.value = "";
-    };
-    reader.readAsDataURL(file);
+    }
   };
 
   return (
     <FieldGroup
-      label="Local Image Defaults"
+      label={localizeUi("ui.connections.imagegenerationdefaultspanel.localImageDefaults")}
       icon={<SlidersHorizontal size="0.875rem" className="text-sky-400" />}
-      help="Connection-scoped defaults for local Stable Diffusion backends. These only apply when this image generation connection is selected for a generation."
+      help={localizeUi(
+        "ui.connections.imagegenerationdefaultspanel.connectionScopedDefaultsForLocalStableDiffusionBackendsThese",
+      )}
     >
       <div className="rounded-xl bg-[var(--secondary)]/40 ring-1 ring-[var(--border)]">
         <button
@@ -2875,13 +3590,15 @@ function ImageGenerationDefaultsPanel({
           <div className="min-w-0">
             <div className="text-xs font-medium text-[var(--foreground)]">
               {service === "comfyui"
-                ? "ComfyUI generation setup"
+                ? localizeUi("ui.connections.imagegenerationdefaultspanel.comfyuiGenerationSetup")
                 : service === "novelai"
-                  ? "NovelAI generation setup"
-                  : "AUTOMATIC1111 / Forge setup"}
+                  ? localizeUi("ui.connections.imagegenerationdefaultspanel.novelaiGenerationSetup")
+                  : localizeUi("ui.connections.imagegenerationdefaultspanel.automatic1111ForgeSetup")}
             </div>
             <p className="mt-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
-              Prompt prefixes, sampler, scheduler, steps, guidance, seed, clip skip, and denoise.
+              {localizeUi(
+                "ui.connections.imagegenerationdefaultspanel.promptPrefixesSamplerSchedulerStepsGuidanceSeedClipSkip",
+              )}
             </p>
           </div>
           <ChevronDown
@@ -2894,7 +3611,7 @@ function ImageGenerationDefaultsPanel({
           <div className="space-y-4 border-t border-[var(--border)] p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-                Seed -1 keeps generation random. Any non-negative seed is reused exactly for this connection.
+                {localizeUi("ui.connections.imagegenerationdefaultspanel.seed1KeepsGenerationRandomAnyNonNegativeSeed")}
               </p>
               <button
                 type="button"
@@ -2902,22 +3619,30 @@ function ImageGenerationDefaultsPanel({
                 className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--card)] px-2.5 py-1.5 text-[0.625rem] font-medium text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
               >
                 <RotateCcw size="0.6875rem" />
-                Reset
+                {localizeUi("ui.connections.imagegenerationdefaultspanel.reset")}
               </button>
             </div>
 
             <div className="grid gap-2 sm:grid-cols-2">
-              <NumberSetting label="Seed" value={value.seed} min={-1} max={4_294_967_295} onCommit={updateSeed} />
+              <NumberSetting
+                label={localizeUi("ui.connections.imagegenerationdefaultspanel.seed")}
+                value={value.seed}
+                min={-1}
+                max={4_294_967_295}
+                onCommit={updateSeed}
+              />
               <label className="flex flex-col gap-1 rounded-lg bg-[var(--card)] px-3 py-2 ring-1 ring-[var(--border)]">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Style Profile</span>
+                  <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">
+                    {localizeUi("ui.connections.imagegenerationdefaultspanel.styleProfile")}
+                  </span>
                   {suggestedStyleProfile && suggestedStyleProfile.id !== value.styleProfileId && (
                     <button
                       type="button"
                       onClick={() => updateStyleProfile(suggestedStyleProfile.id)}
                       className="rounded-md bg-[var(--secondary)] px-1.5 py-0.5 text-[0.55rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
                     >
-                      Use {suggestedStyleProfile.name}
+                      {localizeUi("ui.connections.imagegenerationdefaultspanel.use")} {suggestedStyleProfile.name}
                     </button>
                   )}
                 </div>
@@ -2926,7 +3651,7 @@ function ImageGenerationDefaultsPanel({
                   onChange={(event) => updateStyleProfile(event.target.value)}
                   className="rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2 py-1.5 text-xs text-[var(--foreground)]"
                 >
-                  <option value="">Use global default</option>
+                  <option value="">{localizeUi("ui.connections.imagegenerationdefaultspanel.useGlobalDefault")}</option>
                   {styleProfiles.profiles.map((profile) => (
                     <option key={profile.id} value={profile.id}>
                       {profile.name}
@@ -2935,21 +3660,22 @@ function ImageGenerationDefaultsPanel({
                 </select>
                 {suggestedStyleProfile && (
                   <span className="text-[0.55rem] text-[var(--muted-foreground)]">
-                    Suggested from model/source: {suggestedStyleProfile.name}
+                    {localizeUi("ui.connections.imagegenerationdefaultspanel.suggestedFromModelSource")}{" "}
+                    {suggestedStyleProfile.name}
                   </span>
                 )}
               </label>
               {service === "automatic1111" ? (
                 <>
                   <NumberSetting
-                    label="Steps"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.steps")}
                     value={automatic1111.steps}
                     min={1}
                     max={150}
                     onCommit={(steps) => updateAutomatic1111({ steps })}
                   />
                   <NumberSetting
-                    label="CFG Scale"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.cfgScale")}
                     value={automatic1111.cfgScale}
                     min={0}
                     max={30}
@@ -2957,14 +3683,14 @@ function ImageGenerationDefaultsPanel({
                     onCommit={(cfgScale) => updateAutomatic1111({ cfgScale })}
                   />
                   <NumberSetting
-                    label="Clip Skip"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.clipSkip")}
                     value={automatic1111.clipSkip ?? 0}
                     min={0}
                     max={12}
                     onCommit={(clipSkip) => updateAutomatic1111({ clipSkip: clipSkip > 0 ? clipSkip : null })}
                   />
                   <NumberSetting
-                    label="Img2Img Denoise"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.img2imgDenoise")}
                     value={automatic1111.denoisingStrength}
                     min={0}
                     max={1}
@@ -2975,14 +3701,14 @@ function ImageGenerationDefaultsPanel({
               ) : service === "comfyui" ? (
                 <>
                   <NumberSetting
-                    label="Steps"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.steps")}
                     value={comfyui.steps}
                     min={1}
                     max={150}
                     onCommit={(steps) => updateComfyUi({ steps })}
                   />
                   <NumberSetting
-                    label="CFG Scale"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.cfgScale")}
                     value={comfyui.cfgScale}
                     min={0}
                     max={30}
@@ -2990,7 +3716,7 @@ function ImageGenerationDefaultsPanel({
                     onCommit={(cfgScale) => updateComfyUi({ cfgScale })}
                   />
                   <NumberSetting
-                    label="Denoise"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.denoise")}
                     value={comfyui.denoisingStrength}
                     min={0}
                     max={1}
@@ -2998,7 +3724,7 @@ function ImageGenerationDefaultsPanel({
                     onCommit={(denoisingStrength) => updateComfyUi({ denoisingStrength })}
                   />
                   <NumberSetting
-                    label="Clip Skip"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.clipSkip")}
                     value={comfyui.clipSkip ?? 0}
                     min={0}
                     max={12}
@@ -3008,14 +3734,14 @@ function ImageGenerationDefaultsPanel({
               ) : (
                 <>
                   <NumberSetting
-                    label="Steps"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.steps")}
                     value={novelai.steps}
                     min={1}
                     max={150}
                     onCommit={(steps) => updateNovelAi({ steps })}
                   />
                   <NumberSetting
-                    label="Prompt Guidance"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.promptGuidance")}
                     value={novelai.promptGuidance}
                     min={0}
                     max={30}
@@ -3023,7 +3749,7 @@ function ImageGenerationDefaultsPanel({
                     onCommit={(promptGuidance) => updateNovelAi({ promptGuidance })}
                   />
                   <NumberSetting
-                    label="Guidance Rescale"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.guidanceRescale")}
                     value={novelai.promptGuidanceRescale}
                     min={0}
                     max={1}
@@ -3031,7 +3757,7 @@ function ImageGenerationDefaultsPanel({
                     onCommit={(promptGuidanceRescale) => updateNovelAi({ promptGuidanceRescale })}
                   />
                   <NumberSetting
-                    label="UC Preset"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.ucPreset")}
                     value={novelai.undesiredContentPreset}
                     min={0}
                     max={4}
@@ -3044,33 +3770,33 @@ function ImageGenerationDefaultsPanel({
             {service === "automatic1111" ? (
               <>
                 <TextSetting
-                  label="Prompt Prefix"
+                  label={localizeUi("ui.connections.imagegenerationdefaultspanel.promptPrefix")}
                   value={automatic1111.promptPrefix}
                   onChange={(promptPrefix) => updateAutomatic1111({ promptPrefix })}
-                  placeholder="e.g. masterpiece, high quality"
+                  placeholder={localizeUi("ui.connections.imagegenerationdefaultspanel.eGMasterpieceHighQuality")}
                 />
                 <TextSetting
-                  label="Negative Prefix"
+                  label={localizeUi("ui.connections.imagegenerationdefaultspanel.negativePrefix")}
                   value={automatic1111.negativePromptPrefix}
                   onChange={(negativePromptPrefix) => updateAutomatic1111({ negativePromptPrefix })}
-                  placeholder="e.g. low quality, blurry"
+                  placeholder={localizeUi("ui.connections.imagegenerationdefaultspanel.eGLowQualityBlurry")}
                 />
                 <div className="grid gap-2 sm:grid-cols-2">
                   <ChoiceSetting
-                    label="Sampler"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.sampler")}
                     value={automatic1111.sampler}
                     options={SD_WEBUI_SAMPLER_OPTIONS}
                     onChange={(sampler) => updateAutomatic1111({ sampler })}
                   />
                   <ChoiceSetting
-                    label="Scheduler"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.scheduler")}
                     value={automatic1111.scheduler}
                     options={SD_WEBUI_SCHEDULER_OPTIONS}
                     onChange={(scheduler) => updateAutomatic1111({ scheduler })}
                   />
                 </div>
                 <SettingsCheckbox
-                  label="Restore faces"
+                  label={localizeUi("ui.connections.imagegenerationdefaultspanel.restoreFaces")}
                   checked={automatic1111.restoreFaces}
                   onChange={(checked) => updateAutomatic1111({ restoreFaces: checked })}
                   className="bg-[var(--card)] px-3 py-2 ring-1 ring-[var(--border)]"
@@ -3080,76 +3806,88 @@ function ImageGenerationDefaultsPanel({
             ) : service === "comfyui" ? (
               <>
                 <TextSetting
-                  label="Prompt Prefix"
+                  label={localizeUi("ui.connections.imagegenerationdefaultspanel.promptPrefix")}
                   value={comfyui.promptPrefix}
                   onChange={(promptPrefix) => updateComfyUi({ promptPrefix })}
-                  placeholder="e.g. masterpiece, high quality"
+                  placeholder={localizeUi("ui.connections.imagegenerationdefaultspanel.eGMasterpieceHighQuality")}
                 />
                 <TextSetting
-                  label="Negative Prefix"
+                  label={localizeUi("ui.connections.imagegenerationdefaultspanel.negativePrefix")}
                   value={comfyui.negativePromptPrefix}
                   onChange={(negativePromptPrefix) => updateComfyUi({ negativePromptPrefix })}
-                  placeholder="e.g. low quality, blurry"
+                  placeholder={localizeUi("ui.connections.imagegenerationdefaultspanel.eGLowQualityBlurry")}
                 />
                 <div className="grid gap-2 sm:grid-cols-2">
                   <ChoiceSetting
-                    label="Sampler"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.sampler")}
                     value={comfyui.sampler}
                     options={COMFYUI_SAMPLER_OPTIONS}
                     onChange={(sampler) => updateComfyUi({ sampler })}
                   />
                   <ChoiceSetting
-                    label="Scheduler"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.scheduler")}
                     value={comfyui.scheduler}
                     options={COMFYUI_SCHEDULER_OPTIONS}
                     onChange={(scheduler) => updateComfyUi({ scheduler })}
                   />
                 </div>
                 <SettingsCheckbox
-                  label="Upload a 1x1 placeholder when no reference image is provided"
-                  description="Custom workflows using %reference_image% or %reference_image_name% receive a tiny PNG instead of the raw placeholder text."
+                  label={localizeUi(
+                    "ui.connections.imagegenerationdefaultspanel.uploadA1x1PlaceholderWhenNoReferenceImageIs",
+                  )}
+                  description={localizeUi(
+                    "ui.connections.imagegenerationdefaultspanel.customWorkflowsUsingReferenceImageOrReferenceImageName",
+                  )}
                   checked={comfyui.uploadPlaceholderOnMissingReference}
                   onChange={(checked) => updateComfyUi({ uploadPlaceholderOnMissingReference: checked })}
                   className="bg-[var(--card)] px-3 py-2 ring-1 ring-[var(--border)]"
                   labelClassName="text-[var(--foreground)]"
                 />
+                <ComfyUiLoraSettings
+                  idPrefix="image-comfyui"
+                  value={comfyui.loras}
+                  availableLoras={remoteLoras}
+                  onChange={(loras) => updateComfyUi({ loras })}
+                />
                 <p className="text-[0.55rem] text-[var(--muted-foreground)]">
-                  Custom ComfyUI workflows can use %steps%, %cfg%, %sampler%, %scheduler%, %denoise%, %clip_skip%,
-                  %reference_image% / %reference_image_01%-%reference_image_04%, and %reference_image_name% /
-                  %reference_image_name_01%-%reference_image_name_04% placeholders.
+                  {localizeUi(
+                    "ui.connections.imagegenerationdefaultspanel.customComfyuiWorkflowsCanUseStepsCfgSamplerScheduler",
+                  )}
                 </p>
               </>
             ) : (
               <>
                 <TextSetting
-                  label="Prompt Prefix"
+                  label={localizeUi("ui.connections.imagegenerationdefaultspanel.promptPrefix")}
                   value={novelai.promptPrefix}
                   onChange={(promptPrefix) => updateNovelAi({ promptPrefix })}
-                  placeholder="e.g. masterpiece, best quality"
+                  placeholder={localizeUi("ui.connections.imagegenerationdefaultspanel.eGMasterpieceBestQuality")}
                 />
                 <TextSetting
-                  label="Negative Prefix"
+                  label={localizeUi("ui.connections.imagegenerationdefaultspanel.negativePrefix")}
                   value={novelai.negativePromptPrefix}
                   onChange={(negativePromptPrefix) => updateNovelAi({ negativePromptPrefix })}
-                  placeholder="e.g. low quality, blurry"
+                  placeholder={localizeUi("ui.connections.imagegenerationdefaultspanel.eGLowQualityBlurry")}
                 />
                 <div className="grid gap-2 sm:grid-cols-2">
                   <ChoiceSetting
-                    label="Sampler"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.sampler")}
                     value={novelai.sampler}
                     options={NOVELAI_SAMPLER_OPTIONS}
                     onChange={(sampler) => updateNovelAi({ sampler })}
                   />
                   <ChoiceSetting
-                    label="Noise Schedule"
+                    label={localizeUi("ui.connections.imagegenerationdefaultspanel.noiseSchedule")}
                     value={novelai.noiseSchedule}
                     options={NOVELAI_NOISE_SCHEDULE_OPTIONS}
                     onChange={(noiseSchedule) => updateNovelAi({ noiseSchedule })}
                   />
                 </div>
                 <SettingsCheckbox
-                  label="Choose resolution from character count"
-                  description="Uses portrait for one subject, square for two, and landscape for three or more. Free-form prompts without a detectable count keep the requested size."
+                  label={localizeUi("ui.connections.imagegenerationdefaultspanel.chooseResolutionFromCharacterCount")}
+                  description={localizeUi(
+                    "ui.connections.imagegenerationdefaultspanel.usesPortraitForOneSubjectSquareForTwoAnd",
+                  )}
                   checked={novelai.dynamicResolutionBySubjectCount}
                   onChange={(checked) => updateNovelAi({ dynamicResolutionBySubjectCount: checked })}
                   className="bg-[var(--card)] px-3 py-2 ring-1 ring-[var(--border)]"
@@ -3158,29 +3896,41 @@ function ImageGenerationDefaultsPanel({
                 <div className="space-y-2 rounded-lg bg-[var(--card)] px-3 py-2 ring-1 ring-[var(--border)]">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <p className="text-[0.625rem] font-medium text-[var(--foreground)]">NovelAI V4.5 style plate</p>
+                      <p className="text-[0.625rem] font-medium text-[var(--foreground)]">
+                        {localizeUi("ui.connections.imagegenerationdefaultspanel.novelaiV45StylePlate")}
+                      </p>
                       <p className="text-[0.55rem] text-[var(--muted-foreground)]">
-                        A persistent style-only reference applied first to every V4.5 generation, including scenes without characters.
+                        {localizeUi(
+                          "ui.connections.imagegenerationdefaultspanel.aPersistentStyleOnlyReferenceAppliedFirstToEvery",
+                        )}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--secondary)] px-2.5 py-1.5 text-[0.625rem] font-medium text-[var(--foreground)] ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--accent)]">
+                      <button
+                        type="button"
+                        onClick={() => novelAiStylePlateInputRef.current?.click()}
+                        className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--secondary)] px-2.5 py-1.5 text-[0.625rem] font-medium text-[var(--foreground)] ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--accent)]"
+                      >
                         <Upload size="0.6875rem" />
-                        {novelai.styleReferenceImage ? "Replace" : "Choose image"}
-                        <input
-                          type="file"
-                          accept="image/png,image/jpeg,image/webp"
-                          className="sr-only"
-                          onChange={handleNovelAiStylePlateUpload}
-                        />
-                      </label>
+                        {novelai.styleReferenceImage
+                          ? localizeUi("settings.notifications.customSound.actions.replace")
+                          : localizeUi("ui.connections.imagegenerationdefaultspanel.chooseImage")}
+                      </button>
+                      <input
+                        ref={novelAiStylePlateInputRef}
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        className="sr-only"
+                        tabIndex={-1}
+                        onChange={handleNovelAiStylePlateUpload}
+                      />
                       {novelai.styleReferenceImage && (
                         <button
                           type="button"
                           onClick={() => updateNovelAi({ styleReferenceImage: null })}
                           className="rounded-lg bg-[var(--secondary)] px-2.5 py-1.5 text-[0.625rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
                         >
-                          Remove
+                          {localizeUi("settings.notifications.customSound.actions.remove")}
                         </button>
                       )}
                     </div>
@@ -3188,13 +3938,13 @@ function ImageGenerationDefaultsPanel({
                   {novelai.styleReferenceImage && (
                     <img
                       src={novelai.styleReferenceImage}
-                      alt="NovelAI style plate preview"
+                      alt={localizeUi("ui.connections.imagegenerationdefaultspanel.novelaiStylePlatePreview")}
                       className="h-24 w-full rounded-md object-cover ring-1 ring-[var(--border)]"
                     />
                   )}
                   <div className="grid gap-2 sm:grid-cols-2">
                     <NumberSetting
-                      label="Style Strength"
+                      label={localizeUi("ui.connections.imagegenerationdefaultspanel.styleStrength")}
                       value={novelai.styleReferenceStrength}
                       min={0}
                       max={1}
@@ -3202,7 +3952,7 @@ function ImageGenerationDefaultsPanel({
                       onCommit={(styleReferenceStrength) => updateNovelAi({ styleReferenceStrength })}
                     />
                     <NumberSetting
-                      label="Style Fidelity"
+                      label={localizeUi("ui.connections.imagegenerationdefaultspanel.styleFidelity")}
                       value={novelai.styleReferenceFidelity}
                       min={0}
                       max={1}
@@ -3212,8 +3962,9 @@ function ImageGenerationDefaultsPanel({
                   </div>
                 </div>
                 <p className="text-[0.55rem] text-[var(--muted-foreground)]">
-                  These values are sent with native NovelAI requests and embedded in generated PNG metadata for
-                  troubleshooting.
+                  {localizeUi(
+                    "ui.connections.imagegenerationdefaultspanel.theseValuesAreSentWithNativeNovelaiRequestsAnd",
+                  )}
                 </p>
               </>
             )}
@@ -3251,21 +4002,30 @@ function TextSetting({
 
 function VideoGenerationDefaultsPanel({
   value,
+  source,
+  remoteLoras,
   expanded,
   onExpandedChange,
   onChange,
   onReset,
 }: {
   value: VideoGenerationDefaultsProfile;
+  source: string;
+  remoteLoras: RemoteConnectionModel[];
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   onChange: (next: VideoGenerationDefaultsProfile) => void;
   onReset: () => void;
 }) {
+  const { t: localizeUi } = useUiTranslation();
+  const { t } = useTranslation();
+  const isNanoGpt = source === "nanogpt";
   const service =
     value.service === "xai" ||
     value.service === "openrouter" ||
+    value.service === "atlas" ||
     value.service === "seedance" ||
+    value.service === "comfyui" ||
     value.service === "google_veo"
       ? value.service
       : "gemini_omni";
@@ -3276,19 +4036,29 @@ function VideoGenerationDefaultsPanel({
         ? `${value.googleVeo.durationSeconds}s, ${value.googleVeo.aspectRatio}, ${value.googleVeo.resolution}`
         : service === "openrouter"
           ? `${value.openrouter.durationSeconds}s, ${value.openrouter.aspectRatio}, ${value.openrouter.resolution}`
-          : service === "seedance"
-            ? `${value.seedance.durationSeconds}s, ${value.seedance.aspectRatio}, ${value.seedance.resolution}`
-            : `${value.geminiOmni.durationSeconds}s, ${value.geminiOmni.aspectRatio}`;
+          : service === "atlas"
+            ? `${value.atlas.durationSeconds}s, ${value.atlas.aspectRatio}, ${value.atlas.resolution}`
+            : service === "seedance"
+              ? `${value.seedance.durationSeconds}s, ${value.seedance.aspectRatio}, ${value.seedance.resolution}`
+              : service === "comfyui"
+                ? `${value.comfyui.durationSeconds}s, ${value.comfyui.fps} FPS, ${value.comfyui.aspectRatio}, ${value.comfyui.resolution}`
+                : `${value.geminiOmni.durationSeconds}s, ${value.geminiOmni.aspectRatio}`;
   const serviceLabel =
     service === "xai"
       ? "xAI Imagine"
       : service === "google_veo"
         ? "Google AI Studio Veo"
         : service === "openrouter"
-          ? "OpenRouter Video"
-          : service === "seedance"
-            ? "Seedance 2.0"
-            : "Google AI Studio Gemini Omni";
+          ? isNanoGpt
+            ? "NanoGPT"
+            : "OpenRouter Video"
+          : service === "atlas"
+            ? t("connections.mediaSources.atlas.name")
+            : service === "seedance"
+              ? "Seedance 2.0"
+              : service === "comfyui"
+                ? "ComfyUI"
+                : "Google AI Studio Gemini Omni";
 
   const updateGeminiOmni = (patch: Partial<VideoGenerationDefaultsProfile["geminiOmni"]>) => {
     onChange({
@@ -3318,6 +4088,13 @@ function VideoGenerationDefaultsPanel({
       openrouter: { ...value.openrouter, ...patch },
     });
   };
+  const updateAtlas = (patch: Partial<VideoGenerationDefaultsProfile["atlas"]>) => {
+    onChange({
+      ...value,
+      service: "atlas",
+      atlas: { ...value.atlas, ...patch },
+    });
+  };
   const updateSeedance = (patch: Partial<VideoGenerationDefaultsProfile["seedance"]>) => {
     onChange({
       ...value,
@@ -3325,21 +4102,46 @@ function VideoGenerationDefaultsPanel({
       seedance: { ...value.seedance, ...patch },
     });
   };
+  const updateComfyUi = (patch: Partial<VideoGenerationDefaultsProfile["comfyui"]>) => {
+    onChange({
+      ...value,
+      service: "comfyui",
+      comfyui: { ...value.comfyui, ...patch },
+    });
+  };
 
   return (
     <FieldGroup
-      label="Video Defaults"
+      label={localizeUi("ui.connections.videogenerationdefaultspanel.videoDefaults")}
       icon={<SlidersHorizontal size="0.875rem" className="text-sky-400" />}
       help={
         service === "xai"
-          ? "Connection-scoped defaults for xAI scene video generation."
+          ? localizeUi("ui.connections.videogenerationdefaultspanel.connectionScopedDefaultsForXaiSceneVideoGeneration")
           : service === "google_veo"
-            ? "Connection-scoped defaults for Google AI Studio Veo video generation."
+            ? localizeUi(
+                "ui.connections.videogenerationdefaultspanel.connectionScopedDefaultsForGoogleAiStudioVeoVideo",
+              )
             : service === "openrouter"
-              ? "Connection-scoped defaults for OpenRouter asynchronous video generation."
-              : service === "seedance"
-                ? "Connection-scoped defaults for Seedance 2.0 asynchronous video generation."
-                : "Connection-scoped defaults for scene video generation. Duration is rendered into the Omni prompt."
+              ? isNanoGpt
+                ? localizeUi(
+                    "ui.connections.videogenerationdefaultspanel.connectionScopedDefaultsForNanogptAsynchronousVideoGeneration",
+                  )
+                : localizeUi(
+                    "ui.connections.videogenerationdefaultspanel.connectionScopedDefaultsForOpenrouterAsynchronousVideoGeneration",
+                  )
+              : service === "atlas"
+                ? t("connections.mediaSources.atlas.videoDefaultsHelp")
+                : service === "seedance"
+                  ? localizeUi(
+                      "ui.connections.videogenerationdefaultspanel.connectionScopedDefaultsForSeedance20AsynchronousVideo",
+                    )
+                  : service === "comfyui"
+                    ? localizeUi(
+                        "ui.connections.videogenerationdefaultspanel.connectionScopedDimensionsAndDurationForLocalComfyuiVideo",
+                      )
+                    : localizeUi(
+                        "ui.connections.videogenerationdefaultspanel.connectionScopedDefaultsForSceneVideoGenerationDurationIs",
+                      )
       }
     >
       <div className="rounded-xl bg-[var(--secondary)]/40 ring-1 ring-[var(--border)]">
@@ -3349,7 +4151,11 @@ function VideoGenerationDefaultsPanel({
           className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-colors hover:bg-[var(--accent)]"
         >
           <div className="min-w-0">
-            <div className="text-xs font-medium text-[var(--foreground)]">{serviceLabel} setup</div>
+            <div className="text-xs font-medium text-[var(--foreground)]">
+              {service === "atlas"
+                ? t("connections.mediaSources.atlas.videoSetupLabel")
+                : localizeUi("ui.connections.videogenerationdefaultspanel.value1Setup", { value1: serviceLabel })}
+            </div>
             <div className="text-[0.625rem] text-[var(--muted-foreground)]">{summary}</div>
           </div>
           <ChevronDown
@@ -3367,23 +4173,32 @@ function VideoGenerationDefaultsPanel({
                 className="flex items-center gap-1.5 rounded-lg bg-[var(--card)] px-2.5 py-1.5 text-[0.625rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:text-[var(--foreground)]"
               >
                 <RotateCcw size="0.6875rem" />
-                Reset
+                {localizeUi("ui.connections.imagegenerationdefaultspanel.reset")}
               </button>
             </div>
 
-            {service === "xai" || service === "google_veo" || service === "openrouter" || service === "seedance" ? (
+            {service === "xai" ||
+            service === "google_veo" ||
+            service === "openrouter" ||
+            service === "atlas" ||
+            service === "seedance" ||
+            service === "comfyui" ? (
               <>
-                <div className="grid gap-2 sm:grid-cols-3">
+                <div className={cn("grid gap-2", service === "comfyui" ? "sm:grid-cols-2" : "sm:grid-cols-3")}>
                   <NumberSetting
-                    label="Duration Seconds"
+                    label={localizeUi("ui.connections.videogenerationdefaultspanel.durationSeconds")}
                     value={
                       service === "xai"
                         ? value.xai.durationSeconds
                         : service === "google_veo"
                           ? value.googleVeo.durationSeconds
-                          : service === "seedance"
-                            ? value.seedance.durationSeconds
-                            : value.openrouter.durationSeconds
+                          : service === "atlas"
+                            ? value.atlas.durationSeconds
+                            : service === "seedance"
+                              ? value.seedance.durationSeconds
+                              : service === "comfyui"
+                                ? value.comfyui.durationSeconds
+                                : value.openrouter.durationSeconds
                     }
                     min={service === "google_veo" || service === "seedance" ? 4 : 1}
                     max={service === "xai" || service === "seedance" ? 15 : service === "google_veo" ? 8 : 60}
@@ -3393,26 +4208,47 @@ function VideoGenerationDefaultsPanel({
                         updateGoogleVeo({ durationSeconds: durationSeconds <= 5 ? 4 : durationSeconds <= 7 ? 6 : 8 });
                       } else if (service === "seedance") {
                         updateSeedance({ durationSeconds });
+                      } else if (service === "atlas") {
+                        updateAtlas({ durationSeconds });
+                      } else if (service === "comfyui") {
+                        updateComfyUi({ durationSeconds });
                       } else updateOpenRouter({ durationSeconds });
                     }}
                   />
+                  {service === "comfyui" && (
+                    <NumberSetting
+                      label={localizeUi("ui.connections.videogenerationdefaultspanel.framesPerSecondFps")}
+                      value={value.comfyui.fps}
+                      min={1}
+                      max={120}
+                      onCommit={(fps) => updateComfyUi({ fps })}
+                    />
+                  )}
                   <label className="block">
-                    <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Aspect Ratio</span>
+                    <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">
+                      {localizeUi("ui.connections.videogenerationdefaultspanel.aspectRatio")}
+                    </span>
                     <select
                       value={
                         service === "xai"
                           ? value.xai.aspectRatio
                           : service === "google_veo"
                             ? value.googleVeo.aspectRatio
-                            : service === "seedance"
-                              ? value.seedance.aspectRatio
-                              : value.openrouter.aspectRatio
+                            : service === "atlas"
+                              ? value.atlas.aspectRatio
+                              : service === "seedance"
+                                ? value.seedance.aspectRatio
+                                : service === "comfyui"
+                                  ? value.comfyui.aspectRatio
+                                  : value.openrouter.aspectRatio
                       }
                       onChange={(event) => {
                         const aspectRatio = event.target.value === "9:16" ? "9:16" : "16:9";
                         if (service === "xai") updateXai({ aspectRatio });
                         else if (service === "google_veo") updateGoogleVeo({ aspectRatio });
+                        else if (service === "atlas") updateAtlas({ aspectRatio });
                         else if (service === "seedance") updateSeedance({ aspectRatio });
+                        else if (service === "comfyui") updateComfyUi({ aspectRatio });
                         else updateOpenRouter({ aspectRatio });
                       }}
                       className="mt-1 w-full rounded-lg bg-[var(--card)] px-3 py-2 text-xs ring-1 ring-[var(--border)] focus:outline-none focus:ring-sky-400/50"
@@ -3422,28 +4258,38 @@ function VideoGenerationDefaultsPanel({
                     </select>
                   </label>
                   <label className="block">
-                    <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Resolution</span>
+                    <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">
+                      {localizeUi("ui.connections.videogenerationdefaultspanel.resolution")}
+                    </span>
                     <select
                       value={
                         service === "xai"
                           ? value.xai.resolution
                           : service === "google_veo"
                             ? value.googleVeo.resolution
-                            : service === "seedance"
-                              ? value.seedance.resolution
-                              : value.openrouter.resolution
+                            : service === "atlas"
+                              ? value.atlas.resolution
+                              : service === "seedance"
+                                ? value.seedance.resolution
+                                : service === "comfyui"
+                                  ? value.comfyui.resolution
+                                  : value.openrouter.resolution
                       }
                       onChange={(event) => {
                         const resolution = event.target.value as VideoResolution;
                         if (service === "xai") updateXai({ resolution });
                         else if (service === "google_veo") updateGoogleVeo({ resolution });
+                        else if (service === "atlas") updateAtlas({ resolution });
                         else if (service === "seedance") updateSeedance({ resolution });
+                        else if (service === "comfyui") updateComfyUi({ resolution });
                         else updateOpenRouter({ resolution });
                       }}
                       className="mt-1 w-full rounded-lg bg-[var(--card)] px-3 py-2 text-xs ring-1 ring-[var(--border)] focus:outline-none focus:ring-sky-400/50"
                     >
                       {VIDEO_RESOLUTION_OPTIONS.filter(
-                        (option) => service !== "google_veo" || option.value !== "480p",
+                        (option) =>
+                          (service !== "google_veo" || option.value !== "480p") &&
+                          (service !== "comfyui" || option.value !== "1080p"),
                       ).map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
@@ -3452,27 +4298,49 @@ function VideoGenerationDefaultsPanel({
                     </select>
                   </label>
                 </div>
+                {service === "comfyui" && (
+                  <ComfyUiLoraSettings
+                    idPrefix="video-comfyui"
+                    value={value.comfyui.loras}
+                    availableLoras={remoteLoras}
+                    onChange={(loras) => updateComfyUi({ loras })}
+                  />
+                )}
                 <p className="text-[0.55rem] text-[var(--muted-foreground)]">
                   {service === "xai"
-                    ? "These values are sent to the xAI Videos API. xAI accepts 1-15 seconds for generated videos."
+                    ? localizeUi("ui.connections.videogenerationdefaultspanel.theseValuesAreSentToTheXaiVideosApi")
                     : service === "google_veo"
-                      ? "Veo accepts 4, 6, or 8 seconds. Character loop references use the avatar as the first and last frame and run at 8 seconds."
-                      : service === "seedance"
-                        ? "Seedance accepts 4-15 seconds. Reference-image jobs send matching first and last frames when the provider can fetch the reference URL."
-                        : "These values are sent to OpenRouter's asynchronous Videos API. OpenRouter model support varies, so keep the model's own limits in mind."}
+                      ? localizeUi("ui.connections.videogenerationdefaultspanel.veoAccepts46Or8SecondsCharacterLoop")
+                      : service === "atlas"
+                        ? t("connections.mediaSources.atlas.videoDefaultsNote")
+                        : service === "seedance"
+                          ? localizeUi(
+                              "ui.connections.videogenerationdefaultspanel.seedanceAccepts415SecondsReferenceImageJobsSend",
+                            )
+                          : service === "comfyui"
+                            ? localizeUi(
+                                "ui.connections.videogenerationdefaultspanel.comfyuiReceivesDimensionsDurationFpsAndFrameCount",
+                              )
+                            : localizeUi(
+                                isNanoGpt
+                                  ? "ui.connections.videogenerationdefaultspanel.theseValuesAreSentToNanogptSAsynchronousVideoApi"
+                                  : "ui.connections.videogenerationdefaultspanel.theseValuesAreSentToOpenrouterSAsynchronousVideos",
+                              )}
                 </p>
               </>
             ) : (
               <div className="grid gap-2 sm:grid-cols-2">
                 <NumberSetting
-                  label="Target Duration Seconds"
+                  label={localizeUi("ui.connections.videogenerationdefaultspanel.targetDurationSeconds")}
                   value={value.geminiOmni.durationSeconds}
                   min={1}
                   max={60}
                   onCommit={(durationSeconds) => updateGeminiOmni({ durationSeconds })}
                 />
                 <label className="block">
-                  <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Aspect Ratio</span>
+                  <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">
+                    {localizeUi("ui.connections.videogenerationdefaultspanel.aspectRatio")}
+                  </span>
                   <select
                     value={value.geminiOmni.aspectRatio}
                     onChange={(event) =>
@@ -3493,6 +4361,75 @@ function VideoGenerationDefaultsPanel({
   );
 }
 
+function ComfyUiLoraSettings({
+  idPrefix,
+  value,
+  availableLoras,
+  onChange,
+}: {
+  idPrefix: string;
+  value: ComfyUiLoraSetting[];
+  availableLoras: RemoteConnectionModel[];
+  onChange: (value: ComfyUiLoraSetting[]) => void;
+}) {
+  const { t: localizeUi } = useUiTranslation();
+  const datalistId = `${idPrefix}-lora-models`;
+  const slots = Array.from({ length: 5 }, (_, index) => value[index] ?? { model: "", strength: 1 });
+  const updateSlot = (index: number, patch: Partial<ComfyUiLoraSetting>) => {
+    const next = slots.map((slot, slotIndex) => (slotIndex === index ? { ...slot, ...patch } : slot));
+    while (next.length > 0 && !next[next.length - 1]!.model.trim()) next.pop();
+    onChange(next);
+  };
+
+  return (
+    <div className="space-y-2 rounded-lg bg-[var(--card)] px-3 py-2 ring-1 ring-[var(--border)]">
+      <div>
+        <p className="text-[0.625rem] font-medium text-[var(--foreground)]">
+          {localizeUi("ui.connections.comfyuilorasettings.loras")}
+        </p>
+        <p className="text-[0.55rem] text-[var(--muted-foreground)]">
+          {localizeUi("ui.connections.comfyuilorasettings.chooseUpToFiveLoras")}
+        </p>
+      </div>
+      <datalist id={datalistId}>
+        {availableLoras.map((lora) => (
+          <option key={lora.id} value={lora.id}>
+            {lora.name}
+          </option>
+        ))}
+      </datalist>
+      {slots.map((slot, index) => (
+        <div key={index} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem]">
+          <label className="block">
+            <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">
+              {localizeUi("ui.connections.comfyuilorasettings.loraNumber", { value1: index + 1 })}
+            </span>
+            <input
+              type="text"
+              list={datalistId}
+              value={slot.model}
+              onChange={(event) => updateSlot(index, { model: event.target.value })}
+              placeholder={localizeUi("ui.connections.comfyuilorasettings.selectOrEnterLora")}
+              className="mt-1 w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs ring-1 ring-[var(--border)] focus:outline-none focus:ring-sky-400/50"
+            />
+          </label>
+          <NumberSetting
+            label={localizeUi("ui.connections.comfyuilorasettings.strength")}
+            value={slot.strength}
+            min={COMFYUI_LORA_STRENGTH_MIN}
+            max={COMFYUI_LORA_STRENGTH_MAX}
+            integer={false}
+            onCommit={(strength) => updateSlot(index, { strength })}
+          />
+        </div>
+      ))}
+      <p className="text-[0.55rem] text-[var(--muted-foreground)]">
+        {localizeUi("ui.connections.comfyuilorasettings.workflowPlaceholders")}
+      </p>
+    </div>
+  );
+}
+
 function ChoiceSetting({
   label,
   value,
@@ -3504,6 +4441,7 @@ function ChoiceSetting({
   options: ReadonlyArray<{ value: string; label: string }>;
   onChange: (value: string) => void;
 }) {
+  const { t: localizeUi } = useUiTranslation();
   const listId = `image-default-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   return (
     <label className="block">
@@ -3513,7 +4451,7 @@ function ChoiceSetting({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         className="mt-1 w-full rounded-lg bg-[var(--card)] px-3 py-2 text-xs ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)]/60 focus:outline-none focus:ring-sky-400/50"
-        placeholder="Backend default"
+        placeholder={localizeUi("ui.connections.choicesetting.backendDefault")}
       />
       <datalist id={listId}>
         {options.map((option) => (
@@ -3593,6 +4531,18 @@ function getStoredImageGenerationDefaults(
   const root = parseDefaultParametersRoot(raw);
   if (!root[IMAGE_DEFAULTS_STORAGE_KEY]) return null;
   return normalizeImageGenerationProfile(root[IMAGE_DEFAULTS_STORAGE_KEY], service).profile;
+}
+
+function buildLanguageDefaultParameters(
+  parameters: EditableGenerationParameters,
+  imageCaptioningEnabled: boolean,
+  imageCaptioningConnectionId: string,
+): Record<string, unknown> {
+  return {
+    ...(parameters as unknown as Record<string, unknown>),
+    imageCaptioningEnabled,
+    imageCaptioningConnectionId: imageCaptioningConnectionId || null,
+  };
 }
 
 function buildImageDefaultParameters(

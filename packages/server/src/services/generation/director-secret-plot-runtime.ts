@@ -1,7 +1,4 @@
-import {
-  NARRATIVE_DIRECTOR_SECRET_PLOT_PROMPT,
-  type ChatMode,
-} from "@marinara-engine/shared";
+import { NARRATIVE_DIRECTOR_SECRET_PLOT_PROMPT, type ChatMode } from "@marinara-engine/shared";
 
 import type { ResolvedAgent } from "../agents/agent-pipeline.js";
 import { wrapContent } from "../prompt/format-engine.js";
@@ -72,6 +69,7 @@ export function shouldRunDirectorSecretPlotMaintenance(args: {
   memory: Record<string, unknown>;
   runInterval: number;
   messages: Array<{ id?: string | null; role?: string | null }>;
+  countUpcomingMessage?: boolean;
 }): boolean {
   const state = buildSecretPlotStateFromMemory(args.memory);
   const arc = normalizeSecretPlotArc(state.overarchingArc);
@@ -83,10 +81,11 @@ export function shouldRunDirectorSecretPlotMaintenance(args: {
   if (typeof lastMessageId !== "string" || !lastMessageId) return true;
   const lastIndex = args.messages.findIndex((message) => message.id === lastMessageId);
   if (lastIndex < 0) return true;
-  const assistantMessagesSince = args.messages
+  const messagesSince = args.messages
     .slice(lastIndex + 1)
-    .filter((message) => message.role === "assistant").length;
-  return assistantMessagesSince + 1 >= args.runInterval;
+    .filter((message) => message.role === "user" || message.role === "assistant").length;
+  const upcomingMessageCount = args.countUpcomingMessage === false ? 0 : 1;
+  return messagesSince + upcomingMessageCount >= args.runInterval;
 }
 
 export function formatSecretPlotSystemBlock(arcRaw: unknown, wrapFormat: "xml" | "markdown" | "none"): string {

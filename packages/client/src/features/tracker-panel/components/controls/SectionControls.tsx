@@ -3,6 +3,9 @@ import { ChevronDown, Plus } from "lucide-react";
 import { cn } from "../../../../lib/utils";
 import { TRACKER_TEXT_MICRO } from "../../lib/tracker-panel.constants";
 
+export const TRACKER_SECTION_SHELL_CLASS =
+  "relative z-10 overflow-hidden border-b border-[var(--border)] bg-[var(--tracker-panel-section-background,color-mix(in_srgb,var(--card)_5%,transparent))] shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_5%,transparent)]";
+
 export function AddRowButton({
   children,
   onClick,
@@ -169,9 +172,14 @@ export function SectionHeader({
   );
 }
 
-export function EmptySection({ children }: { children: ReactNode }) {
+export function EmptySection({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className="rounded-sm border border-dashed border-[color-mix(in_srgb,var(--tracker-inline-rule,var(--border))_38%,transparent)] px-1 py-1 text-center text-[0.6875rem] text-[color-mix(in_srgb,var(--tracker-inline-muted,var(--muted-foreground))_66%,transparent)]">
+    <div
+      className={cn(
+        "rounded-sm border border-dashed border-[color-mix(in_srgb,var(--tracker-inline-rule,var(--border))_38%,transparent)] px-1 py-1 text-center text-[0.6875rem] text-[color-mix(in_srgb,var(--tracker-inline-muted,var(--muted-foreground))_66%,transparent)]",
+        className,
+      )}
+    >
       {children}
     </div>
   );

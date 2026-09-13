@@ -2,7 +2,6 @@ import { useCallback, useRef, useState, type ChangeEvent } from "react";
 import type {
   CharacterStat,
   CustomTrackerField,
-  InventoryItem,
   PlayerStats,
   PresentCharacter,
   QuestProgress,
@@ -10,10 +9,8 @@ import type {
 } from "@marinara-engine/shared";
 import {
   characterTrackerLockPrefix,
-  inventoryItemTrackerLockPrefix,
   normalizeTrackerHiddenFields,
   removeTrackerCharacterLocks,
-  removeTrackerFieldLockPrefix,
   removeTrackerQuestLocks,
   renameTrackerFieldLockPrefix,
 } from "@marinara-engine/shared";
@@ -63,11 +60,7 @@ function findUniqueNamedIndex<T extends { name?: string }>(items: T[], item: T |
   return matches.length === 1 ? matches[0]!.index : -1;
 }
 
-function resolveIndexedMutationTarget<T extends { name?: string }>(
-  liveItems: T[],
-  renderedItems: T[],
-  index: number,
-) {
+function resolveIndexedMutationTarget<T extends { name?: string }>(liveItems: T[], renderedItems: T[], index: number) {
   const renderedItem = renderedItems[index];
   const namedIndex = findUniqueNamedIndex(liveItems, renderedItem);
   const targetIndex = namedIndex >= 0 ? namedIndex : index;
@@ -83,7 +76,9 @@ function reconcileListUpdate<T extends { name?: string }>(liveItems: T[], render
   }
 
   if (updatedItems.length === renderedItems.length - 1) {
-    const removedIndex = renderedItems.findIndex((renderedItem, index) => !shallowRecordEqual(renderedItem, updatedItems[index]));
+    const removedIndex = renderedItems.findIndex(
+      (renderedItem, index) => !shallowRecordEqual(renderedItem, updatedItems[index]),
+    );
     const fallbackIndex = removedIndex >= 0 ? removedIndex : renderedItems.length - 1;
     const { targetIndex } = resolveIndexedMutationTarget(liveItems, renderedItems, fallbackIndex);
     if (targetIndex < 0) return liveItems;
@@ -91,7 +86,9 @@ function reconcileListUpdate<T extends { name?: string }>(liveItems: T[], render
   }
 
   if (updatedItems.length === renderedItems.length) {
-    const changedIndex = updatedItems.findIndex((updatedItem, index) => !shallowRecordEqual(updatedItem, renderedItems[index]));
+    const changedIndex = updatedItems.findIndex(
+      (updatedItem, index) => !shallowRecordEqual(updatedItem, renderedItems[index]),
+    );
     if (changedIndex < 0) return liveItems;
     const { renderedItem, targetIndex } = resolveIndexedMutationTarget(liveItems, renderedItems, changedIndex);
     if (targetIndex < 0) return updatedItems;
@@ -110,7 +107,6 @@ function reconcileListUpdate<T extends { name?: string }>(liveItems: T[], render
 export function useTrackerMutations({
   activeChatId,
   customFields,
-  inventory,
   personaStats,
   presentCharacters,
   quests,
@@ -120,7 +116,6 @@ export function useTrackerMutations({
 }: {
   activeChatId: string | null;
   customFields: CustomTrackerField[];
-  inventory: InventoryItem[];
   personaStats: CharacterStat[];
   presentCharacters: PresentCharacter[];
   quests: QuestProgress[];
@@ -154,16 +149,12 @@ export function useTrackerMutations({
     [presentCharacters, readCurrentGameState],
   );
   const readPlayerStats = useCallback(() => readCurrentGameState()?.playerStats ?? null, [readCurrentGameState]);
-  const readInventory = useCallback(() => readPlayerStats()?.inventory ?? inventory, [inventory, readPlayerStats]);
   const readQuests = useCallback(() => readPlayerStats()?.activeQuests ?? quests, [quests, readPlayerStats]);
   const readPersonaStats = useCallback(
     () => readCurrentGameState()?.personaStats ?? personaStats,
     [personaStats, readCurrentGameState],
   );
-  const readCustomFields = useCallback(
-    () => readPlayerStats()?.customTrackerFields ?? [],
-    [readPlayerStats],
-  );
+  const readCustomFields = useCallback(() => readPlayerStats()?.customTrackerFields ?? [], [readPlayerStats]);
 
   const openAvatarUpload = useCallback(
     (index: number) => {
@@ -324,44 +315,6 @@ export function useTrackerMutations({
     ]);
   }, [patchField, readPresentCharacters]);
 
-  const updateInventory = useCallback(
-    (items: InventoryItem[]) => patchPlayerStats("inventory", items),
-    [patchPlayerStats],
-  );
-
-  const updateInventoryItem = useCallback(
-    (index: number, item: InventoryItem) => {
-      const liveInventory = readInventory();
-      const { renderedItem, targetIndex } = resolveIndexedMutationTarget(liveInventory, inventory, index);
-      if (targetIndex < 0) return;
-      const next = [...liveInventory];
-      next[targetIndex] = mergeChangedRecord(
-        liveInventory[targetIndex]! as InventoryItem & Record<string, unknown>,
-        renderedItem as (InventoryItem & Record<string, unknown>) | undefined,
-        item as InventoryItem & Record<string, unknown>,
-      ) as InventoryItem;
-      updateInventory(next);
-    },
-    [inventory, readInventory, updateInventory],
-  );
-
-  const removeInventoryItem = useCallback(
-    (index: number) => {
-      const liveInventory = readInventory();
-      const { targetIndex } = resolveIndexedMutationTarget(liveInventory, inventory, index);
-      if (targetIndex < 0) return;
-      updateInventory(liveInventory.filter((_, itemIndex) => itemIndex !== targetIndex));
-      updateFieldLocks((locks) =>
-        removeTrackerFieldLockPrefix(locks, inventoryItemTrackerLockPrefix(liveInventory[targetIndex]!, targetIndex)),
-      );
-    },
-    [inventory, readInventory, updateFieldLocks, updateInventory],
-  );
-
-  const addInventoryItem = useCallback(() => {
-    updateInventory([...readInventory(), { name: "New Item", description: "", quantity: 1, location: "on_person" }]);
-  }, [readInventory, updateInventory]);
-
   const updateQuests = useCallback(
     (nextQuests: QuestProgress[]) => patchPlayerStats("activeQuests", nextQuests),
     [patchPlayerStats],
@@ -419,7 +372,8 @@ export function useTrackerMutations({
   const savePersonaStatus = useCallback((status: string) => patchPlayerStats("status", status), [patchPlayerStats]);
 
   const updatePersonaStats = useCallback(
-    (stats: CharacterStat[]) => patchField("personaStats", reconcileListUpdate(readPersonaStats(), personaStats, stats)),
+    (stats: CharacterStat[]) =>
+      patchField("personaStats", reconcileListUpdate(readPersonaStats(), personaStats, stats)),
     [patchField, personaStats, readPersonaStats],
   );
 
@@ -438,19 +392,16 @@ export function useTrackerMutations({
 
   return {
     addCharacter,
-    addInventoryItem,
     addPersonaStat,
     addQuest,
     avatarFileInputRef,
     handleAvatarFileInputChange,
     openAvatarUpload,
     removeCharacter,
-    removeInventoryItem,
     removeQuest,
     savePersonaStatus,
     updateCharacter,
     updateCustomFields,
-    updateInventoryItem,
     updatePersonaStats,
     updateQuest,
   };
