@@ -3,11 +3,19 @@
 // ──────────────────────────────────────────────
 
 import type { MariWorkspaceTraceItem } from "./professor-mari-workspace.js";
+import type { GameDicePlaceholderRecord } from "../utils/dice-placeholder.js";
 import type { GenerationGuideSource } from "../utils/generation-guide.js";
 import type { HapticFeedbackSensitivity } from "./haptic.js";
 import type { CustomEmojiSelectionPrefs } from "../schemas/custom-emoji.schema.js";
-import type { DiceRollResult } from "./game.js";
+import type { DiceRollResult, GameDicePoolConsumption, GameDicePoolMismatch } from "./game.js";
 import type { SpotifySourceType } from "./spotify.js";
+import type {
+  RoleplayCommandActivity,
+  RoleplayCommandAudience,
+  RoleplayCommandToggles,
+  RoleplayDocument,
+  RoleplayPrivateCommand,
+} from "./roleplay-command.js";
 
 export type { SpotifySourceType } from "./spotify.js";
 
@@ -16,6 +24,11 @@ export type ChatMode = "conversation" | "roleplay" | "game";
 
 /** How a multi-character (group) chat is handled. */
 export type GroupChatMode = "merged" | "individual";
+
+/** The one reading of a stored group mode: anything but "individual" is the default Merged mode. */
+export function normalizeGroupChatMode(value: unknown): GroupChatMode {
+  return value === "individual" ? "individual" : "merged";
+}
 
 /** How individual-mode group chats decide response order. */
 export type GroupResponseOrder = "sequential" | "smart" | "manual";
@@ -114,6 +127,8 @@ export interface Chat {
   /** Groups related chats together (like ST "chat files" per character) */
   groupId: string | null;
   personaId: string | null;
+  /** Character card currently being played as the user identity. */
+  personaCharacterId: string | null;
   promptPresetId: string | null;
   connectionId: string | null;
   /** ID of a linked chat (conversation ↔ roleplay bidirectional link) */
@@ -245,6 +260,29 @@ export type GameStoryboardViewerDisplayMode = "floating" | "background";
 
 /** Extra metadata stored on a chat. */
 export interface ChatMetadata {
+  /** Fresh, explicitly reviewed setup for an optional shared session. */
+  multiplayerSetup?: boolean;
+  multiplayerSetupComplete?: boolean;
+  multiplayerGameSetup?: { preferences: string; gmConnectionId?: string; gameName?: string };
+  multiplayer?: import("./multiplayer.js").MultiplayerStoredRoom | import("./multiplayer.js").MultiplayerJoinedRoom;
+  /** Opt-in coordinated Roleplay context and scene memory. */
+  advancedMemory?: import("./advanced-memory.js").AdvancedMemorySettings;
+  /** Durable maintenance checkpoint; model calls never hold a storage transaction. */
+  advancedMemoryState?: import("./advanced-memory.js").AdvancedMemoryJob & {
+    sourceFingerprint?: string;
+    boundaryMessageId?: string | null;
+    activeSceneId?: string | null;
+  };
+  /** Roleplay presentation only; omitted chats use the Appearance default. */
+  roleplayDisplayStyle?: "classic" | "visual-novel";
+  /**
+   * This chat's window layout on a computer (window places and sizes, pinned and locked state,
+   * popped-out drawers), owned and validated by the client. Absent migrates an older chat's toolbar;
+   * null selects the current defaults, including after Reset View.
+   */
+  windowLayout?: unknown;
+  /** Hide Chat Settings' introductory tips for this chat; included in settings profiles. */
+  chatSettingsHintDismissed?: boolean;
   /** Chat-local tracker icon overrides keyed by persona id, unique character id, or tracker character slot. */
   trackerStatIconOverrides?: Record<string, import("../constants/stat-icons.js").TrackerStatIconAssignment[]>;
   /** Compiled enabled rolling summary text for context injection. Derived from summaryEntries when present. */
@@ -267,6 +305,9 @@ export interface ChatMetadata {
   automaticSummaryEnabled?: boolean;
   /** Keep recent automatic summaries in context while retrieving relevant older Conversation weeks or Roleplay entries. */
   semanticSummaryRetrievalEnabled?: boolean;
+  semanticSummaryRecentCount?: number;
+  semanticSummaryOlderCount?: number;
+  semanticSummaryMinSimilarity?: number;
   /** Last assistant message ID processed by the automatic Roleplay summary updater. */
   lastAutomaticSummaryMessageId?: string | null;
   /** Chat-scoped manual summary prompt templates. Missing or empty uses the built-in default. */
@@ -290,6 +331,8 @@ export interface ChatMetadata {
   tags: string[];
   /** Whether agents are enabled for this chat */
   enableAgents: boolean;
+  /** Attach shared chat-summary context to Roleplay agents only when true. Missing/false excludes summaries. */
+  attachSummariesToAgents?: boolean;
   /** When true, agent output proposals such as lorebook, summary, and card updates require user review. */
   agentWriteApprovalRequired?: boolean;
   /** Per-agent enable overrides (agentId → boolean) */
@@ -368,6 +411,8 @@ export interface ChatMetadata {
   spriteCharacterIds?: string[];
   /** Which sprite file families the roleplay Expression Engine may display. */
   spriteDisplayModes?: Array<"expressions" | "full-body">;
+  /** Only show roleplay sprites returned by the latest completed Expression Engine result. Off by default. */
+  expressionOnlyActiveSprites?: boolean;
   /** Preferred sidebar / default layout side for chat sprites. */
   spritePosition?: SpriteSide;
   /**
@@ -381,10 +426,10 @@ export interface ChatMetadata {
    * How character-scoped regex scripts (those with target characters) apply at
    * display time in this chat: "exclusive" (a scoped script only transforms its
    * own character's messages) or "chat" (all scoped scripts transform every
-   * message). Defaults to "disabled" — scoped scripts are off at display unless
-   * opted in per chat. Global scripts (no target characters) are unaffected.
+   * message). Missing/null inherits the prompt preset (otherwise "disabled").
+   * Global scripts (no target characters) are unaffected.
    */
-  scopedRegexMode?: "disabled" | "exclusive" | "chat";
+  scopedRegexMode?: "disabled" | "exclusive" | "chat" | null;
   /** Legacy display scale for roleplay Expression Engine sprites. */
   spriteScale?: number;
   /** Display scale for roleplay Expression Engine expression sprites. Falls back to spriteScale. */
@@ -425,6 +470,8 @@ export interface ChatMetadata {
   discordWebhookUrl?: string;
   /** When true, Noodle timeline refreshes may include this chat's recent messages as generation context. */
   noodleTimelineContextEnabled?: boolean;
+  /** When true, the Slurp package may add this chat's characters' recent Slurp activity to the prompt. Off unless set. */
+  slurp2ActivityContextEnabled?: boolean;
   /** Per-chat ephemeral / enabled overrides for lorebook entries (entryId → state).
    *  Tracked per-chat so ephemeral countdown in one chat doesn't affect others. */
   entryStateOverrides?: Record<string, { ephemeral?: number | null; enabled?: boolean }>;
@@ -459,6 +506,16 @@ export interface ChatMetadata {
   translationDisplayOnly?: boolean;
   /** Allow roleplay characters to create direct-message conversation chats with hidden [dm] commands. */
   roleplayDmCommandsEnabled?: boolean;
+  /** Hidden character commands are opt-in, independently of automatic agents. */
+  roleplayCommandsEnabled?: boolean;
+  roleplayCommandToggles?: RoleplayCommandToggles;
+  /** An actual group participant, used only for individual Roleplay generations. */
+  roleplayCommandNarratorId?: string | null;
+  roleplayRollAudience?: RoleplayCommandAudience;
+  roleplayCombatAudience?: RoleplayCommandAudience;
+  roleplayDocumentAudience?: RoleplayCommandAudience;
+  roleplayWhisperAudience?: RoleplayCommandAudience;
+  roleplaySoundConnectionId?: string | null;
   /** Chat-scoped Intiface Central WebSocket URL for haptic manual and auto-connect. */
   hapticIntifaceUrl?: string | null;
   /** Haptic response style for any chat mode. Missing = standard. */
@@ -572,6 +629,9 @@ export interface ChatMetadata {
   gameCombatStyle?: import("./game.js").GameCombatStyle;
   /** Live tactical (grid) battle snapshot — restored on page refresh while a tactical fight is in progress. */
   gameTacticalCombatSnapshot?: import("../features/tactical-combat/types.js").TacticalCombatState | null;
+  /** The ruleset this game was created on, pinned for the game's lifetime. Absent means
+   *  `engine-legacy`: the Engine's own rules, exactly as before rulesets existed. */
+  gameRuleset?: import("../schemas/ruleset.schema.js").RulesetRef;
   /** User's initial game setup preferences */
   gameSetupConfig?: import("./game.js").GameSetupConfig | null;
   /** Immutable creation-time setup retained for viewing and sharing after the campaign changes. */
@@ -590,6 +650,34 @@ export interface ChatMetadata {
   gameLastIllustrationTag?: string;
   /** Connection used for Game Mode scene-video generation. */
   gameVideoConnectionId?: string | null;
+  /** Optional independent tool-planning pass before the Game narrator. */
+  gameGmToolConnectionId?: string | null;
+  /** Let the GM query already-vectorized lore without enabling the other optional tools. */
+  gameLorebookSearch?: boolean;
+  /** Rewrite Game narration after new text-command dice rolls; absent means enabled. */
+  gameDiceOutcomeNarration?: boolean;
+  /**
+   * Finish a rolled Game turn in one provider request: the GM commits its prose blind,
+   * the engine rolls afterwards and fills the result in, and the narration rewrite never
+   * fires. Absent means off.
+   */
+  gameOneRequestDice?: boolean;
+  /**
+   * The sighted pool, a sub-option of `gameOneRequestDice` and off by default. The engine
+   * throws one die of each size before the turn and shows the head values to the GM, so a
+   * number that itself has to pick between three or more endings can be narrated in the
+   * same pass. The GM sees the number before it decides what to check, so it can steer
+   * outcomes in a way the blind forms do not allow; the engine's record is still what is
+   * saved. Only read while `gameOneRequestDice` is on.
+   */
+  gameDicePoolMode?: boolean;
+  /** How many values per size the GM is shown. Absent means 1, which is the smallest
+   *  window the mechanism works at and the largest single mitigation it has. */
+  gameDicePoolWindow?: number;
+  /** Accepted turns a size may go unspent before it is rethrown. Absent means 3; 0 is off. */
+  gameDicePoolAgeTurns?: number;
+  /** Serialize narration, agents, and scene media within this Game chat. */
+  gameSequentialAgents?: boolean;
   /** Master visibility/runtime switch for manual Game Mode scene videos. */
   gameSceneVideosEnabled?: boolean;
   /** Selected Game Mode scene/storyboard video prompt template. */
@@ -695,6 +783,8 @@ export interface ChatMetadata {
   summaryTailMessages?: number;
   /** When true or omitted, prior provider reasoning metadata is not replayed into future prompts. */
   excludePastReasoning?: boolean;
+  /** Most recent assistant reasoning blocks to replay when enabled. Default: 1; 0 includes all. */
+  pastReasoningLimit?: number;
 
   /** Any extra key-value data */
   [key: string]: unknown;
@@ -753,8 +843,27 @@ export interface MessageReaction {
   segmentSpeaker?: string | null;
 }
 
+/** A quote snapshot retains the selected text even if its source is edited or deleted. */
+export interface MessageReply {
+  messageId: string;
+  name: string;
+  content: string;
+}
+
+/** A character's scene invitation, retained with the response that proposed it. */
+export interface ConversationSceneRequest {
+  prompt: string;
+  background?: string | null;
+  planHint?: string | null;
+  initiatorCharId?: string | null;
+  initiatorCharName?: string | null;
+  connectionId?: string | null;
+}
+
 /** Additional data attached to a message. */
 export interface MessageExtra {
+  /** Quoted snapshot shown in the transcript and included only for the latest user turn in prompts. */
+  replyTo?: MessageReply;
   /** Display-formatted text (may differ from raw content) */
   displayText: string | null;
   /** Whether this message was generated by the AI vs typed by user */
@@ -791,14 +900,26 @@ export interface MessageExtra {
    * like [selfie] remain part of the model-visible transcript.
    */
   conversationCommandContent?: string | null;
+  sceneRequest?: ConversationSceneRequest | null;
+  /** Private actions for this swipe, never replayed into shared prompt history. */
+  roleplayPrivateCommands?: RoleplayPrivateCommand[] | null;
+  /** Provider reasoning from a private turn must not be replayed into shared history. */
+  roleplayPrivateContext?: boolean;
+  /** This empty command-only turn was automatically hidden from the reader. */
+  roleplayPrivateOnly?: boolean;
+  roleplayDocuments?: RoleplayDocument[] | null;
+  /** User-only command disclosures. Their labels and raw text never enter prompt history. */
+  roleplayCommandActivity?: RoleplayCommandActivity[] | null;
   /** Professor Mari workspace trace shown on the home assistant transcript. */
   mariWorkspaceTimeline?: MariWorkspaceTraceItem[] | null;
-  /** Mutation kinds Professor Mari has explicitly asked the user to approve. */
-  mariPendingMutationCategories?: string[] | null;
-  /** Fingerprints binding Professor Mari approval to the exact proposed commands. */
-  mariPendingMutationSignatures?: string[] | null;
+  /** True when this Mari turn deferred mutating commands behind an Accept action (#5725 Manual mode). */
+  mariDeferredMutations?: boolean | null;
   /** Per-swipe sprite expressions from the Expression Engine agent */
   spriteExpressions?: Record<string, string> | null;
+  /** Presentation-only ID-macro card references for merged Roleplay narrator avatars; never chat members. */
+  referencedCharacterIds?: string[];
+  /** All sprite owners in the completed expression result, including the persona. Empty means none. */
+  expressionSpriteIds?: string[];
   /** Per-swipe CYOA choices from the CYOA Choices agent */
   cyoaChoices?: Array<{ label: string; text: string }> | null;
   /** Presentation-only Game Mode cues retained so completed turns can be replayed without rerunning scene analysis. */
@@ -813,6 +934,7 @@ export interface MessageExtra {
   /** Snapshot of the persona that was active when this message was sent (user messages only) */
   personaSnapshot?: {
     personaId: string;
+    source?: "persona" | "character";
     name: string;
     avatarUrl?: string | null;
     /** JSON-encoded AvatarCrop captured at send time so re-edits don't restyle past messages. */
@@ -825,12 +947,26 @@ export interface MessageExtra {
   hiddenFromUser?: boolean;
   /** When true, the visible message is excluded from future AI prompt context */
   hiddenFromAI?: boolean;
+  /** User bookmark shown in chat tools. Never sent to the model. */
+  bookmark?: import("../utils/message-marks.js").MessageBookmark | null;
+  /** Keep this message in prompt context when the message limit would otherwise drop it. */
+  pinnedToContext?: boolean;
+  /** User-only note attached to this message. Never sent to the model. */
+  privateNote?: string | null;
   /** Character IDs whose generation context excludes this message. Global hiddenFromAI takes precedence. */
   hiddenFromAICharacterIds?: string[];
   /** When true, Roleplay renders this generated assistant turn as a fresh bubble instead of grouping with the previous assistant turn. */
   startsNewAssistantBubble?: boolean;
   /** Structured dice roll payload rendered by the chat UI. */
   diceRollResult?: DiceRollResult | null;
+  /** Every Game roll in this swipe, in execution order. Older turns use diceRollResult. */
+  diceRollResults?: DiceRollResult[] | null;
+  /** Real roll records survived, but the separate outcome narration request failed. */
+  gameOutcomeNarrationFailed?: boolean;
+  /** What the one-request dice pass did on this turn, when the switch was on. */
+  gameDiceTurn?: GameDiceTurnNotice | null;
+  /** Separate tool planner billing; never added to the narrator model's usage. */
+  gameToolPlanning?: GameToolPlanningInfo | null;
   /**
    * Cached pipeline injections (prose-guardian, director, knowledge-retrieval, etc.)
    * saved with this assistant message — reused when regenerating that swipe unless refreshed.
@@ -855,6 +991,50 @@ export interface MessageExtra {
   } | null;
 }
 
+/**
+ * Summary of the one-request dice pass for one Game turn. Saved on the assistant
+ * message and mirrored on a `game_dice_turn_notice` SSE frame, so the session log can
+ * say in plain words what the engine could and could not roll. Every field is optional
+ * and only truthy values are written, so a clean turn stores nothing.
+ */
+export interface GameDiceTurnNotice {
+  /** Which blind forms actually resolved this turn, in first-seen order. */
+  forms?: Array<"branch" | "placeholder">;
+  /**
+   * One record per substituted placeholder, in reading order: the body as the model
+   * wrote it, the dice actually thrown, and where the number landed. The saved content
+   * carries a bare number so the prompt leaf and the transcript both read as prose, so
+   * this is the only audit trail of what that number was.
+   */
+  placeholders?: GameDicePlaceholderRecord[];
+  /** Spans the pass refused to read and replaced with a visible notice. Never a number. */
+  unreadablePlaceholders?: number;
+  /** Branch blocks the pass could not read. The roll stands, the narration does not. */
+  branchFailures?: number;
+  /** The pass itself threw; its fallback rewrite ran and the turn was kept. */
+  passFailed?: boolean;
+  /**
+   * The pool values this turn actually spent, in spend order. Only ever written while
+   * the sighted pool sub-option is on, so a chat that never turned it on stores nothing.
+   */
+  poolSlots?: GameDicePoolConsumption[];
+  /**
+   * Checks and `[dice:]` tags the pool had no value left for. Nothing was rolled and
+   * nothing was written: the tag went back sparse and the outcome is owed to the next
+   * turn. Never a number, and never a second request to get one.
+   */
+  poolOverflow?: number;
+  /** What the model claimed that disagreed with what the engine spent. Recorded, never obeyed. */
+  poolMismatches?: GameDicePoolMismatch[];
+}
+
+export interface GameToolPlanningInfo {
+  connectionId?: string;
+  model: string;
+  provider: string;
+  usage: { promptTokens?: number; completionTokens?: number; totalTokens?: number } | null;
+}
+
 /** Metadata about how a message was generated. */
 export interface GenerationInfo {
   model: string;
@@ -862,6 +1042,17 @@ export interface GenerationInfo {
   temperature: number | null;
   tokensPrompt: number | null;
   tokensCompletion: number | null;
+  /** Input tokens in the latest completed model request, including cache but excluding output. */
+  tokensLastRequestInput?: number | null;
+  /** Occupied tokens in the latest completed model request, including cache and output; null when unreported. */
+  tokensContext?: number | null;
+  /** Completed main-model requests in this turn; agent and separate Game planner calls are excluded. */
+  requestCount?: number;
+  tokensAcceptedPrediction?: number | null;
+  tokensRejectedPrediction?: number | null;
+  /** Completion tokens excluding hidden reasoning tokens. */
+  tokensVisibleCompletion?: number | null;
+  tokensCompletionAudio?: number | null;
   /** Provider-reported hidden reasoning-token usage, when available. */
   tokensReasoning?: number | null;
   tokensCachedPrompt?: number | null;
@@ -904,6 +1095,8 @@ export interface GenerateRequest {
   attachments?: MessageAttachment[];
   /** One-shot Narrative Director mode for this generation, if the user armed Push Story. */
   narrativeDirectorMode?: "natural" | "random" | null;
+  /** One-shot Smart speaker selection for an individual Roleplay group. */
+  smartResponse?: boolean;
 }
 
 /** An SSE event from the generation stream. */
@@ -933,6 +1126,20 @@ export interface ConversationNote {
   content: string;
   anchorMessageId: string;
   createdAt: string;
+}
+
+export interface HistoricalPersonaIdentitySummary {
+  personaId: string;
+  source: "persona" | "character";
+  name: string;
+  avatarUrl?: string | null;
+  count: number;
+}
+
+export interface ChatPersonaAttributionsSummary {
+  unassignedCount: number;
+  allUserMessageCount: number;
+  identities: HistoricalPersonaIdentitySummary[];
 }
 
 export function normalizeManualTrackerAgentTypes(value: unknown): Record<string, boolean> {

@@ -24,6 +24,8 @@ export const promptPresets = fileTable("prompt_presets", {
   parameters: text("parameters").notNull().default("{}"),
   /** Auto-wrapping format: "xml" | "markdown" */
   wrapFormat: text("wrap_format").notNull().default("xml"),
+  /** Default display mode for character-scoped regex; chats may override it. */
+  scopedRegexMode: text("scoped_regex_mode").notNull().default("disabled"),
   /** JSON object of saved default variable selections for this preset */
   defaultChoices: text("default_choices").notNull().default("{}"),
   /** Whether this is the built-in default preset */
@@ -77,6 +79,8 @@ export const promptSections = fileTable("prompt_sections", {
   wrapInXml: text("wrap_in_xml").notNull().default("false"),
   xmlTagName: text("xml_tag_name").notNull().default(""),
   forbidOverrides: text("forbid_overrides").notNull().default("false"),
+  /** "true" sends this prompt block without the preset's wrap format (group wrapping still applies; ignored for markers) */
+  skipWrap: text("skip_wrap").notNull().default("false"),
 });
 
 export const choiceBlocks = fileTable("choice_blocks", {

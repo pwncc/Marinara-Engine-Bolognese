@@ -6,30 +6,46 @@ import {
   TRACKER_PANEL_DEFAULT_BACKGROUND_COLOR,
   QUICK_REPLIES_SETTINGS_CONTROL_ID,
   useUIStore,
+  SIDEBAR_WIDTH_MIN,
+  SIDEBAR_WIDTH_MAX,
+  RIGHT_PANEL_WIDTH_MIN,
+  RIGHT_PANEL_WIDTH_MAX,
   getDefaultAppAccentColor,
   getDefaultAppBackgroundColor,
   getDefaultChatChromeTextColor,
   getDefaultChatTextColor,
   getTrackerPanelWidthForProfile,
+  type ChatWidgetPreset,
+  type ChatWidgetShape,
   type ConversationAvatarShape,
   type ConversationMessageStyle,
   type GameDialogueDisplayMode,
   type ChatListBackgroundMode,
   type RoleplayAvatarStyle,
+  type RoleplayChatPosition,
   type TrackerDataPanelSection,
   type TrackerPanelSizeProfile,
   type TrackerStatDisplayMode,
   type TrackerThoughtBubbleDisplay,
   type VisualTheme,
 } from "../../stores/ui.store";
-import { APP_LANGUAGE_OPTIONS } from "../../localization/locale-loader";
+import { UILanguageSetting } from "./settings/UILanguageSetting";
+import { MultiplayerSettings } from "../../features/multiplayer/MultiplayerSettings";
 import { useLocalizedUiText } from "../../localization/use-localized-ui-text";
 import { cn, copyToClipboard } from "../../lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ADMIN_SECRET_STORAGE_KEY, ApiError, api, getPrivilegedActionErrorMessage } from "../../lib/api-client";
+import {
+  ADMIN_SECRET_STORAGE_KEY,
+  ApiError,
+  api,
+  getPrivilegedActionErrorMessage,
+  isRequestTimeoutError,
+  requestTimeoutSignal,
+} from "../../lib/api-client";
 import { ANDROID_BRIDGE_READY_EVENT, getAndroidBridgeToken } from "../../lib/android-bridge";
 import { chatBackgroundUrlToMetadata } from "../../lib/backgrounds";
 import { normalizeThemeCss, sanitizeAppCss } from "../../lib/theme-css";
+import { getChatWidgetFontFamily } from "../../lib/font-family";
 import { forceRefreshSpa } from "@/lib/browser-runtime";
 import {
   formatProfileImportWarningDetails,
@@ -38,7 +54,7 @@ import {
   type ProfileImportWarningCopy,
   type ProfileImportWarning,
 } from "@/lib/profile-import-warnings";
-import React, { useRef, useState, useCallback, useEffect, useMemo } from "react";
+import React, { Activity, useRef, useState, useCallback, useEffect, useMemo } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation, useTranslation as useUiTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -67,6 +83,7 @@ import {
   type ImageStyleProfile,
   type ImageStyleProfileSettings,
   type QuoteFormat,
+  type SidecarHealthSection,
   type Theme,
   type VideoGenerationUserSettings,
 } from "@marinara-engine/shared";
@@ -125,6 +142,7 @@ import {
   HardDrive,
   LifeBuoy,
   SlidersHorizontal,
+  ToggleRight,
 } from "lucide-react";
 import {
   useChat,
@@ -135,17 +153,20 @@ import {
 } from "../../hooks/use-chats";
 import { useConnections } from "../../hooks/use-connections";
 import { useChatStore } from "../../stores/chat.store";
+import { parseChatMetadata } from "../../lib/chat-display";
 import { useOpenGameAssetsFolder, useRescanGameAssets } from "../../hooks/use-game-assets";
 import { chatKeys } from "../../hooks/use-chats";
 import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
 import { useDocsLanguage, useFixDocsLanguage, useSetDocsLanguage } from "../../hooks/use-docs-language";
 import { HelpTooltip } from "../ui/HelpTooltip";
 import { ColorPicker } from "../ui/ColorPicker";
+import { getChatWidgetColorRoles, getChatWidgetColorStyle, type ChatWidgetColors } from "../../lib/chat-widget-colors";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { TrackerPanelIcon } from "../ui/TrackerPanelIcon";
 import { TrackerSizeTierIcon } from "../ui/TrackerSizeTierIcon";
 import {
   ConversationSoundSetting,
+  MariPermissionsModeSetting,
   SettingsIntro,
   SettingsSection,
   SettingsSwitch,
@@ -154,6 +175,8 @@ import {
 import { TrackerCardColorSettings } from "./settings/TrackerCardColorSettings";
 import { PromptOverridesEditor } from "./settings/PromptOverridesEditor";
 import { BackgroundPicker } from "./settings/BackgroundPicker";
+import { RequestTimeoutSettings } from "./settings/RequestTimeoutSettings";
+import { FEATURE_SWITCHES_CONTROL_ID, FeatureSwitchesSettings } from "./settings/FeatureSwitchesSettings";
 import { CustomGenerationParametersSettings } from "./settings/CustomGenerationParametersSettings";
 import { ExternalExtensionsSettings, PersonalExtensionsSettings } from "./settings/PersonalExtensionsSettings";
 import { usePersonalExtensionPolicy, useSetExternalExtensionsEnabled } from "../../hooks/use-personal-extensions";
@@ -161,9 +184,16 @@ import { useAgentImportPolicy, useSetAgentImportsEnabled } from "../../hooks/use
 import { DraftNumberInput } from "../ui/DraftNumberInput";
 import { ExportFormatDialog, type ExportFormatChoice } from "../ui/ExportFormatDialog";
 import { inspectCharacterFilesForEmbeddedLorebooks } from "../../lib/character-import";
-import { detectBrowserGpu, formatSupportDiagnostics, resolveClientOs } from "../../lib/support-diagnostics";
+import { getClientRuntimeDiagnostics } from "../../lib/client-runtime-diagnostics";
+import {
+  detectBrowserGpu,
+  formatSupportDiagnostics,
+  resolveClientOs,
+  type SupportDiagnostics,
+} from "../../lib/support-diagnostics";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { downloadJsonFile, sanitizeExportFilenamePart } from "../../lib/download-json";
+import { saveExportFile } from "../../lib/file-download";
 import {
   HOST_DEVICE_FILE_MANAGER_MESSAGE,
   HostDeviceFileManagerError,
@@ -257,8 +287,11 @@ type SettingsSectionId =
   | "profile-marinara"
   | "sillytavern-import"
   | "admin-access"
+  | "multiplayer"
+  | "features"
   | "updates"
   | "support-diagnostics"
+  | "request-timeouts"
   | "parameters"
   | "message-tools"
   | "backup-export"
@@ -367,7 +400,7 @@ const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
   },
   {
     id: "game-assets",
-    tab: "generations",
+    tab: "import",
     label: "Game Assets",
     description: "Asset folders for music, ambience, sprites, and backgrounds.",
     aliases: ["assets", "music", "ambient", "sfx", "sprites", "backgrounds", "folder"],
@@ -413,8 +446,8 @@ const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
   {
     id: "roleplay-messages",
     tab: "appearance",
-    label: "Roleplay Messages",
-    description: "Roleplay bubbles, avatars, sprite scale, and message opacity.",
+    label: "Roleplay Presentation",
+    description: "Classic and Visual Novel display, avatars, sprites, and message opacity.",
     aliases: ["roleplay", "avatar", "sprite", "message", "bubble", "opacity", "portrait"],
   },
   {
@@ -488,6 +521,20 @@ const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     aliases: ["admin", "secret", "access", "authorization"],
   },
   {
+    id: "multiplayer",
+    tab: "advanced",
+    label: "Multiplayer WIP",
+    description: "Optional shared roleplay, conversation and game sessions.",
+    aliases: ["multiplayer", "host", "join", "players", "invite", "shared", "online"],
+  },
+  {
+    id: "features",
+    tab: "advanced",
+    label: "Features",
+    description: "Optional server behaviours, all off by default.",
+    aliases: ["features", "switches", "optional", "provider retry", "lorebook groups"],
+  },
+  {
     id: "updates",
     tab: "advanced",
     label: "Updates",
@@ -500,6 +547,13 @@ const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     label: "Support Diagnostics",
     description: "Copy technical details for support tickets.",
     aliases: ["support", "diagnostics", "system info", "gpu", "model", "ticket", "bug report"],
+  },
+  {
+    id: "request-timeouts",
+    tab: "advanced",
+    label: "Request timeouts",
+    description: "Adjust how long text, agents and media wait for a slow backend.",
+    aliases: ["timeout", "slow", "koboldcpp", "images", "video", "seconds", "backend"],
   },
   {
     id: "parameters",
@@ -642,6 +696,22 @@ const SETTINGS_SEARCHABLE_CONTROLS: readonly SettingsSearchableControlMeta[] = [
     kind: "Toggle",
   },
   {
+    id: "mari-permissions-mode",
+    sectionId: "application",
+    label: "Professor Mari Permissions Mode",
+    description: "When Mari may stage or apply workspace changes: Auto, Manual, Accept edits, Plan, or Bypass.",
+    aliases: ["mari", "permissions", "mode", "plan", "bypass", "accept", "manual", "approve"],
+    kind: "Select",
+  },
+  {
+    id: "notification-position",
+    sectionId: "notifications",
+    label: "Notification position",
+    description: "Choose where error messages and other notifications appear.",
+    aliases: ["error", "toast", "top", "bottom", "position"],
+    kind: "Select",
+  },
+  {
     id: "notification-conversation-sound",
     sectionId: "notifications",
     label: "Conversation mode notification sound",
@@ -720,6 +790,14 @@ const SETTINGS_SEARCHABLE_CONTROLS: readonly SettingsSearchableControlMeta[] = [
     description: "Control how many messages load at once.",
     aliases: ["pagination", "load more", "history"],
     kind: "Input",
+  },
+  {
+    id: "keep-guidance-after-regenerating",
+    sectionId: "input-editing",
+    label: "Keep guidance after regenerating",
+    description: "Leave your direction in the chat box after a guided regenerate, so you can adjust it and try again.",
+    aliases: ["guided", "regenerate", "draft", "clear"],
+    kind: "Toggle",
   },
   {
     id: "speech-to-text",
@@ -878,14 +956,6 @@ const SETTINGS_SEARCHABLE_CONTROLS: readonly SettingsSearchableControlMeta[] = [
     kind: "Input",
   },
   {
-    id: "image-noodle-size",
-    sectionId: "image-generation",
-    label: "Noodle image size",
-    description: "Set default Noodle timeline image dimensions.",
-    aliases: ["image", "resolution", "canvas", "noodle", "timeline"],
-    kind: "Input",
-  },
-  {
     id: "image-game-size",
     sectionId: "image-generation",
     label: "Game scene image size",
@@ -899,6 +969,14 @@ const SETTINGS_SEARCHABLE_CONTROLS: readonly SettingsSearchableControlMeta[] = [
     label: "Portrait image size",
     description: "Set default generated portrait dimensions.",
     aliases: ["image", "resolution", "canvas", "character"],
+    kind: "Input",
+  },
+  {
+    id: "image-character-sheet-size",
+    sectionId: "image-generation",
+    label: "Character sheets",
+    description: "Set character reference sheet dimensions independently of backgrounds.",
+    aliases: ["image", "resolution", "canvas", "character", "reference", "sheet"],
     kind: "Input",
   },
   {
@@ -950,6 +1028,15 @@ const SETTINGS_SEARCHABLE_CONTROLS: readonly SettingsSearchableControlMeta[] = [
     kind: "Select",
   },
   {
+    id: "desktop-sidebar-width",
+    sectionId: "app-style",
+    label: "Desktop sidebar width",
+    description:
+      "Adjust both desktop sidebars. Their contents adapt to the available space; mobile panels keep their existing layout.",
+    aliases: ["sidebar", "width", "resize", "left panel", "right panel"],
+    kind: "Slider",
+  },
+  {
     id: "custom-cursor",
     sectionId: "app-style",
     label: "Custom Mouse Pointer",
@@ -990,12 +1077,94 @@ const SETTINGS_SEARCHABLE_CONTROLS: readonly SettingsSearchableControlMeta[] = [
     kind: "Toggle",
   },
   {
+    id: "chat-widget-style",
+    sectionId: "app-style",
+    label: "Chat widget style",
+    description:
+      "Choose a look for movable chat buttons, windows and sections. Picking a preset resets Font, Shape and Colors. Professor Mari can create custom themes for you.",
+    aliases: ["dottore", "mari", "preset", "window", "drawer", "button", "sci-fi", "fantasy"],
+    kind: "Button group",
+  },
+  {
+    id: "chat-widget-border-color",
+    sectionId: "app-style",
+    label: "Border & Buttons Color",
+    description: "Set chat widget outlines and button icon colors.",
+    aliases: ["widget", "window", "drawer", "color", "gradient"],
+    kind: "Picker",
+  },
+  {
+    id: "chat-widget-background-color",
+    sectionId: "app-style",
+    label: "Widget Background Color",
+    description: "Set backgrounds for chat windows, sections and buttons.",
+    aliases: ["widget", "window", "drawer", "color", "gradient"],
+    kind: "Picker",
+  },
+  {
+    id: "chat-widget-text-color",
+    sectionId: "app-style",
+    label: "Widget Text Color",
+    description: "Set chat widget text colors and gradients.",
+    aliases: ["widget", "window", "drawer", "color", "gradient"],
+    kind: "Picker",
+  },
+  {
+    id: "chat-widget-button-size",
+    sectionId: "app-style",
+    label: "Button size (px)",
+    description:
+      "Resize movable chat buttons and their icons independently of Display Size. Reset to keep the current default.",
+    aliases: ["widget", "icon", "scale", "pixels", "size", "movable", "tracker", "map"],
+    kind: "Input",
+  },
+  {
+    id: "chat-widget-font",
+    sectionId: "app-style",
+    label: "Chat widget font",
+    description: "Choose lettering for chat windows and sections.",
+    aliases: ["typography", "typeface", "serif", "monospace", "window", "drawer"],
+    kind: "Select",
+  },
+  {
+    id: "chat-widget-shape",
+    sectionId: "app-style",
+    label: "Chat widget shape",
+    description: "Change the frame shape without changing the colors.",
+    aliases: ["rounded", "square", "cut corner", "arched", "window", "drawer", "button"],
+    kind: "Select",
+  },
+  {
     id: "font-family",
     sectionId: "text-scale",
     label: "Font",
     description: "Choose the font used across the app.",
     aliases: ["typography", "typeface"],
     kind: "Select",
+  },
+  {
+    id: "chat-widget-apply-font",
+    sectionId: "app-style",
+    label: "Apply preset font",
+    description: "Use the selected widget font for chat messages, input boxes and controls.",
+    aliases: ["widget", "message", "composer", "typography", "dottore", "mari"],
+    kind: "Toggle",
+  },
+  {
+    id: "chat-widget-apply-shape",
+    sectionId: "app-style",
+    label: "Apply preset shape",
+    description: "Use widget shapes for chat boxes and controls. Conversation messages keep their own shape.",
+    aliases: ["widget", "message", "composer", "rounded", "cut corner", "arched"],
+    kind: "Toggle",
+  },
+  {
+    id: "chat-widget-apply-colors",
+    sectionId: "app-style",
+    label: "Apply preset colors",
+    description: "Use widget colors and custom gradients for chat messages, input boxes and controls.",
+    aliases: ["widget", "message", "composer", "gradient", "dottore", "mari"],
+    kind: "Toggle",
   },
   {
     id: "display-size",
@@ -1054,12 +1223,38 @@ const SETTINGS_SEARCHABLE_CONTROLS: readonly SettingsSearchableControlMeta[] = [
     kind: "Button group",
   },
   {
+    id: "conversation-always-display-swipe-menu",
+    sectionId: "chat-display",
+    label: "Always display swipe menu",
+    description:
+      "Show swipe arrows and the counter from the first response. Turn off to show them only after regeneration.",
+    aliases: ["conversation", "swipe", "regenerate", "arrows"],
+    kind: "Toggle",
+  },
+  {
+    id: "roleplay-always-display-swipe-menu",
+    sectionId: "roleplay-messages",
+    label: "Always display swipe menu",
+    description:
+      "Show swipe arrows and the counter from the first response. Turn off to show them only after regeneration.",
+    aliases: ["roleplay", "swipe", "regenerate", "arrows"],
+    kind: "Toggle",
+  },
+  {
     id: "conversation-avatar-shape",
     sectionId: "chat-display",
     label: "Avatar Shape",
     description: "Choose circular or square avatars in Conversation mode.",
     aliases: ["conversation", "avatar", "circle", "square"],
     kind: "Button group",
+  },
+  {
+    id: "show-characters-in-persona-pickers",
+    sectionId: "message-tools",
+    label: "Show Characters in Persona Pickers",
+    description: "Allow character cards to appear as user identities in chat.",
+    aliases: ["persona", "character", "play as", "identity"],
+    kind: "Toggle",
   },
   {
     id: "tracker-panel",
@@ -1132,6 +1327,54 @@ const SETTINGS_SEARCHABLE_CONTROLS: readonly SettingsSearchableControlMeta[] = [
     description: "Switch tracker temperature displays between Celsius and Fahrenheit.",
     aliases: ["tracker", "weather", "celsius", "fahrenheit"],
     kind: "Toggle",
+  },
+  {
+    id: "roleplay-vn-display",
+    sectionId: "roleplay-messages",
+    label: "Visual Novel display",
+    description: "Show one completed paragraph at a time above the composer.",
+    aliases: ["roleplay", "vn", "visual novel", "classic", "presentation", "history"],
+    kind: "Toggle",
+  },
+  {
+    id: "roleplay-vn-autoplay",
+    sectionId: "roleplay-messages",
+    label: "Auto-play VN paragraphs",
+    description: "Advance Roleplay Visual Novel paragraphs automatically, waiting for speech when it is playing.",
+    aliases: ["roleplay", "vn", "autoplay", "tts", "speech", "reading"],
+    kind: "Toggle",
+  },
+  {
+    id: "roleplay-vn-autoplay-delay",
+    sectionId: "roleplay-messages",
+    label: "Paragraph delay",
+    description: "Set the time between Roleplay Visual Novel paragraphs when auto-play is enabled.",
+    aliases: ["roleplay", "vn", "autoplay", "delay", "reading"],
+    kind: "Slider",
+  },
+  {
+    id: "roleplay-vn-portrait-scale",
+    sectionId: "roleplay-messages",
+    label: "Dialogue portrait scale",
+    description: "Adjust Roleplay Visual Novel portraits.",
+    aliases: ["roleplay", "vn", "portrait", "scale"],
+    kind: "Slider",
+  },
+  {
+    id: "roleplay-vn-sprite-scale",
+    sectionId: "roleplay-messages",
+    label: "Full-body sprite scale",
+    description: "Adjust Roleplay Visual Novel full-body sprites.",
+    aliases: ["roleplay", "vn", "sprite", "scale"],
+    kind: "Slider",
+  },
+  {
+    id: "roleplay-chat-position",
+    sectionId: "roleplay-messages",
+    label: "Chat position",
+    description: "Where the chat sits on wide screens. Has no effect on phones.",
+    aliases: ["roleplay", "layout", "left", "right", "center", "centre", "align", "side", "column", "desktop"],
+    kind: "Button group",
   },
   {
     id: "roleplay-message-opacity",
@@ -1342,6 +1585,14 @@ const SETTINGS_SEARCHABLE_CONTROLS: readonly SettingsSearchableControlMeta[] = [
     kind: "Toggle",
   },
   {
+    id: "include-private-notes-in-exports",
+    sectionId: "message-tools",
+    label: "Include private notes in exports",
+    description: "Include your private message notes in chat exports.",
+    aliases: ["notes", "private", "exports"],
+    kind: "Toggle",
+  },
+  {
     id: "debug-mode",
     sectionId: "message-tools",
     label: "Debug mode",
@@ -1380,6 +1631,7 @@ const SETTINGS_PRIMARY_BUTTON_CLASS = "mari-chrome-control mari-chrome-control--
 const SETTINGS_COMPACT_PRIMARY_BUTTON_CLASS =
   "mari-chrome-control mari-chrome-control--compact mari-chrome-control--selected text-[0.625rem]";
 type MarinaraAndroidBridge = {
+  openLauncher?: (token?: string) => void;
   openConsole?: {
     (token: string): void;
     (): void;
@@ -1465,14 +1717,25 @@ function AndroidStatusBarSetting() {
   }
 
   return (
-    <ToggleSetting
-      anchorId={getSettingsControlAnchorId("android-status-bar")}
-      label={t("settings.application.androidStatusBar.label")}
-      checked={visible}
-      onChange={handleChange}
-      help={help}
-      disabled={!supported}
-    />
+    <>
+      <ToggleSetting
+        anchorId={getSettingsControlAnchorId("android-status-bar")}
+        label={t("settings.application.androidStatusBar.label")}
+        checked={visible}
+        onChange={handleChange}
+        help={help}
+        disabled={!supported}
+      />
+      {typeof getMarinaraAndroidBridge()?.openLauncher === "function" && (
+        <button
+          type="button"
+          className={SETTINGS_BUTTON_CLASS}
+          onClick={() => getMarinaraAndroidBridge()?.openLauncher?.(getAndroidBridgeToken() ?? undefined)}
+        >
+          {t("settings.application.androidLauncher")}
+        </button>
+      )}
+    </>
   );
 }
 
@@ -1670,6 +1933,8 @@ function formatStorageBytes(bytes: number): string {
   }).format(safeBytes / 1_000_000_000);
 }
 
+const ROLEPLAY_CHAT_POSITIONS: RoleplayChatPosition[] = ["left", "center", "right"];
+
 const ROLEPLAY_AVATAR_STYLE_OPTIONS: Array<{ id: RoleplayAvatarStyle; label: string; desc: string }> = [
   {
     id: "none",
@@ -1851,8 +2116,6 @@ const CONVERSATION_CALL_VIDEO_CLIP_LABELS: Record<ConversationCallCharacterVideo
 type GameAssetCategoryId = (typeof GAME_ASSET_CATEGORIES)[number]["id"];
 const GAME_ASSET_CATEGORY_BY_ID = new Map(GAME_ASSET_CATEGORIES.map((category) => [category.id, category]));
 
-// Module-level set survives component remounts (e.g. mobile AnimatePresence unmount/remount)
-const mountedSettingsTabs = new Set<string>();
 const IMAGE_STYLE_SUBJECT_KINDS: ImagePromptKind[] = [
   "avatar",
   "portrait",
@@ -1901,6 +2164,7 @@ function ImageDimensionRow({
       <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1.5 sm:w-40">
         <DraftNumberInput
           value={width}
+          ariaLabel={localizeUi("settings.imageDimensions.width", { label })}
           min={64}
           max={4096}
           commitOnValidChange
@@ -1912,6 +2176,7 @@ function ImageDimensionRow({
         </span>
         <DraftNumberInput
           value={height}
+          ariaLabel={localizeUi("settings.imageDimensions.height", { label })}
           min={64}
           max={4096}
           commitOnValidChange
@@ -2297,7 +2562,7 @@ function TrackerPanelCardOrderSetting() {
           disabled={isDefaultOrder}
           title={localizeUi("settings.actions.resetTrackerOrder")}
           aria-label={localizeUi("settings.actions.resetTrackerOrder")}
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--secondary)] hover:text-[var(--foreground)] active:scale-95 disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-[var(--muted-foreground)]"
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] hover:text-[var(--foreground)] active:scale-95 disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-[var(--muted-foreground)]"
         >
           <RotateCcw size="0.6875rem" />
         </button>
@@ -2381,12 +2646,10 @@ function TrackerPanelAppearanceDrawer() {
   const setTrackerTemperatureUnit = useUIStore((state) => state.setTrackerTemperatureUnit);
   const trackerStatDisplayMode = useUIStore((state) => state.trackerStatDisplayMode);
   const setTrackerStatDisplayMode = useUIStore((state) => state.setTrackerStatDisplayMode);
-  const [drawerOpen, setDrawerOpen] = useState(true);
-  const drawerId = React.useId();
 
   return (
     <section className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--background)]/34 shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_8%,transparent)]">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-3 py-2.5">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--secondary)]/70 text-[var(--primary)] ring-1 ring-[var(--border)]">
             <TrackerPanelIcon size="0.9rem" />
@@ -2401,7 +2664,7 @@ function TrackerPanelAppearanceDrawer() {
             <span className="block truncate text-[0.625rem] text-[var(--muted-foreground)]">
               {trackerPanelEnabled
                 ? localizeUi("ui.panels.trackerpanelappearancedrawer.shownInTheRoleplayHud")
-                : localizeUi("ui.panels.trackerpanelappearancedrawer.hiddenFromTheRoleplayHud")}
+                : localizeUi("ui.panels.trackerpanelappearancedrawer.inATrackerWindow")}
             </span>
           </span>
         </div>
@@ -2409,266 +2672,247 @@ function TrackerPanelAppearanceDrawer() {
         <SettingsSwitch
           anchorId={getSettingsControlAnchorId("tracker-panel")}
           checked={trackerPanelEnabled}
-          onChange={(enabled) => {
-            setTrackerPanelEnabled(enabled);
-            if (enabled) setDrawerOpen(true);
-          }}
+          onChange={setTrackerPanelEnabled}
           ariaLabel={trackerPanelEnabled ? "Disable Tracker Panel" : "Enable Tracker Panel"}
           className="p-0 hover:bg-transparent"
         />
-
-        <button
-          type="button"
-          onClick={() => setDrawerOpen((open) => !open)}
-          aria-expanded={drawerOpen}
-          aria-controls={drawerId}
-          aria-label={
-            drawerOpen
-              ? localizeUi("ui.panels.trackerpanelappearancedrawer.collapseTrackerPanelSettings")
-              : localizeUi("ui.panels.trackerpanelappearancedrawer.expandTrackerPanelSettings")
-          }
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-all hover:bg-[var(--secondary)] hover:text-[var(--foreground)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--primary)] active:scale-95"
-        >
-          <ChevronDown
-            size="0.875rem"
-            className={cn("transition-transform duration-200", drawerOpen ? "rotate-180" : "rotate-0")}
-          />
-        </button>
       </div>
 
-      {drawerOpen && (
-        <fieldset
-          id={drawerId}
-          disabled={!trackerPanelEnabled}
-          className={cn(
-            "border-t border-[var(--border)] px-3 pb-3 pt-2 transition-opacity",
-            trackerPanelEnabled ? "" : "opacity-45",
-          )}
-        >
-          <ToggleSetting
-            anchorId={getSettingsControlAnchorId("tracker-replace-hud-icons")}
-            label={localizeUi("settings.controls.replaceTrackerIcons.label")}
-            checked={trackerPanelHideHudWidgets}
-            onChange={setTrackerPanelHideHudWidgets}
-            help={localizeUi("settings.controls.replaceTrackerIcons.help")}
+      <fieldset
+        disabled={!trackerPanelEnabled}
+        className={cn(
+          "border-t border-[var(--border)] px-3 pb-3 pt-2 transition-opacity",
+          trackerPanelEnabled ? "" : "opacity-45",
+        )}
+      >
+        <ToggleSetting
+          anchorId={getSettingsControlAnchorId("tracker-replace-hud-icons")}
+          label={localizeUi("settings.controls.replaceTrackerIcons.label")}
+          checked={trackerPanelHideHudWidgets}
+          onChange={setTrackerPanelHideHudWidgets}
+          help={localizeUi("settings.controls.replaceTrackerIcons.help")}
+        />
+        <ToggleSetting
+          anchorId={getSettingsControlAnchorId("tracker-expression-sprites")}
+          label={localizeUi("settings.controls.useExpressionSprites.label")}
+          checked={trackerPanelUseExpressionSprites}
+          onChange={setTrackerPanelUseExpressionSprites}
+          help={localizeUi("settings.controls.useExpressionSprites.help")}
+        />
+        <div id={getSettingsControlAnchorId("tracker-panel-background")} className="mt-2 scroll-mt-3">
+          <ColorPicker
+            value={trackerPanelBackgroundColor}
+            onChange={setTrackerPanelBackgroundColor}
+            gradient
+            compact
+            label={localizeUi("settings.controls.panelBackground.label")}
+            helpText="Pick the Tracker panel and tracker section background. CSS colors and gradients are accepted."
+            emptyText={localizeUi("ui.panels.trackerpanelappearancedrawer.defaultValue1", {
+              value1: TRACKER_PANEL_DEFAULT_BACKGROUND_COLOR,
+            })}
+            clearLabel="Reset"
           />
-          <ToggleSetting
-            anchorId={getSettingsControlAnchorId("tracker-expression-sprites")}
-            label={localizeUi("settings.controls.useExpressionSprites.label")}
-            checked={trackerPanelUseExpressionSprites}
-            onChange={setTrackerPanelUseExpressionSprites}
-            help={localizeUi("settings.controls.useExpressionSprites.help")}
-          />
-          <div id={getSettingsControlAnchorId("tracker-panel-background")} className="mt-2 scroll-mt-3">
-            <ColorPicker
-              value={trackerPanelBackgroundColor}
-              onChange={setTrackerPanelBackgroundColor}
-              gradient
-              compact
-              label={localizeUi("settings.controls.panelBackground.label")}
-              helpText="Pick the Tracker panel and tracker section background. CSS colors and gradients are accepted."
-              emptyText={localizeUi("ui.panels.trackerpanelappearancedrawer.defaultValue1", {
-                value1: TRACKER_PANEL_DEFAULT_BACKGROUND_COLOR,
-              })}
-              clearLabel="Reset"
+        </div>
+        <div id={getSettingsControlAnchorId("tracker-desktop-size")} className="mt-2 grid scroll-mt-3 gap-1.5">
+          <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium">
+            {localizeUi("ui.panels.trackerpanelappearancedrawer.desktopSize")}
+            <HelpTooltip
+              text={localizeUi(
+                "ui.panels.trackerpanelappearancedrawer.chooseTheDesignedDesktopWidthForTheTrackerPanel",
+              )}
             />
-          </div>
-          <div id={getSettingsControlAnchorId("tracker-desktop-size")} className="mt-2 grid scroll-mt-3 gap-1.5">
-            <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium">
-              {localizeUi("ui.panels.trackerpanelappearancedrawer.desktopSize")}
-              <HelpTooltip
-                text={localizeUi(
-                  "ui.panels.trackerpanelappearancedrawer.chooseTheDesignedDesktopWidthForTheTrackerPanel",
-                )}
-              />
-            </span>
-            <div className="grid grid-cols-3 gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-0.5">
-              {TRACKER_PANEL_SIZE_PROFILE_OPTIONS.map((opt) => {
-                const selected = trackerPanelSizeProfile === opt.id;
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setTrackerPanelSizeProfile(opt.id)}
-                    aria-pressed={selected}
-                    title={localizeUi("ui.panels.trackerpanelappearancedrawer.value1Value2PxValue3", {
-                      value1: opt.label,
-                      value2: getTrackerPanelWidthForProfile(opt.id),
-                      value3: opt.desc,
-                    })}
-                    className={cn(
-                      "flex min-h-8 min-w-0 items-center justify-center rounded-md px-1.5 text-[0.6875rem] transition-all disabled:cursor-not-allowed",
-                      selected
-                        ? "bg-[var(--primary)]/12 text-[var(--foreground)] ring-1 ring-[var(--primary)]/45"
-                        : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
-                    )}
-                  >
-                    <span className="inline-flex items-center gap-1 font-semibold">
-                      <span className={cn("inline-flex", selected && "text-[var(--primary)]")}>
-                        <TrackerSizeTierIcon sizeProfile={opt.id} />
-                      </span>
-                      {opt.label}
+          </span>
+          <div className="grid grid-cols-3 gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-0.5">
+            {TRACKER_PANEL_SIZE_PROFILE_OPTIONS.map((opt) => {
+              const selected = trackerPanelSizeProfile === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setTrackerPanelSizeProfile(opt.id)}
+                  aria-pressed={selected}
+                  title={localizeUi("ui.panels.trackerpanelappearancedrawer.value1Value2PxValue3", {
+                    value1: opt.label,
+                    value2: getTrackerPanelWidthForProfile(opt.id),
+                    value3: opt.desc,
+                  })}
+                  className={cn(
+                    "flex min-h-8 min-w-0 items-center justify-center rounded-md px-1.5 text-[0.6875rem] transition-all disabled:cursor-not-allowed",
+                    selected
+                      ? "bg-[var(--primary)]/12 text-[var(--foreground)] ring-1 ring-[var(--primary)]/45"
+                      : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+                  )}
+                >
+                  <span className="inline-flex items-center gap-1 font-semibold">
+                    <span className={cn("inline-flex", selected && "text-[var(--primary)]")}>
+                      <TrackerSizeTierIcon sizeProfile={opt.id} />
                     </span>
-                  </button>
-                );
-              })}
-            </div>
+                    {opt.label}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-          <div
-            id={getSettingsControlAnchorId("tracker-thought-display-mode")}
-            className="mt-2 grid scroll-mt-3 gap-1.5"
-          >
-            <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium">
-              {localizeUi("ui.panels.trackerpanelappearancedrawer.thoughtDisplayMode")}
-              <HelpTooltip
-                text={localizeUi(
-                  "ui.panels.trackerpanelappearancedrawer.chooseWhetherFeaturedCharacterThoughtsOpenInsideTheTracker",
-                )}
-              />
-            </span>
-            <div className="grid grid-cols-2 gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-0.5">
-              {TRACKER_THOUGHT_BUBBLE_DISPLAY_OPTIONS.map((opt) => {
-                const selected = trackerPanelThoughtBubbleDisplay === opt.id;
-                const Icon = opt.id === "inline" ? Dock : MessageCircle;
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setTrackerPanelThoughtBubbleDisplay(opt.id)}
-                    aria-pressed={selected}
-                    title={opt.desc}
-                    className={cn(
-                      "flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-md px-2 text-[0.6875rem] transition-all disabled:cursor-not-allowed",
-                      selected
-                        ? "bg-[var(--primary)]/12 text-[var(--foreground)] ring-1 ring-[var(--primary)]/45"
-                        : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
-                    )}
-                  >
-                    <span className="inline-flex items-center gap-1.5 font-semibold">
-                      <Icon size="0.75rem" className={selected ? "text-[var(--primary)]" : ""} />
-                      {opt.label}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+        </div>
+        <div id={getSettingsControlAnchorId("tracker-thought-display-mode")} className="mt-2 grid scroll-mt-3 gap-1.5">
+          <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium">
+            {localizeUi("ui.panels.trackerpanelappearancedrawer.thoughtDisplayMode")}
+            <HelpTooltip
+              text={localizeUi(
+                "ui.panels.trackerpanelappearancedrawer.chooseWhetherFeaturedCharacterThoughtsOpenInsideTheTracker",
+              )}
+            />
+          </span>
+          <div className="grid grid-cols-2 gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-0.5">
+            {TRACKER_THOUGHT_BUBBLE_DISPLAY_OPTIONS.map((opt) => {
+              const selected = trackerPanelThoughtBubbleDisplay === opt.id;
+              const Icon = opt.id === "inline" ? Dock : MessageCircle;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setTrackerPanelThoughtBubbleDisplay(opt.id)}
+                  aria-pressed={selected}
+                  title={opt.desc}
+                  className={cn(
+                    "flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-md px-2 text-[0.6875rem] transition-all disabled:cursor-not-allowed",
+                    selected
+                      ? "bg-[var(--primary)]/12 text-[var(--foreground)] ring-1 ring-[var(--primary)]/45"
+                      : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+                  )}
+                >
+                  <span className="inline-flex items-center gap-1.5 font-semibold">
+                    <Icon size="0.75rem" className={selected ? "text-[var(--primary)]" : ""} />
+                    {opt.label}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-          <div id={getSettingsControlAnchorId("tracker-stat-display-mode")} className="mt-2 grid scroll-mt-3 gap-1.5">
-            <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium">
-              {localizeUi("ui.panels.trackerpanelappearancedrawer.statDisplayMode")}
-              <HelpTooltip
-                text={localizeUi("ui.panels.trackerpanelappearancedrawer.chooseBarsOrGaugesForTrackerStats")}
-              />
-            </span>
-            <div className="grid grid-cols-2 gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-0.5">
-              {TRACKER_STAT_DISPLAY_OPTIONS.map((option) => {
-                const selected = trackerStatDisplayMode === option;
-                const Icon = option === "bars" ? BarChart3 : Gauge;
-                const label = localizeUi(
-                  option === "bars"
-                    ? "ui.panels.trackerpanelappearancedrawer.bars"
-                    : "ui.panels.trackerpanelappearancedrawer.gauges",
-                );
-                const description = localizeUi(
-                  option === "bars"
-                    ? "ui.panels.trackerpanelappearancedrawer.barsDescription"
-                    : "ui.panels.trackerpanelappearancedrawer.gaugesDescription",
-                );
-                return (
-                  <button
-                    key={option}
-                    type="button"
-                    onClick={() => setTrackerStatDisplayMode(option)}
-                    aria-pressed={selected}
-                    title={description}
-                    className={cn(
-                      "flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-md px-2 text-[0.6875rem] transition-all",
-                      selected
-                        ? "bg-[var(--primary)]/12 text-[var(--foreground)] ring-1 ring-[var(--primary)]/45"
-                        : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
-                    )}
-                  >
-                    <span className="inline-flex items-center gap-1.5 font-semibold">
-                      <Icon size="0.75rem" className={selected ? "text-[var(--primary)]" : ""} />
-                      {label}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+        </div>
+        <div id={getSettingsControlAnchorId("tracker-stat-display-mode")} className="mt-2 grid scroll-mt-3 gap-1.5">
+          <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium">
+            {localizeUi("ui.panels.trackerpanelappearancedrawer.statDisplayMode")}
+            <HelpTooltip
+              text={localizeUi("ui.panels.trackerpanelappearancedrawer.chooseBarsOrGaugesForTrackerStats")}
+            />
+          </span>
+          <div className="grid grid-cols-2 gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-0.5">
+            {TRACKER_STAT_DISPLAY_OPTIONS.map((option) => {
+              const selected = trackerStatDisplayMode === option;
+              const Icon = option === "bars" ? BarChart3 : Gauge;
+              const label = localizeUi(
+                option === "bars"
+                  ? "ui.panels.trackerpanelappearancedrawer.bars"
+                  : "ui.panels.trackerpanelappearancedrawer.gauges",
+              );
+              const description = localizeUi(
+                option === "bars"
+                  ? "ui.panels.trackerpanelappearancedrawer.barsDescription"
+                  : "ui.panels.trackerpanelappearancedrawer.gaugesDescription",
+              );
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => setTrackerStatDisplayMode(option)}
+                  aria-pressed={selected}
+                  title={description}
+                  className={cn(
+                    "flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-md px-2 text-[0.6875rem] transition-all",
+                    selected
+                      ? "bg-[var(--primary)]/12 text-[var(--foreground)] ring-1 ring-[var(--primary)]/45"
+                      : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+                  )}
+                >
+                  <span className="inline-flex items-center gap-1.5 font-semibold">
+                    <Icon size="0.75rem" className={selected ? "text-[var(--primary)]" : ""} />
+                    {label}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-          <ToggleSetting
-            anchorId={getSettingsControlAnchorId("tracker-docked-thoughts")}
-            label={localizeUi("settings.controls.alwaysShowDockedThoughts.label")}
-            checked={trackerPanelDockedThoughtsAlwaysVisible}
-            onChange={setTrackerPanelDockedThoughtsAlwaysVisible}
-            help={localizeUi("settings.controls.alwaysShowDockedThoughts.help")}
-          />
-          <div
-            id={getSettingsControlAnchorId("tracker-temperature-unit")}
-            className="mt-2 flex scroll-mt-3 min-h-8 items-center justify-between gap-2"
-          >
-            <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium">
-              {localizeUi("ui.panels.trackerpanelappearancedrawer.temperatureUnit")}
-              <HelpTooltip
-                text={localizeUi(
-                  "ui.panels.trackerpanelappearancedrawer.changesTrackerPanelAndRoleplayHudTemperatureDisplaysWithout",
-                )}
-              />
-            </span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={trackerTemperatureUnit === "fahrenheit"}
-              aria-label={localizeUi("ui.panels.trackerpanelappearancedrawer.trackerTemperatureUnitValue1", {
-                value1:
-                  trackerTemperatureUnit === "celsius"
-                    ? localizeUi("ui.panels.trackerpanelappearancedrawer.celsius")
-                    : localizeUi("ui.panels.trackerpanelappearancedrawer.fahrenheit"),
-              })}
-              title={
+        </div>
+        <ToggleSetting
+          anchorId={getSettingsControlAnchorId("tracker-docked-thoughts")}
+          label={localizeUi("settings.controls.alwaysShowDockedThoughts.label")}
+          checked={trackerPanelDockedThoughtsAlwaysVisible}
+          onChange={setTrackerPanelDockedThoughtsAlwaysVisible}
+          help={localizeUi("settings.controls.alwaysShowDockedThoughts.help")}
+        />
+        <div
+          id={getSettingsControlAnchorId("tracker-temperature-unit")}
+          className="mt-2 flex scroll-mt-3 min-h-8 items-center justify-between gap-2"
+        >
+          <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium">
+            {localizeUi("ui.panels.trackerpanelappearancedrawer.temperatureUnit")}
+            <HelpTooltip
+              text={localizeUi(
+                "ui.panels.trackerpanelappearancedrawer.changesTrackerPanelAndRoleplayHudTemperatureDisplaysWithout",
+              )}
+            />
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={trackerTemperatureUnit === "fahrenheit"}
+            aria-label={localizeUi("ui.panels.trackerpanelappearancedrawer.trackerTemperatureUnitValue1", {
+              value1:
                 trackerTemperatureUnit === "celsius"
-                  ? localizeUi("ui.panels.trackerpanelappearancedrawer.showingTrackerTemperaturesAsCClickForF")
-                  : localizeUi("ui.panels.trackerpanelappearancedrawer.showingTrackerTemperaturesAsFClickForC")
-              }
-              onClick={() => setTrackerTemperatureUnit(trackerTemperatureUnit === "celsius" ? "fahrenheit" : "celsius")}
-              className="relative grid h-7 w-[4.75rem] shrink-0 grid-cols-2 items-center rounded-full border border-[var(--border)] bg-[var(--secondary)]/55 p-0.5 text-[0.625rem] font-semibold transition-colors hover:bg-[var(--accent)]/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--primary)]"
+                  ? localizeUi("ui.panels.trackerpanelappearancedrawer.celsius")
+                  : localizeUi("ui.panels.trackerpanelappearancedrawer.fahrenheit"),
+            })}
+            title={
+              trackerTemperatureUnit === "celsius"
+                ? localizeUi("ui.panels.trackerpanelappearancedrawer.showingTrackerTemperaturesAsCClickForF")
+                : localizeUi("ui.panels.trackerpanelappearancedrawer.showingTrackerTemperaturesAsFClickForC")
+            }
+            onClick={() => setTrackerTemperatureUnit(trackerTemperatureUnit === "celsius" ? "fahrenheit" : "celsius")}
+            className="relative grid h-8 w-[4.75rem] shrink-0 grid-cols-2 items-center rounded-lg border border-[var(--border)] bg-[var(--secondary)]/55 p-0.5 text-[0.625rem] font-semibold transition-colors hover:bg-[var(--accent)]/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--primary)]"
+          >
+            <span
+              className={cn(
+                "absolute inset-y-0.5 left-0.5 w-[calc(50%-0.125rem)] rounded-md bg-[var(--primary)]/16 ring-1 ring-[var(--primary)]/45 transition-transform",
+                trackerTemperatureUnit === "fahrenheit" && "translate-x-full",
+              )}
+            />
+            <span
+              className={cn(
+                "relative z-10 text-center transition-colors",
+                trackerTemperatureUnit === "celsius" ? "text-[var(--foreground)]" : "text-[var(--muted-foreground)]",
+              )}
             >
-              <span
-                className={cn(
-                  "absolute inset-y-0.5 left-0.5 w-[calc(50%-0.125rem)] rounded-full bg-[var(--primary)]/16 ring-1 ring-[var(--primary)]/45 transition-transform",
-                  trackerTemperatureUnit === "fahrenheit" && "translate-x-full",
-                )}
-              />
-              <span
-                className={cn(
-                  "relative z-10 text-center transition-colors",
-                  trackerTemperatureUnit === "celsius" ? "text-[var(--foreground)]" : "text-[var(--muted-foreground)]",
-                )}
-              >
-                {localizeUi("ui.panels.trackerpanelappearancedrawer.c")}
-              </span>
-              <span
-                className={cn(
-                  "relative z-10 text-center transition-colors",
-                  trackerTemperatureUnit === "fahrenheit"
-                    ? "text-[var(--foreground)]"
-                    : "text-[var(--muted-foreground)]",
-                )}
-              >
-                {localizeUi("ui.panels.trackerpanelappearancedrawer.f")}
-              </span>
-            </button>
-          </div>
-          <TrackerPanelCardOrderSetting />
-          <TrackerCardColorSettings />
-        </fieldset>
-      )}
+              {localizeUi("ui.panels.trackerpanelappearancedrawer.c")}
+            </span>
+            <span
+              className={cn(
+                "relative z-10 text-center transition-colors",
+                trackerTemperatureUnit === "fahrenheit" ? "text-[var(--foreground)]" : "text-[var(--muted-foreground)]",
+              )}
+            >
+              {localizeUi("ui.panels.trackerpanelappearancedrawer.f")}
+            </span>
+          </button>
+        </div>
+        <TrackerPanelCardOrderSetting />
+        <TrackerCardColorSettings />
+      </fieldset>
     </section>
   );
 }
 
+type AppearanceGroup = "app" | "conversation" | "roleplay" | "game";
+
+function appearanceGroupForSection(id: SettingsSectionId): AppearanceGroup {
+  if (id === "chat-display" || id === "conversation-theme") return "conversation";
+  if (id === "roleplay-tracker" || id === "roleplay-messages") return "roleplay";
+  if (id === "game-presentation") return "game";
+  return "app";
+}
+
 export function SettingsPanel() {
+  const [mountedSettingsTabs] = useState(() => new Set<string>());
   const { t: localizeUi } = useUiTranslation();
   const { t } = useTranslation();
   const localize = useLocalizedUiText();
@@ -2679,6 +2923,7 @@ export function SettingsPanel() {
   const settingsTab = normalizeSettingsTab(rawSettingsTab);
   const [settingsSearch, setSettingsSearch] = useState("");
   const [quickAccessOpen, setQuickAccessOpen] = useState(false);
+  const [appearanceGroup, setAppearanceGroup] = useState<AppearanceGroup>("app");
   const activePanelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -2695,6 +2940,7 @@ export function SettingsPanel() {
   const jumpToSection = useCallback(
     (section: SettingsSectionMeta) => {
       setSettingsTab(section.tab);
+      if (section.tab === "appearance") setAppearanceGroup(appearanceGroupForSection(section.id));
       mountedSettingsTabs.add(section.tab);
       window.requestAnimationFrame(() => {
         const panel = activePanelRef.current;
@@ -2703,12 +2949,14 @@ export function SettingsPanel() {
         panel.scrollTo({ top: Math.max(0, target.offsetTop - 12), behavior: "smooth" });
       });
     },
-    [setSettingsTab],
+    [setSettingsTab, mountedSettingsTabs],
   );
 
   const jumpToSearchResult = useCallback(
     (result: SettingsSearchResult) => {
+      setSettingsSearch("");
       const section = result.section;
+      if (section.tab === "appearance") setAppearanceGroup(appearanceGroupForSection(section.id));
       const targetId =
         result.type === "control"
           ? getSettingsControlAnchorId(result.control.id)
@@ -2722,14 +2970,18 @@ export function SettingsPanel() {
             document.getElementById(targetId) ?? document.getElementById(getSettingsSectionAnchorId(section.id));
           if (!panel || !target) return;
           panel.scrollTo({ top: Math.max(0, target.offsetTop - 12), behavior: "smooth" });
-          const focusTarget = target.querySelector<HTMLElement>(
-            'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-          );
+          const focusTarget =
+            result.type === "control"
+              ? target.querySelector<HTMLElement>(
+                  'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+                )
+              : target;
+          if (focusTarget === target) target.tabIndex = -1;
           focusTarget?.focus({ preventScroll: true });
         });
       });
     },
-    [setSettingsTab],
+    [setSettingsTab, mountedSettingsTabs],
   );
 
   useEffect(() => {
@@ -2762,7 +3014,7 @@ export function SettingsPanel() {
                 type="button"
                 onClick={() => setSettingsSearch("")}
                 aria-label={localize("Clear settings search")}
-                className="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+                className="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
               >
                 <X size="0.75rem" />
               </button>
@@ -2785,7 +3037,7 @@ export function SettingsPanel() {
                       key={`${result.type}-${result.type === "control" ? result.control.id : section.id}`}
                       type="button"
                       onClick={() => jumpToSearchResult(result)}
-                      className="grid min-w-0 gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--secondary)]/70"
+                      className="grid min-w-0 gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--accent)]/70"
                     >
                       <span className="flex min-w-0 items-center gap-1.5">
                         <span className="truncate text-xs font-semibold text-[var(--foreground)]">{label}</span>
@@ -2832,7 +3084,7 @@ export function SettingsPanel() {
                   "group relative isolate flex min-h-8 min-w-0 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-md border px-1 py-0.5 text-center text-[0.625rem] font-semibold leading-tight transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]/40",
                   active
                     ? "border-[var(--primary)]/35 bg-[var(--primary)]/10 text-[var(--foreground)] shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_11%,transparent)]"
-                    : "border-transparent text-[var(--muted-foreground)] hover:border-[var(--border)]/80 hover:bg-[var(--secondary)]/60 hover:text-[var(--foreground)]",
+                    : "border-transparent text-[var(--muted-foreground)] hover:border-[var(--border)]/80 hover:bg-[var(--accent)]/60 hover:text-[var(--foreground)]",
                 )}
                 title={t(tab.descriptionKey)}
               >
@@ -2869,7 +3121,7 @@ export function SettingsPanel() {
                   "flex min-h-6 max-w-full items-center gap-1 rounded-lg border px-1.5 py-0.5 text-[0.625rem] font-semibold transition-colors",
                   quickAccessOpen
                     ? "border-[var(--primary)]/30 bg-[var(--primary)]/10 text-[var(--foreground)]"
-                    : "border-transparent text-[var(--muted-foreground)] hover:bg-[var(--secondary)]/60 hover:text-[var(--foreground)]",
+                    : "border-transparent text-[var(--muted-foreground)] hover:bg-[var(--accent)]/60 hover:text-[var(--foreground)]",
                 )}
                 title={localize(quickAccessOpen ? "Collapse Quick Access" : "Expand Quick Access")}
               >
@@ -2908,18 +3160,51 @@ export function SettingsPanel() {
           const Comp = SETTINGS_COMPONENTS[tab.id];
           const active = settingsTab === tab.id;
           return (
-            <div
-              key={tab.id}
-              id={`settings-panel-${tab.id}`}
-              role="tabpanel"
-              aria-labelledby={`settings-tab-${tab.id}`}
-              hidden={!active}
-              ref={active ? activePanelRef : undefined}
-              className="absolute inset-0 overflow-y-auto p-3"
-              style={active ? undefined : { clipPath: "inset(100%)", pointerEvents: "none" }}
-            >
-              <Comp />
-            </div>
+            <Activity key={tab.id} mode={active ? "visible" : "hidden"}>
+              <div
+                id={`settings-panel-${tab.id}`}
+                role="tabpanel"
+                aria-labelledby={`settings-tab-${tab.id}`}
+                hidden={!active}
+                ref={active ? activePanelRef : undefined}
+                className="absolute inset-0 overflow-y-auto p-3"
+                style={active ? undefined : { clipPath: "inset(100%)", pointerEvents: "none" }}
+              >
+                {tab.id === "appearance" ? (
+                  <>
+                    <div
+                      role="group"
+                      aria-label={localizeUi("settings.appearance.modeNavigation")}
+                      className="@container mb-3 grid grid-cols-4 divide-x divide-[var(--border)] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--secondary)]/40"
+                    >
+                      {(["app", "conversation", "roleplay", "game"] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          aria-pressed={appearanceGroup === mode}
+                          onClick={() => {
+                            setAppearanceGroup(mode);
+                            activePanelRef.current?.scrollTo({ top: 0 });
+                          }}
+                          className={cn(
+                            "min-h-11 min-w-0 whitespace-nowrap px-0.5 py-2 font-semibold transition-colors",
+                            appearanceGroup === mode
+                              ? "bg-[var(--primary)]/15 text-[var(--primary)]"
+                              : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]",
+                          )}
+                          style={{ fontSize: "clamp(0.5rem, 3.5cqi, 0.625rem)" }}
+                        >
+                          {localizeUi(`settings.appearance.modes.${mode}`)}
+                        </button>
+                      ))}
+                    </div>
+                    <AppearanceSettings group={appearanceGroup} />
+                  </>
+                ) : (
+                  <Comp />
+                )}
+              </div>
+            </Activity>
           );
         })}
       </div>
@@ -2951,7 +3236,7 @@ function QuickRepliesSetting() {
         "scroll-mt-3 overflow-hidden rounded-xl border transition-colors",
         showQuickRepliesMenu
           ? "border-[var(--primary)]/30 bg-[var(--secondary)]/15"
-          : "border-transparent bg-transparent hover:bg-[var(--secondary)]/30",
+          : "border-transparent bg-transparent hover:bg-[var(--accent)]/30",
       )}
     >
       <div className="flex min-h-9 items-stretch">
@@ -3002,7 +3287,7 @@ function QuickRepliesSetting() {
             "flex min-w-10 flex-1 items-center justify-end py-2 pl-2 pr-2 text-[var(--muted-foreground)] transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]",
             showQuickRepliesMenu && drawerOpen ? "rounded-tr-xl" : "rounded-r-xl",
             showQuickRepliesMenu
-              ? "cursor-pointer hover:bg-[var(--secondary)]/35 hover:text-[var(--foreground)] active:scale-[0.99]"
+              ? "cursor-pointer hover:bg-[var(--accent)]/35 hover:text-[var(--foreground)] active:scale-[0.99]"
               : "cursor-not-allowed opacity-35",
           )}
           tabIndex={showQuickRepliesMenu ? 0 : -1}
@@ -3057,7 +3342,7 @@ function QuickRepliesSetting() {
                   "group flex min-h-10 min-w-0 max-w-full items-center gap-2.5 overflow-hidden rounded-md px-2 py-1.5 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] active:scale-[0.99]",
                   option.checked
                     ? "bg-[var(--primary)]/8 text-[var(--foreground)] ring-1 ring-[var(--primary)]/30"
-                    : "text-[var(--muted-foreground)] ring-1 ring-transparent hover:bg-[var(--secondary)]/45 hover:text-[var(--foreground)]",
+                    : "text-[var(--muted-foreground)] ring-1 ring-transparent hover:bg-[var(--accent)]/45 hover:text-[var(--foreground)]",
                 )}
               >
                 <span
@@ -3114,7 +3399,7 @@ function CustomQuickReplyIconButton({
         ref={buttonRef}
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-[var(--secondary)]/60 text-sm leading-none outline-none ring-1 ring-transparent transition-colors hover:bg-[var(--secondary)] focus-visible:ring-[var(--primary)]/40"
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-[var(--secondary)]/60 text-sm leading-none outline-none ring-1 ring-transparent transition-colors hover:bg-[var(--accent)] focus-visible:ring-[var(--primary)]/40"
         title={localize("Choose quick reply icon")}
         aria-label={localize("Choose quick reply icon")}
         aria-expanded={open}
@@ -3150,7 +3435,7 @@ function CustomQuickRepliesManager() {
         <button
           type="button"
           onClick={() => addCustomQuickReply("", "")}
-          className="flex shrink-0 items-center gap-1 rounded-md bg-[var(--secondary)]/50 px-2 py-1 text-[0.65rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)] active:scale-[0.98]"
+          className="flex shrink-0 items-center gap-1 rounded-md bg-[var(--secondary)]/50 px-2 py-1 text-[0.65rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] active:scale-[0.98]"
           title={localize("Add a custom quick reply")}
         >
           <Plus size="0.75rem" aria-hidden="true" />
@@ -3373,9 +3658,9 @@ function GeneralSettings() {
   const musicDjInstalled = installedCapabilities.some(
     (capability) => capability.id === "spotify" && capability.status === "active",
   );
-  const language = useUIStore((s) => s.language);
-  const setLanguage = useUIStore((s) => s.setLanguage);
   const enableStreaming = useUIStore((s) => s.enableStreaming);
+  const notificationPosition = useUIStore((s) => s.notificationPosition);
+  const setNotificationPosition = useUIStore((s) => s.setNotificationPosition);
   const setEnableStreaming = useUIStore((s) => s.setEnableStreaming);
   const streamingSpeed = useUIStore((s) => s.streamingSpeed);
   const setStreamingSpeed = useUIStore((s) => s.setStreamingSpeed);
@@ -3395,6 +3680,8 @@ function GeneralSettings() {
   const setEnterToSendGame = useUIStore((s) => s.setEnterToSendGame);
   const enterToSendProfessorMari = useUIStore((s) => s.enterToSendProfessorMari);
   const setEnterToSendProfessorMari = useUIStore((s) => s.setEnterToSendProfessorMari);
+  const keepGuidanceAfterRegenerate = useUIStore((s) => s.keepGuidanceAfterRegenerate);
+  const setKeepGuidanceAfterRegenerate = useUIStore((s) => s.setKeepGuidanceAfterRegenerate);
   const confirmBeforeDelete = useUIStore((s) => s.confirmBeforeDelete);
   const setConfirmBeforeDelete = useUIStore((s) => s.setConfirmBeforeDelete);
   const chatHelpButtonHidden = useUIStore((s) => s.chatHelpButtonHidden ?? false);
@@ -3447,26 +3734,7 @@ function GeneralSettings() {
         {...getSettingsSectionAnchorProps("application")}
       >
         <div className="flex flex-col gap-2.5">
-          <label id={getSettingsControlAnchorId("language")} className="flex scroll-mt-3 flex-col gap-1">
-            <span className="inline-flex items-center gap-1 text-xs font-medium">
-              {t("settings.application.language.label")}
-              <HelpTooltip text={t("settings.application.language.help")} />
-            </span>
-            <select
-              value={language}
-              onChange={(e) => setLanguage(e.target.value)}
-              className="rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]"
-            >
-              {APP_LANGUAGE_OPTIONS.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-              {t("settings.application.language.fallback")}
-            </p>
-          </label>
+          <UILanguageSetting anchorId={getSettingsControlAnchorId("language")} />
 
           <DocsLanguageSetting />
 
@@ -3523,6 +3791,7 @@ function GeneralSettings() {
             onChange={setProfessorMariNavigationEnabled}
             help={localizeUi("settings.controls.professorMariNavigation.help")}
           />
+          <MariPermissionsModeSetting anchorId={getSettingsControlAnchorId("mari-permissions-mode")} />
         </div>
       </SettingsSection>
 
@@ -3532,6 +3801,21 @@ function GeneralSettings() {
         icon={<Bell size="0.875rem" />}
         {...getSettingsSectionAnchorProps("notifications")}
       >
+        <label
+          id={getSettingsControlAnchorId("notification-position")}
+          className="mb-3 flex scroll-mt-3 flex-col gap-1.5 text-xs"
+        >
+          <span>{localizeUi("settings.notifications.position.label")}</span>
+          <select
+            value={notificationPosition}
+            onChange={(event) => setNotificationPosition(event.target.value === "bottom" ? "bottom" : "top")}
+            className="w-full rounded-lg bg-[var(--secondary)] px-3 py-2 ring-1 ring-[var(--border)]"
+          >
+            <option value="top">{localizeUi("settings.notifications.position.top")}</option>
+            <option value="bottom">{localizeUi("settings.notifications.position.bottom")}</option>
+          </select>
+          <span className="text-[var(--muted-foreground)]">{localizeUi("settings.notifications.position.help")}</span>
+        </label>
         <ConversationSoundSetting />
       </SettingsSection>
 
@@ -3554,7 +3838,7 @@ function GeneralSettings() {
             id={getSettingsControlAnchorId("streaming-speed")}
             className={cn(
               "flex scroll-mt-3 flex-col gap-1.5 rounded-lg p-1 transition-colors",
-              enableStreaming ? "hover:bg-[var(--secondary)]/50" : "opacity-40 pointer-events-none",
+              enableStreaming ? "hover:bg-[var(--accent)]/50" : "opacity-40 pointer-events-none",
             )}
           >
             <div className="flex items-center gap-2">
@@ -3599,7 +3883,7 @@ function GeneralSettings() {
 
           <label
             id={getSettingsControlAnchorId("messages-per-page")}
-            className="flex scroll-mt-3 flex-wrap items-center gap-2.5 rounded-lg p-1 transition-colors hover:bg-[var(--secondary)]/50"
+            className="flex scroll-mt-3 flex-wrap items-center gap-2.5 rounded-lg p-1 transition-colors hover:bg-[var(--accent)]/50"
           >
             <span className="text-xs">{localize("Messages per page")}</span>
             <HelpTooltip
@@ -3611,7 +3895,6 @@ function GeneralSettings() {
               value={messagesPerPage}
               min={0}
               max={500}
-              commitOnValidChange
               onCommit={(nextValue) => setMessagesPerPage(Math.max(0, Math.min(500, nextValue)))}
               className="w-16 rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs"
             />
@@ -3626,7 +3909,7 @@ function GeneralSettings() {
         {...getSettingsSectionAnchorProps("input-editing")}
       >
         <div className="flex flex-col gap-2.5">
-          <div className="flex flex-col gap-1.5 rounded-lg p-1 transition-colors hover:bg-[var(--secondary)]/50">
+          <div className="flex flex-col gap-1.5 rounded-lg p-1 transition-colors hover:bg-[var(--accent)]/50">
             <div className="flex items-center gap-2">
               <span className="text-xs">{localizeUi("settings.controls.sendOnEnter.label")}</span>
               <HelpTooltip text={localizeUi("settings.controls.sendOnEnter.help")} />
@@ -3637,7 +3920,7 @@ function GeneralSettings() {
                 onClick={() => setEnterToSendRP(!enterToSendRP)}
                 aria-pressed={enterToSendRP}
                 className={cn(
-                  "rounded-md px-2 py-1 text-[0.625rem] font-medium transition-all",
+                  "mari-chrome-tag min-h-9 px-2.5 py-1.5 text-[0.6875rem] font-medium transition-colors",
                   enterToSendRP
                     ? "bg-[var(--primary)]/15 text-[var(--primary)] ring-1 ring-[var(--primary)]/30"
                     : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
@@ -3650,7 +3933,7 @@ function GeneralSettings() {
                 onClick={() => setEnterToSendConvo(!enterToSendConvo)}
                 aria-pressed={enterToSendConvo}
                 className={cn(
-                  "rounded-md px-2 py-1 text-[0.625rem] font-medium transition-all",
+                  "mari-chrome-tag min-h-9 px-2.5 py-1.5 text-[0.6875rem] font-medium transition-colors",
                   enterToSendConvo
                     ? "bg-[var(--primary)]/15 text-[var(--primary)] ring-1 ring-[var(--primary)]/30"
                     : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
@@ -3663,7 +3946,7 @@ function GeneralSettings() {
                 onClick={() => setEnterToSendGame(!enterToSendGame)}
                 aria-pressed={enterToSendGame}
                 className={cn(
-                  "rounded-md px-2 py-1 text-[0.625rem] font-medium transition-all",
+                  "mari-chrome-tag min-h-9 px-2.5 py-1.5 text-[0.6875rem] font-medium transition-colors",
                   enterToSendGame
                     ? "bg-[var(--primary)]/15 text-[var(--primary)] ring-1 ring-[var(--primary)]/30"
                     : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
@@ -3676,7 +3959,7 @@ function GeneralSettings() {
                 onClick={() => setEnterToSendProfessorMari(!enterToSendProfessorMari)}
                 aria-pressed={enterToSendProfessorMari}
                 className={cn(
-                  "rounded-md px-2 py-1 text-[0.625rem] font-medium transition-all",
+                  "mari-chrome-tag min-h-9 px-2.5 py-1.5 text-[0.6875rem] font-medium transition-colors",
                   enterToSendProfessorMari
                     ? "bg-[var(--primary)]/15 text-[var(--primary)] ring-1 ring-[var(--primary)]/30"
                     : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
@@ -3686,6 +3969,14 @@ function GeneralSettings() {
               </button>
             </div>
           </div>
+
+          <ToggleSetting
+            anchorId={getSettingsControlAnchorId("keep-guidance-after-regenerating")}
+            label={localizeUi("settings.controls.keepGuidanceAfterRegenerate.label")}
+            checked={keepGuidanceAfterRegenerate}
+            onChange={setKeepGuidanceAfterRegenerate}
+            help={localizeUi("settings.controls.keepGuidanceAfterRegenerate.help")}
+          />
 
           <QuickRepliesSetting />
 
@@ -3767,7 +4058,7 @@ function GeneralSettings() {
           )}
           <div
             id={getSettingsControlAnchorId("quote-style")}
-            className="flex scroll-mt-3 flex-col gap-1.5 rounded-lg p-1 transition-colors hover:bg-[var(--secondary)]/50"
+            className="flex scroll-mt-3 flex-col gap-1.5 rounded-lg p-1 transition-colors hover:bg-[var(--accent)]/50"
           >
             <div className="flex items-center gap-2">
               <span className="text-xs">{localize("Quote style")}</span>
@@ -3828,7 +4119,7 @@ function GeneralSettings() {
           {!gameInstantTextReveal && (
             <label
               id={getSettingsControlAnchorId("game-narration-speed")}
-              className="flex scroll-mt-3 flex-col gap-1.5 rounded-lg p-1 transition-colors hover:bg-[var(--secondary)]/50"
+              className="flex scroll-mt-3 flex-col gap-1.5 rounded-lg p-1 transition-colors hover:bg-[var(--accent)]/50"
             >
               <div className="flex items-center gap-2">
                 <span className="text-xs">{localize("Game narration speed")}</span>
@@ -3857,7 +4148,7 @@ function GeneralSettings() {
 
           <label
             id={getSettingsControlAnchorId("game-auto-play-delay")}
-            className="flex scroll-mt-3 flex-col gap-1.5 rounded-lg p-1 transition-colors hover:bg-[var(--secondary)]/50"
+            className="flex scroll-mt-3 flex-col gap-1.5 rounded-lg p-1 transition-colors hover:bg-[var(--accent)]/50"
           >
             <div className="flex items-center gap-2">
               <span className="text-xs">{localize("Game auto-play segment delay")}</span>
@@ -3931,21 +4222,23 @@ function OverallGenerationSettings() {
 
 function ImageGenerationSettings() {
   const { t: localizeUi } = useUiTranslation();
+  const autoSaveToGalleries = useUIStore((s) => s.autoSaveGeneratedImagesToGalleries);
+  const setAutoSaveToGalleries = useUIStore((s) => s.setAutoSaveGeneratedImagesToGalleries);
   const imageBackgroundWidth = useUIStore((s) => s.imageBackgroundWidth);
   const imageBackgroundHeight = useUIStore((s) => s.imageBackgroundHeight);
   const setImageBackgroundDimensions = useUIStore((s) => s.setImageBackgroundDimensions);
   const imageIllustrationWidth = useUIStore((s) => s.imageIllustrationWidth);
   const imageIllustrationHeight = useUIStore((s) => s.imageIllustrationHeight);
   const setImageIllustrationDimensions = useUIStore((s) => s.setImageIllustrationDimensions);
-  const imageNoodleWidth = useUIStore((s) => s.imageNoodleWidth);
-  const imageNoodleHeight = useUIStore((s) => s.imageNoodleHeight);
-  const setImageNoodleDimensions = useUIStore((s) => s.setImageNoodleDimensions);
   const imageGameWidth = useUIStore((s) => s.imageGameWidth);
   const imageGameHeight = useUIStore((s) => s.imageGameHeight);
   const setImageGameDimensions = useUIStore((s) => s.setImageGameDimensions);
   const imagePortraitWidth = useUIStore((s) => s.imagePortraitWidth);
   const imagePortraitHeight = useUIStore((s) => s.imagePortraitHeight);
   const setImagePortraitDimensions = useUIStore((s) => s.setImagePortraitDimensions);
+  const imageCharacterSheetWidth = useUIStore((s) => s.imageCharacterSheetWidth);
+  const imageCharacterSheetHeight = useUIStore((s) => s.imageCharacterSheetHeight);
+  const setImageCharacterSheetDimensions = useUIStore((s) => s.setImageCharacterSheetDimensions);
   const imageSelfieWidth = useUIStore((s) => s.imageSelfieWidth);
   const imageSelfieHeight = useUIStore((s) => s.imageSelfieHeight);
   const setImageSelfieDimensions = useUIStore((s) => s.setImageSelfieDimensions);
@@ -3960,6 +4253,12 @@ function ImageGenerationSettings() {
       {...getSettingsSectionAnchorProps("image-generation")}
     >
       <div className="flex flex-col gap-2.5">
+        <ToggleSetting
+          label={localizeUi("settings.controls.autoSaveGeneratedImagesToGalleries.label")}
+          help={localizeUi("settings.controls.autoSaveGeneratedImagesToGalleries.help")}
+          checked={autoSaveToGalleries}
+          onChange={setAutoSaveToGalleries}
+        />
         <ImageDimensionRow
           controlId="image-background-size"
           label={localizeUi("settings.controls.backgroundGeneration.label")}
@@ -3977,14 +4276,6 @@ function ImageGenerationSettings() {
           onCommit={setImageIllustrationDimensions}
         />
         <ImageDimensionRow
-          controlId="image-noodle-size"
-          label={localizeUi("settings.controls.noodleGeneration.label")}
-          help={localizeUi("settings.controls.noodleGeneration.help")}
-          width={imageNoodleWidth}
-          height={imageNoodleHeight}
-          onCommit={setImageNoodleDimensions}
-        />
-        <ImageDimensionRow
           controlId="image-game-size"
           label={localizeUi("settings.controls.gameGeneration.label")}
           help={localizeUi("settings.controls.gameGeneration.help")}
@@ -3999,6 +4290,14 @@ function ImageGenerationSettings() {
           width={imagePortraitWidth}
           height={imagePortraitHeight}
           onCommit={setImagePortraitDimensions}
+        />
+        <ImageDimensionRow
+          controlId="image-character-sheet-size"
+          label={localizeUi("settings.controls.characterSheets.label")}
+          help={localizeUi("settings.controls.characterSheets.help")}
+          width={imageCharacterSheetWidth}
+          height={imageCharacterSheetHeight}
+          onCommit={setImageCharacterSheetDimensions}
         />
         <ImageDimensionRow
           controlId="image-selfie-size"
@@ -4459,10 +4758,80 @@ function GameAssetsSettings() {
   );
 }
 
-function AppearanceSettings() {
+function ChatWidgetStylePreview({
+  preset,
+  font,
+  shape,
+  colors,
+}: {
+  preset: ChatWidgetPreset;
+  font: string;
+  shape: ChatWidgetShape;
+  colors?: ChatWidgetColors;
+}) {
+  const { t } = useUiTranslation();
+  const colorStyle = getChatWidgetColorStyle(colors);
+  const presetIconClassName =
+    preset !== "default" || colorStyle["--mari-widget-custom-border"] ? "mari-rgb-static-icon" : undefined;
+  return (
+    <span
+      aria-hidden="true"
+      data-chat-widget-preview
+      data-chat-widget-colors={getChatWidgetColorRoles(colorStyle) || undefined}
+      data-chat-widget-preset={preset}
+      data-chat-widget-font={font}
+      data-chat-widget-shape={shape}
+      className="mari-widget-style-preview pointer-events-none block min-w-0 w-full"
+      style={
+        {
+          "--mari-widget-font-override": getChatWidgetFontFamily(font) ?? "initial",
+          ...colorStyle,
+        } as React.CSSProperties
+      }
+    >
+      <span className="mari-window mari-widget-style-preview__window relative flex min-w-0 flex-col">
+        <span className="mari-window__header flex min-w-0 items-center justify-between gap-1">
+          <span className="mari-window__title min-w-0 truncate">{t("chat.help.targets.settings.title")}</span>
+          <X
+            size="0.625rem"
+            className={cn(
+              "shrink-0",
+              presetIconClassName,
+              presetIconClassName &&
+                "text-[var(--mari-window-control-color,var(--mari-widget-custom-border-solid,var(--mari-widget-accent,var(--marinara-chat-chrome-panel-muted))))]",
+            )}
+          />
+        </span>
+        <span className="mari-window__body block p-1.5">
+          <span className="mari-drawer block">
+            <span className="mari-drawer__header flex min-w-0 items-center gap-1">
+              <FileText size="0.625rem" className={cn("mari-drawer__icon shrink-0", presetIconClassName)} />
+              <span className="mari-drawer__title min-w-0 flex-1 truncate">{t("settings.common.section")}</span>
+              <ChevronDown size="0.625rem" className={cn("mari-drawer__arrow shrink-0", presetIconClassName)} />
+            </span>
+          </span>
+        </span>
+      </span>
+      <span className="flex justify-center pt-3">
+        <span className="mari-window-bubble relative">
+          <span className="mari-window-bubble__paint pointer-events-none" aria-hidden="true" />
+          <span className="mari-window-bubble__icon">
+            <SlidersHorizontal size="0.875rem" className={presetIconClassName} />
+          </span>
+        </span>
+      </span>
+    </span>
+  );
+}
+
+function AppearanceSettings({ group = "app" }: { group?: AppearanceGroup }) {
   const { t: localizeUi } = useUiTranslation();
   const theme = useUIStore((s) => s.theme);
   const setTheme = useUIStore((s) => s.setTheme);
+  const sidebarWidth = useUIStore((state) => state.sidebarWidth);
+  const setSidebarWidth = useUIStore((state) => state.setSidebarWidth);
+  const rightPanelWidth = useUIStore((state) => state.rightPanelWidth);
+  const setRightPanelWidth = useUIStore((state) => state.setRightPanelWidth);
   const appBackgroundColor = useUIStore((s) => s.appBackgroundColor);
   const setAppBackgroundColor = useUIStore((s) => s.setAppBackgroundColor);
   const appAccentColor = useUIStore((s) => s.appAccentColor);
@@ -4478,19 +4847,42 @@ function AppearanceSettings() {
   const defaultAppBackgroundColor = getDefaultAppBackgroundColor(theme);
   const displayedAppBackgroundColor =
     appBackgroundColor.trim().toLowerCase() === defaultAppBackgroundColor.toLowerCase() ? "" : appBackgroundColor;
-  const defaultAppAccentColor = getDefaultAppAccentColor(theme);
+  const defaultAppAccentColor = getDefaultAppAccentColor();
   const displayedAppAccentColor =
     appAccentColor.trim().toLowerCase() === defaultAppAccentColor.toLowerCase() ? "" : appAccentColor;
   const visualTheme = useUIStore((s) => s.visualTheme);
   const setVisualTheme = useUIStore((s) => s.setVisualTheme);
+  const chatWidgetPreset = useUIStore((s) => s.chatWidgetPreset);
+  const setChatWidgetPreset = useUIStore((s) => s.setChatWidgetPreset);
+  const chatWidgetFont = useUIStore((s) => s.chatWidgetFont);
+  const setChatWidgetFont = useUIStore((s) => s.setChatWidgetFont);
+  const chatWidgetShape = useUIStore((s) => s.chatWidgetShape);
+  const chatWidgetButtonSize = useUIStore((s) => s.chatWidgetButtonSize);
+  const setChatWidgetButtonSize = useUIStore((s) => s.setChatWidgetButtonSize);
+  const setChatWidgetShape = useUIStore((s) => s.setChatWidgetShape);
+  const chatWidgetBorderColor = useUIStore((s) => s.chatWidgetBorderColor);
+  const setChatWidgetBorderColor = useUIStore((s) => s.setChatWidgetBorderColor);
+  const chatWidgetBackgroundColor = useUIStore((s) => s.chatWidgetBackgroundColor);
+  const setChatWidgetBackgroundColor = useUIStore((s) => s.setChatWidgetBackgroundColor);
+  const chatWidgetTextColor = useUIStore((s) => s.chatWidgetTextColor);
+  const setChatWidgetTextColor = useUIStore((s) => s.setChatWidgetTextColor);
+  const chatWidgetApplyFont = useUIStore((s) => s.chatWidgetApplyFont);
+  const setChatWidgetApplyFont = useUIStore((s) => s.setChatWidgetApplyFont);
+  const chatWidgetApplyShape = useUIStore((s) => s.chatWidgetApplyShape);
+  const setChatWidgetApplyShape = useUIStore((s) => s.setChatWidgetApplyShape);
+  const chatWidgetApplyColors = useUIStore((s) => s.chatWidgetApplyColors);
+  const setChatWidgetApplyColors = useUIStore((s) => s.setChatWidgetApplyColors);
   const chatBackground = useUIStore((s) => s.chatBackground);
   const setChatBackgroundRaw = useUIStore((s) => s.setChatBackground);
   const defaultRoleplayBackground = useUIStore((s) => s.defaultRoleplayBackground);
   const setDefaultRoleplayBackground = useUIStore((s) => s.setDefaultRoleplayBackground);
   const chatBackgroundBlur = useUIStore((s) => s.chatBackgroundBlur);
   const setChatBackgroundBlur = useUIStore((s) => s.setChatBackgroundBlur);
+  const conversationBackgroundImageOpacity = useUIStore((s) => s.conversationBackgroundImageOpacity);
+  const setConversationBackgroundImageOpacity = useUIStore((s) => s.setConversationBackgroundImageOpacity);
   const resetAppearanceSettings = useUIStore((s) => s.resetAppearanceSettings);
   const activeChatId = useChatStore((s) => s.activeChatId);
+  const { data: appearanceChat } = useChat(activeChatId);
   const updateMeta = useUpdateChatMetadata();
   const setActiveSyncedTheme = useSetActiveTheme();
   const handleOpenFontsFolder = async () => {
@@ -4656,6 +5048,10 @@ function AppearanceSettings() {
   const setChatFontSize = useUIStore((s) => s.setChatFontSize);
   const conversationMessageStyle = useUIStore((s) => s.conversationMessageStyle);
   const setConversationMessageStyle = useUIStore((s) => s.setConversationMessageStyle);
+  const alwaysDisplayConversationSwipeMenu = useUIStore((s) => s.alwaysDisplayConversationSwipeMenu);
+  const setAlwaysDisplayConversationSwipeMenu = useUIStore((s) => s.setAlwaysDisplayConversationSwipeMenu);
+  const alwaysDisplayRoleplaySwipeMenu = useUIStore((s) => s.alwaysDisplayRoleplaySwipeMenu);
+  const setAlwaysDisplayRoleplaySwipeMenu = useUIStore((s) => s.setAlwaysDisplayRoleplaySwipeMenu);
   const conversationAvatarShape = useUIStore((s) => s.conversationAvatarShape);
   const setConversationAvatarShape = useUIStore((s) => s.setConversationAvatarShape);
   const weatherEffects = useUIStore((s) => s.weatherEffects);
@@ -4685,6 +5081,22 @@ function AppearanceSettings() {
   const setRoleplayNarratorAvatarCycling = useUIStore((s) => s.setRoleplayNarratorAvatarCycling);
   const roleplaySpriteScale = useUIStore((s) => s.roleplaySpriteScale);
   const setRoleplaySpriteScale = useUIStore((s) => s.setRoleplaySpriteScale);
+  const roleplayDisplayStyle = useUIStore((s) => s.roleplayDisplayStyle);
+  const setRoleplayDisplayStyle = useUIStore((s) => s.setRoleplayDisplayStyle);
+  const roleplayChatPosition = useUIStore((s) => s.roleplayChatPosition);
+  const setRoleplayChatPosition = useUIStore((s) => s.setRoleplayChatPosition);
+  const roleplayVnPortraitScale = useUIStore((s) => s.roleplayVnPortraitScale);
+  const setRoleplayVnPortraitScale = useUIStore((s) => s.setRoleplayVnPortraitScale);
+  const roleplayVnSpriteScale = useUIStore((s) => s.roleplayVnSpriteScale);
+  const setRoleplayVnSpriteScale = useUIStore((s) => s.setRoleplayVnSpriteScale);
+  const roleplayVnAutoPlay = useUIStore((s) => s.roleplayVnAutoPlay);
+  const setRoleplayVnAutoPlay = useUIStore((s) => s.setRoleplayVnAutoPlay);
+  const roleplayVnAutoPlayDelay = useUIStore((s) => s.roleplayVnAutoPlayDelay);
+  const setRoleplayVnAutoPlayDelay = useUIStore((s) => s.setRoleplayVnAutoPlayDelay);
+  const activeRoleplayStyle =
+    appearanceChat?.mode === "roleplay"
+      ? (parseChatMetadata(appearanceChat.metadata).roleplayDisplayStyle ?? roleplayDisplayStyle)
+      : roleplayDisplayStyle;
   const gameDialogueDisplayMode = useUIStore((s) => s.gameDialogueDisplayMode);
   const setGameDialogueDisplayMode = useUIStore((s) => s.setGameDialogueDisplayMode);
   const chatListBackgrounds = useUIStore((s) => s.chatListBackgrounds);
@@ -4715,6 +5127,11 @@ function AppearanceSettings() {
       return true;
     });
   }, [customFonts]);
+  const unavailableWidgetFont =
+    chatWidgetFont.startsWith("custom:") &&
+    !customFontOptions.some((font) => `custom:${font.family}` === chatWidgetFont)
+      ? chatWidgetFont.slice("custom:".length)
+      : null;
 
   // Google Fonts download
   const [googleFontName, setGoogleFontName] = useState("");
@@ -4774,1098 +5191,1559 @@ function AppearanceSettings() {
         {localizeUi("ui.panels.appearancesettings.visualPreferencesGroupedByGlobalChromeTextConversationRoleplay")}
       </SettingsIntro>
 
-      <SettingsSection
-        title={localizeUi("settings.sections.appStyle.title")}
-        description={localizeUi("settings.sections.appStyle.componentDescription")}
-        icon={<Paintbrush size="0.875rem" />}
-        {...getSettingsSectionAnchorProps("app-style")}
-      >
-        <div className="flex flex-col gap-3">
-          <div className="flex justify-start">
-            <button
-              type="button"
-              onClick={handleResetAppearance}
-              disabled={setActiveSyncedTheme.isPending}
-              className={SETTINGS_BUTTON_CLASS}
-              title={localizeUi("settings.actions.resetAppearance")}
-            >
-              {setActiveSyncedTheme.isPending ? (
-                <Loader2 size="0.75rem" className="animate-spin" />
-              ) : (
-                <RotateCcw size="0.75rem" />
-              )}
-              {localizeUi("ui.panels.appearancesettings.resetAppearance")}
-            </button>
-          </div>
-          {/* ── Visual Style ── */}
-          <div id={getSettingsControlAnchorId("visual-theme")} className="flex scroll-mt-3 flex-col gap-2">
-            <div className="flex items-center gap-1.5">
-              <Paintbrush size="0.75rem" className="text-[var(--marinara-chat-chrome-button-text-active)]" />
-              <span className="text-xs font-medium">{localizeUi("ui.panels.appearancesettings.visualStyle")}</span>
-              <HelpTooltip text={localizeUi("ui.panels.appearancesettings.chooseHowTheEntireAppLooksMarinaraUsesA")} />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              {(
-                [
-                  {
-                    id: "default" as VisualTheme,
-                    label: "Default (Marinara)",
-                    desc: "Y2K / retro aesthetic with glow effects",
-                  },
-                  {
-                    id: "sillytavern" as VisualTheme,
-                    label: "SillyTavern",
-                    desc: "Classic SillyTavern look — clean & minimal",
-                  },
-                ] as const
-              ).map((opt) => (
+      {group === "app" && (
+        <>
+          <h2 className="text-sm font-semibold" data-appearance-group="general">
+            {localizeUi("settings.appearance.groups.general")}
+          </h2>
+          <SettingsSection
+            title={localizeUi("settings.sections.appStyle.title")}
+            description={localizeUi("settings.sections.appStyle.componentDescription")}
+            icon={<Paintbrush size="0.875rem" />}
+            {...getSettingsSectionAnchorProps("app-style")}
+          >
+            <div className="flex flex-col gap-3">
+              <div className="flex justify-start">
                 <button
-                  key={opt.id}
-                  onClick={() => setVisualTheme(opt.id)}
-                  className={cn(
-                    "flex flex-col items-start gap-1 rounded-lg border p-3 text-left text-xs transition-all",
-                    visualTheme === opt.id
-                      ? "border-[var(--primary)] bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]"
-                      : "border-[var(--border)] hover:border-[var(--primary)]/40",
-                  )}
+                  type="button"
+                  onClick={handleResetAppearance}
+                  disabled={setActiveSyncedTheme.isPending}
+                  className={SETTINGS_BUTTON_CLASS}
+                  title={localizeUi("settings.actions.resetAppearance")}
                 >
-                  <span className="font-semibold">{opt.label}</span>
-                  <span className="text-[0.625rem] text-[var(--muted-foreground)] leading-tight">{opt.desc}</span>
+                  {setActiveSyncedTheme.isPending ? (
+                    <Loader2 size="0.75rem" className="animate-spin" />
+                  ) : (
+                    <RotateCcw size="0.75rem" />
+                  )}
+                  {localizeUi("ui.panels.appearancesettings.resetAppearance")}
                 </button>
-              ))}
-            </div>
-          </div>
-
-          <label id={getSettingsControlAnchorId("theme-mode")} className="flex scroll-mt-3 flex-col gap-1">
-            <span className="text-xs font-medium inline-flex items-center gap-1">
-              {localizeUi("ui.panels.appearancesettings.colorScheme")}{" "}
-              <HelpTooltip text={localizeUi("ui.panels.appearancesettings.switchBetweenDarkAndLightModeDarkModeIs")} />
-            </span>
-            <select
-              value={theme}
-              onChange={(e) => setTheme(e.target.value as "dark" | "light")}
-              className="rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]"
-            >
-              <option value="dark">{localizeUi("ui.panels.appearancesettings.dark")}</option>
-              <option value="light">{localizeUi("ui.panels.appearancesettings.light")}</option>
-            </select>
-          </label>
-
-          <ToggleSetting
-            anchorId={getSettingsControlAnchorId("custom-cursor")}
-            label={localizeUi("settings.controls.customPointer.label")}
-            checked={customCursorEnabled}
-            onChange={setCustomCursorEnabled}
-            help={localizeUi("settings.controls.customPointer.help")}
-          />
-
-          <ToggleSetting
-            anchorId={getSettingsControlAnchorId("reduce-ambient-effects")}
-            label={localizeUi("settings.controls.reduceAmbientEffects.label")}
-            checked={reduceAmbientEffects}
-            onChange={setReduceAmbientEffects}
-            help={localizeUi("settings.controls.reduceAmbientEffects.help")}
-          />
-
-          <SearchableSettingTarget controlId="app-background-color">
-            <ColorPicker
-              value={displayedAppBackgroundColor}
-              onChange={handleAppBackgroundColorChange}
-              gradient
-              compact
-              label={localizeUi("settings.controls.backgroundColor.label")}
-              helpText="Colors the main app shell background. Leave it on the scheme default to follow Dark and Light mode automatically. Gradients are supported for the shell paint."
-              emptyText={localizeUi("ui.panels.trackerpanelappearancedrawer.defaultValue1", {
-                value1: defaultAppBackgroundColor,
-              })}
-              emptyPreviewValue={defaultAppBackgroundColor}
-              clearLabel="Reset to default"
-            />
-          </SearchableSettingTarget>
-
-          <SearchableSettingTarget controlId="app-accent-color">
-            <ColorPicker
-              value={displayedAppAccentColor}
-              onChange={handleAppAccentColorChange}
-              gradient
-              compact
-              label={localizeUi("settings.controls.accentColor.label")}
-              helpText="Colors the shared app accent layer: buttons, active icons, focus rings, highlights, panel outlines, and chat chrome. Accent Pulse animates this selected color."
-              emptyText={localizeUi("ui.panels.trackerpanelappearancedrawer.defaultValue1", {
-                value1: defaultAppAccentColor,
-              })}
-              emptyPreviewValue={defaultAppAccentColor}
-              clearLabel="Reset to default"
-            />
-          </SearchableSettingTarget>
-
-          <ToggleSetting
-            anchorId={getSettingsControlAnchorId("accent-pulse")}
-            label={localizeUi("settings.controls.accentPulse.label")}
-            checked={appAccentPulseMode}
-            onChange={handleAppAccentPulseModeChange}
-            help={localizeUi("settings.controls.accentPulse.help")}
-          />
-
-          <ToggleSetting
-            anchorId={getSettingsControlAnchorId("rgb-mode")}
-            label={
-              <span className={cn(appAccentRgbMode && "mari-logo-gradient-text mari-logo-gradient-text--active")}>
-                {localizeUi("ui.panels.appearancesettings.rgbMode")}
-              </span>
-            }
-            checked={appAccentRgbMode}
-            onChange={handleAppAccentRgbModeChange}
-            switchClassName={appAccentRgbMode ? "mari-rgb-toggle-track" : undefined}
-            help={localizeUi("settings.controls.rainbowAccent.help")}
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        title={localizeUi("settings.sections.textScale.title")}
-        description={localizeUi("settings.sections.textScale.description")}
-        icon={<FileText size="0.875rem" />}
-        {...getSettingsSectionAnchorProps("text-scale")}
-      >
-        <div className="flex flex-col gap-3">
-          <label id={getSettingsControlAnchorId("font-family")} className="flex scroll-mt-3 flex-col gap-1">
-            <span className="text-xs font-medium inline-flex items-center gap-1">
-              {localizeUi("ui.panels.appearancesettings.font")}{" "}
-              <HelpTooltip
-                text={localizeUi("ui.panels.appearancesettings.chooseTheFontUsedAcrossTheAppDefaultInter")}
-              />
-            </span>
-            <select
-              value={fontFamily}
-              onChange={(e) => setFontFamily(e.target.value)}
-              className="rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]"
-            >
-              <option value="">{localizeUi("ui.panels.appearancesettings.defaultInter")}</option>
-              {customFontOptions.map((f) => (
-                <option key={f.family} value={f.family}>
-                  {f.family}
-                </option>
-              ))}
-            </select>
-            {(!customFonts || customFonts.length === 0) && (
-              <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-                {localizeUi("ui.panels.appearancesettings.dropFontFilesTtfOtfWoffWoff2IntoThe")}{" "}
-                <span className="font-medium">{localizeUi("ui.panels.appearancesettings.dataFonts")}</span>{" "}
-                {localizeUi("ui.panels.appearancesettings.folderToAddCustomFonts")}
-              </p>
-            )}
-            <button onClick={handleOpenFontsFolder} className={cn(SETTINGS_BUTTON_CLASS, "mt-1 self-start")}>
-              <FolderOpen size="0.75rem" />
-              {localizeUi("ui.panels.appearancesettings.openFontsFolder")}
-            </button>
-          </label>
-
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium inline-flex items-center gap-1">
-              {localizeUi("ui.panels.appearancesettings.googleFonts")}{" "}
-              <HelpTooltip
-                text={localizeUi("ui.panels.appearancesettings.downloadAFontDirectlyFromGoogleFontsByName")}
-              />
-            </span>
-            <div className="flex gap-1.5">
-              <input
-                type="text"
-                value={googleFontName}
-                onChange={(e) => setGoogleFontName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && googleFontName.trim() && !googleFontMutation.isPending) {
-                    googleFontMutation.mutate(googleFontName.trim());
-                  }
-                }}
-                placeholder={localizeUi("settings.placeholders.fontFamily")}
-                className="flex-1 rounded-lg bg-[var(--secondary)] px-3 py-1.5 text-xs outline-none ring-1 ring-transparent transition-shadow placeholder:text-[var(--muted-foreground)]/50 focus:ring-[var(--primary)]"
-              />
-              <button
-                onClick={() => googleFontMutation.mutate(googleFontName.trim())}
-                disabled={!googleFontName.trim() || googleFontMutation.isPending}
-                className={cn(SETTINGS_BUTTON_CLASS, "mari-chrome-control--selected")}
-              >
-                {googleFontMutation.isPending ? (
-                  <Loader2 size="0.75rem" className="animate-spin" />
-                ) : (
-                  <Download size="0.75rem" />
-                )}
-                {googleFontMutation.isPending
-                  ? localizeUi("ui.panels.appearancesettings.downloading")
-                  : localizeUi("ui.panels.appearancesettings.add")}
-              </button>
-            </div>
-            <a
-              href="https://fonts.google.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[0.625rem] text-[var(--muted-foreground)] hover:text-[var(--primary)] transition-colors inline-flex items-center gap-1"
-            >
-              {localizeUi("ui.panels.appearancesettings.browseFontsAtFontsGoogleCom")}
-            </a>
-          </div>
-
-          <label id={getSettingsControlAnchorId("display-size")} className="flex scroll-mt-3 flex-col gap-1">
-            <span className="text-xs font-medium inline-flex items-center gap-1">
-              {localizeUi("ui.panels.appearancesettings.displaySize")}{" "}
-              <HelpTooltip text={localizeUi("ui.panels.appearancesettings.adjustsTheBaseFontSizeAcrossTheWholeApp")} />
-            </span>
-            <select
-              value={String(fontSize)}
-              onChange={(e) => setFontSize(Number(e.target.value) as 12 | 14 | 16 | 17 | 19 | 22)}
-              className="rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]"
-            >
-              <option value="12">{localizeUi("ui.panels.appearancesettings.tiny")}</option>
-              <option value="14">{localizeUi("ui.panels.appearancesettings.small")}</option>
-              <option value="16">{localizeUi("ui.panels.appearancesettings.medium")}</option>
-              <option value="17">{localizeUi("ui.noodle.noodlehome.default")}</option>
-              <option value="19">{localizeUi("ui.panels.appearancesettings.large")}</option>
-              <option value="22">{localizeUi("ui.panels.appearancesettings.huge")}</option>
-            </select>
-          </label>
-
-          <label id={getSettingsControlAnchorId("chat-font-size")} className="flex scroll-mt-3 flex-col gap-1">
-            <span className="text-xs font-medium inline-flex items-center gap-1">
-              {localizeUi("ui.panels.appearancesettings.chatFontSize")}{" "}
-              <HelpTooltip text={localizeUi("ui.panels.appearancesettings.adjustsTheFontSizeOfChatMessagesOnThis")} />
-            </span>
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min={12}
-                max={48}
-                step={1}
-                value={chatFontSize}
-                onChange={(e) => setChatFontSize(Number(e.target.value))}
-                className="flex-1 accent-[var(--primary)]"
-              />
-              <span className="text-xs tabular-nums text-[var(--muted-foreground)] w-8 text-right">
-                {chatFontSize}
-                {localizeUi("ui.panels.appearancesettings.px")}
-              </span>
-            </div>
-          </label>
-
-          <SearchableSettingTarget controlId="chat-text-color">
-            <ColorPicker
-              value={chatFontColor}
-              onChange={setChatFontColor}
-              gradient
-              compact
-              label={localizeUi("settings.colors.chatText")}
-              helpText="Controls the main chat message text color. Leave it on the scheme default to keep dark and light mode readable. Gradients are accepted for layouts that support them."
-              emptyText={localizeUi("ui.panels.appearancesettings.schemeDefaultValue1", {
-                value1: getDefaultChatTextColor(theme),
-              })}
-              emptyPreviewValue={getDefaultChatTextColor(theme)}
-              clearLabel="Reset to default"
-            />
-          </SearchableSettingTarget>
-
-          <SearchableSettingTarget controlId="default-dialogue-color">
-            <ColorPicker
-              value={defaultDialogueColor}
-              onChange={setDefaultDialogueColor}
-              compact
-              label={localizeUi("settings.colors.defaultDialogue")}
-              helpText="Colors dialogue for character and persona cards that do not have their own Dialogue Highlight Color. A card's own dialogue color always overrides it."
-              emptyText={localizeUi("ui.panels.appearancesettings.schemeDefaultValue1", {
-                value1: getDefaultChatTextColor(theme),
-              })}
-              emptyPreviewValue={getDefaultChatTextColor(theme)}
-              clearLabel="Reset to scheme default"
-            />
-          </SearchableSettingTarget>
-
-          <SearchableSettingTarget controlId="chat-chrome-text-color">
-            <ColorPicker
-              value={chatChromeTextColor}
-              onChange={setChatChromeTextColor}
-              gradient
-              compact
-              label={localizeUi("settings.colors.chatChrome")}
-              helpText="Controls ordinary chrome copy in tracker widgets, folder labels, settings descriptors, and windows opened from chat buttons. Accent-colored button text and active icons follow Accent Color instead. Gradients use a compatible fallback where plain CSS color is required."
-              emptyText={localizeUi("ui.panels.appearancesettings.schemeDefaultValue1", {
-                value1: getDefaultChatChromeTextColor(theme),
-              })}
-              emptyPreviewValue={getDefaultChatChromeTextColor(theme)}
-              clearLabel="Reset to default"
-            />
-          </SearchableSettingTarget>
-
-          <div id={getSettingsControlAnchorId("text-outline-width")} className="flex scroll-mt-3 flex-col gap-1.5">
-            <span className="text-[0.6875rem] font-medium inline-flex items-center gap-1">
-              {localizeUi("ui.panels.appearancesettings.textOutlineStroke")}
-              <HelpTooltip
-                text={localizeUi("ui.panels.appearancesettings.addsAnOutlineAroundChatTextForBetterReadability")}
-              />
-            </span>
-            <ColorPicker
-              value={textStrokeColor || "#000000"}
-              onChange={(value) => setTextStrokeColor(value || "#000000")}
-              compact
-              label={localizeUi("settings.colors.textOutline")}
-              helpText="Controls the outline color used when text stroke width is above 0."
-              clearLabel="Reset to default"
-              clearValue="#000000"
-            />
-            <label className="flex flex-col gap-1">
-              <span className="text-[0.625rem] text-[var(--muted-foreground)]">
-                {localizeUi("ui.panels.appearancesettings.width")}
-              </span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min={0}
-                  max={5}
-                  step={0.5}
-                  value={textStrokeWidth}
-                  onChange={(e) => setTextStrokeWidth(Number(e.target.value))}
-                  className="flex-1 accent-[var(--primary)]"
-                />
-                <span className="w-10 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
-                  {textStrokeWidth}
-                  {localizeUi("ui.panels.appearancesettings.px")}
+              </div>
+              {/* ── Visual Style ── */}
+              <div className="flex min-w-0 flex-col gap-2" id={getSettingsControlAnchorId("desktop-sidebar-width")}>
+                <label htmlFor="desktop-sidebar-width" className="text-xs font-medium">
+                  {localizeUi("settings.appearance.sidebarWidth")}
+                </label>
+                <span className="text-[0.625rem] text-[var(--muted-foreground)]">
+                  {localizeUi("settings.appearance.sidebarWidthHelp")}
+                </span>
+                <span className="flex min-w-0 items-center gap-2">
+                  <input
+                    id="desktop-sidebar-width"
+                    type="range"
+                    min={Math.max(SIDEBAR_WIDTH_MIN, RIGHT_PANEL_WIDTH_MIN)}
+                    max={Math.min(SIDEBAR_WIDTH_MAX, RIGHT_PANEL_WIDTH_MAX)}
+                    step={8}
+                    value={rightPanelWidth || sidebarWidth}
+                    onChange={(event) => {
+                      const width = Number(event.target.value);
+                      setSidebarWidth(width);
+                      setRightPanelWidth(width);
+                    }}
+                    className="min-w-0 flex-1 accent-[var(--primary)]"
+                  />
+                  <output className="shrink-0 text-xs tabular-nums">
+                    {localizeUi("ui.panels.appearancesettings.value1Px", { value1: rightPanelWidth || sidebarWidth })}
+                  </output>
+                  <button
+                    type="button"
+                    className="mari-chrome-control mari-chrome-control--compact"
+                    onClick={() => {
+                      setSidebarWidth(320);
+                      setRightPanelWidth(320);
+                    }}
+                  >
+                    {localizeUi("settings.appearance.resetSidebarWidth")}
+                  </button>
                 </span>
               </div>
-            </label>
-            <button
-              onClick={() => {
-                setTextStrokeWidth(0.5);
-                setTextStrokeColor("#000000");
-              }}
-              className="text-[0.625rem] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors self-start"
-            >
-              {localizeUi("ui.panels.appearancesettings.resetToDefault")}
-            </button>
-          </div>
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        title={localizeUi("settings.sections.conversationDisplay.title")}
-        description={localizeUi("settings.sections.conversationDisplay.componentDescription")}
-        icon={<MessageCircle size="0.875rem" />}
-        {...getSettingsSectionAnchorProps("chat-display")}
-      >
-        <div className="flex flex-col gap-3">
-          <div
-            id={getSettingsControlAnchorId("conversation-layout")}
-            className="flex scroll-mt-3 flex-col gap-2 rounded-lg border border-[var(--border)]/70 bg-[var(--secondary)]/25 p-3"
-          >
-            <div className="flex items-center gap-1.5">
-              <MessageCircle size="0.75rem" className="text-[var(--muted-foreground)]" />
-              <span className="text-xs font-medium">{localizeUi("ui.panels.appearancesettings.chatLayout")}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              {(
-                [
-                  { id: "classic" as ConversationMessageStyle, label: "Linear", desc: "Chat-style rows" },
-                  { id: "bubble" as ConversationMessageStyle, label: "Bubbles", desc: "Messenger-style bubbles" },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setConversationMessageStyle(opt.id)}
-                  className={cn(
-                    "flex flex-col items-start gap-1 rounded-lg border p-3 text-left text-xs transition-all",
-                    conversationMessageStyle === opt.id
-                      ? "border-[var(--primary)] bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]"
-                      : "border-[var(--border)] bg-[var(--background)]/35 hover:border-[var(--primary)]/40",
-                  )}
-                  aria-pressed={conversationMessageStyle === opt.id}
-                >
-                  <span className="font-semibold">{opt.label}</span>
-                  <span className="text-[0.625rem] leading-tight text-[var(--muted-foreground)]">{opt.desc}</span>
-                </button>
-              ))}
-            </div>
-            <div className="rounded-lg border border-[var(--border)]/60 bg-[var(--background)]/35 p-2.5 text-[0.6875rem]">
-              {conversationMessageStyle === "bubble" ? (
-                <div className="space-y-1.5">
-                  <div className="flex justify-end">
-                    <div className="mari-message-bubble texting-bubble texting-bubble-user max-w-[78%] rounded-2xl px-3 py-1.5 text-xs shadow-sm">
-                      {localizeUi("ui.panels.appearancesettings.heyHowSItGoing")}
-                    </div>
-                  </div>
-                  <div className="flex items-end gap-1.5 justify-start">
-                    <div
+              <div id={getSettingsControlAnchorId("visual-theme")} className="flex scroll-mt-3 flex-col gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Paintbrush size="0.75rem" className="text-[var(--marinara-chat-chrome-button-text-active)]" />
+                  <span className="text-xs font-medium">{localizeUi("ui.panels.appearancesettings.visualStyle")}</span>
+                  <HelpTooltip
+                    text={localizeUi("ui.panels.appearancesettings.chooseHowTheEntireAppLooksMarinaraUsesA")}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {(
+                    [
+                      {
+                        id: "default" as VisualTheme,
+                        label: "Default (Marinara)",
+                        desc: "Y2K / retro aesthetic with glow effects",
+                      },
+                      {
+                        id: "sillytavern" as VisualTheme,
+                        label: "SillyTavern",
+                        desc: "Classic SillyTavern look — clean & minimal",
+                      },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      onClick={() => setVisualTheme(opt.id)}
                       className={cn(
-                        "h-5 w-5 shrink-0 bg-[var(--accent)]",
-                        conversationAvatarShape === "square" ? "rounded-[0.2rem]" : "rounded-full",
+                        "flex flex-col items-start gap-1 rounded-lg border p-3 text-left text-xs transition-all",
+                        visualTheme === opt.id
+                          ? "border-[var(--primary)] bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]"
+                          : "border-[var(--border)] hover:border-[var(--primary)]/40",
+                      )}
+                    >
+                      <span className="font-semibold">{opt.label}</span>
+                      <span className="text-[0.625rem] text-[var(--muted-foreground)] leading-tight">{opt.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <label id={getSettingsControlAnchorId("theme-mode")} className="flex scroll-mt-3 flex-col gap-1">
+                <span className="text-xs font-medium inline-flex items-center gap-1">
+                  {localizeUi("ui.panels.appearancesettings.colorScheme")}{" "}
+                  <HelpTooltip
+                    text={localizeUi("ui.panels.appearancesettings.switchBetweenDarkAndLightModeDarkModeIs")}
+                  />
+                </span>
+                <select
+                  value={theme}
+                  onChange={(e) => setTheme(e.target.value as "dark" | "light")}
+                  className="rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]"
+                >
+                  <option value="dark">{localizeUi("ui.panels.appearancesettings.dark")}</option>
+                  <option value="light">{localizeUi("ui.panels.appearancesettings.light")}</option>
+                </select>
+              </label>
+
+              <ToggleSetting
+                anchorId={getSettingsControlAnchorId("custom-cursor")}
+                label={localizeUi("settings.controls.customPointer.label")}
+                checked={customCursorEnabled}
+                onChange={setCustomCursorEnabled}
+                help={localizeUi("settings.controls.customPointer.help")}
+              />
+
+              <ToggleSetting
+                anchorId={getSettingsControlAnchorId("reduce-ambient-effects")}
+                label={localizeUi("settings.controls.reduceAmbientEffects.label")}
+                checked={reduceAmbientEffects}
+                onChange={setReduceAmbientEffects}
+                help={localizeUi("settings.controls.reduceAmbientEffects.help")}
+              />
+
+              <SearchableSettingTarget controlId="app-background-color">
+                <ColorPicker
+                  value={displayedAppBackgroundColor}
+                  onChange={handleAppBackgroundColorChange}
+                  gradient
+                  compact
+                  label={localizeUi("settings.controls.backgroundColor.label")}
+                  helpText="Colors the main app shell background. Leave it on the scheme default to follow Dark and Light mode automatically. Gradients are supported for the shell paint."
+                  emptyText={localizeUi("ui.panels.trackerpanelappearancedrawer.defaultValue1", {
+                    value1: defaultAppBackgroundColor,
+                  })}
+                  emptyPreviewValue={defaultAppBackgroundColor}
+                  clearLabel="Reset to default"
+                />
+              </SearchableSettingTarget>
+
+              <SearchableSettingTarget controlId="app-accent-color">
+                <ColorPicker
+                  value={displayedAppAccentColor}
+                  onChange={handleAppAccentColorChange}
+                  gradient
+                  compact
+                  label={localizeUi("settings.controls.accentColor.label")}
+                  helpText={localizeUi("settings.controls.accentColor.help")}
+                  emptyText={localizeUi("ui.panels.trackerpanelappearancedrawer.defaultValue1", {
+                    value1: localizeUi("ui.ui.colorpicker.marinaraGradient"),
+                  })}
+                  emptyPreviewValue={defaultAppAccentColor}
+                  clearLabel="Reset to default"
+                />
+              </SearchableSettingTarget>
+
+              <ToggleSetting
+                anchorId={getSettingsControlAnchorId("accent-pulse")}
+                label={localizeUi("settings.controls.accentPulse.label")}
+                checked={appAccentPulseMode}
+                onChange={handleAppAccentPulseModeChange}
+                help={localizeUi("settings.controls.accentPulse.help")}
+              />
+
+              <ToggleSetting
+                anchorId={getSettingsControlAnchorId("rgb-mode")}
+                label={
+                  <span className={cn(appAccentRgbMode && "mari-logo-gradient-text mari-logo-gradient-text--active")}>
+                    {localizeUi("ui.panels.appearancesettings.rgbMode")}
+                  </span>
+                }
+                checked={appAccentRgbMode}
+                onChange={handleAppAccentRgbModeChange}
+                switchClassName={appAccentRgbMode ? "mari-rgb-toggle-track" : undefined}
+                help={localizeUi("settings.controls.rainbowAccent.help")}
+              />
+
+              <fieldset
+                id={getSettingsControlAnchorId("chat-widget-style")}
+                data-chat-widget-style-controls
+                className="@container min-w-0 scroll-mt-3 pt-4"
+              >
+                <legend className="px-0 text-xs font-medium">
+                  {localizeUi("settings.controls.chatWidgetStyle.label")}
+                </legend>
+                <p className="mb-3 text-xs leading-relaxed text-[var(--muted-foreground)]">
+                  {localizeUi("settings.controls.chatWidgetStyle.help")}
+                </p>
+                <div className="grid grid-cols-1 gap-2 @min-[34rem]:grid-cols-3">
+                  {(
+                    [
+                      {
+                        id: "default",
+                        labelKey: "settings.controls.chatWidgetStyle.default",
+                        descriptionKey: "settings.controls.chatWidgetStyle.defaultDescription",
+                      },
+                      {
+                        id: "dottore",
+                        labelKey: "settings.controls.chatWidgetStyle.dottore",
+                        descriptionKey: "settings.controls.chatWidgetStyle.dottoreDescription",
+                      },
+                      {
+                        id: "mari",
+                        labelKey: "settings.controls.chatWidgetStyle.mari",
+                        descriptionKey: "settings.controls.chatWidgetStyle.mariDescription",
+                      },
+                    ] as const
+                  ).map((preset) => {
+                    const selected = chatWidgetPreset === preset.id;
+                    const descriptionId = `chat-widget-preset-${preset.id}-description`;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        data-chat-widget-preset-option={preset.id}
+                        aria-label={localizeUi(preset.labelKey)}
+                        aria-describedby={descriptionId}
+                        aria-pressed={selected}
+                        onClick={() => setChatWidgetPreset(preset.id)}
+                        className={cn(
+                          "flex min-w-0 flex-col items-stretch gap-2 rounded-lg border p-2.5 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)]",
+                          selected
+                            ? "border-[var(--primary)] bg-[var(--accent)] text-[var(--foreground)]"
+                            : "border-[var(--border)] hover:border-[var(--primary)]/50",
+                        )}
+                      >
+                        <span className="flex items-center justify-between gap-1 font-semibold">
+                          {localizeUi(preset.labelKey)}
+                          {selected && <Check size="0.75rem" aria-hidden="true" className="shrink-0" />}
+                        </span>
+                        <ChatWidgetStylePreview
+                          preset={preset.id}
+                          font={selected ? chatWidgetFont : ""}
+                          shape={selected ? chatWidgetShape : "preset"}
+                          colors={
+                            selected
+                              ? {
+                                  border: chatWidgetBorderColor,
+                                  background: chatWidgetBackgroundColor,
+                                  text: chatWidgetTextColor,
+                                }
+                              : undefined
+                          }
+                        />
+                        <span
+                          id={descriptionId}
+                          className="text-[0.6875rem] leading-relaxed text-[var(--muted-foreground)]"
+                        >
+                          {localizeUi(preset.descriptionKey)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label
+                    id={getSettingsControlAnchorId("chat-widget-font")}
+                    className="flex min-w-0 scroll-mt-3 flex-col gap-1"
+                  >
+                    <span className="text-xs font-medium">{localizeUi("settings.controls.chatWidgetFont.label")}</span>
+                    <select
+                      id="chat-widget-font"
+                      value={chatWidgetFont}
+                      onChange={(event) => setChatWidgetFont(event.target.value)}
+                      className="min-w-0 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]"
+                    >
+                      <option value="">{localizeUi("settings.controls.chatWidgetFont.preset")}</option>
+                      <option value="@app">{localizeUi("settings.controls.chatWidgetFont.app")}</option>
+                      <option value="@sans">{localizeUi("settings.controls.chatWidgetFont.sans")}</option>
+                      <option value="@serif">{localizeUi("settings.controls.chatWidgetFont.serif")}</option>
+                      <option value="@mono">{localizeUi("settings.controls.chatWidgetFont.mono")}</option>
+                      {customFontOptions.map((font) => (
+                        <option key={font.family} value={`custom:${font.family}`}>
+                          {font.family}
+                        </option>
+                      ))}
+                      {unavailableWidgetFont && (
+                        <option value={chatWidgetFont}>
+                          {localizeUi("settings.controls.chatWidgetFont.unavailable", { font: unavailableWidgetFont })}
+                        </option>
+                      )}
+                    </select>
+                  </label>
+                  <label
+                    id={getSettingsControlAnchorId("chat-widget-shape")}
+                    className="flex min-w-0 scroll-mt-3 flex-col gap-1"
+                  >
+                    <span className="text-xs font-medium">{localizeUi("settings.controls.chatWidgetShape.label")}</span>
+                    <select
+                      id="chat-widget-shape"
+                      value={chatWidgetShape}
+                      onChange={(event) => setChatWidgetShape(event.target.value as ChatWidgetShape)}
+                      className="min-w-0 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]"
+                    >
+                      <option value="preset">{localizeUi("settings.controls.chatWidgetShape.preset")}</option>
+                      <option value="rounded">{localizeUi("settings.controls.chatWidgetShape.rounded")}</option>
+                      <option value="square">{localizeUi("settings.controls.chatWidgetShape.square")}</option>
+                      <option value="cut-corner">{localizeUi("settings.controls.chatWidgetShape.cutCorner")}</option>
+                      <option value="arched">{localizeUi("settings.controls.chatWidgetShape.arched")}</option>
+                    </select>
+                  </label>
+                </div>
+                <div id={getSettingsControlAnchorId("chat-widget-button-size")} className="mt-4 scroll-mt-3">
+                  <label
+                    htmlFor="chat-widget-button-size"
+                    className="inline-flex items-center gap-1 text-xs font-medium"
+                  >
+                    {localizeUi("settings.controls.chatWidgetButtonSize.label")}
+                    <HelpTooltip text={localizeUi("settings.controls.chatWidgetButtonSize.help")} />
+                  </label>
+                  <div className="mt-1 flex items-center gap-2">
+                    <DraftNumberInput
+                      id="chat-widget-button-size"
+                      allowEmpty
+                      value={chatWidgetButtonSize}
+                      min={32}
+                      max={96}
+                      onCommit={setChatWidgetButtonSize}
+                      placeholder={localizeUi("settings.controls.chatWidgetButtonSize.default")}
+                      className="min-w-0 flex-1 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent focus:ring-[var(--primary)]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setChatWidgetButtonSize(null)}
+                      aria-label={localizeUi("settings.controls.chatWidgetButtonSize.reset")}
+                      title={localizeUi("settings.controls.chatWidgetButtonSize.reset")}
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)] focus-visible:ring-2 focus-visible:ring-[var(--primary)]"
+                    >
+                      <RotateCcw size={14} />
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-col gap-4">
+                  <p className="text-[0.6875rem] leading-relaxed text-[var(--muted-foreground)]">
+                    {localizeUi("settings.controls.chatWidgetColors.help")}
+                  </p>
+                  <SearchableSettingTarget controlId="chat-widget-border-color">
+                    <div data-chat-widget-color="border">
+                      <ColorPicker
+                        value={chatWidgetBorderColor}
+                        onChange={setChatWidgetBorderColor}
+                        gradient
+                        compact
+                        label={localizeUi("settings.controls.chatWidgetBorderColor.label")}
+                        helpText={localizeUi("settings.controls.chatWidgetBorderColor.help")}
+                        emptyText={localizeUi("settings.controls.chatWidgetColors.preset")}
+                        emptyPreviewValue="var(--mari-widget-accent, var(--marinara-chat-chrome-button-text))"
+                        clearLabel={localizeUi("settings.controls.chatWidgetColors.reset")}
+                      />
+                    </div>
+                  </SearchableSettingTarget>
+                  <SearchableSettingTarget controlId="chat-widget-background-color">
+                    <div data-chat-widget-color="background">
+                      <ColorPicker
+                        value={chatWidgetBackgroundColor}
+                        onChange={setChatWidgetBackgroundColor}
+                        gradient
+                        compact
+                        label={localizeUi("settings.controls.chatWidgetBackgroundColor.label")}
+                        helpText={localizeUi("settings.controls.chatWidgetBackgroundColor.help")}
+                        emptyText={localizeUi("settings.controls.chatWidgetColors.preset")}
+                        emptyPreviewValue="var(--mari-widget-bg, var(--marinara-chat-chrome-panel-bg))"
+                        clearLabel={localizeUi("settings.controls.chatWidgetColors.reset")}
+                      />
+                    </div>
+                  </SearchableSettingTarget>
+                  <SearchableSettingTarget controlId="chat-widget-text-color">
+                    <div data-chat-widget-color="text">
+                      <ColorPicker
+                        value={chatWidgetTextColor}
+                        onChange={setChatWidgetTextColor}
+                        gradient
+                        compact
+                        label={localizeUi("settings.controls.chatWidgetTextColor.label")}
+                        helpText={localizeUi("settings.controls.chatWidgetTextColor.help")}
+                        emptyText={localizeUi("settings.controls.chatWidgetColors.preset")}
+                        emptyPreviewValue="var(--mari-widget-text, var(--marinara-chat-chrome-panel-text))"
+                        clearLabel={localizeUi("settings.controls.chatWidgetColors.reset")}
+                      />
+                    </div>
+                  </SearchableSettingTarget>
+                  <ToggleSetting
+                    anchorId={getSettingsControlAnchorId("chat-widget-apply-font")}
+                    label={localizeUi("settings.controls.chatWidgetApplyFont.label")}
+                    checked={chatWidgetApplyFont}
+                    onChange={setChatWidgetApplyFont}
+                    help={localizeUi("settings.controls.chatWidgetApplyFont.help")}
+                  />
+                  <ToggleSetting
+                    anchorId={getSettingsControlAnchorId("chat-widget-apply-shape")}
+                    label={localizeUi("settings.controls.chatWidgetApplyShape.label")}
+                    checked={chatWidgetApplyShape}
+                    onChange={setChatWidgetApplyShape}
+                    help={localizeUi("settings.controls.chatWidgetApplyShape.help")}
+                  />
+                  <ToggleSetting
+                    anchorId={getSettingsControlAnchorId("chat-widget-apply-colors")}
+                    label={localizeUi("settings.controls.chatWidgetApplyColors.label")}
+                    checked={chatWidgetApplyColors}
+                    onChange={setChatWidgetApplyColors}
+                    help={localizeUi("settings.controls.chatWidgetApplyColors.help")}
+                  />
+                </div>
+              </fieldset>
+            </div>
+          </SettingsSection>
+
+          <SettingsSection
+            title={localizeUi("settings.sections.textScale.title")}
+            description={localizeUi("settings.sections.textScale.description")}
+            icon={<FileText size="0.875rem" />}
+            {...getSettingsSectionAnchorProps("text-scale")}
+          >
+            <div className="flex flex-col gap-3">
+              <label id={getSettingsControlAnchorId("font-family")} className="flex scroll-mt-3 flex-col gap-1">
+                <span className="text-xs font-medium inline-flex items-center gap-1">
+                  {localizeUi("ui.panels.appearancesettings.font")}{" "}
+                  <HelpTooltip
+                    text={localizeUi("ui.panels.appearancesettings.chooseTheFontUsedAcrossTheAppDefaultInter")}
+                  />
+                </span>
+                <select
+                  value={fontFamily}
+                  onChange={(e) => setFontFamily(e.target.value)}
+                  className="rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]"
+                >
+                  <option value="">{localizeUi("ui.panels.appearancesettings.defaultInter")}</option>
+                  {customFontOptions.map((f) => (
+                    <option key={f.family} value={f.family}>
+                      {f.family}
+                    </option>
+                  ))}
+                </select>
+                {(!customFonts || customFonts.length === 0) && (
+                  <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                    {localizeUi("ui.panels.appearancesettings.dropFontFilesTtfOtfWoffWoff2IntoThe")}{" "}
+                    <span className="font-medium">{localizeUi("ui.panels.appearancesettings.dataFonts")}</span>{" "}
+                    {localizeUi("ui.panels.appearancesettings.folderToAddCustomFonts")}
+                  </p>
+                )}
+                <button onClick={handleOpenFontsFolder} className={cn(SETTINGS_BUTTON_CLASS, "mt-1 self-start")}>
+                  <FolderOpen size="0.75rem" />
+                  {localizeUi("ui.panels.appearancesettings.openFontsFolder")}
+                </button>
+              </label>
+
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs font-medium inline-flex items-center gap-1">
+                  {localizeUi("ui.panels.appearancesettings.googleFonts")}{" "}
+                  <HelpTooltip
+                    text={localizeUi("ui.panels.appearancesettings.downloadAFontDirectlyFromGoogleFontsByName")}
+                  />
+                </span>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={googleFontName}
+                    onChange={(e) => setGoogleFontName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && googleFontName.trim() && !googleFontMutation.isPending) {
+                        googleFontMutation.mutate(googleFontName.trim());
+                      }
+                    }}
+                    placeholder={localizeUi("settings.placeholders.fontFamily")}
+                    className="flex-1 rounded-lg bg-[var(--secondary)] px-3 py-1.5 text-xs outline-none ring-1 ring-transparent transition-shadow placeholder:text-[var(--muted-foreground)]/50 focus:ring-[var(--primary)]"
+                  />
+                  <button
+                    onClick={() => googleFontMutation.mutate(googleFontName.trim())}
+                    disabled={!googleFontName.trim() || googleFontMutation.isPending}
+                    className={cn(SETTINGS_BUTTON_CLASS, "mari-chrome-control--selected")}
+                  >
+                    {googleFontMutation.isPending ? (
+                      <Loader2 size="0.75rem" className="animate-spin" />
+                    ) : (
+                      <Download size="0.75rem" />
+                    )}
+                    {googleFontMutation.isPending
+                      ? localizeUi("ui.panels.appearancesettings.downloading")
+                      : localizeUi("ui.panels.appearancesettings.add")}
+                  </button>
+                </div>
+                <a
+                  href="https://fonts.google.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[0.625rem] text-[var(--muted-foreground)] hover:text-[var(--primary)] transition-colors inline-flex items-center gap-1"
+                >
+                  {localizeUi("ui.panels.appearancesettings.browseFontsAtFontsGoogleCom")}
+                </a>
+              </div>
+
+              <label id={getSettingsControlAnchorId("display-size")} className="flex scroll-mt-3 flex-col gap-1">
+                <span className="text-xs font-medium inline-flex items-center gap-1">
+                  {localizeUi("ui.panels.appearancesettings.displaySize")}{" "}
+                  <HelpTooltip
+                    text={localizeUi("ui.panels.appearancesettings.adjustsTheBaseFontSizeAcrossTheWholeApp")}
+                  />
+                </span>
+                <select
+                  value={String(fontSize)}
+                  onChange={(e) => setFontSize(Number(e.target.value) as Parameters<typeof setFontSize>[0])}
+                  className="rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]"
+                >
+                  <option value="12">{localizeUi("ui.panels.appearancesettings.tiny")}</option>
+                  <option value="14">{localizeUi("ui.panels.appearancesettings.small")}</option>
+                  <option value="16">{localizeUi("ui.panels.appearancesettings.medium")}</option>
+                  <option value="17">{localizeUi("ui.noodle.noodlehome.default")}</option>
+                  <option value="19">{localizeUi("ui.panels.appearancesettings.large")}</option>
+                  <option value="22">{localizeUi("ui.panels.appearancesettings.huge")}</option>
+                  <option value="26">{localizeUi("settings.appearance.displaySize.extraLarge")}</option>
+                  <option value="30">{localizeUi("settings.appearance.displaySize.extraExtraLarge")}</option>
+                  <option value="34">{localizeUi("settings.appearance.displaySize.maximum")}</option>
+                </select>
+              </label>
+
+              <label id={getSettingsControlAnchorId("chat-font-size")} className="flex scroll-mt-3 flex-col gap-1">
+                <span className="text-xs font-medium inline-flex items-center gap-1">
+                  {localizeUi("ui.panels.appearancesettings.chatFontSize")}{" "}
+                  <HelpTooltip
+                    text={localizeUi("ui.panels.appearancesettings.adjustsTheFontSizeOfChatMessagesOnThis")}
+                  />
+                </span>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={12}
+                    max={72}
+                    step={1}
+                    value={chatFontSize}
+                    onChange={(e) => setChatFontSize(Number(e.target.value))}
+                    className="min-w-0 flex-1 accent-[var(--primary)]"
+                  />
+                  <span className="text-xs tabular-nums text-[var(--muted-foreground)] w-8 text-right">
+                    {chatFontSize}
+                    {localizeUi("ui.panels.appearancesettings.px")}
+                  </span>
+                </div>
+              </label>
+
+              <SearchableSettingTarget controlId="chat-text-color">
+                <ColorPicker
+                  value={chatFontColor}
+                  onChange={setChatFontColor}
+                  gradient
+                  compact
+                  label={localizeUi("settings.colors.chatText")}
+                  helpText="Controls the main chat message text color. Leave it on the scheme default to keep dark and light mode readable. Gradients are accepted for layouts that support them."
+                  emptyText={localizeUi("ui.panels.appearancesettings.schemeDefaultValue1", {
+                    value1: getDefaultChatTextColor(theme),
+                  })}
+                  emptyPreviewValue={getDefaultChatTextColor(theme)}
+                  clearLabel="Reset to default"
+                />
+              </SearchableSettingTarget>
+
+              <SearchableSettingTarget controlId="default-dialogue-color">
+                <ColorPicker
+                  value={defaultDialogueColor}
+                  onChange={setDefaultDialogueColor}
+                  compact
+                  label={localizeUi("settings.colors.defaultDialogue")}
+                  helpText="Colors dialogue for character and persona cards that do not have their own Dialogue Highlight Color. A card's own dialogue color always overrides it."
+                  emptyText={localizeUi("ui.panels.appearancesettings.schemeDefaultValue1", {
+                    value1: getDefaultChatTextColor(theme),
+                  })}
+                  emptyPreviewValue={getDefaultChatTextColor(theme)}
+                  clearLabel="Reset to scheme default"
+                />
+              </SearchableSettingTarget>
+
+              <SearchableSettingTarget controlId="chat-chrome-text-color">
+                <ColorPicker
+                  value={chatChromeTextColor}
+                  onChange={setChatChromeTextColor}
+                  gradient
+                  compact
+                  label={localizeUi("settings.colors.chatChrome")}
+                  helpText="Controls ordinary chrome copy in tracker widgets, folder labels, settings descriptors, and windows opened from chat buttons. Accent-colored button text and active icons follow Accent Color instead. Gradients use a compatible fallback where plain CSS color is required."
+                  emptyText={localizeUi("ui.panels.appearancesettings.schemeDefaultValue1", {
+                    value1: getDefaultChatChromeTextColor(theme),
+                  })}
+                  emptyPreviewValue={getDefaultChatChromeTextColor(theme)}
+                  clearLabel="Reset to default"
+                />
+              </SearchableSettingTarget>
+
+              <div id={getSettingsControlAnchorId("text-outline-width")} className="flex scroll-mt-3 flex-col gap-1.5">
+                <span className="text-[0.6875rem] font-medium inline-flex items-center gap-1">
+                  {localizeUi("ui.panels.appearancesettings.textOutlineStroke")}
+                  <HelpTooltip
+                    text={localizeUi("ui.panels.appearancesettings.addsAnOutlineAroundChatTextForBetterReadability")}
+                  />
+                </span>
+                <ColorPicker
+                  value={textStrokeColor || "#000000"}
+                  onChange={(value) => setTextStrokeColor(value || "#000000")}
+                  compact
+                  label={localizeUi("settings.colors.textOutline")}
+                  helpText="Controls the outline color used when text stroke width is above 0."
+                  clearLabel="Reset to default"
+                  clearValue="#000000"
+                />
+                <label className="flex flex-col gap-1">
+                  <span className="text-[0.625rem] text-[var(--muted-foreground)]">
+                    {localizeUi("ui.panels.appearancesettings.width")}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={0}
+                      max={5}
+                      step={0.5}
+                      value={textStrokeWidth}
+                      onChange={(e) => setTextStrokeWidth(Number(e.target.value))}
+                      className="flex-1 accent-[var(--primary)]"
+                    />
+                    <span className="w-10 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                      {textStrokeWidth}
+                      {localizeUi("ui.panels.appearancesettings.px")}
+                    </span>
+                  </div>
+                </label>
+                <button
+                  onClick={() => {
+                    setTextStrokeWidth(0.5);
+                    setTextStrokeColor("#000000");
+                  }}
+                  className="text-[0.625rem] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors self-start"
+                >
+                  {localizeUi("ui.panels.appearancesettings.resetToDefault")}
+                </button>
+              </div>
+            </div>
+          </SettingsSection>
+
+          <SettingsSection
+            title={localizeUi("settings.sections.atmosphere.title")}
+            description={localizeUi("settings.sections.atmosphere.description")}
+            icon={<CloudRain size="0.875rem" />}
+            {...getSettingsSectionAnchorProps("motion-backgrounds")}
+          >
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-1.5">
+                  <CloudRain size="0.75rem" className="text-[var(--muted-foreground)]" />
+                  <span className="text-xs font-medium">{localizeUi("ui.panels.appearancesettings.effects")}</span>
+                  <HelpTooltip
+                    text={localizeUi(
+                      "ui.panels.appearancesettings.visualEffectsThatEnhanceTheRoleplayAtmosphereWeatherParticles",
+                    )}
+                  />
+                </div>
+                <ToggleSetting
+                  anchorId={getSettingsControlAnchorId("weather-effects")}
+                  label={localizeUi("settings.controls.weatherEffects.label")}
+                  checked={weatherEffects}
+                  onChange={setWeatherEffects}
+                />
+                <p className="text-[0.625rem] text-[var(--muted-foreground)] pl-6">
+                  {localizeUi("ui.panels.appearancesettings.showsAnimatedWeatherParticlesBasedOnInStoryWeather")}{" "}
+                  <span className="font-medium">{localizeUi("ui.panels.appearancesettings.worldState")}</span>{" "}
+                  {localizeUi("ui.panels.appearancesettings.agentToBeEnabledSoWeatherDataIsExtracted")}
+                </p>
+              </div>
+            </div>
+          </SettingsSection>
+
+          <SettingsSection
+            title={localizeUi("settings.controls.backgroundGeneration.label")}
+            description={localizeUi("settings.sections.backgrounds.componentDescription")}
+            icon={<Image size="0.875rem" />}
+            {...getSettingsSectionAnchorProps("chat-backgrounds")}
+          >
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2">
+                <span className="text-xs font-medium inline-flex items-center gap-1">
+                  {localizeUi("ui.panels.appearancesettings.chatBackground")}{" "}
+                  <HelpTooltip
+                    text={localizeUi("ui.panels.appearancesettings.importOneOrMoreCustomImagesOrChooseFrom")}
+                  />
+                </span>
+                <label className="flex flex-col gap-1 rounded-lg bg-[var(--secondary)]/45 p-3 ring-1 ring-[var(--border)]/70">
+                  <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium">
+                    {localizeUi("ui.panels.appearancesettings.backgroundBlur")}
+                    <HelpTooltip
+                      text={localizeUi(
+                        "ui.panels.appearancesettings.softensSelectedRoleplayAndGameModeBackgroundImagesBehind",
                       )}
                     />
-                    <div className="mari-message-bubble texting-bubble texting-bubble-other max-w-[78%] rounded-2xl px-3 py-1.5 text-xs shadow-sm">
-                      {localizeUi("ui.panels.appearancesettings.prettyGoodThanks")}
-                    </div>
+                  </span>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={0}
+                      max={24}
+                      step={1}
+                      value={chatBackgroundBlur}
+                      onChange={(e) => setChatBackgroundBlur(Number(e.target.value))}
+                      className="min-w-0 flex-1 accent-[var(--primary)]"
+                    />
+                    <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                      {chatBackgroundBlur === 0
+                        ? localizeUi("ui.panels.appearancesettings.off")
+                        : localizeUi("ui.panels.appearancesettings.value1Px", { value1: chatBackgroundBlur })}
+                    </span>
                   </div>
-                </div>
-              ) : (
-                <div className="flex gap-2 text-xs">
-                  <div
-                    className={cn(
-                      "h-6 w-6 shrink-0 bg-[var(--accent)]",
-                      conversationAvatarShape === "square" ? "rounded-[0.2rem]" : "rounded-full",
-                    )}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="mb-0.5 flex items-baseline gap-2">
-                      <span className="font-semibold">{localizeUi("ui.panels.appearancesettings.character")}</span>
-                      <span className="text-[0.625rem] text-[var(--muted-foreground)]">12:45</span>
-                    </div>
-                    <div className="space-y-0.5 text-[var(--foreground)]/90">
-                      <div>{localizeUi("ui.panels.appearancesettings.messagesAppearAsRows")}</div>
-                      <div>{localizeUi("ui.panels.appearancesettings.groupedBySender")}</div>
-                    </div>
+                </label>
+                <label className="flex flex-col gap-1 rounded-lg bg-[var(--secondary)]/45 p-3 ring-1 ring-[var(--border)]/70">
+                  <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium">
+                    {localizeUi("settings.controls.conversationBackgroundImageOpacity.label")}
+                    <HelpTooltip text={localizeUi("settings.controls.conversationBackgroundImageOpacity.help")} />
+                  </span>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      aria-label={localizeUi("settings.controls.conversationBackgroundImageOpacity.label")}
+                      min={0}
+                      max={100}
+                      step={5}
+                      value={conversationBackgroundImageOpacity}
+                      onChange={(event) => setConversationBackgroundImageOpacity(Number(event.target.value))}
+                      className="min-w-0 flex-1 accent-[var(--primary)]"
+                    />
+                    <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                      {conversationBackgroundImageOpacity}%
+                    </span>
                   </div>
-                </div>
-              )}
-            </div>
-          </div>
-          <div
-            id={getSettingsControlAnchorId("conversation-avatar-shape")}
-            className="flex scroll-mt-3 flex-col gap-2 rounded-lg border border-[var(--border)]/70 bg-[var(--secondary)]/25 p-3"
-          >
-            <div>
-              <div className="text-xs font-medium">
-                {localizeUi("ui.panels.appearancesettings.conversationAvatarShape")}
+                </label>
+                <label className="flex items-center gap-2">
+                  <span className="inline-flex shrink-0 items-center gap-1 text-[0.6875rem] font-medium">
+                    {localizeUi("ui.panels.appearancesettings.chatListBackgrounds")}
+                    <HelpTooltip
+                      text={localizeUi("ui.panels.appearancesettings.showsEachChatsOwnBackgroundAsAMutedBanner")}
+                    />
+                  </span>
+                  <select
+                    id={getSettingsControlAnchorId("chat-list-backgrounds")}
+                    value={chatListBackgrounds}
+                    onChange={(e) => setChatListBackgrounds(e.target.value as ChatListBackgroundMode)}
+                    className="h-7 min-w-0 flex-1 scroll-mt-3 rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2 text-xs"
+                  >
+                    {CHAT_LIST_BACKGROUND_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <BackgroundPicker
+                  selected={chatBackground}
+                  onSelect={setChatBackground}
+                  defaultRoleplayBackground={defaultRoleplayBackground}
+                  onDefaultChange={setDefaultRoleplayBackground}
+                />
               </div>
-              <p className="mt-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
-                {localizeUi("ui.panels.appearancesettings.conversationAvatarShapeDescription")}
-              </p>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              {(
-                [
-                  {
-                    id: "circle" as ConversationAvatarShape,
-                    label: localizeUi("ui.panels.appearancesettings.circularAvatars"),
-                    cornerClass: "rounded-full",
-                  },
-                  {
-                    id: "square" as ConversationAvatarShape,
-                    label: localizeUi("ui.panels.appearancesettings.squareAvatars"),
-                    cornerClass: "rounded-[0.2rem]",
-                  },
-                ] as const
-              ).map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  onClick={() => setConversationAvatarShape(option.id)}
-                  className={cn(
-                    "flex min-h-10 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-all",
-                    conversationAvatarShape === option.id
-                      ? "border-[var(--primary)] bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]"
-                      : "border-[var(--border)] bg-[var(--background)]/35 hover:border-[var(--primary)]/40",
-                  )}
-                  aria-pressed={conversationAvatarShape === option.id}
-                >
-                  <span
-                    className={cn("h-5 w-5 border border-current bg-[var(--accent)]", option.cornerClass)}
-                    data-avatar-shape-preview={option.id}
-                  />
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </SettingsSection>
+          </SettingsSection>
+        </>
+      )}
 
-      <div id={getSettingsSectionAnchorId("roleplay-tracker")} className="flex scroll-mt-3 flex-col gap-3">
-        <TrackerPanelAppearanceDrawer />
-      </div>
-
-      <SettingsSection
-        title={localizeUi("settings.sections.roleplayMessages.title")}
-        description={localizeUi("settings.sections.roleplayMessages.description")}
-        icon={<Image size="0.875rem" />}
-        {...getSettingsSectionAnchorProps("roleplay-messages")}
-      >
-        <div className="flex flex-col gap-3">
-          <label
-            id={getSettingsControlAnchorId("roleplay-message-opacity")}
-            className="flex scroll-mt-3 flex-col gap-1"
+      {group === "conversation" && (
+        <>
+          <h2 className="text-sm font-semibold" data-appearance-group="conversation">
+            {localizeUi("settings.appearance.groups.conversation")}
+          </h2>
+          <SettingsSection
+            title={localizeUi("settings.sections.conversationDisplay.title")}
+            description={localizeUi("settings.sections.conversationDisplay.componentDescription")}
+            icon={<MessageCircle size="0.875rem" />}
+            {...getSettingsSectionAnchorProps("chat-display")}
           >
-            <span className="text-[0.6875rem] font-medium">
-              {localizeUi("ui.panels.appearancesettings.roleplayMessagesBackgroundOpacity")}
-            </span>
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={5}
-                value={chatFontOpacity}
-                onChange={(e) => setChatFontOpacity(Number(e.target.value))}
-                className="flex-1 accent-[var(--primary)]"
+            <div className="flex flex-col gap-3">
+              <ToggleSetting
+                anchorId={getSettingsControlAnchorId("conversation-always-display-swipe-menu")}
+                label={localizeUi("settings.controls.alwaysDisplaySwipeMenu.label")}
+                checked={alwaysDisplayConversationSwipeMenu}
+                onChange={setAlwaysDisplayConversationSwipeMenu}
+                help={localizeUi("settings.controls.alwaysDisplaySwipeMenu.help")}
               />
-              <span className="text-xs tabular-nums text-[var(--muted-foreground)] w-8 text-right">
-                {chatFontOpacity}%
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setChatFontOpacity(90)}
-              disabled={chatFontOpacity === 90}
-              className="self-start text-[0.625rem] text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:pointer-events-none disabled:opacity-45"
-            >
-              {localizeUi("ui.panels.appearancesettings.resetOpacityToDefault")}
-            </button>
-          </label>
-
-          <ToggleSetting
-            anchorId={getSettingsControlAnchorId("roleplay-reduced-paint-effects")}
-            label={localizeUi("settings.controls.reducedPaintEffects.label")}
-            checked={roleplayReducedPaintEffects}
-            onChange={setRoleplayReducedPaintEffects}
-            help={localizeUi("settings.controls.reducedPaintEffects.help")}
-          />
-
-          <ToggleSetting
-            anchorId={getSettingsControlAnchorId("show-roleplay-thinking-in-messages")}
-            label={localizeUi("settings.controls.showRoleplayThinkingInMessages.label")}
-            checked={showRoleplayThinkingInMessages}
-            onChange={setShowRoleplayThinkingInMessages}
-            help={localizeUi("settings.controls.showRoleplayThinkingInMessages.help")}
-          />
-          <ToggleSetting
-            anchorId={getSettingsControlAnchorId("keep-roleplay-thinking-expanded")}
-            label={localizeUi("settings.controls.keepRoleplayThinkingExpanded.label")}
-            checked={keepRoleplayThinkingExpanded}
-            onChange={setKeepRoleplayThinkingExpanded}
-            disabled={!showRoleplayThinkingInMessages}
-            help={localizeUi("settings.controls.keepRoleplayThinkingExpanded.help")}
-          />
-
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-1.5">
-              <Image size="0.75rem" className="text-[var(--muted-foreground)]" />
-              <span className="text-xs font-medium">{localizeUi("ui.panels.appearancesettings.roleplayAvatars")}</span>
-              <HelpTooltip
-                text={localizeUi("ui.panels.appearancesettings.chooseHowAvatarsSitNextToRoleplayMessagesNone")}
-              />
-            </div>
-            <ToggleSetting
-              anchorId={getSettingsControlAnchorId("scrollable-avatars")}
-              label={localizeUi("settings.controls.scrollableAvatars.label")}
-              checked={roleplayAvatarsScrollable}
-              onChange={setRoleplayAvatarsScrollable}
-              help={localizeUi("settings.controls.scrollableAvatars.help")}
-            />
-            <ToggleSetting
-              anchorId={getSettingsControlAnchorId("narrator-cycling-avatars")}
-              label={localizeUi("settings.controls.narratorCyclingAvatars.label")}
-              checked={roleplayNarratorAvatarCycling}
-              onChange={setRoleplayNarratorAvatarCycling}
-              help={localizeUi("settings.controls.narratorCyclingAvatars.help")}
-            />
-            <div
-              id={getSettingsControlAnchorId("roleplay-avatar-style")}
-              className="grid scroll-mt-3 grid-cols-1 gap-2 sm:grid-cols-2"
-            >
-              {ROLEPLAY_AVATAR_STYLE_OPTIONS.map((opt) => (
-                <button
-                  key={opt.id}
-                  onClick={() => setRoleplayAvatarStyle(opt.id)}
-                  className={cn(
-                    "flex flex-col items-start gap-2 rounded-lg border p-3 text-left text-xs transition-all",
-                    roleplayAvatarStyle === opt.id
-                      ? "border-[var(--primary)] bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]"
-                      : "border-[var(--border)] hover:border-[var(--primary)]/40",
-                  )}
-                >
-                  <div className="w-full overflow-hidden rounded-md bg-[var(--secondary)]/80 ring-1 ring-[var(--border)]/70">
-                    {opt.id === "none" ? (
-                      <div className="flex h-14 items-center px-3">
-                        <div className="flex-1 rounded-2xl bg-black/25 px-3 py-2">
-                          <div className="h-1.5 w-16 rounded-full bg-white/20" />
-                          <div className="mt-1.5 h-1.5 w-24 rounded-full bg-white/12" />
-                        </div>
-                      </div>
-                    ) : opt.id === "circles" ? (
-                      <div className="flex h-14 items-center px-3">
-                        <div className="relative flex-1 rounded-2xl rounded-tl-sm bg-black/25 px-3 py-2">
-                          <div className="mari-settings-accent-dot absolute left-2 top-2 h-2.5 w-2.5 rounded-full shadow-[0_0_0_2px_rgba(255,255,255,0.16)]" />
-                          <div className="ml-4 h-1.5 w-14 rounded-full bg-white/20" />
-                          <div className="mt-1.5 ml-4 h-1.5 w-20 rounded-full bg-white/12" />
-                        </div>
-                      </div>
-                    ) : opt.id === "rectangles" ? (
-                      <div className="flex h-14 items-center px-3">
-                        <div className="relative flex-1 rounded-2xl rounded-tl-sm bg-black/25 py-2 pl-8 pr-3">
-                          <div className="mari-settings-portrait-preview absolute left-2 top-2 h-4 w-4 overflow-hidden rounded ring-1 ring-white/20">
-                            <div className="h-full w-full bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.24),transparent_58%)]" />
-                          </div>
-                          <div className="h-1.5 w-14 rounded-full bg-white/20" />
-                          <div className="mt-1.5 h-1.5 w-20 rounded-full bg-white/12" />
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex h-14 items-stretch overflow-hidden bg-black/25">
-                        <div className="mari-settings-scene-preview relative flex w-[42%] shrink-0 items-end justify-center overflow-hidden">
-                          <div className="absolute left-1/2 top-2 h-4 w-4 -translate-x-1/2 rounded-full bg-orange-50/45 shadow-[0_0_12px_rgba(255,237,213,0.35)]" />
-                          <div className="h-8 w-8 rounded-t-full bg-zinc-950/35" />
-                          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[32%] backdrop-blur-[4px] [mask-image:linear-gradient(to_bottom,transparent_0%,rgba(0,0,0,0.25)_28%,rgba(0,0,0,0.8)_100%)] [-webkit-mask-image:linear-gradient(to_bottom,transparent_0%,rgba(0,0,0,0.25)_28%,rgba(0,0,0,0.8)_100%)]" />
-                          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_bottom,rgba(255,255,255,0)_0%,rgba(255,255,255,0)_72%,rgba(113,113,122,0.84)_92%,rgba(113,113,122,1)_100%)]" />
-                        </div>
-                        <div className="flex-1 px-3 py-2">
-                          <div className="h-1.5 w-14 rounded-full bg-white/20" />
-                          <div className="mt-1.5 h-1.5 w-20 rounded-full bg-white/12" />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <span className="font-semibold">{opt.label}</span>
-                  <span className="text-[0.625rem] leading-tight text-[var(--muted-foreground)]">{opt.desc}</span>
-                </button>
-              ))}
-            </div>
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-3">
-              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-                <div className="flex h-20 w-full shrink-0 items-end justify-center gap-3 overflow-hidden rounded-md bg-black/30 p-2 ring-1 ring-[var(--border)]/70 sm:w-28">
-                  {roleplayAvatarStyle === "none" ? (
-                    <div
-                      className="flex shrink-0 items-center justify-center rounded-md border border-dashed border-white/20 px-2 text-[0.625rem] font-medium text-white/35"
-                      style={{
-                        width: toPreviewRem(roleplayAvatarPreview.width),
-                        height: toPreviewRem(roleplayAvatarPreview.height),
-                      }}
+              <div
+                id={getSettingsControlAnchorId("conversation-layout")}
+                className="flex scroll-mt-3 flex-col gap-2 rounded-lg border border-[var(--border)]/70 bg-[var(--secondary)]/25 p-3"
+              >
+                <div className="flex items-center gap-1.5">
+                  <MessageCircle size="0.75rem" className="text-[var(--muted-foreground)]" />
+                  <span className="text-xs font-medium">{localizeUi("ui.panels.appearancesettings.chatLayout")}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {(
+                    [
+                      { id: "classic" as ConversationMessageStyle, label: "Linear", desc: "Chat-style rows" },
+                      { id: "bubble" as ConversationMessageStyle, label: "Bubbles", desc: "Messenger-style bubbles" },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setConversationMessageStyle(opt.id)}
+                      className={cn(
+                        "flex flex-col items-start gap-1 rounded-lg border p-3 text-left text-xs transition-all",
+                        conversationMessageStyle === opt.id
+                          ? "border-[var(--primary)] bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]"
+                          : "border-[var(--border)] bg-[var(--background)]/35 hover:border-[var(--primary)]/40",
+                      )}
+                      aria-pressed={conversationMessageStyle === opt.id}
                     >
-                      {localizeUi("ui.panels.appearancesettings.noAvatars")}
+                      <span className="font-semibold">{opt.label}</span>
+                      <span className="text-[0.625rem] leading-tight text-[var(--muted-foreground)]">{opt.desc}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="rounded-lg border border-[var(--border)]/60 bg-[var(--background)]/35 p-2.5 text-[0.6875rem]">
+                  {conversationMessageStyle === "bubble" ? (
+                    <div className="space-y-1.5">
+                      <div className="flex justify-end">
+                        <div className="mari-message-bubble texting-bubble texting-bubble-user max-w-[78%] rounded-2xl px-3 py-1.5 text-xs shadow-sm">
+                          {localizeUi("ui.panels.appearancesettings.heyHowSItGoing")}
+                        </div>
+                      </div>
+                      <div className="flex items-end gap-1.5 justify-start">
+                        <div
+                          className={cn(
+                            "h-5 w-5 shrink-0 bg-[var(--accent)]",
+                            conversationAvatarShape === "square" ? "rounded-[0.2rem]" : "rounded-full",
+                          )}
+                        />
+                        <div className="mari-message-bubble texting-bubble texting-bubble-other max-w-[78%] rounded-2xl px-3 py-1.5 text-xs shadow-sm">
+                          {localizeUi("ui.panels.appearancesettings.prettyGoodThanks")}
+                        </div>
+                      </div>
                     </div>
                   ) : (
-                    <div
+                    <div className="flex gap-2 text-xs">
+                      <div
+                        className={cn(
+                          "h-6 w-6 shrink-0 bg-[var(--accent)]",
+                          conversationAvatarShape === "square" ? "rounded-[0.2rem]" : "rounded-full",
+                        )}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-0.5 flex items-baseline gap-2">
+                          <span className="font-semibold">{localizeUi("ui.panels.appearancesettings.character")}</span>
+                          <span className="text-[0.625rem] text-[var(--muted-foreground)]">12:45</span>
+                        </div>
+                        <div className="space-y-0.5 text-[var(--foreground)]/90">
+                          <div>{localizeUi("ui.panels.appearancesettings.messagesAppearAsRows")}</div>
+                          <div>{localizeUi("ui.panels.appearancesettings.groupedBySender")}</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div
+                id={getSettingsControlAnchorId("conversation-avatar-shape")}
+                className="flex scroll-mt-3 flex-col gap-2 rounded-lg border border-[var(--border)]/70 bg-[var(--secondary)]/25 p-3"
+              >
+                <div>
+                  <div className="text-xs font-medium">
+                    {localizeUi("ui.panels.appearancesettings.conversationAvatarShape")}
+                  </div>
+                  <p className="mt-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
+                    {localizeUi("ui.panels.appearancesettings.conversationAvatarShapeDescription")}
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {(
+                    [
+                      {
+                        id: "circle" as ConversationAvatarShape,
+                        label: localizeUi("ui.panels.appearancesettings.circularAvatars"),
+                        cornerClass: "rounded-full",
+                      },
+                      {
+                        id: "square" as ConversationAvatarShape,
+                        label: localizeUi("ui.panels.appearancesettings.squareAvatars"),
+                        cornerClass: "rounded-[0.2rem]",
+                      },
+                    ] as const
+                  ).map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => setConversationAvatarShape(option.id)}
                       className={cn(
-                        "mari-settings-portrait-preview shrink-0 border border-white/20 shadow-lg transition-all",
-                        roleplayAvatarStyle === "circles"
-                          ? "rounded-full"
-                          : roleplayAvatarStyle === "rectangles"
-                            ? "rounded-xl"
-                            : "rounded-md",
+                        "flex min-h-10 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-all",
+                        conversationAvatarShape === option.id
+                          ? "border-[var(--primary)] bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]"
+                          : "border-[var(--border)] bg-[var(--background)]/35 hover:border-[var(--primary)]/40",
                       )}
-                      style={{
-                        width: toPreviewRem(roleplayAvatarPreview.width),
-                        height: toPreviewRem(roleplayAvatarPreview.height),
-                      }}
+                      aria-pressed={conversationAvatarShape === option.id}
+                    >
+                      <span
+                        className={cn("h-5 w-5 border border-current bg-[var(--accent)]", option.cornerClass)}
+                        data-avatar-shape-preview={option.id}
+                      />
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </SettingsSection>
+
+          <SettingsSection
+            title={localizeUi("settings.sections.conversationTheme.title")}
+            description={localizeUi("settings.sections.conversationTheme.description")}
+            icon={<Palette size="0.875rem" />}
+            {...getSettingsSectionAnchorProps("conversation-theme")}
+          >
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Palette size="0.75rem" className="text-[var(--muted-foreground)]" />
+                    <span className="text-xs font-medium">
+                      {localizeUi("settings.sections.conversationTheme.title")}
+                    </span>
+                    <HelpTooltip
+                      text={localizeUi(
+                        "ui.panels.appearancesettings.setABackgroundGradientForAllConversationModeChats",
+                      )}
                     />
-                  )}
-                  <div
-                    className="mari-settings-scene-preview shrink-0 rounded-full border border-white/20 shadow-lg transition-all"
-                    style={{
-                      width: toPreviewRem(roleplaySpritePreview.width),
-                      height: toPreviewRem(roleplaySpritePreview.height),
-                    }}
-                  />
+                  </div>
+                  {/* Scheme tabs */}
+                  <div className="flex rounded-lg bg-[var(--secondary)] p-0.5 text-[0.625rem]">
+                    <button
+                      type="button"
+                      onClick={() => setActiveGradientScheme("dark")}
+                      className={cn(
+                        "rounded-md px-2 py-1 transition-colors",
+                        activeGradientScheme === "dark"
+                          ? "mari-accent-animated bg-[var(--accent)] text-[var(--primary)] shadow-sm ring-1 ring-[var(--primary)]/25"
+                          : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
+                      )}
+                    >
+                      {localizeUi("ui.panels.appearancesettings.dark")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveGradientScheme("light")}
+                      className={cn(
+                        "rounded-md px-2 py-1 transition-colors",
+                        activeGradientScheme === "light"
+                          ? "mari-accent-animated bg-[var(--accent)] text-[var(--primary)] shadow-sm ring-1 ring-[var(--primary)]/25"
+                          : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
+                      )}
+                    >
+                      {localizeUi("ui.panels.appearancesettings.light")}
+                    </button>
+                  </div>
                 </div>
-                <div className="grid min-w-0 flex-1 gap-3 sm:min-w-[9rem]">
-                  <label
-                    id={getSettingsControlAnchorId("roleplay-avatar-scale")}
-                    className="flex scroll-mt-3 min-w-0 flex-col gap-1"
-                  >
-                    <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">
-                      {localizeUi("ui.panels.appearancesettings.messageAvatarScale")}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        min={0.75}
-                        max={2.5}
-                        step={0.05}
-                        value={roleplayAvatarScale}
-                        onChange={(e) => setRoleplayAvatarScale(Number(e.target.value))}
-                        className="min-w-0 flex-1 accent-[var(--primary)]"
-                      />
-                      <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
-                        {Math.round(roleplayAvatarScale * 100)}%
-                      </span>
-                    </div>
-                  </label>
-                  <label
-                    id={getSettingsControlAnchorId("roleplay-sprite-scale")}
-                    className="flex scroll-mt-3 min-w-0 flex-col gap-1"
-                  >
-                    <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">
-                      {localizeUi("ui.panels.appearancesettings.defaultSpriteScale")}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        min={0.5}
-                        max={1.75}
-                        step={0.05}
-                        value={roleplaySpriteScale}
-                        onChange={(e) => setRoleplaySpriteScale(Number(e.target.value))}
-                        className="min-w-0 flex-1 accent-[var(--primary)]"
-                      />
-                      <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
-                        {Math.round(roleplaySpriteScale * 100)}%
-                      </span>
-                    </div>
-                  </label>
-                </div>
-              </div>
-            </div>
-            <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-              {localizeUi("ui.panels.appearancesettings.rectanglesKeepTheCompactSideSlotButGivePortraits")}
-            </p>
-          </div>
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        title={localizeUi("settings.sections.gamePresentation.title")}
-        description={localizeUi("settings.sections.gamePresentation.description")}
-        icon={<ScrollText size="0.875rem" />}
-        {...getSettingsSectionAnchorProps("game-presentation")}
-      >
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-1.5">
-              <Image size="0.75rem" className="text-[var(--muted-foreground)]" />
-              <span className="text-xs font-medium">{localizeUi("ui.panels.appearancesettings.gameVnArt")}</span>
-              <HelpTooltip
-                text={localizeUi("ui.panels.appearancesettings.scalesGameModeDialoguePortraitsSeparatelyFromTheCenter")}
-              />
-            </div>
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-3">
-              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-                <div className="flex h-20 w-full shrink-0 items-end justify-center gap-3 overflow-hidden rounded-md bg-black/30 p-2 ring-1 ring-[var(--border)]/70 sm:w-28">
-                  <div
-                    className="shrink-0 rounded-lg border border-white/20 bg-gradient-to-b from-sky-300/80 via-cyan-200/65 to-slate-800/90 shadow-lg transition-all"
-                    style={{
-                      width: toPreviewRem(gameAvatarPreview.width),
-                      height: toPreviewRem(gameAvatarPreview.height),
-                    }}
-                  />
-                  <div
-                    className="mari-settings-portrait-preview shrink-0 rounded-full border border-white/20 shadow-lg transition-all"
-                    style={{
-                      width: toPreviewRem(gameFullBodyPreview.width),
-                      height: toPreviewRem(gameFullBodyPreview.height),
-                    }}
-                  />
-                </div>
-                <div className="grid min-w-0 flex-1 gap-3 sm:min-w-[9rem]">
-                  <label
-                    id={getSettingsControlAnchorId("game-dialogue-portrait-scale")}
-                    className="flex scroll-mt-3 min-w-0 flex-col gap-1"
-                  >
-                    <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">
-                      {localizeUi("ui.panels.appearancesettings.dialoguePortraitScale")}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        min={0.75}
-                        max={1.75}
-                        step={0.05}
-                        value={gameAvatarScale}
-                        onChange={(e) => setGameAvatarScale(Number(e.target.value))}
-                        className="min-w-0 flex-1 accent-[var(--primary)]"
-                      />
-                      <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
-                        {Math.round(gameAvatarScale * 100)}%
-                      </span>
-                    </div>
-                  </label>
-                  <label
-                    id={getSettingsControlAnchorId("game-full-body-sprite-scale")}
-                    className="flex scroll-mt-3 min-w-0 flex-col gap-1"
-                  >
-                    <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">
-                      {localizeUi("ui.panels.appearancesettings.fullBodySpriteScale")}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        min={0.75}
-                        max={2.75}
-                        step={0.05}
-                        value={gameFullBodySpriteScale}
-                        onChange={(e) => setGameFullBodySpriteScale(Number(e.target.value))}
-                        className="min-w-0 flex-1 accent-[var(--primary)]"
-                      />
-                      <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
-                        {Math.round(gameFullBodySpriteScale * 100)}%
-                      </span>
-                    </div>
-                  </label>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-1.5">
-              <ScrollText size="0.75rem" className="text-[var(--muted-foreground)]" />
-              <span className="text-xs font-medium">
-                {localizeUi("ui.panels.appearancesettings.gameDialogueDisplay")}
-              </span>
-              <HelpTooltip
-                text={localizeUi("ui.panels.appearancesettings.chooseWhetherGameModeUsesAClassicDialogueBox")}
-              />
-            </div>
-            <div
-              id={getSettingsControlAnchorId("game-dialogue-display")}
-              className="grid scroll-mt-3 grid-cols-1 gap-2 sm:grid-cols-2"
-            >
-              {GAME_DIALOGUE_DISPLAY_OPTIONS.map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setGameDialogueDisplayMode(opt.id)}
-                  className={cn(
-                    "flex flex-col items-start gap-1 rounded-lg border p-3 text-left text-xs transition-all",
-                    gameDialogueDisplayMode === opt.id
-                      ? "border-[var(--primary)] bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]"
-                      : "border-[var(--border)] hover:border-[var(--primary)]/40",
-                  )}
-                >
-                  <span className="font-semibold">{opt.label}</span>
-                  <span className="text-[0.625rem] leading-tight text-[var(--muted-foreground)]">{opt.desc}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <ToggleSetting
-            anchorId={getSettingsControlAnchorId("game-text-effects")}
-            label={localizeUi("settings.controls.gameTextEffects.label")}
-            checked={gameTextEffectsEnabled}
-            onChange={setGameTextEffectsEnabled}
-            help={localizeUi("settings.controls.gameTextEffects.help")}
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        title={localizeUi("settings.sections.atmosphere.title")}
-        description={localizeUi("settings.sections.atmosphere.description")}
-        icon={<CloudRain size="0.875rem" />}
-        {...getSettingsSectionAnchorProps("motion-backgrounds")}
-      >
-        <div className="flex flex-col gap-2">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-1.5">
-              <CloudRain size="0.75rem" className="text-[var(--muted-foreground)]" />
-              <span className="text-xs font-medium">{localizeUi("ui.panels.appearancesettings.effects")}</span>
-              <HelpTooltip
-                text={localizeUi(
-                  "ui.panels.appearancesettings.visualEffectsThatEnhanceTheRoleplayAtmosphereWeatherParticles",
-                )}
-              />
-            </div>
-            <ToggleSetting
-              anchorId={getSettingsControlAnchorId("weather-effects")}
-              label={localizeUi("settings.controls.weatherEffects.label")}
-              checked={weatherEffects}
-              onChange={setWeatherEffects}
-            />
-            <p className="text-[0.625rem] text-[var(--muted-foreground)] pl-6">
-              {localizeUi("ui.panels.appearancesettings.showsAnimatedWeatherParticlesBasedOnInStoryWeather")}{" "}
-              <span className="font-medium">{localizeUi("ui.panels.appearancesettings.worldState")}</span>{" "}
-              {localizeUi("ui.panels.appearancesettings.agentToBeEnabledSoWeatherDataIsExtracted")}
-            </p>
-          </div>
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        title={localizeUi("settings.sections.conversationTheme.title")}
-        description={localizeUi("settings.sections.conversationTheme.description")}
-        icon={<Palette size="0.875rem" />}
-        {...getSettingsSectionAnchorProps("conversation-theme")}
-      >
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <Palette size="0.75rem" className="text-[var(--muted-foreground)]" />
-                <span className="text-xs font-medium">{localizeUi("settings.sections.conversationTheme.title")}</span>
-                <HelpTooltip
-                  text={localizeUi("ui.panels.appearancesettings.setABackgroundGradientForAllConversationModeChats")}
+                {/* Preview */}
+                <div
+                  className="h-16 rounded-lg ring-1 ring-[var(--border)]"
+                  style={{ background: `linear-gradient(135deg, ${currentGradient.from}, ${currentGradient.to})` }}
                 />
-              </div>
-              {/* Scheme tabs */}
-              <div className="flex rounded-lg bg-[var(--secondary)] p-0.5 text-[0.625rem]">
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={currentGradient.from}
+                        onInput={(e) => handleGradientColorInput("from", e.currentTarget.value)}
+                        onChange={(e) => handleGradientColorInput("from", e.currentTarget.value)}
+                        onBlur={flushPendingGradientChange}
+                        onPointerUp={flushPendingGradientChange}
+                        onKeyUp={flushPendingGradientChange}
+                        className="h-8 w-8 flex-shrink-0 cursor-pointer rounded-md border border-[var(--border)] bg-transparent p-0.5"
+                      />
+                      <input
+                        type="text"
+                        value={draftFrom}
+                        onChange={(e) => {
+                          setDraftFrom(e.target.value);
+                          if (/^#[0-9a-fA-F]{6}$/.test(e.target.value))
+                            commitConvoGradientField(activeGradientScheme, "from", e.target.value);
+                        }}
+                        onBlur={() => setDraftFrom(currentGradient.from)}
+                        className="w-full rounded-md bg-[var(--secondary)] px-2 py-1.5 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                      />
+                    </div>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={currentGradient.to}
+                        onInput={(e) => handleGradientColorInput("to", e.currentTarget.value)}
+                        onChange={(e) => handleGradientColorInput("to", e.currentTarget.value)}
+                        onBlur={flushPendingGradientChange}
+                        onPointerUp={flushPendingGradientChange}
+                        onKeyUp={flushPendingGradientChange}
+                        className="h-8 w-8 flex-shrink-0 cursor-pointer rounded-md border border-[var(--border)] bg-transparent p-0.5"
+                      />
+                      <input
+                        type="text"
+                        value={draftTo}
+                        onChange={(e) => {
+                          setDraftTo(e.target.value);
+                          if (/^#[0-9a-fA-F]{6}$/.test(e.target.value))
+                            commitConvoGradientField(activeGradientScheme, "to", e.target.value);
+                        }}
+                        onBlur={() => setDraftTo(currentGradient.to)}
+                        className="w-full rounded-md bg-[var(--secondary)] px-2 py-1.5 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                      />
+                    </div>
+                  </label>
+                </div>
                 <button
                   type="button"
-                  onClick={() => setActiveGradientScheme("dark")}
-                  className={cn(
-                    "rounded-md px-2 py-1 transition-colors",
-                    activeGradientScheme === "dark"
-                      ? "mari-accent-animated bg-[var(--accent)] text-[var(--primary)] shadow-sm ring-1 ring-[var(--primary)]/25"
-                      : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
-                  )}
+                  onClick={() => {
+                    const defaults =
+                      activeGradientScheme === "dark"
+                        ? { from: "#0a0a0e", to: "#1c2133" }
+                        : { from: "#f2eff7", to: "#eae6f0" };
+                    commitConvoGradientField(activeGradientScheme, "from", defaults.from);
+                    commitConvoGradientField(activeGradientScheme, "to", defaults.to);
+                    setDraftFrom(defaults.from);
+                    setDraftTo(defaults.to);
+                  }}
+                  className="text-[0.625rem] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors self-start"
                 >
-                  {localizeUi("ui.panels.appearancesettings.dark")}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveGradientScheme("light")}
-                  className={cn(
-                    "rounded-md px-2 py-1 transition-colors",
-                    activeGradientScheme === "light"
-                      ? "mari-accent-animated bg-[var(--accent)] text-[var(--primary)] shadow-sm ring-1 ring-[var(--primary)]/25"
-                      : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
-                  )}
-                >
-                  {localizeUi("ui.panels.appearancesettings.light")}
+                  {localizeUi("ui.panels.imagestyleprofileseditor.reset")}{" "}
+                  {activeGradientScheme === "dark"
+                    ? localizeUi("ui.panels.appearancesettings.dark")
+                    : localizeUi("ui.panels.appearancesettings.light")}{" "}
+                  {localizeUi("ui.panels.appearancesettings.toDefault")}
                 </button>
               </div>
             </div>
-            {/* Preview */}
-            <div
-              className="h-16 rounded-lg ring-1 ring-[var(--border)]"
-              style={{ background: `linear-gradient(135deg, ${currentGradient.from}, ${currentGradient.to})` }}
-            />
-            <div className="grid grid-cols-2 gap-3">
-              <label className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    value={currentGradient.from}
-                    onInput={(e) => handleGradientColorInput("from", e.currentTarget.value)}
-                    onChange={(e) => handleGradientColorInput("from", e.currentTarget.value)}
-                    onBlur={flushPendingGradientChange}
-                    onPointerUp={flushPendingGradientChange}
-                    onKeyUp={flushPendingGradientChange}
-                    className="h-8 w-8 flex-shrink-0 cursor-pointer rounded-md border border-[var(--border)] bg-transparent p-0.5"
-                  />
-                  <input
-                    type="text"
-                    value={draftFrom}
-                    onChange={(e) => {
-                      setDraftFrom(e.target.value);
-                      if (/^#[0-9a-fA-F]{6}$/.test(e.target.value))
-                        commitConvoGradientField(activeGradientScheme, "from", e.target.value);
-                    }}
-                    onBlur={() => setDraftFrom(currentGradient.from)}
-                    className="w-full rounded-md bg-[var(--secondary)] px-2 py-1.5 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
-                  />
-                </div>
-              </label>
-              <label className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    value={currentGradient.to}
-                    onInput={(e) => handleGradientColorInput("to", e.currentTarget.value)}
-                    onChange={(e) => handleGradientColorInput("to", e.currentTarget.value)}
-                    onBlur={flushPendingGradientChange}
-                    onPointerUp={flushPendingGradientChange}
-                    onKeyUp={flushPendingGradientChange}
-                    className="h-8 w-8 flex-shrink-0 cursor-pointer rounded-md border border-[var(--border)] bg-transparent p-0.5"
-                  />
-                  <input
-                    type="text"
-                    value={draftTo}
-                    onChange={(e) => {
-                      setDraftTo(e.target.value);
-                      if (/^#[0-9a-fA-F]{6}$/.test(e.target.value))
-                        commitConvoGradientField(activeGradientScheme, "to", e.target.value);
-                    }}
-                    onBlur={() => setDraftTo(currentGradient.to)}
-                    className="w-full rounded-md bg-[var(--secondary)] px-2 py-1.5 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
-                  />
-                </div>
-              </label>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                const defaults =
-                  activeGradientScheme === "dark"
-                    ? { from: "#0a0a0e", to: "#1c2133" }
-                    : { from: "#f2eff7", to: "#eae6f0" };
-                commitConvoGradientField(activeGradientScheme, "from", defaults.from);
-                commitConvoGradientField(activeGradientScheme, "to", defaults.to);
-                setDraftFrom(defaults.from);
-                setDraftTo(defaults.to);
-              }}
-              className="text-[0.625rem] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors self-start"
-            >
-              {localizeUi("ui.panels.imagestyleprofileseditor.reset")}{" "}
-              {activeGradientScheme === "dark"
-                ? localizeUi("ui.panels.appearancesettings.dark")
-                : localizeUi("ui.panels.appearancesettings.light")}{" "}
-              {localizeUi("ui.panels.appearancesettings.toDefault")}
-            </button>
-          </div>
-        </div>
-      </SettingsSection>
+          </SettingsSection>
+        </>
+      )}
 
-      <SettingsSection
-        title={localizeUi("settings.controls.backgroundGeneration.label")}
-        description={localizeUi("settings.sections.backgrounds.componentDescription")}
-        icon={<Image size="0.875rem" />}
-        {...getSettingsSectionAnchorProps("chat-backgrounds")}
-      >
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-2">
-            <span className="text-xs font-medium inline-flex items-center gap-1">
-              {localizeUi("ui.panels.appearancesettings.chatBackground")}{" "}
-              <HelpTooltip text={localizeUi("ui.panels.appearancesettings.importOneOrMoreCustomImagesOrChooseFrom")} />
-            </span>
-            <label className="flex flex-col gap-1 rounded-lg bg-[var(--secondary)]/45 p-3 ring-1 ring-[var(--border)]/70">
-              <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium">
-                {localizeUi("ui.panels.appearancesettings.backgroundBlur")}
-                <HelpTooltip
-                  text={localizeUi(
-                    "ui.panels.appearancesettings.softensSelectedRoleplayAndGameModeBackgroundImagesBehind",
-                  )}
-                />
-              </span>
-              <div className="flex items-center gap-3">
+      {group === "roleplay" && (
+        <>
+          <h2 className="text-sm font-semibold" data-appearance-group="roleplay">
+            {localizeUi("settings.appearance.groups.roleplay")}
+          </h2>
+          <div id={getSettingsSectionAnchorId("roleplay-tracker")} className="flex scroll-mt-3 flex-col gap-3">
+            <TrackerPanelAppearanceDrawer />
+          </div>
+
+          <SettingsSection
+            title={localizeUi("settings.sections.roleplayMessages.title")}
+            description={localizeUi("settings.sections.roleplayMessages.description")}
+            icon={<Image size="0.875rem" />}
+            {...getSettingsSectionAnchorProps("roleplay-messages")}
+          >
+            <div className="flex flex-col gap-3">
+              <div id={getSettingsControlAnchorId("roleplay-chat-position")} className="grid scroll-mt-3 gap-1.5">
+                <span className="inline-flex items-center gap-1 text-xs font-medium">
+                  {localizeUi("settings.controls.roleplayChatPosition.label")}
+                  <HelpTooltip text={localizeUi("settings.controls.roleplayChatPosition.help")} />
+                </span>
+                <div
+                  role="group"
+                  aria-label={localizeUi("settings.controls.roleplayChatPosition.label")}
+                  className="grid grid-cols-3 gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-0.5"
+                >
+                  {ROLEPLAY_CHAT_POSITIONS.map((position) => {
+                    // An unknown synced value shows as Center, which is how the chat treats it.
+                    const selected =
+                      position ===
+                      (ROLEPLAY_CHAT_POSITIONS.includes(roleplayChatPosition) ? roleplayChatPosition : "center");
+                    return (
+                      <button
+                        key={position}
+                        type="button"
+                        onClick={() => setRoleplayChatPosition(position)}
+                        aria-pressed={selected}
+                        className={cn(
+                          "flex min-h-8 min-w-0 items-center justify-center rounded-md px-1.5 text-[0.6875rem] font-semibold transition-all",
+                          selected
+                            ? "bg-[var(--primary)]/12 text-[var(--foreground)] ring-1 ring-[var(--primary)]/45"
+                            : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+                        )}
+                      >
+                        {localizeUi(`settings.controls.roleplayChatPosition.${position}`)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <ToggleSetting
+                anchorId={getSettingsControlAnchorId("roleplay-vn-display")}
+                label={localizeUi("settings.roleplayVn.enabled")}
+                help={localizeUi("settings.roleplayVn.help")}
+                checked={activeRoleplayStyle === "visual-novel"}
+                onChange={(enabled) => {
+                  const style = enabled ? "visual-novel" : "classic";
+                  setRoleplayDisplayStyle(style);
+                  if (appearanceChat?.mode === "roleplay")
+                    updateMeta.mutate({ id: appearanceChat.id, roleplayDisplayStyle: style });
+                }}
+              />
+              <p className="text-xs text-[var(--muted-foreground)]">{localizeUi("settings.roleplayVn.scope")}</p>
+              <ToggleSetting
+                anchorId={getSettingsControlAnchorId("roleplay-vn-autoplay")}
+                label={localizeUi("settings.roleplayVn.autoPlay")}
+                help={localizeUi("settings.roleplayVn.autoPlayHelp")}
+                checked={roleplayVnAutoPlay}
+                onChange={setRoleplayVnAutoPlay}
+              />
+              <label
+                id={getSettingsControlAnchorId("roleplay-vn-autoplay-delay")}
+                className="flex scroll-mt-3 flex-col gap-2 text-xs"
+              >
+                <span>
+                  {localizeUi("settings.roleplayVn.autoPlayDelay")}{" "}
+                  {localizeUi("settings.units.secondsShort", { value: roleplayVnAutoPlayDelay / 1000 })}
+                </span>
                 <input
                   type="range"
-                  min={0}
-                  max={24}
-                  step={1}
-                  value={chatBackgroundBlur}
-                  onChange={(e) => setChatBackgroundBlur(Number(e.target.value))}
-                  className="min-w-0 flex-1 accent-[var(--primary)]"
+                  min={200}
+                  max={10000}
+                  step={100}
+                  value={roleplayVnAutoPlayDelay}
+                  disabled={!roleplayVnAutoPlay}
+                  onChange={(event) => setRoleplayVnAutoPlayDelay(Number(event.target.value))}
+                  className="w-full accent-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
                 />
-                <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
-                  {chatBackgroundBlur === 0
-                    ? localizeUi("ui.panels.appearancesettings.off")
-                    : localizeUi("ui.panels.appearancesettings.value1Px", { value1: chatBackgroundBlur })}
-                </span>
+              </label>
+              <div className="grid gap-3 rounded-lg border border-[var(--border)] p-3 sm:grid-cols-2">
+                <label
+                  id={getSettingsControlAnchorId("roleplay-vn-portrait-scale")}
+                  className="flex scroll-mt-3 min-w-0 flex-col gap-2 text-xs"
+                >
+                  <span>{localizeUi("ui.panels.appearancesettings.dialoguePortraitScale")}</span>
+                  <div className="flex min-h-11 items-center gap-2">
+                    <input
+                      type="range"
+                      min={0.75}
+                      max={1.75}
+                      step={0.05}
+                      value={roleplayVnPortraitScale}
+                      onChange={(event) => setRoleplayVnPortraitScale(Number(event.target.value))}
+                      className="min-w-0 flex-1 accent-[var(--primary)]"
+                    />
+                    <span className="w-10 text-right tabular-nums">{Math.round(roleplayVnPortraitScale * 100)}%</span>
+                  </div>
+                </label>
+                <label
+                  id={getSettingsControlAnchorId("roleplay-vn-sprite-scale")}
+                  className="flex scroll-mt-3 min-w-0 flex-col gap-2 text-xs"
+                >
+                  <span>{localizeUi("ui.panels.appearancesettings.fullBodySpriteScale")}</span>
+                  <div className="flex min-h-11 items-center gap-2">
+                    <input
+                      type="range"
+                      min={0.75}
+                      max={2.75}
+                      step={0.05}
+                      value={roleplayVnSpriteScale}
+                      onChange={(event) => setRoleplayVnSpriteScale(Number(event.target.value))}
+                      className="min-w-0 flex-1 accent-[var(--primary)]"
+                    />
+                    <span className="w-10 text-right tabular-nums">{Math.round(roleplayVnSpriteScale * 100)}%</span>
+                  </div>
+                </label>
               </div>
-            </label>
-            <label className="flex items-center gap-2">
-              <span className="inline-flex shrink-0 items-center gap-1 text-[0.6875rem] font-medium">
-                {localizeUi("ui.panels.appearancesettings.chatListBackgrounds")}
-                <HelpTooltip
-                  text={localizeUi("ui.panels.appearancesettings.showsEachChatsOwnBackgroundAsAMutedBanner")}
-                />
-              </span>
-              <select
-                id={getSettingsControlAnchorId("chat-list-backgrounds")}
-                value={chatListBackgrounds}
-                onChange={(e) => setChatListBackgrounds(e.target.value as ChatListBackgroundMode)}
-                className="h-7 min-w-0 flex-1 scroll-mt-3 rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2 text-xs"
+              <label
+                id={getSettingsControlAnchorId("roleplay-message-opacity")}
+                className="flex scroll-mt-3 flex-col gap-1"
               >
-                {CHAT_LIST_BACKGROUND_OPTIONS.map((opt) => (
-                  <option key={opt.id} value={opt.id}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <BackgroundPicker
-              selected={chatBackground}
-              onSelect={setChatBackground}
-              defaultRoleplayBackground={defaultRoleplayBackground}
-              onDefaultChange={setDefaultRoleplayBackground}
-            />
-          </div>
-        </div>
-      </SettingsSection>
+                <span className="text-[0.6875rem] font-medium">
+                  {localizeUi("ui.panels.appearancesettings.roleplayMessagesBackgroundOpacity")}
+                </span>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={chatFontOpacity}
+                    onChange={(e) => setChatFontOpacity(Number(e.target.value))}
+                    className="flex-1 accent-[var(--primary)]"
+                  />
+                  <span className="text-xs tabular-nums text-[var(--muted-foreground)] w-8 text-right">
+                    {chatFontOpacity}%
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setChatFontOpacity(90)}
+                  disabled={chatFontOpacity === 90}
+                  className="self-start text-[0.625rem] text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:pointer-events-none disabled:opacity-45"
+                >
+                  {localizeUi("ui.panels.appearancesettings.resetOpacityToDefault")}
+                </button>
+              </label>
+
+              <ToggleSetting
+                anchorId={getSettingsControlAnchorId("roleplay-always-display-swipe-menu")}
+                label={localizeUi("settings.controls.alwaysDisplaySwipeMenu.label")}
+                checked={alwaysDisplayRoleplaySwipeMenu}
+                onChange={setAlwaysDisplayRoleplaySwipeMenu}
+                help={localizeUi("settings.controls.alwaysDisplaySwipeMenu.help")}
+              />
+              <ToggleSetting
+                anchorId={getSettingsControlAnchorId("roleplay-reduced-paint-effects")}
+                label={localizeUi("settings.controls.reducedPaintEffects.label")}
+                checked={roleplayReducedPaintEffects}
+                onChange={setRoleplayReducedPaintEffects}
+                help={localizeUi("settings.controls.reducedPaintEffects.help")}
+              />
+
+              <ToggleSetting
+                anchorId={getSettingsControlAnchorId("show-roleplay-thinking-in-messages")}
+                label={localizeUi("settings.controls.showRoleplayThinkingInMessages.label")}
+                checked={showRoleplayThinkingInMessages}
+                onChange={setShowRoleplayThinkingInMessages}
+                help={localizeUi("settings.controls.showRoleplayThinkingInMessages.help")}
+              />
+              <ToggleSetting
+                anchorId={getSettingsControlAnchorId("keep-roleplay-thinking-expanded")}
+                label={localizeUi("settings.controls.keepRoleplayThinkingExpanded.label")}
+                checked={keepRoleplayThinkingExpanded}
+                onChange={setKeepRoleplayThinkingExpanded}
+                disabled={!showRoleplayThinkingInMessages}
+                help={localizeUi("settings.controls.keepRoleplayThinkingExpanded.help")}
+              />
+
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Image size="0.75rem" className="text-[var(--muted-foreground)]" />
+                  <span className="text-xs font-medium">
+                    {localizeUi("ui.panels.appearancesettings.roleplayAvatars")}
+                  </span>
+                  <HelpTooltip
+                    text={localizeUi("ui.panels.appearancesettings.chooseHowAvatarsSitNextToRoleplayMessagesNone")}
+                  />
+                </div>
+                <ToggleSetting
+                  anchorId={getSettingsControlAnchorId("scrollable-avatars")}
+                  label={localizeUi("settings.controls.scrollableAvatars.label")}
+                  checked={roleplayAvatarsScrollable}
+                  onChange={setRoleplayAvatarsScrollable}
+                  help={localizeUi("settings.controls.scrollableAvatars.help")}
+                />
+                <ToggleSetting
+                  anchorId={getSettingsControlAnchorId("narrator-cycling-avatars")}
+                  label={localizeUi("settings.controls.narratorCyclingAvatars.label")}
+                  checked={roleplayNarratorAvatarCycling}
+                  onChange={setRoleplayNarratorAvatarCycling}
+                  help={localizeUi("settings.controls.narratorCyclingAvatars.help")}
+                />
+                <div
+                  id={getSettingsControlAnchorId("roleplay-avatar-style")}
+                  className="grid scroll-mt-3 grid-cols-1 gap-2 sm:grid-cols-2"
+                >
+                  {ROLEPLAY_AVATAR_STYLE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      onClick={() => setRoleplayAvatarStyle(opt.id)}
+                      className={cn(
+                        "flex flex-col items-start gap-2 rounded-lg border p-3 text-left text-xs transition-all",
+                        roleplayAvatarStyle === opt.id
+                          ? "border-[var(--primary)] bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]"
+                          : "border-[var(--border)] hover:border-[var(--primary)]/40",
+                      )}
+                    >
+                      <div className="w-full overflow-hidden rounded-md bg-[var(--secondary)]/80 ring-1 ring-[var(--border)]/70">
+                        {opt.id === "none" ? (
+                          <div className="flex h-14 items-center px-3">
+                            <div className="flex-1 rounded-2xl bg-black/25 px-3 py-2">
+                              <div className="h-1.5 w-16 rounded-full bg-white/20" />
+                              <div className="mt-1.5 h-1.5 w-24 rounded-full bg-white/12" />
+                            </div>
+                          </div>
+                        ) : opt.id === "circles" ? (
+                          <div className="flex h-14 items-center px-3">
+                            <div className="relative flex-1 rounded-2xl rounded-tl-sm bg-black/25 px-3 py-2">
+                              <div className="mari-settings-accent-dot absolute left-2 top-2 h-2.5 w-2.5 rounded-full shadow-[0_0_0_2px_rgba(255,255,255,0.16)]" />
+                              <div className="ml-4 h-1.5 w-14 rounded-full bg-white/20" />
+                              <div className="mt-1.5 ml-4 h-1.5 w-20 rounded-full bg-white/12" />
+                            </div>
+                          </div>
+                        ) : opt.id === "rectangles" ? (
+                          <div className="flex h-14 items-center px-3">
+                            <div className="relative flex-1 rounded-2xl rounded-tl-sm bg-black/25 py-2 pl-8 pr-3">
+                              <div className="mari-settings-portrait-preview absolute left-2 top-2 h-4 w-4 overflow-hidden rounded ring-1 ring-white/20">
+                                <div className="h-full w-full bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.24),transparent_58%)]" />
+                              </div>
+                              <div className="h-1.5 w-14 rounded-full bg-white/20" />
+                              <div className="mt-1.5 h-1.5 w-20 rounded-full bg-white/12" />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex h-14 items-stretch overflow-hidden bg-black/25">
+                            <div className="mari-settings-scene-preview relative flex w-[42%] shrink-0 items-end justify-center overflow-hidden">
+                              <div className="absolute left-1/2 top-2 h-4 w-4 -translate-x-1/2 rounded-full bg-orange-50/45 shadow-[0_0_12px_rgba(255,237,213,0.35)]" />
+                              <div className="h-8 w-8 rounded-t-full bg-zinc-950/35" />
+                              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[32%] backdrop-blur-[4px] [mask-image:linear-gradient(to_bottom,transparent_0%,rgba(0,0,0,0.25)_28%,rgba(0,0,0,0.8)_100%)] [-webkit-mask-image:linear-gradient(to_bottom,transparent_0%,rgba(0,0,0,0.25)_28%,rgba(0,0,0,0.8)_100%)]" />
+                              <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_bottom,rgba(255,255,255,0)_0%,rgba(255,255,255,0)_72%,rgba(113,113,122,0.84)_92%,rgba(113,113,122,1)_100%)]" />
+                            </div>
+                            <div className="flex-1 px-3 py-2">
+                              <div className="h-1.5 w-14 rounded-full bg-white/20" />
+                              <div className="mt-1.5 h-1.5 w-20 rounded-full bg-white/12" />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <span className="font-semibold">{opt.label}</span>
+                      <span className="text-[0.625rem] leading-tight text-[var(--muted-foreground)]">{opt.desc}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                    <div className="flex h-20 w-full shrink-0 items-end justify-center gap-3 overflow-hidden rounded-md bg-black/30 p-2 ring-1 ring-[var(--border)]/70 sm:w-28">
+                      {roleplayAvatarStyle === "none" ? (
+                        <div
+                          className="flex shrink-0 items-center justify-center rounded-md border border-dashed border-white/20 px-2 text-[0.625rem] font-medium text-white/35"
+                          style={{
+                            width: toPreviewRem(roleplayAvatarPreview.width),
+                            height: toPreviewRem(roleplayAvatarPreview.height),
+                          }}
+                        >
+                          {localizeUi("ui.panels.appearancesettings.noAvatars")}
+                        </div>
+                      ) : (
+                        <div
+                          className={cn(
+                            "mari-settings-portrait-preview shrink-0 border border-white/20 shadow-lg transition-all",
+                            roleplayAvatarStyle === "circles"
+                              ? "rounded-full"
+                              : roleplayAvatarStyle === "rectangles"
+                                ? "rounded-xl"
+                                : "rounded-md",
+                          )}
+                          style={{
+                            width: toPreviewRem(roleplayAvatarPreview.width),
+                            height: toPreviewRem(roleplayAvatarPreview.height),
+                          }}
+                        />
+                      )}
+                      <div
+                        className="mari-settings-scene-preview shrink-0 rounded-full border border-white/20 shadow-lg transition-all"
+                        style={{
+                          width: toPreviewRem(roleplaySpritePreview.width),
+                          height: toPreviewRem(roleplaySpritePreview.height),
+                        }}
+                      />
+                    </div>
+                    <div className="grid min-w-0 flex-1 gap-3 sm:min-w-[9rem]">
+                      <label
+                        id={getSettingsControlAnchorId("roleplay-avatar-scale")}
+                        className="flex scroll-mt-3 min-w-0 flex-col gap-1"
+                      >
+                        <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">
+                          {localizeUi("ui.panels.appearancesettings.messageAvatarScale")}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min={0.75}
+                            max={2.5}
+                            step={0.05}
+                            value={roleplayAvatarScale}
+                            onChange={(e) => setRoleplayAvatarScale(Number(e.target.value))}
+                            className="min-w-0 flex-1 accent-[var(--primary)]"
+                          />
+                          <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                            {Math.round(roleplayAvatarScale * 100)}%
+                          </span>
+                        </div>
+                      </label>
+                      <label
+                        id={getSettingsControlAnchorId("roleplay-sprite-scale")}
+                        className="flex scroll-mt-3 min-w-0 flex-col gap-1"
+                      >
+                        <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">
+                          {localizeUi("ui.panels.appearancesettings.defaultSpriteScale")}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min={0.5}
+                            max={1.75}
+                            step={0.05}
+                            value={roleplaySpriteScale}
+                            onChange={(e) => setRoleplaySpriteScale(Number(e.target.value))}
+                            className="min-w-0 flex-1 accent-[var(--primary)]"
+                          />
+                          <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                            {Math.round(roleplaySpriteScale * 100)}%
+                          </span>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                  {localizeUi("ui.panels.appearancesettings.rectanglesKeepTheCompactSideSlotButGivePortraits")}
+                </p>
+              </div>
+            </div>
+          </SettingsSection>
+        </>
+      )}
+
+      {group === "game" && (
+        <>
+          <h2 className="text-sm font-semibold" data-appearance-group="game">
+            {localizeUi("settings.appearance.groups.game")}
+          </h2>
+          <SettingsSection
+            title={localizeUi("settings.sections.gamePresentation.title")}
+            description={localizeUi("settings.sections.gamePresentation.description")}
+            icon={<ScrollText size="0.875rem" />}
+            {...getSettingsSectionAnchorProps("game-presentation")}
+          >
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Image size="0.75rem" className="text-[var(--muted-foreground)]" />
+                  <span className="text-xs font-medium">{localizeUi("ui.panels.appearancesettings.gameVnArt")}</span>
+                  <HelpTooltip
+                    text={localizeUi(
+                      "ui.panels.appearancesettings.scalesGameModeDialoguePortraitsSeparatelyFromTheCenter",
+                    )}
+                  />
+                </div>
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                    <div className="flex h-20 w-full shrink-0 items-end justify-center gap-3 overflow-hidden rounded-md bg-black/30 p-2 ring-1 ring-[var(--border)]/70 sm:w-28">
+                      <div
+                        className="shrink-0 rounded-lg border border-white/20 bg-gradient-to-b from-sky-300/80 via-cyan-200/65 to-slate-800/90 shadow-lg transition-all"
+                        style={{
+                          width: toPreviewRem(gameAvatarPreview.width),
+                          height: toPreviewRem(gameAvatarPreview.height),
+                        }}
+                      />
+                      <div
+                        className="mari-settings-portrait-preview shrink-0 rounded-full border border-white/20 shadow-lg transition-all"
+                        style={{
+                          width: toPreviewRem(gameFullBodyPreview.width),
+                          height: toPreviewRem(gameFullBodyPreview.height),
+                        }}
+                      />
+                    </div>
+                    <div className="grid min-w-0 flex-1 gap-3 sm:min-w-[9rem]">
+                      <label
+                        id={getSettingsControlAnchorId("game-dialogue-portrait-scale")}
+                        className="flex scroll-mt-3 min-w-0 flex-col gap-1"
+                      >
+                        <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">
+                          {localizeUi("ui.panels.appearancesettings.dialoguePortraitScale")}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min={0.75}
+                            max={1.75}
+                            step={0.05}
+                            value={gameAvatarScale}
+                            onChange={(e) => setGameAvatarScale(Number(e.target.value))}
+                            className="min-w-0 flex-1 accent-[var(--primary)]"
+                          />
+                          <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                            {Math.round(gameAvatarScale * 100)}%
+                          </span>
+                        </div>
+                      </label>
+                      <label
+                        id={getSettingsControlAnchorId("game-full-body-sprite-scale")}
+                        className="flex scroll-mt-3 min-w-0 flex-col gap-1"
+                      >
+                        <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">
+                          {localizeUi("ui.panels.appearancesettings.fullBodySpriteScale")}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min={0.75}
+                            max={2.75}
+                            step={0.05}
+                            value={gameFullBodySpriteScale}
+                            onChange={(e) => setGameFullBodySpriteScale(Number(e.target.value))}
+                            className="min-w-0 flex-1 accent-[var(--primary)]"
+                          />
+                          <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                            {Math.round(gameFullBodySpriteScale * 100)}%
+                          </span>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-1.5">
+                  <ScrollText size="0.75rem" className="text-[var(--muted-foreground)]" />
+                  <span className="text-xs font-medium">
+                    {localizeUi("ui.panels.appearancesettings.gameDialogueDisplay")}
+                  </span>
+                  <HelpTooltip
+                    text={localizeUi("ui.panels.appearancesettings.chooseWhetherGameModeUsesAClassicDialogueBox")}
+                  />
+                </div>
+                <div
+                  id={getSettingsControlAnchorId("game-dialogue-display")}
+                  className="grid scroll-mt-3 grid-cols-1 gap-2 sm:grid-cols-2"
+                >
+                  {GAME_DIALOGUE_DISPLAY_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setGameDialogueDisplayMode(opt.id)}
+                      className={cn(
+                        "flex flex-col items-start gap-1 rounded-lg border p-3 text-left text-xs transition-all",
+                        gameDialogueDisplayMode === opt.id
+                          ? "border-[var(--primary)] bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]"
+                          : "border-[var(--border)] hover:border-[var(--primary)]/40",
+                      )}
+                    >
+                      <span className="font-semibold">{opt.label}</span>
+                      <span className="text-[0.625rem] leading-tight text-[var(--muted-foreground)]">{opt.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <ToggleSetting
+                anchorId={getSettingsControlAnchorId("game-text-effects")}
+                label={localizeUi("settings.controls.gameTextEffects.label")}
+                checked={gameTextEffectsEnabled}
+                onChange={setGameTextEffectsEnabled}
+                help={localizeUi("settings.controls.gameTextEffects.help")}
+              />
+            </div>
+          </SettingsSection>
+        </>
+      )}
     </div>
   );
 }
@@ -5880,7 +6758,7 @@ function GenerationsSettings() {
   );
   const openDownloadAgents = useCallback(() => {
     openRightPanel("agents");
-    openAgentCatalog();
+    openAgentCatalog("illustrator");
   }, [openAgentCatalog, openRightPanel]);
 
   return (
@@ -6112,12 +6990,11 @@ function ThemesSettings({ showIntro = true }: { showIntro?: boolean } = {}) {
         if (duplicate) {
           recordSkippedTheme(`"${importedThemeName}" is already synced.`);
         } else {
-          const created = await createTheme.mutateAsync({
+          await createTheme.mutateAsync({
             name: importedThemeName,
             css: importedThemeCss,
             installedAt: new Date().toISOString(),
           });
-          workingThemes = [created, ...workingThemes];
           imported++;
         }
       }
@@ -6157,7 +7034,7 @@ function ThemesSettings({ showIntro = true }: { showIntro?: boolean } = {}) {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setEditorOpen(false)}
-              className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+              className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
             >
               <X size="0.875rem" />
             </button>
@@ -6288,7 +7165,7 @@ function ThemesSettings({ showIntro = true }: { showIntro?: boolean } = {}) {
                   },
                 });
               }}
-              className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-[var(--border)] p-3 text-xs text-[var(--muted-foreground)] transition-all hover:border-[var(--primary)]/40 hover:bg-[var(--secondary)]/50"
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-[var(--border)] p-3 text-xs text-[var(--muted-foreground)] transition-all hover:border-[var(--primary)]/40 hover:bg-[var(--accent)]/50"
             >
               <Download size="0.875rem" /> {localizeUi("ui.panels.themessettings.importFile")}
             </button>
@@ -6467,7 +7344,7 @@ const CSS_TEMPLATE = `/* ══════════════════�
   /* ── Borders ── */
   /* --border: #27272a; */
   /* --sidebar-border: #27272a; */
-  /* --marinara-shell-edge-border: color-mix(in srgb, var(--foreground) 14%, var(--background) 86%); */
+  /* --marinara-shell-edge-border: color-mix(in srgb, var(--primary) 14%, var(--background) 86%); */
 
   /* ── Text ── */
   /* --muted-foreground: #71717a; */
@@ -6503,12 +7380,22 @@ const CSS_TEMPLATE = `/* ══════════════════�
   /* --marinara-chat-chrome-highlight-bg-hover: color-mix(in srgb, var(--marinara-chat-chrome-accent) 13%, transparent); */
   /* --marinara-chat-chrome-highlight-text: color-mix(in srgb, var(--marinara-chat-chrome-highlight-text-base) 94%, transparent); */
   /* --marinara-chat-chrome-input-bg: var(--marinara-chat-chrome-surface-bg); */
+
+  /* ── Chat windows and drawers (Chat Settings and its sections) ── */
+  /* --mari-window-bg: var(--marinara-chat-chrome-panel-bg); */
+  /* --mari-window-border: var(--marinara-chat-chrome-panel-border); */
+  /* --mari-window-radius: calc(var(--radius) + 0.25rem); */
+  /* --mari-window-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.4); */
+  /* --mari-window-header-bg: transparent; */
+  /* --mari-drawer-border: var(--border); */
+  /* --mari-drawer-header-bg-hover: color-mix(in oklab, var(--accent) 50%, transparent); */
 }
 
 /* Uncomment and edit the variables above.
    You can also target shared chrome directly:
    .marinara-chat-toolbar-button { border-radius: 0.5rem; }
    .marinara-chat-popover { box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.4); }
+   [data-window="chat-settings"] .mari-window__header { background: rgb(0 0 0 / 0.2); }
 
    You can also add any custom CSS below: */
 `;
@@ -6626,7 +7513,7 @@ type ProfileImportPreviewResult = {
   preview?: boolean;
   imported?: ProfileImportStats;
   warnings?: ProfileImportWarning[];
-  fileFingerprint?: string;
+  previewToken?: string;
   error?: string;
   message?: string;
 };
@@ -6701,8 +7588,10 @@ function getProfileImportItemCount(stats?: ProfileImportStats) {
 function getProfileImportWarningCopy(localizeUi: TFunction): ProfileImportWarningCopy {
   return {
     missingAssetSummary: (count) => localizeUi("ui.panels.importsettings.profileImportMissingAssets", { count }),
+    skippedAssetSummary: (count) => localizeUi("ui.panels.importsettings.profileImportSkippedAssets", { count }),
     securityWarningSummary: (count) => localizeUi("ui.panels.importsettings.profileImportSecurityWarnings", { count }),
     missingLabel: localizeUi("ui.panels.importsettings.profileImportMissingLabel"),
+    skippedLabel: localizeUi("ui.panels.importsettings.profileImportSkippedLabel"),
     additionalPaths: (count) => localizeUi("ui.panels.importsettings.profileImportAdditionalPaths", { count }),
     additionalMessages: (count) => localizeUi("ui.panels.importsettings.profileImportAdditionalMessages", { count }),
   };
@@ -6832,9 +7721,19 @@ function ImportSettings() {
     return () => window.clearInterval(timer);
   }, [profileImportBusy]);
 
+  const profileImportInputRef = useRef<HTMLInputElement>(null);
   const handleProfileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    let previewToken: string | undefined;
+    const releaseProfilePreview = async () => {
+      if (!previewToken) return;
+      const token = previewToken;
+      previewToken = undefined;
+      await api
+        .raw(`/backup/import-profile-preview/${encodeURIComponent(token)}`, { method: "DELETE" })
+        .catch(() => {});
+    };
     const startedAt = Date.now();
     const makeImportBody = (isZip: boolean, text: string): BodyInit => {
       if (!isZip) return text;
@@ -6851,6 +7750,10 @@ function ImportSettings() {
       elapsedSeconds: 0,
     });
     try {
+      const isLoopbackHost = /^(?:localhost|127\.0\.0\.1|\[::1\])$/i.test(window.location.hostname);
+      if (window.location.protocol !== "https:" && !isLoopbackHost) {
+        throw new Error(localizeUi("ui.panels.importsettings.profileImportRequiresHttps"));
+      }
       const isZip = await isZipFile(file);
       let profileText = "";
       if (!isZip) {
@@ -6895,6 +7798,7 @@ function ImportSettings() {
       if (preview.success === false) {
         throw new Error(preview.message ?? preview.error ?? "Unknown error");
       }
+      previewToken = preview.previewToken;
       const previewWarnings = normalizeProfileImportWarnings(preview.warnings);
       const previewTotalItems = Math.max(1, getProfileImportItemCount(preview.imported));
       setProfileImportProgress({
@@ -6916,6 +7820,7 @@ function ImportSettings() {
         tone: "destructive",
       });
       if (!confirmed) {
+        await releaseProfilePreview();
         setProfileImportProgress(null);
         e.target.value = "";
         return;
@@ -6945,7 +7850,11 @@ function ImportSettings() {
           ? {
               ...current,
               status: "starting",
-              label: isZip ? "Uploading profile archive" : "Starting profile import",
+              label: previewToken
+                ? "Starting profile import"
+                : isZip
+                  ? "Uploading profile archive"
+                  : "Starting profile import",
               elapsedSeconds: Math.floor((Date.now() - startedAt) / 1000),
             }
           : current,
@@ -6954,9 +7863,9 @@ function ImportSettings() {
         method: "POST",
         headers: {
           Accept: "text/event-stream",
-          ...(preview.fileFingerprint ? { "X-Profile-Preview-Fingerprint": preview.fileFingerprint } : {}),
+          ...(previewToken ? { "X-Profile-Preview-Token": previewToken } : {}),
         },
-        body: makeImportBody(isZip, profileText),
+        body: previewToken ? undefined : makeImportBody(isZip, profileText),
       });
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
@@ -7035,7 +7944,9 @@ function ImportSettings() {
       if (!importCompleted) {
         throw new Error("Profile import stream closed before completion.");
       }
+      previewToken = undefined;
     } catch (err) {
+      await releaseProfilePreview();
       const message =
         err instanceof SyntaxError
           ? "Import failed. Make sure this is a valid profile JSON or ZIP file."
@@ -7067,12 +7978,11 @@ function ImportSettings() {
         {...getSettingsSectionAnchorProps("profile-marinara")}
       >
         <div className="flex flex-col gap-2.5">
-          <label
-            className={cn(
-              SETTINGS_PRIMARY_BUTTON_CLASS,
-              "w-full cursor-pointer gap-2",
-              profileImportBusy && "pointer-events-none opacity-75",
-            )}
+          <button
+            type="button"
+            onClick={() => profileImportInputRef.current?.click()}
+            disabled={profileImportBusy}
+            className={cn(SETTINGS_PRIMARY_BUTTON_CLASS, "w-full gap-2")}
           >
             {profileImportBusy ? <Loader2 size="1rem" className="animate-spin" /> : <Download size="1rem" />}
             {profileImportBusy
@@ -7080,14 +7990,17 @@ function ImportSettings() {
                 ? localizeUi("ui.panels.importsettings.scanningProfile")
                 : localizeUi("ui.panels.importsettings.importingProfile")
               : localizeUi("ui.panels.importsettings.importProfileJsonZip")}
-            <input
-              type="file"
-              accept=".json,.zip,application/json,application/zip"
-              onChange={handleProfileImport}
-              disabled={profileImportBusy}
-              className="hidden"
-            />
-          </label>
+          </button>
+          <input
+            ref={profileImportInputRef}
+            type="file"
+            accept=".json,.zip,application/json,application/zip"
+            onChange={handleProfileImport}
+            disabled={profileImportBusy}
+            className="hidden"
+            tabIndex={-1}
+            aria-hidden="true"
+          />
 
           {profileImportProgress && (
             <div
@@ -7371,12 +8284,18 @@ function AdvancedSettings() {
   const setShowModelName = useUIStore((s) => s.setShowModelName);
   const showTokenUsage = useUIStore((s) => s.showTokenUsage);
   const setShowTokenUsage = useUIStore((s) => s.setShowTokenUsage);
+  const showContextUsage = useUIStore((s) => s.showContextUsage);
+  const setShowContextUsage = useUIStore((s) => s.setShowContextUsage);
   const showMessageNumbers = useUIStore((s) => s.showMessageNumbers);
   const setShowMessageNumbers = useUIStore((s) => s.setShowMessageNumbers);
+  const showCharactersInPersonaPickers = useUIStore((s) => s.showCharactersInPersonaPickers);
+  const setShowCharactersInPersonaPickers = useUIStore((s) => s.setShowCharactersInPersonaPickers);
   const guideGenerations = useUIStore((s) => s.guideGenerations);
   const setGuideGenerations = useUIStore((s) => s.setGuideGenerations);
   const includeReasoningInExports = useUIStore((s) => s.includeReasoningInExports);
   const setIncludeReasoningInExports = useUIStore((s) => s.setIncludeReasoningInExports);
+  const includePrivateNotesInExports = useUIStore((s) => s.includePrivateNotesInExports);
+  const setIncludePrivateNotesInExports = useUIStore((s) => s.setIncludePrivateNotesInExports);
   const debugMode = useUIStore((s) => s.debugMode);
   const setDebugMode = useUIStore((s) => s.setDebugMode);
   const clearAllData = useClearAllData();
@@ -7538,14 +8457,11 @@ function AdvancedSettings() {
         }
         throw new Error(failure.message);
       }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = getDownloadFilename(res, profileExportFallbackNames[format]);
-      a.click();
-      URL.revokeObjectURL(url);
-      toast.success(profileExportSuccessMessages[format]);
+      const saveStatus = await saveExportFile(
+        await res.blob(),
+        getDownloadFilename(res, profileExportFallbackNames[format]),
+      );
+      if (saveStatus === "saved") toast.success(profileExportSuccessMessages[format]);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : localizeUi("ui.panels.advancedsettings.failedToExportProfile"));
     } finally {
@@ -7674,39 +8590,103 @@ function AdvancedSettings() {
       heapLimitMiB: number;
       rssMiB: number;
     };
+    wakeLock?: string | null;
+    lastFreeze?: { detectedAt: string; gapMs: number; suspendedMs: number } | null;
+    previousSession?:
+      | { status: "unknown"; reason: string }
+      | { status: "ended"; exitKind: "clean" | "crash" | "restart"; exitedAt: string | null; exitCode: number | null }
+      | {
+          status: "unclean";
+          record: {
+            startedAt: string;
+            lastSeenAt: string;
+            uptimeMs: number;
+            rssMiB: number;
+            heapUsedMiB: number;
+            pid: number;
+            rebootedSince: boolean | null;
+            detectedAt: string;
+          };
+        };
+    uncleanExitCount?: number;
+    sidecars?: SidecarHealthSection;
   }>({
     queryKey: ["health"],
-    queryFn: () => api.get("/health"),
+    // Against a frozen host this fetch would otherwise pend forever, leaving
+    // supportDiagnosticsPending true and the copy button disabled with no
+    // explanation (#5657). A deadline turns that into a distinguishable error.
+    queryFn: ({ signal }) => api.get("/health", { signal: requestTimeoutSignal(10_000, signal) }),
     staleTime: 60_000,
+    // failureCount < 1 preserves the app-wide default of one retry (main.tsx);
+    // only the timeout carve-out is new.
+    retry: (failureCount, error) => !isRequestTimeoutError(error) && failureCount < 1,
+  });
+  // #5740: the report includes what Mari last reported acting on. Safari only
+  // lets a tap write to the clipboard while the tap is handled, so this cannot
+  // be fetched after the tap; it reloads whenever Settings opens instead. The
+  // deadline keeps a frozen host from disabling the copy button (#5657).
+  const settingsOpen = useUIStore((s) => s.rightPanelOpen && s.rightPanel === "settings");
+  const mariStatus = useQuery<{ latestUnderstoodRequest?: SupportDiagnostics["mariActingOn"] }>({
+    queryKey: ["professor-mari", "workspace-status"],
+    queryFn: ({ signal }) =>
+      api.get("/professor-mari/workspace/status", { signal: requestTimeoutSignal(5_000, signal) }),
+    enabled: settingsOpen,
+    staleTime: 0,
+    retry: false,
   });
   const connections = (rawConnections ?? []) as APIConnection[];
   const activeConnection = activeChat?.connectionId
     ? (connections.find((connection) => connection.id === activeChat.connectionId) ?? null)
     : (connections.find((connection) => connection.isDefault) ?? null);
-  const supportDiagnosticsPending = isConnectionsLoading || (!!activeChatId && isActiveChatLoading);
+  // Health is included so a copy taken before the query settles cannot label
+  // pending wake-lock/freeze telemetry as genuinely absent (#5656 review).
+  const supportDiagnosticsPending =
+    isConnectionsLoading || (!!activeChatId && isActiveChatLoading) || health.isPending || mariStatus.isPending;
 
   const handleCopySupportDiagnostics = useCallback(async () => {
+    // Best-effort: a failed status request reads as unavailable, never blocks the copy.
+    const mariActingOn = mariStatus.isError ? undefined : (mariStatus.data?.latestUnderstoodRequest ?? null);
+    const report = formatSupportDiagnostics({
+      clientRuntime: getClientRuntimeDiagnostics(),
+      mariActingOn,
+      // Distinguish "the server never answered" (frozen host) from ordinary
+      // missing fields so support reports carry the signal (#5657): the
+      // formatter renders every server telemetry line as unreachable.
+      serverUnreachable: isRequestTimeoutError(health.error),
+      version: health.data?.version ?? APP_VERSION,
+      build: health.data?.build ?? APP_VERSION,
+      commit: health.data?.commit ?? null,
+      serverOs: health.data?.serverOs ?? "",
+      serverMemory: health.data?.memory,
+      wakeLock: health.data?.wakeLock ?? null,
+      lastFreeze: health.data?.lastFreeze ?? null,
+      // undefined (fetch failed) stays undefined so the report says
+      // Unavailable instead of asserting a fate it never observed.
+      previousSession: health.data?.previousSession,
+      uncleanExitCount: health.data?.uncleanExitCount,
+      // The server's own GPU and local model slots. Useful on its own for
+      // "my local model won't load" reports, whether or not the user has
+      // ever touched an activation question.
+      sidecars: health.data?.sidecars,
+      clientOs: resolveClientOs(navigator.userAgent, navigator.platform, navigator.maxTouchPoints),
+      browser: navigator.userAgent,
+      gpu: detectBrowserGpu(),
+      connectionName: activeConnection?.name ?? null,
+      connectionProvider: activeConnection?.provider ?? null,
+      model: activeConnection?.model ?? null,
+    });
+    // Fenced so Discord and GitHub render the report as a code block (#6668). Discord only knows
+    // ``` fences, so a backtick run inside the report (a connection name, Mari's phrase) is split
+    // with a zero-width space instead of lengthening the fence.
     const copied = await copyToClipboard(
-      formatSupportDiagnostics({
-        version: health.data?.version ?? APP_VERSION,
-        build: health.data?.build ?? APP_VERSION,
-        commit: health.data?.commit ?? null,
-        serverOs: health.data?.serverOs ?? "Unavailable",
-        serverMemory: health.data?.memory,
-        clientOs: resolveClientOs(navigator.userAgent, navigator.platform, navigator.maxTouchPoints),
-        browser: navigator.userAgent,
-        gpu: detectBrowserGpu(),
-        connectionName: activeConnection?.name ?? null,
-        connectionProvider: activeConnection?.provider ?? null,
-        model: activeConnection?.model ?? null,
-      }),
+      `\`\`\`\n${report.replace(/``+/gu, (run) => run.split("").join("\u200b"))}\n\`\`\``,
     );
     if (copied) {
       toast.success(localizeUi("ui.panels.advancedsettings.supportDiagnosticsCopied"));
     } else {
       toast.error(localizeUi("ui.panels.advancedsettings.supportDiagnosticsCopyFailed"));
     }
-  }, [activeConnection, health.data, localizeUi]);
+  }, [activeConnection, health.data, health.error, localizeUi, mariStatus.data, mariStatus.isError]);
 
   const deleteBackupMutation = useMutation({
     mutationFn: (name: string) => api.delete(`/backup/${name}`),
@@ -7739,6 +8719,11 @@ function AdvancedSettings() {
 
   type UpdateChannelId = "stable" | "staging";
   const [updateChannel, setUpdateChannel] = useState<UpdateChannelId | null>(null);
+  const installedChannel = useQuery<{ channel: UpdateChannelId }>({
+    queryKey: ["update-channel"],
+    queryFn: () => api.get("/updates/channel"),
+    staleTime: 30_000,
+  });
   const updateCheck = useQuery<{
     currentVersion: string;
     currentCommit: string | null;
@@ -7772,7 +8757,8 @@ function AdvancedSettings() {
     applyAvailable?: boolean;
     channelSwitch?: boolean;
     updatesApplyEnabled?: boolean;
-    applyUnavailableReason?: "disabled" | "unsupported-install" | "container-install" | null;
+    applyUnavailableReason?:
+      "disabled" | "hard-disabled" | "dev-branch" | "unsupported-install" | "container-install" | null;
     manualUpdateCommand?: string | null;
     manualUpdateHint?: string | null;
   }>({
@@ -7783,7 +8769,7 @@ function AdvancedSettings() {
     retry: false,
   });
 
-  const selectedUpdateChannelId = updateChannel ?? updateCheck.data?.channel ?? "stable";
+  const selectedUpdateChannelId = updateChannel ?? updateCheck.data?.channel ?? installedChannel.data?.channel;
 
   const applyUpdate = useMutation({
     mutationFn: () =>
@@ -7840,9 +8826,13 @@ function AdvancedSettings() {
   const applyUnavailableCopy =
     applyUnavailableReason === "container-install"
       ? "Container installs cannot replace themselves from inside the browser. Pull the release image tag or latest image on the host, then restart the container."
-      : applyUnavailableReason === "disabled"
-        ? "This install can check for updates, but applying them from the browser is disabled. Update manually with the command below. Advanced git installs can enable server-side apply with UPDATES_APPLY_ENABLED=true."
-        : "This install can check for updates, but it cannot apply them from the browser. Relaunch the app if you use the launcher, or update manually for your install type.";
+      : applyUnavailableReason === "hard-disabled"
+        ? "Applying updates from the browser is blocked for this server instance (UPDATES_APPLY_DISABLED). The dev and e2e launchers set this so a browser tab cannot rewrite a development checkout."
+        : applyUnavailableReason === "dev-branch"
+          ? "This checkout is on a development branch, so applying updates from the browser is blocked to protect work in progress. Update the checkout manually if you really intend to."
+          : applyUnavailableReason === "disabled"
+            ? "This install can check for updates, but applying them from the browser is disabled. Update manually with the command below. Advanced git installs can enable server-side apply with UPDATES_APPLY_ENABLED=true."
+            : "This install can check for updates, but it cannot apply them from the browser. Relaunch the app if you use the launcher, or update manually for your install type.";
   const isClearing = clearAllData.isPending || expungeData.isPending;
   const isAllScopesSelected = selectedScopes.length === EXPUNGE_SCOPE_OPTIONS.length;
 
@@ -7886,6 +8876,7 @@ function AdvancedSettings() {
       <SettingsIntro>
         {localizeUi("ui.panels.advancedsettings.serverMaintenanceMessageUtilitiesBackupsAndDataRemoval")}
       </SettingsIntro>
+      <MultiplayerSettings />
 
       <SettingsSection
         title={localizeUi("settings.sections.adminAccess.title")}
@@ -7935,6 +8926,15 @@ function AdvancedSettings() {
       </SettingsSection>
 
       <SettingsSection
+        title={localizeUi("settings.sections.features.title")}
+        description={localizeUi("settings.sections.features.description")}
+        icon={<ToggleRight size="0.875rem" />}
+        {...getSettingsSectionAnchorProps("features")}
+      >
+        <FeatureSwitchesSettings anchorId={getSettingsControlAnchorId(FEATURE_SWITCHES_CONTROL_ID)} />
+      </SettingsSection>
+
+      <SettingsSection
         title={localizeUi("settings.sections.updates.title")}
         description={localizeUi("settings.sections.updates.componentDescription")}
         icon={<RefreshCw size="0.875rem" />}
@@ -7948,10 +8948,15 @@ function AdvancedSettings() {
             >
               {localizeUi("ui.panels.advancedsettings.releaseChannel")}
               <select
-                value={selectedUpdateChannelId}
+                value={selectedUpdateChannelId ?? ""}
                 onChange={(event) => setUpdateChannel(event.target.value as UpdateChannelId)}
                 className="w-full rounded-lg bg-[var(--background)] px-3 py-2 text-xs font-medium normal-case tracking-normal text-[var(--foreground)] outline-none ring-1 ring-[var(--border)] focus:ring-[var(--primary)]"
               >
+                {!selectedUpdateChannelId && (
+                  <option value="" disabled>
+                    {localizeUi("settings.updates.channelPending")}
+                  </option>
+                )}
                 {updateChannelOptions.map((channel) => (
                   <option key={channel.id} value={channel.id}>
                     {channel.label}
@@ -8140,7 +9145,7 @@ function AdvancedSettings() {
             <button
               onClick={() => void handleForceRefreshSpa()}
               disabled={refreshingSpa}
-              className="flex items-center justify-center gap-1.5 rounded-lg bg-[var(--background)]/70 px-3 py-2 text-xs font-medium text-[var(--foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+              className={SETTINGS_PRIMARY_BUTTON_CLASS}
             >
               {refreshingSpa ? (
                 <>
@@ -8182,6 +9187,14 @@ function AdvancedSettings() {
       </SettingsSection>
 
       <SettingsSection
+        title={localizeUi("settings.timeouts.title")}
+        icon={<Gauge size="0.875rem" />}
+        {...getSettingsSectionAnchorProps("request-timeouts")}
+      >
+        <RequestTimeoutSettings />
+      </SettingsSection>
+
+      <SettingsSection
         title={localizeUi("settings.customGenerationParameters.title")}
         description={localizeUi("settings.customGenerationParameters.sectionDescription")}
         help={localizeUi("settings.customGenerationParameters.help")}
@@ -8208,6 +9221,13 @@ function AdvancedSettings() {
             help={localizeUi("settings.controls.showTimestamps.help")}
           />
           <ToggleSetting
+            anchorId={getSettingsControlAnchorId("show-characters-in-persona-pickers")}
+            label={localizeUi("settings.controls.showCharactersInPersonaPickers.label")}
+            checked={showCharactersInPersonaPickers}
+            onChange={setShowCharactersInPersonaPickers}
+            help={localizeUi("settings.controls.showCharactersInPersonaPickers.description")}
+          />
+          <ToggleSetting
             anchorId={getSettingsControlAnchorId("show-model-name")}
             label={localizeUi("settings.controls.showModelName.label")}
             checked={showModelName}
@@ -8220,6 +9240,13 @@ function AdvancedSettings() {
             checked={showTokenUsage}
             onChange={setShowTokenUsage}
             help={localizeUi("settings.controls.showTokenUsage.help")}
+          />
+          <ToggleSetting
+            anchorId={getSettingsControlAnchorId("show-context-usage")}
+            label={localizeUi("settings.controls.showContextUsage.label")}
+            checked={showContextUsage}
+            onChange={setShowContextUsage}
+            help={localizeUi("settings.controls.showContextUsage.help")}
           />
           <ToggleSetting
             anchorId={getSettingsControlAnchorId("show-message-numbers")}
@@ -8241,6 +9268,13 @@ function AdvancedSettings() {
             checked={includeReasoningInExports}
             onChange={setIncludeReasoningInExports}
             help={localizeUi("settings.controls.includeReasoning.help")}
+          />
+          <ToggleSetting
+            anchorId={getSettingsControlAnchorId("include-private-notes-in-exports")}
+            label={localizeUi("settings.controls.includePrivateNotes.label")}
+            checked={includePrivateNotesInExports}
+            onChange={setIncludePrivateNotesInExports}
+            help={localizeUi("settings.controls.includePrivateNotes.help")}
           />
           <ToggleSetting
             anchorId={getSettingsControlAnchorId("debug-mode")}
@@ -8363,7 +9397,7 @@ function AdvancedSettings() {
           <button
             onClick={() => setExportProfileDialogOpen(true)}
             disabled={exportingProfile}
-            className="flex items-center justify-center gap-1.5 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs font-medium ring-1 ring-[var(--border)] transition-all hover:bg-[var(--secondary)]/80 active:scale-95 disabled:opacity-50"
+            className={SETTINGS_PRIMARY_BUTTON_CLASS}
           >
             {exportingProfile ? (
               <>
@@ -8479,7 +9513,7 @@ function AdvancedSettings() {
                     "flex cursor-pointer items-start gap-2 rounded-lg px-2.5 py-2 ring-1 transition-colors",
                     checked
                       ? "bg-[var(--primary)]/10 ring-[var(--primary)]/30"
-                      : "bg-[var(--background)]/40 ring-[var(--border)] hover:bg-[var(--secondary)]/70",
+                      : "bg-[var(--background)]/40 ring-[var(--border)] hover:bg-[var(--accent)]/70",
                   )}
                 >
                   <input

@@ -11,52 +11,54 @@ import {
   useCallback,
   useMemo,
   useState,
+  type CSSProperties,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useTranslation, useTranslation as useUiTranslation } from "react-i18next";
-import { Loader2, ChevronUp, Settings2, Image as ImageIcon, ArrowRightLeft } from "lucide-react";
+import { Loader2, ChevronUp, Puzzle } from "lucide-react";
 import { ConversationMessage } from "./ConversationMessage";
 import { ConversationInput } from "./ConversationInput";
 import { ConversationGamesPicker } from "./ConversationGamesPicker";
 import { SceneBanner, EndSceneBar } from "./SceneBanner";
-import { ChatBranchSelector } from "./ChatBranchSelector";
-import { ChatMessageSearch } from "./ChatMessageSearch";
-import { ActiveLorebookEntriesButton } from "./ActiveLorebookEntriesButton";
-import {
-  CHAT_TOOLBAR_OVERFLOW_BUTTON_SIZE_CLASS,
-  ChatToolbarButton,
-  ChatToolbarMenu,
-  getChatToolbarButtonClass,
-} from "./ChatToolbarControls";
-import { ChatHelpButton } from "./ChatHelpButton";
+import { CHAT_TOOLBAR_OVERFLOW_BUTTON_SIZE_CLASS, getChatToolbarButtonClass } from "./ChatToolbarControls";
+import { CHAT_CONTROL_WINDOW_IDS, ChatControlWindow } from "./ChatControlWindow";
 import { ConversationPresenceCard } from "./ConversationPresenceCard";
 import { PendingTypingDots } from "./PendingTypingDots";
 import { TranscriptWindowControls } from "./TranscriptWindowControls";
 import { PinnedImageOverlay } from "./PinnedImageOverlay";
 import { useChatStore } from "../../stores/chat.store";
+import { hasActiveTextSelection } from "../../lib/text-selection";
 import { useConversationGamesStore } from "../../stores/conversation-games.store";
 import { useUIStore } from "../../stores/ui.store";
 import { playConfiguredNotificationPing } from "../../lib/notification-sound";
 import { rememberBoundedSetValue } from "../../lib/bounded-set";
 import { useRenderTimer } from "../../lib/perf-diagnostics";
 import { messageHasPendingPostProcessing } from "../../lib/chat-message-extra";
-import { getTranscriptRenderWindow, TRANSCRIPT_RENDER_WINDOW_STEP } from "../../lib/transcript-render-window";
+import {
+  getTranscriptRenderWindow,
+  resolveTranscriptRenderWindowSize,
+  TRANSCRIPT_RENDER_WINDOW_STEP,
+} from "../../lib/transcript-render-window";
 import { useThrottledStreamBuffer } from "../../hooks/use-throttled-stream-buffer";
 import { useConversationCustomEmojis } from "../../hooks/use-conversation-custom-emojis";
 import { useConversationCustomStickers } from "../../hooks/use-conversation-custom-stickers";
+import { useReducedAmbientEffects } from "../../hooks/use-reduced-ambient-effects";
 import type { CharacterMap, MessageSelectionToggle, PersonaInfo } from "./chat-area.types";
 import {
   normalizeTextForMatch,
   parseGroupedSpeakerSegments,
   stripCharacterStatusTagsForDisplay,
   stripLeadingMessageTimestamps,
+  type InstalledCapabilityPackage,
   type Message,
+  type ScenePackageOrigin,
 } from "@marinara-engine/shared";
 import { ConvoCharacterStatusStrip } from "./ConvoCharacterStatusStrip";
 import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
 import { CapabilityElement } from "../capabilities/CapabilityElement";
 import { TURN_GAME_BOT_REQUEST_EVENT } from "../../lib/capability-turn-game-events";
 import { useGenerate } from "../../hooks/use-generate";
+import { useChatOpeningScroll } from "../../hooks/use-chat-opening-scroll";
 import {
   useChatComposerFocused,
   useChatKeyboardOpen,
@@ -81,32 +83,28 @@ interface ConversationViewProps {
   characterNames: string[];
   personaInfo?: PersonaInfo;
   chatMeta: Record<string, any>;
-  chatName?: string;
-  chatGroupId?: string | null;
   chatCharIds: string[];
   onDelete: (messageId: string) => void;
   onRegenerate: (messageId: string) => void;
   onEdit: (messageId: string, content: string) => void;
   onSetActiveSwipe: (messageId: string, index: number) => void;
   onToggleHiddenFromAI: (messageId: string, current: boolean) => void;
-  onPeekPrompt: () => void;
-  onIllustrate?: () => void | Promise<void>;
+  onPeekPrompt: (messageId?: string) => void;
+  onIllustrate?: (prompt?: string, messageRange?: [string, string]) => void | Promise<void>;
   onGenerateSelfie?: (characterId?: string) => void | Promise<void>;
   lastAssistantMessageId: string | null;
   onOpenSettings: (event?: ReactMouseEvent<HTMLElement>, options?: { initialSection?: "autonomous" | null }) => void;
   onOpenScheduleEditor?: (characterId: string, options?: { initialDay?: string | null }) => void;
-  onOpenGallery: (event?: ReactMouseEvent<HTMLElement>) => void;
   onBranch?: (messageId: string) => void;
   multiSelectMode?: boolean;
   selectedMessageIds?: Set<string>;
   onToggleSelectMessage?: (toggle: MessageSelectionToggle) => void;
-  connectedChatName?: string;
-  onSwitchChat?: () => void;
   sceneInfo?: {
     variant: "origin" | "scene";
     sceneChatId?: string;
     sceneChatName?: string;
     originChatId?: string;
+    packageOrigin?: ScenePackageOrigin | null;
     description?: string;
   };
   onConcludeScene?: (sceneChatId: string) => void;
@@ -278,6 +276,98 @@ function splitAssistantContentLines(content: string, charName?: string | null): 
 const globalSeenKeys = new Set<string>();
 const MAX_GLOBAL_SEEN_KEYS = 5_000;
 
+function getBackgroundBlurStyle(blurPx: number): Pick<CSSProperties, "filter" | "transform"> {
+  if (blurPx <= 0) return {};
+  return {
+    filter: `blur(${blurPx}px)`,
+    transform: `scale(${Math.min(1.08, 1 + blurPx * 0.0025)})`,
+  };
+}
+
+function ConversationBackground({
+  url,
+  blurPx,
+  opacity,
+  reduceMotion,
+}: {
+  url: string | null;
+  blurPx: number;
+  opacity: number;
+  reduceMotion: boolean;
+}) {
+  const backgroundBlurStyle = getBackgroundBlurStyle(blurPx);
+  return url ? (
+    <img
+      src={url}
+      alt=""
+      draggable={false}
+      className="mari-background pointer-events-none absolute inset-0 h-full w-full select-none object-cover object-center"
+      style={{
+        opacity,
+        transition: reduceMotion ? "none" : "opacity 180ms ease-out, filter 180ms ease-out, transform 180ms ease-out",
+        ...backgroundBlurStyle,
+      }}
+    />
+  ) : null;
+}
+
+/** The chat's package integrations the user turned on (Calls, which keeps its header button, aside). */
+function selectEnabledConversationPackages(installed: InstalledCapabilityPackage[], chatMeta: Record<string, any>) {
+  if (chatMeta.enableAgents !== true) return [];
+  const activeAgentIds: string[] = Array.isArray(chatMeta.activeAgentIds) ? chatMeta.activeAgentIds : [];
+  return installed.filter((item) => {
+    if (item.status !== "active" || !item.manifest.entrypoints.client) return false;
+    if (item.manifest.kind.includes("conversation-calls")) return false;
+    const contributedAgentIds = item.manifest.contributions?.agentDetail?.agentIds ?? [];
+    return activeAgentIds.includes(item.id) || contributedAgentIds.some((id: string) => activeAgentIds.includes(id));
+  });
+}
+
+/** Package toolbars (the conversation-toolbar slot) as control windows that minimize to bubbles. */
+export function ConversationPackageWindows({
+  chatId,
+  chatMeta,
+  characterMap,
+  chatCharIds,
+  personaInfo,
+}: {
+  chatId: string;
+  chatMeta: Record<string, any>;
+  characterMap: CharacterMap;
+  chatCharIds: string[];
+  personaInfo?: PersonaInfo;
+}) {
+  const { data: installedCapabilities = [] } = useInstalledCapabilityPackages();
+  const packages = selectEnabledConversationPackages(installedCapabilities, chatMeta).filter((item) =>
+    item.manifest.contributions?.slots?.includes("conversation-toolbar"),
+  );
+  const capabilityProps = {
+    chatId,
+    metadata: chatMeta,
+    characterMap,
+    chatCharIds,
+    personaInfo,
+    toolbarButtonClass: getChatToolbarButtonClass(),
+  };
+  return packages.map((item, index) => (
+    <ChatControlWindow
+      key={item.id}
+      id={CHAT_CONTROL_WINDOW_IDS.package(item.id)}
+      title={item.manifest.name}
+      icon={<Puzzle size={14} />}
+      // The connected chat takes slot 0.
+      slot={index + 1}
+      width={280}
+      height={140}
+      helpTarget="agent-controls"
+    >
+      <div className="flex flex-wrap items-center gap-0.5 p-2">
+        <CapabilityElement packageId={item.id} view="toolbar" capabilityProps={capabilityProps} className="contents" />
+      </div>
+    </ChatControlWindow>
+  ));
+}
+
 export function ConversationView({
   chatId,
   messages,
@@ -291,8 +381,6 @@ export function ConversationView({
   characterNames,
   personaInfo,
   chatMeta,
-  chatName,
-  chatGroupId,
   chatCharIds,
   onDelete,
   onRegenerate,
@@ -305,13 +393,10 @@ export function ConversationView({
   lastAssistantMessageId,
   onOpenSettings,
   onOpenScheduleEditor,
-  onOpenGallery,
   onBranch,
   multiSelectMode,
   selectedMessageIds,
   onToggleSelectMessage,
-  connectedChatName,
-  onSwitchChat,
   sceneInfo,
   onConcludeScene,
   onAbandonScene,
@@ -429,6 +514,10 @@ export function ConversationView({
   // default stops without collapsing Marinara's two-color background.
   const convoGradient = useUIStore((s) => s.convoGradient);
   const theme = useUIStore((s) => s.theme);
+  const chatBackground = useUIStore((s) => s.chatBackground);
+  const chatBackgroundBlur = useUIStore((s) => s.chatBackgroundBlur);
+  const conversationBackgroundImageOpacity = useUIStore((s) => s.conversationBackgroundImageOpacity);
+  const reduceAmbientEffects = useReducedAmbientEffects();
   const gradientStyle = useMemo(() => {
     const g = convoGradient[theme];
     const defaults = theme === "dark" ? { from: "#0a0a0e", to: "#1c2133" } : { from: "#f2eff7", to: "#eae6f0" };
@@ -452,64 +541,14 @@ export function ConversationView({
     personaInfo,
     toolbarButtonClass: getChatToolbarButtonClass({ sizeClassName: CHAT_TOOLBAR_OVERFLOW_BUTTON_SIZE_CLASS }),
   };
-  const activeAgentIds = chatMeta.activeAgentIds;
-  const enabledConversationCapabilities =
-    chatMeta.enableAgents === true
-      ? installedCapabilities.filter((item) => {
-          if (item.status !== "active" || !item.manifest.entrypoints.client) return false;
-          if (item.manifest.kind.includes("conversation-calls")) return false;
-          const contributedAgentIds = item.manifest.contributions?.agentDetail?.agentIds ?? [];
-          return activeAgentIds.includes(item.id) || contributedAgentIds.some((id) => activeAgentIds.includes(id));
-        })
-      : [];
-  const conversationToolbarPackages = enabledConversationCapabilities.filter((item) =>
-    item.manifest.contributions?.slots?.includes("conversation-toolbar"),
-  );
-  const conversationSurfacePackages = enabledConversationCapabilities.filter((item) =>
-    item.manifest.contributions?.slots?.includes("conversation-surface"),
+  const conversationSurfacePackages = selectEnabledConversationPackages(installedCapabilities, chatMeta).filter(
+    (item) => item.manifest.contributions?.slots?.includes("conversation-surface"),
   );
   const conversationCapabilityProps = { chatId, metadata: chatMeta, characterMap, chatCharIds, personaInfo };
-  const renderToolbarActions = (compact = false) => (
-    <>
-      <ChatHelpButton mode="conversation" compact={compact} />
-      <ChatBranchSelector
-        activeChatId={chatId}
-        activeChatName={chatName}
-        groupId={chatGroupId}
-        variant="roleplay"
-        compact={compact}
-      />
-      <ActiveLorebookEntriesButton chatId={chatId} />
-      <ChatToolbarButton
-        icon={<ImageIcon size="0.875rem" />}
-        title={t("chat.toolbar.gallery")}
-        panelAction="gallery"
-        onClick={onOpenGallery}
-      />
-      {onSwitchChat && (
-        <ChatToolbarButton
-          icon={<ArrowRightLeft size="0.875rem" />}
-          helpTarget="connected-chat"
-          title={
-            connectedChatName
-              ? t("chat.toolbar.switchTo", { name: connectedChatName })
-              : t("chat.toolbar.switchToConnected")
-          }
-          onClick={onSwitchChat}
-        />
-      )}
-      <ChatMessageSearch chatId={chatId} />
-      <ChatToolbarButton
-        icon={<Settings2 size="0.875rem" />}
-        title={t("chat.toolbar.settings")}
-        panelAction="settings"
-        onClick={onOpenSettings}
-      />
-    </>
-  );
+  // Like the Roleplay strip, the see-through header lets touches through to the transcript except on its controls.
   const renderHeader = () => (
-    <div className="sticky top-0 z-30 flex items-center justify-between px-4 py-2">
-      <div data-conversation-header-identity className="flex min-w-0 items-center gap-1.5">
+    <div className="pointer-events-none sticky top-0 z-30 flex items-center justify-between px-4 py-2">
+      <div data-conversation-header-identity className="pointer-events-auto flex min-w-0 items-center gap-1.5">
         <ConversationPresenceCard
           chatId={chatId}
           chatMeta={chatMeta}
@@ -531,27 +570,7 @@ export function ConversationView({
           </span>
         )}
       </div>
-
-      <div className="ml-2 flex min-w-0 flex-1 items-center justify-end gap-2">
-        <ChatToolbarMenu
-          className="flex-1"
-          desktopChildren={renderToolbarActions()}
-          mobileChildren={renderToolbarActions(true)}
-        />
-        {conversationToolbarPackages.map((item) => (
-          <span key={`${item.id}-toolbar`} data-chat-help="agent-controls" className="contents">
-            <CapabilityElement
-              packageId={item.id}
-              view="toolbar"
-              capabilityProps={{
-                ...conversationCapabilityProps,
-                toolbarButtonClass: getChatToolbarButtonClass(),
-              }}
-              className="contents"
-            />
-          </span>
-        ))}
-      </div>
+      {/* Chat Settings, the connected chat and package toolbars sit in the topbar and in bubbles. */}
     </div>
   );
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -567,6 +586,7 @@ export function ConversationView({
   const composerScrollTopRef = useRef(0);
   const userScrolledAtRef = useRef(0);
   const openedAtBottomChatIdRef = useRef<string | null>(null);
+  const gotoRequest = useChatStore((state) => state.gotoRequest);
   const streamScrollFrameRef = useRef(0);
   const keyboardOpen = useChatKeyboardOpen();
   const composerFocused = useChatComposerFocused();
@@ -574,6 +594,7 @@ export function ConversationView({
     keyboardOpen || composerFocused || hasLiveStream || hasDraftInput || isFetchingNextPage;
 
   const scrollToMessagesBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    if (hasActiveTextSelection()) return;
     const el = scrollRef.current;
     if (el) {
       el.scrollTo({ top: el.scrollHeight, behavior });
@@ -596,17 +617,12 @@ export function ConversationView({
     [],
   );
 
-  const scheduleScrollToMessagesBottom = useCallback(
-    (behavior: ScrollBehavior = "smooth") => {
-      scrollToMessagesBottom(behavior);
-      requestAnimationFrame(() => {
-        scrollToMessagesBottom(behavior);
-        requestAnimationFrame(() => scrollToMessagesBottom(behavior));
-      });
-    },
-    [scrollToMessagesBottom],
-  );
   useKeepLatestChatMessageVisible(scrollRef, scrollToMessagesBottom);
+  const followOpeningScroll = useChatOpeningScroll(
+    gotoRequest?.chatId === chatId ? null : chatId,
+    scrollRef,
+    scrollToMessagesBottom,
+  );
 
   useEffect(() => {
     if (shouldKeepMobileComposerOpen) setMobileHistoryComposerCollapsed(false);
@@ -708,13 +724,21 @@ export function ConversationView({
 
   useLayoutEffect(() => {
     setTranscriptWindowStart(null);
+    openedAtBottomChatIdRef.current = null;
   }, [chatId]);
 
+  const messagesPerPage = useUIStore((s) => s.messagesPerPage);
+  const maxMountedMessages = resolveTranscriptRenderWindowSize(messagesPerPage);
+  // The window size follows the "Messages per page" setting, which can change while
+  // this chat stays mounted. A pinned start index is relative to the old size, so
+  // re-anchor to the latest messages the same way a chat switch does.
+  useLayoutEffect(() => {
+    setTranscriptWindowStart(null);
+  }, [maxMountedMessages]);
   const transcriptWindow = useMemo(
-    () => getTranscriptRenderWindow(messages, { startIndex: transcriptWindowStart }),
-    [messages, transcriptWindowStart],
+    () => getTranscriptRenderWindow(messages, { maxMountedMessages, startIndex: transcriptWindowStart }),
+    [maxMountedMessages, messages, transcriptWindowStart],
   );
-  const gotoRequest = useChatStore((state) => state.gotoRequest);
   // ChatArea clears the request after scrolling; only reveal its transcript window once.
   const handledTranscriptGotoRef = useRef<typeof gotoRequest>(null);
 
@@ -760,19 +784,43 @@ export function ConversationView({
   useLayoutEffect(() => {
     if (!chatId || isFetchingNextPage || isLoadingMoreRef.current) return;
     if (openedAtBottomChatIdRef.current === chatId) return;
-    if (isLoading && (messages?.length ?? 0) === 0) return;
+    if (!messages || (isLoading && messages.length === 0)) return;
     if (transcriptWindow.hiddenAfterCount > 0) return;
+    // A pending jump-to-message owns the initial scroll position. With an
+    // unbounded render window nothing is ever hidden after the target, so the
+    // hidden-after guard alone no longer defers to the jump. Only treat the chat
+    // as opened once the target is loaded (ChatArea scrolls to it in that same
+    // commit); a target that is still being paged in, out of range, or
+    // unreachable leaves this effect retryable so the chat still opens at the
+    // bottom once the request clears.
+    if (gotoRequest && gotoRequest.chatId === chatId) {
+      const loadedMessageOffset = totalMessageCount - (messages?.length ?? 0);
+      const localIndex = gotoRequest.messageNumber - 1 - loadedMessageOffset;
+      if (messages && localIndex >= 0 && localIndex < messages.length) {
+        openedAtBottomChatIdRef.current = chatId;
+      }
+      return;
+    }
 
-    openedAtBottomChatIdRef.current = chatId;
-    userScrolledAwayRef.current = false;
-    isNearBottomRef.current = true;
-    scheduleScrollToMessagesBottom("auto");
+    const openAtBottom = () => {
+      if (hasActiveTextSelection()) return;
+      document.removeEventListener("selectionchange", openAtBottom);
+      openedAtBottomChatIdRef.current = chatId;
+      userScrolledAwayRef.current = false;
+      isNearBottomRef.current = true;
+      followOpeningScroll();
+    };
+    document.addEventListener("selectionchange", openAtBottom);
+    openAtBottom();
+    return () => document.removeEventListener("selectionchange", openAtBottom);
   }, [
     chatId,
+    gotoRequest,
     isFetchingNextPage,
     isLoading,
-    messages?.length,
-    scheduleScrollToMessagesBottom,
+    messages,
+    followOpeningScroll,
+    totalMessageCount,
     transcriptWindow.hiddenAfterCount,
   ]);
 
@@ -1232,19 +1280,36 @@ export function ConversationView({
       data-chat-mode="conversation"
       style={{ ...gradientStyle, isolation: "isolate" }}
     >
+      {chatBackground ? (
+        <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden" aria-hidden="true">
+          <ConversationBackground
+            url={chatBackground}
+            blurPx={chatBackgroundBlur}
+            opacity={conversationBackgroundImageOpacity / 100}
+            reduceMotion={reduceAmbientEffects}
+          />
+          <div
+            data-conversation-background-gradient-veil
+            className="pointer-events-none absolute inset-0"
+            style={{ ...gradientStyle, opacity: 0.35 }}
+          />
+        </div>
+      ) : null}
       {/* ── Messages scroll area ── */}
+      {/* The scroll padding clears the see-through header, so messages scrolled or revealed to the top land below it. */}
+      {/* ponytail: 4rem fits the one-row header (about 3.5rem on phones); measure it like Roleplay if it ever wraps. */}
       <div
         ref={scrollRef}
         data-chat-scroll
         data-chat-resource-drop-surface
-        className="mari-messages-scroll flex-1 overflow-y-auto overflow-x-hidden"
+        className="mari-messages-scroll flex-1 scroll-pt-16 overflow-y-auto overflow-x-hidden"
       >
         {/* Floating header — character info + action buttons */}
         {renderHeader()}
 
         {/* Load More */}
         {hasNextPage && (
-          <div className="flex justify-center py-3">
+          <div className="mari-chat-load-more flex justify-center py-3">
             <button
               onClick={handleLoadMore}
               disabled={isFetchingNextPage}
@@ -1361,7 +1426,7 @@ export function ConversationView({
                 onEdit={onEdit}
                 onSetActiveSwipe={onSetActiveSwipe}
                 onToggleHiddenFromAI={onToggleHiddenFromAI}
-                onPeekPrompt={onPeekPrompt}
+                onPeekPrompt={() => onPeekPrompt(msg.id)}
                 isLastAssistantMessage={msg.id === lastAssistantMessageId}
                 characterMap={characterMap}
                 personaInfo={personaInfo as any}
@@ -1396,7 +1461,7 @@ export function ConversationView({
                   onEdit={onEdit}
                   onSetActiveSwipe={onSetActiveSwipe}
                   onToggleHiddenFromAI={onToggleHiddenFromAI}
-                  onPeekPrompt={onPeekPrompt}
+                  onPeekPrompt={() => onPeekPrompt(regenerationDraftMessage.id)}
                   isLastAssistantMessage={false}
                   characterMap={characterMap}
                   personaInfo={personaInfo as any}
@@ -1428,7 +1493,7 @@ export function ConversationView({
             onEdit={onEdit}
             onSetActiveSwipe={onSetActiveSwipe}
             onToggleHiddenFromAI={onToggleHiddenFromAI}
-            onPeekPrompt={onPeekPrompt}
+            onPeekPrompt={() => onPeekPrompt(liveStreamMessage.id)}
             isLastAssistantMessage={false}
             characterMap={characterMap}
             personaInfo={personaInfo as any}
@@ -1513,6 +1578,7 @@ export function ConversationView({
         <EndSceneBar
           sceneChatId={sceneInfo.sceneChatId}
           originChatId={sceneInfo.originChatId}
+          packageOrigin={sceneInfo.packageOrigin}
           onConclude={onConcludeScene}
           onAbandon={onAbandonScene}
         />

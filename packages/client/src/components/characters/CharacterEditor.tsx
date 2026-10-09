@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Character Editor — Full-page detail view
 // Replaces the chat area when editing a character.
-// Sections: Metadata, Card, Convo, Lorebook, Sprites, Gallery, Colors, Stats, Advanced
+// Sections: Metadata, Card, Convo, Lorebook, Sprites, Gallery, Colors, Voice, Stats, Advanced
 // ──────────────────────────────────────────────
 import {
   useState,
@@ -18,6 +18,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   useCharacter,
   useUpdateCharacter,
+  useGenerateCharacterSummary,
+  useGenerateCharacterConvoProfile,
   useUploadAvatar,
   useRemoveAvatar,
   useDeleteCharacter,
@@ -39,6 +41,7 @@ import {
   useGenerateCharacterCustomCallVideoClip,
   useUploadSprite,
   useDeleteSprite,
+  useRenameSprite,
   useExportSprites,
   useCleanupSavedSprites,
   useRestoreSpriteCleanupBackup,
@@ -59,7 +62,8 @@ import { CharacterScheduleEditorModal } from "../chat/CharacterScheduleEditorMod
 import { useUIStore } from "../../stores/ui.store";
 import { lorebookKeys, useLorebook, useUpdateLorebook } from "../../hooks/use-lorebooks";
 import { useConnections } from "../../hooks/use-connections";
-import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
+import { isCapabilityPackageAvailable, useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
+import { RulesetSheetsSection } from "../rulesets/RulesetSheetsSection";
 import { showConfirmDialog, showPromptDialog } from "../../lib/app-dialogs";
 import { formatCardVersionTimestamp, getCardVersionTitle } from "../../lib/card-version-history";
 import { dataImageUrlToFile } from "../../lib/data-image-file";
@@ -74,6 +78,7 @@ import { CallClipGenerationModal } from "../ui/CallClipGenerationModal";
 import { ImageUploadDropzone } from "../ui/ImageUploadDropzone";
 import { CustomEmojiTagButton } from "../ui/CustomEmojiTagButton";
 import { CharacterRegexSection } from "./CharacterRegexSection";
+import { CharacterVoicePicker } from "./CharacterVoicePicker";
 import { NameAliasesSection } from "../ui/NameAliasesSection";
 import {
   ArrowDown,
@@ -113,6 +118,7 @@ import {
   MessageCircle,
   Pencil,
   Check,
+  Volume2,
 } from "lucide-react";
 import { cn, copyToClipboard, generateClientId, getAvatarCropStyle } from "../../lib/utils";
 import { normalizeAvatarCrop, type WeekSchedule } from "@marinara-engine/shared";
@@ -121,7 +127,9 @@ import { buildCardAssetMarkdown } from "../../lib/card-asset-links";
 import { HelpTooltip } from "../ui/HelpTooltip";
 import { api } from "../../lib/api-client";
 import { downloadSpriteFile } from "../../lib/sprite-download";
-import { downloadUrlToDevice } from "../../lib/file-download";
+import { downloadUrlToDevice, shouldUseIosImageShare } from "../../lib/file-download";
+import { ImageDownloadButton } from "../ui/ImageDownloadButton";
+import { useDialogFocusScope } from "../../hooks/use-dialog-focus-scope";
 import { ColorPicker } from "../ui/ColorPicker";
 import { StatIconPicker } from "../ui/StatIconPicker";
 import { MacroTextarea } from "../ui/MacroTextarea";
@@ -130,6 +138,10 @@ import { SpriteFrameEditor } from "../ui/SpriteFrameEditor";
 import { SpriteWandCleanupEditor } from "../ui/SpriteWandCleanupEditor";
 import { ExportFormatDialog, type ExportFormatChoice } from "../ui/ExportFormatDialog";
 import { EditorTabNavigation } from "../ui/EditorTabNavigation";
+import { useEditorSections } from "../../hooks/use-editor-sections";
+import { useEditorLeaveSave } from "../../hooks/use-editor-leave-save";
+import { LazyEditorSection } from "../ui/LazyEditorSection";
+import { leaveWithoutSaving } from "../../lib/editor-leave";
 import { EditorSectionAnchor, EditorSectionJumps } from "../ui/EditorSectionJumps";
 import { SettingsSwitch } from "../panels/settings/SettingControls";
 import {
@@ -165,6 +177,7 @@ const TABS = [
   { id: "sprites", label: "Sprites", icon: Image },
   { id: "gallery", label: "Gallery", icon: Camera },
   { id: "colors", label: "Colors", icon: Palette },
+  { id: "voice", label: "Voice", icon: Volume2 },
   { id: "stats", label: "Stats", icon: Swords },
   { id: "advanced", label: "Advanced", icon: Settings2 },
 ] as const;
@@ -172,6 +185,7 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"];
 
 const CHARACTER_CARD_SECTIONS = [
+  { id: "character-card-summary", label: "Summary" },
   { id: "character-card-description", label: "Description" },
   { id: "character-card-personality", label: "Personality" },
   { id: "character-card-backstory", label: "Backstory" },
@@ -308,6 +322,12 @@ export function CharacterEditor() {
     () => (useUIStore.getState().characterDetailInitialTab as TabId | null) ?? "metadata",
   );
   const [formData, setFormData] = useState<CharacterData | null>(null);
+  const { contentRef, scrollToSection } = useEditorSections(
+    characterId,
+    !!formData,
+    (useUIStore.getState().characterDetailInitialTab as TabId | null) ?? "metadata",
+    setActiveTab,
+  );
   const [characterComment, setCharacterComment] = useState("");
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -341,8 +361,9 @@ export function CharacterEditor() {
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [avatarGeneratorOpen, setAvatarGeneratorOpen] = useState(false);
   const [characterSheetGeneratorOpen, setCharacterSheetGeneratorOpen] = useState(false);
+  const { data: characterSheetSprites } = useCharacterSprites(characterSheetGeneratorOpen ? characterId : null);
   const [newTag, setNewTag] = useState("");
-  const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const latestAvatarUploadRef = useRef<{ token: string; characterId: string } | null>(null);
   const avatarUploadInFlightRef = useRef(false);
@@ -383,6 +404,10 @@ export function CharacterEditor() {
       setDirtyState(false);
     }
   }, [rawCharacter, setDirtyState]);
+  const persistedCharacterName = useMemo(
+    () => getPersistedCharacterName(rawCharacter as ParsedCharacter | undefined),
+    [rawCharacter],
+  );
 
   const updateField = useCallback(
     <K extends keyof CharacterData>(key: K, value: CharacterData[K]) => {
@@ -527,7 +552,7 @@ export function CharacterEditor() {
       if (editRevisionRef.current === editRevisionAtSaveStart) {
         setDirtyState(false);
       }
-      return true;
+      return editRevisionRef.current === editRevisionAtSaveStart;
     } catch (err: any) {
       console.error("[CharacterEditor] Save failed:", err);
       toast.error(
@@ -538,6 +563,13 @@ export function CharacterEditor() {
       setSaving(false);
     }
   };
+
+  useEditorLeaveSave(
+    `characterDetailId:${characterId}`,
+    dirty,
+    handleSave,
+    saving || avatarUploading || lorebookEmbedding,
+  );
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -739,7 +771,7 @@ export function CharacterEditor() {
       return;
     }
     await deleteCharacter.mutateAsync(characterId);
-    closeDetail();
+    leaveWithoutSaving(closeDetail);
   };
 
   const getAvatarDataUrl = useCallback(async (src: string) => {
@@ -851,26 +883,8 @@ export function CharacterEditor() {
       toast.error(localizeUi("ui.characters.lorebooktab.waitForTheEmbeddedLorebookUpdateToFinish"));
       return;
     }
-    if (dirty) {
-      setShowUnsavedWarning(true);
-      return;
-    }
     closeDetail();
-  }, [avatarUploading, dirty, closeDetail, lorebookEmbedding, localizeUi]);
-
-  const forceClose = useCallback(() => {
-    if (avatarUploading) {
-      toast.error(localizeUi("ui.characters.charactereditor.waitForTheCurrentAvatarUploadToFinish"));
-      return;
-    }
-    if (lorebookEmbedding) {
-      toast.error(localizeUi("ui.characters.lorebooktab.waitForTheEmbeddedLorebookUpdateToFinish"));
-      return;
-    }
-    setShowUnsavedWarning(false);
-    setDirtyState(false);
-    closeDetail();
-  }, [avatarUploading, closeDetail, lorebookEmbedding, setDirtyState, localizeUi]);
+  }, [avatarUploading, closeDetail, lorebookEmbedding, localizeUi]);
 
   const addTag = () => {
     if (!formData) return;
@@ -1019,9 +1033,10 @@ export function CharacterEditor() {
         open={avatarGeneratorOpen}
         title={localizeUi("ui.characters.charactereditor.generateCharacterAvatar")}
         entityName={formData.name}
-        defaultAppearance={
-          ((formData.extensions.appearance as string | undefined) || formData.description || formData.personality) ?? ""
-        }
+        defaultAppearance={imageAppearanceGeneratorSeed(
+          formData.extensions,
+          (formData.extensions.appearance as string | undefined) || formData.description || formData.personality,
+        )}
         defaultAvatarUrl={avatarPreview}
         onClose={() => setAvatarGeneratorOpen(false)}
         onUseAvatar={handleGeneratedAvatar}
@@ -1031,10 +1046,12 @@ export function CharacterEditor() {
         mode="character-sheet"
         title={localizeUi("ui.characters.charactersheet.createTitle")}
         entityName={formData.name || localizeUi("ui.characters.charactersheet.characterFallback")}
-        defaultAppearance={
-          ((formData.extensions.appearance as string | undefined) || formData.description || formData.personality) ?? ""
-        }
+        defaultAppearance={imageAppearanceGeneratorSeed(
+          formData.extensions,
+          (formData.extensions.appearance as string | undefined) || formData.description || formData.personality,
+        )}
         defaultAvatarUrl={avatarPreview}
+        neutralFullBodyReferenceUrl={characterSheetSprites?.find((sprite) => sprite.expression === "full_neutral")?.url}
         onClose={() => setCharacterSheetGeneratorOpen(false)}
         onUseAvatar={handleGeneratedCharacterSheet}
       />
@@ -1121,7 +1138,7 @@ export function CharacterEditor() {
           </div>
         </div>
 
-        <EditorTabNavigation tabs={TABS} activeId={activeTab} onChange={setActiveTab} />
+        <EditorTabNavigation tabs={TABS} activeId={activeTab} onChange={scrollToSection} />
 
         <div className="mari-editor-actions flex">
           <button
@@ -1139,49 +1156,12 @@ export function CharacterEditor() {
         </div>
       </div>
 
-      {/* ── Unsaved changes warning ── */}
-      {showUnsavedWarning && (
-        <div className="flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5">
-          <AlertTriangle size="0.9375rem" className="shrink-0 text-amber-500" />
-          <p className="flex-1 text-xs font-medium text-amber-500">
-            {localizeUi("ui.characters.charactereditor.youHaveUnsavedChangesCloseWithoutSaving")}
-          </p>
-          <button
-            type="button"
-            onClick={() => setShowUnsavedWarning(false)}
-            className="rounded-lg px-3 py-1 text-xs font-medium text-[var(--muted-foreground)] transition-all hover:bg-[var(--accent)]"
-          >
-            {localizeUi("ui.characters.charactereditor.keepEditing")}
-          </button>
-          <button
-            type="button"
-            onClick={forceClose}
-            disabled={avatarUploading}
-            className="rounded-lg bg-amber-500/15 px-3 py-1 text-xs font-medium text-amber-500 transition-all hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {localizeUi("ui.characters.charactereditor.discardClose")}
-          </button>
-          <button
-            type="button"
-            onClick={async () => {
-              if (await handleSave()) {
-                closeDetail();
-              }
-            }}
-            disabled={saving || avatarUploading}
-            className="mari-editor-action mari-editor-action--primary mari-editor-action--compact inline-flex rounded-lg px-3 py-1 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {localizeUi("ui.characters.charactereditor.saveClose")}
-          </button>
-        </div>
-      )}
-
       {/* ── Body ── */}
       <div className="mari-editor-body">
         {/* Tab Content */}
-        <div className="mari-editor-content @max-5xl:p-4">
+        <div ref={contentRef} className="mari-editor-content @max-5xl:p-4">
           <div className="mari-editor-content-inner">
-            {activeTab === "metadata" && (
+            <section data-editor-section="metadata">
               <MetadataTab
                 characterId={characterId}
                 formData={formData}
@@ -1203,54 +1183,19 @@ export function CharacterEditor() {
                 removingAvatar={removeAvatar.isPending}
                 hasUnsavedChanges={dirty}
               />
-            )}
-            {activeTab === "card" && (
+            </section>
+            <section data-editor-section="card">
               <CharacterCardTab formData={formData} updateField={updateField} updateExtension={updateExtension} />
-            )}
-            {activeTab === "convo" && (
+            </section>
+            <section data-editor-section="convo">
               <ConvoTab
                 formData={formData}
                 updateExtension={updateExtension}
                 kind="character"
                 characterId={characterId ?? undefined}
               />
-            )}
-            {activeTab === "advanced" && (
-              <AdvancedTab
-                formData={formData}
-                updateField={updateField}
-                updateExtension={updateExtension}
-                characterId={characterId}
-              />
-            )}
-            {activeTab === "sprites" && characterId && (
-              <SpritesTab
-                characterId={characterId}
-                characterName={formData.name}
-                defaultAppearance={(formData.extensions.appearance as string) ?? formData.description}
-                defaultAvatarUrl={avatarPreview}
-                characterSheetImageId={
-                  typeof formData.extensions.characterSheetImageId === "string"
-                    ? formData.extensions.characterSheetImageId
-                    : null
-                }
-                useCharacterSheetAsReference={formData.extensions.useCharacterSheetAsReference === true}
-                updateExtension={updateExtension}
-                onCreateCharacterSheet={() => setCharacterSheetGeneratorOpen(true)}
-              />
-            )}
-            {activeTab === "gallery" && characterId && (
-              <CharacterGalleryTab
-                characterId={characterId}
-                characterName={formData.name}
-                onCreateCharacterSheet={() => setCharacterSheetGeneratorOpen(true)}
-              />
-            )}
-            {activeTab === "colors" && (
-              <ColorsTab formData={formData} updateExtension={updateExtension} avatarUrl={avatarPreview} />
-            )}
-            {activeTab === "stats" && <StatsTab formData={formData} updateExtension={updateExtension} />}
-            {activeTab === "lorebook" && (
+            </section>
+            <LazyEditorSection key={`lorebook:${characterId}`} id="lorebook">
               <LorebookTab
                 characterId={characterId}
                 formData={formData}
@@ -1260,7 +1205,61 @@ export function CharacterEditor() {
                 onEmbeddingChange={setLorebookEmbedInFlight}
                 onUnembed={handleLorebookUnembedded}
               />
-            )}
+            </LazyEditorSection>
+            <LazyEditorSection key={`sprites:${characterId}`} id="sprites">
+              {characterId && (
+                <SpritesTab
+                  characterId={characterId}
+                  characterName={formData.name}
+                  defaultAppearance={imageAppearanceGeneratorSeed(
+                    formData.extensions,
+                    (formData.extensions.appearance as string) ?? formData.description,
+                  )}
+                  defaultAvatarUrl={avatarPreview}
+                  characterSheetImageId={
+                    typeof formData.extensions.characterSheetImageId === "string"
+                      ? formData.extensions.characterSheetImageId
+                      : null
+                  }
+                  useCharacterSheetAsReference={formData.extensions.useCharacterSheetAsReference === true}
+                  updateExtension={updateExtension}
+                  onCreateCharacterSheet={() => setCharacterSheetGeneratorOpen(true)}
+                />
+              )}
+            </LazyEditorSection>
+            <LazyEditorSection key={`gallery:${characterId}`} id="gallery">
+              {characterId && (
+                <CharacterGalleryTab
+                  characterId={characterId}
+                  characterName={formData.name}
+                  onCreateCharacterSheet={() => setCharacterSheetGeneratorOpen(true)}
+                />
+              )}
+            </LazyEditorSection>
+            <section data-editor-section="colors">
+              <ColorsTab formData={formData} updateExtension={updateExtension} avatarUrl={avatarPreview} />
+            </section>
+            <LazyEditorSection key={`voice:${characterId}`} id="voice">
+              {characterId && (
+                <VoiceTab
+                  characterId={characterId}
+                  characterName={persistedCharacterName ?? formData.name}
+                  formData={formData}
+                  updateExtension={updateExtension}
+                />
+              )}
+            </LazyEditorSection>
+            <section data-editor-section="stats">
+              <StatsTab formData={formData} updateExtension={updateExtension} onDraftChange={markDirty} />
+            </section>
+            <section data-editor-section="advanced">
+              <AdvancedTab
+                formData={formData}
+                updateField={updateField}
+                updateExtension={updateExtension}
+                characterId={characterId}
+              />
+            </section>
           </div>
         </div>
       </div>
@@ -1313,6 +1312,9 @@ function CharacterCardTab({
       />
       <EditorSectionJumps items={CHARACTER_CARD_SECTIONS} />
       <div className="space-y-10">
+        <EditorSectionAnchor id="character-card-summary">
+          <CharacterSummaryField formData={formData} updateField={updateField} />
+        </EditorSectionAnchor>
         <EditorSectionAnchor id="character-card-description">
           <CharacterDescriptionTab formData={formData} updateField={updateField} />
         </EditorSectionAnchor>
@@ -1352,6 +1354,32 @@ function CharacterCardTab({
             placeholder={localizeUi("ui.characters.charactercardtab.tallAndWillowyWithSilverStreakedDarkHairWears")}
             rows={8}
           />
+          <div className="mt-3">
+            <SettingsSwitch
+              label={
+                <span className="font-medium">
+                  {localizeUi("ui.characters.charactercardtab.imageAppearanceToggle")}
+                </span>
+              }
+              description={localizeUi("ui.characters.charactercardtab.imageAppearanceToggleHelp")}
+              checked={formData.extensions.imageAppearanceEnabled === true}
+              onChange={(enabled) => updateExtension("imageAppearanceEnabled", enabled)}
+              labelPosition="start"
+              className="justify-between rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"
+            />
+          </div>
+          {formData.extensions.imageAppearanceEnabled === true && (
+            <div className="mt-3">
+              <TextareaTab
+                title={localizeUi("ui.characters.charactercardtab.imageAppearanceToggle")}
+                subtitle={localizeUi("ui.characters.charactercardtab.imageAppearanceSubtitle")}
+                value={(formData.extensions.imageAppearance as string) ?? ""}
+                onChange={(v) => updateExtension("imageAppearance", v)}
+                placeholder={localizeUi("ui.characters.charactercardtab.imageAppearancePlaceholder")}
+                rows={6}
+              />
+            </div>
+          )}
         </EditorSectionAnchor>
         <EditorSectionAnchor id="character-card-scenario">
           <TextareaTab
@@ -1374,6 +1402,82 @@ function CharacterCardTab({
   );
 }
 
+function CharacterSummaryField({
+  formData,
+  updateField,
+}: {
+  formData: CharacterData;
+  updateField: <K extends keyof CharacterData>(key: K, value: CharacterData[K]) => void;
+}) {
+  const { t: localizeUi } = useUiTranslation();
+  const characterId = useUIStore((s) => s.characterDetailId);
+  const generateSummary = useGenerateCharacterSummary();
+  const liveSummaryRef = useRef(formData.summary ?? "");
+  liveSummaryRef.current = formData.summary ?? "";
+  const handleGenerate = async () => {
+    if (!characterId) return;
+    const requestedCharacterId = characterId;
+    const summaryAtRequest = liveSummaryRef.current;
+    try {
+      const result = await generateSummary.mutateAsync({
+        id: requestedCharacterId,
+        draft: {
+          name: formData.name,
+          description: formData.description,
+          personality: formData.personality,
+          scenario: formData.scenario,
+          backstory: formData.extensions?.backstory,
+        },
+      });
+      if (useUIStore.getState().characterDetailId !== requestedCharacterId) return;
+      if (liveSummaryRef.current !== summaryAtRequest) return;
+      updateField("summary", result.summary);
+      toast.success(localizeUi("ui.characters.summary.generated"));
+    } catch (error) {
+      if (useUIStore.getState().characterDetailId !== requestedCharacterId) return;
+      toast.error(error instanceof Error ? error.message : localizeUi("ui.characters.summary.failed"));
+    }
+  };
+
+  return (
+    <div className="mari-editor-panel space-y-3 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <SectionHeader
+          title={localizeUi("ui.characters.summary.label")}
+          subtitle={localizeUi("ui.characters.summary.help")}
+        />
+        <button
+          type="button"
+          onClick={() => void handleGenerate()}
+          disabled={!characterId || generateSummary.isPending}
+          className="mari-editor-action inline-flex min-h-9 shrink-0 items-center gap-1.5 px-2.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+          title={localizeUi("ui.characters.summary.generate")}
+        >
+          {generateSummary.isPending ? <Loader2 size="0.8rem" className="animate-spin" /> : <Wand2 size="0.8rem" />}
+          {generateSummary.isPending
+            ? localizeUi("ui.characters.summary.generating")
+            : localizeUi("ui.characters.summary.generate")}
+        </button>
+      </div>
+      <MacroTextarea
+        value={formData.summary ?? ""}
+        onChange={(value) => updateField("summary", value.slice(0, 500))}
+        maxLength={500}
+        rows={4}
+        title={localizeUi("ui.characters.summary.label")}
+        ariaLabel={localizeUi("ui.characters.summary.label")}
+        placeholder={localizeUi("ui.characters.summary.placeholder")}
+        showMarkdownPreview
+        selfCharacterId={characterId}
+        className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-3 text-sm leading-relaxed outline-none placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
+      />
+      <p className="text-right text-[0.625rem] text-[var(--muted-foreground)]">
+        {String(formData.summary ?? "").length}/500
+      </p>
+    </div>
+  );
+}
+
 function CharacterDescriptionTab({
   formData,
   updateField,
@@ -1391,6 +1495,7 @@ function CharacterDescriptionTab({
         helpText={CHARACTER_DESCRIPTION_HELP}
       />
       <MacroTextarea
+        showTokenCount
         value={formData.description}
         onChange={(value) => updateField("description", value)}
         placeholder={localizeUi("ui.characters.characterdescriptiontab.describeWhoThisCharacterIsTheirRoleAndTheir")}
@@ -1400,9 +1505,6 @@ function CharacterDescriptionTab({
         selfCharacterId={selfCharacterId}
         className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-4 text-sm leading-relaxed outline-none transition-colors placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
       />
-      <p className="mt-1.5 text-right text-[0.625rem] text-[var(--muted-foreground)]">
-        {formData.description.length} {localizeUi("ui.noodle.noodlehome.characters")}
-      </p>
     </div>
   );
 }
@@ -1424,12 +1526,12 @@ function TextareaTab({
   placeholder: string;
   rows?: number;
 }) {
-  const { t: localizeUi } = useUiTranslation();
   const selfCharacterId = useUIStore((s) => s.characterDetailId);
   return (
     <div className="mari-editor-panel space-y-3 p-3">
       <SectionHeader title={title} subtitle={subtitle} helpText={helpText} />
       <MacroTextarea
+        showTokenCount
         value={value}
         onChange={onChange}
         placeholder={placeholder}
@@ -1439,13 +1541,11 @@ function TextareaTab({
         selfCharacterId={selfCharacterId}
         className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-4 text-sm leading-relaxed outline-none transition-colors placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
       />
-      <p className="mt-1.5 text-right text-[0.625rem] text-[var(--muted-foreground)]">
-        {value.length} {localizeUi("ui.noodle.noodlehome.characters")}
-      </p>
     </div>
   );
 }
 
+/** Connects the character editor's unsaved card draft to Conversation profile controls. */
 function ConvoTab({
   formData,
   updateExtension,
@@ -1459,6 +1559,21 @@ function ConvoTab({
 }) {
   const ext = formData.extensions;
   const { t: localizeUi } = useUiTranslation();
+  const generateCharacterConvoProfile = useGenerateCharacterConvoProfile();
+  const { data: installedCapabilities = [] } = useInstalledCapabilityPackages(kind === "character");
+  const noodleInstalled = isCapabilityPackageAvailable(installedCapabilities, "noodle");
+  const currentCharacterIdRef = useRef(characterId);
+  currentCharacterIdRef.current = characterId;
+  const currentConvoProfileDraft = {
+    name: formData.name,
+    description: formData.description,
+    personality: formData.personality,
+    scenario: formData.scenario,
+    backstory: (ext.backstory as string) ?? "",
+    appearance: (ext.appearance as string) ?? "",
+  };
+  const currentConvoProfileDraftRef = useRef(currentConvoProfileDraft);
+  currentConvoProfileDraftRef.current = currentConvoProfileDraft;
   const [scheduleOpen, setScheduleOpen] = useState(false);
   // The schedule is runtime state, not card content, so it saves on its own
   // rather than through the editor form. Routing it through `updateExtension`
@@ -1498,11 +1613,32 @@ function ConvoTab({
         onAboutMeChange={(v) => updateExtension("aboutMe", v)}
         behavior={ext.convoBehavior as ConvoBehaviorConfig | undefined}
         onBehaviorChange={(b) => updateExtension("convoBehavior", b)}
+        generateConvoProfile={
+          characterId
+            ? (target) =>
+                (() => {
+                  const draft = currentConvoProfileDraftRef.current;
+                  return generateCharacterConvoProfile
+                    .mutateAsync({
+                      id: characterId,
+                      target,
+                      draft,
+                    })
+                    .then((result) => {
+                      const currentDraft = currentConvoProfileDraftRef.current;
+                      const draftUnchanged = Object.keys(draft).every(
+                        (key) => draft[key as keyof typeof draft] === currentDraft[key as keyof typeof currentDraft],
+                      );
+                      return currentCharacterIdRef.current === characterId && draftUnchanged ? result : null;
+                    });
+                })()
+            : undefined
+        }
         imageInstructions={(ext.conversationImageInstructions as string) ?? ""}
         onImageInstructionsChange={(value) => updateExtension("conversationImageInstructions", value)}
         applyImageInstructionsToNoodle={ext.applyConversationImageInstructionsToNoodle === true}
-        onApplyImageInstructionsToNoodleChange={(value) =>
-          updateExtension("applyConversationImageInstructionsToNoodle", value)
+        onApplyImageInstructionsToNoodleChange={
+          noodleInstalled ? (value) => updateExtension("applyConversationImageInstructionsToNoodle", value) : undefined
         }
         schedule={schedule}
         onEditSchedule={kind === "character" && characterId ? () => setScheduleOpen(true) : undefined}
@@ -1673,20 +1809,6 @@ function MetadataTab({
         </label>
         <label className="space-y-1.5">
           <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)]">
-            {localizeUi("ui.characters.metadatatab.phoneticName")}{" "}
-            <HelpTooltip
-              text={localizeUi("ui.characters.metadatatab.optionalPronunciationOverrideUsedOnlyWhenThisCharacterS")}
-            />
-          </span>
-          <input
-            value={typeof formData.extensions?.phoneticName === "string" ? formData.extensions.phoneticName : ""}
-            onChange={(e) => updateExtension("phoneticName", e.target.value)}
-            className="w-full rounded-xl border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm outline-none focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
-            placeholder={formData.name}
-          />
-        </label>
-        <label className="space-y-1.5">
-          <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)]">
             {localizeUi("ui.characters.metadatatab.creator")}{" "}
             <HelpTooltip text={localizeUi("ui.characters.metadatatab.thePersonWhoMadeThisCharacterUsefulForGiving")} />
           </span>
@@ -1834,6 +1956,7 @@ function MetadataTab({
 
 const VERSION_COMPARE_FIELDS: Array<{ key: string; label: string }> = [
   { key: "name", label: "Name" },
+  { key: "summary", label: "Summary" },
   { key: "description", label: "Description" },
   { key: "personality", label: "Personality" },
   { key: "scenario", label: "Scenario" },
@@ -1841,15 +1964,35 @@ const VERSION_COMPARE_FIELDS: Array<{ key: string; label: string }> = [
   { key: "mes_example", label: "Example Dialogue" },
   { key: "extensions.backstory", label: "Backstory" },
   { key: "extensions.appearance", label: "Appearance" },
+  { key: "extensions.imageAppearance", label: "Image Appearance Override" },
+  { key: "extensions.imageAppearanceEnabled", label: "Use Image Appearance Override" },
   { key: "creator_notes", label: "Creator Notes" },
   { key: "system_prompt", label: "System Prompt" },
   { key: "post_history_instructions", label: "Post-History Instructions" },
 ];
 
+/**
+ * #7053: the avatar / character-sheet generator seeds its editable prompt with
+ * the card appearance. It must seed the image override instead when one is on
+ * and filled, or the generated portrait ignores the very tags the user wrote
+ * for image models. Mirrors `readImageAppearanceOverride` in shared, but the
+ * editor holds a draft `extensions` object rather than a stored card.
+ */
+function imageAppearanceGeneratorSeed(extensions: Record<string, unknown>, fallback: string | undefined): string {
+  const enabled = extensions.imageAppearanceEnabled === true;
+  const override = typeof extensions.imageAppearance === "string" ? extensions.imageAppearance.trim() : "";
+  if (enabled && override) return override;
+  return fallback ?? "";
+}
+
 function getVersionFieldValue(data: CharacterData, key: string): string {
-  if (key === "extensions.backstory" || key === "extensions.appearance") {
+  if (key.startsWith("extensions.")) {
     const extensionKey = key.split(".")[1] ?? "";
     const value = data.extensions?.[extensionKey];
+    // #7053: the image-appearance switch is a boolean. Render it as On/Off so a
+    // comparison shows the toggle change that decides which text image prompts
+    // use, instead of collapsing to "" and hiding it.
+    if (typeof value === "boolean") return value ? "On" : "Off";
     return typeof value === "string" ? value : "";
   }
   const value = data[key as keyof CharacterData];
@@ -2268,6 +2411,7 @@ function DialogueTab({
           <HelpTooltip text={localizeUi("ui.characters.dialoguetab.theCharacterSOpeningMessageWhenANewChat")} />
         </span>
         <MacroTextarea
+          showTokenCount
           value={formData.first_mes}
           onChange={(value) => updateField("first_mes", value)}
           rows={6}
@@ -2367,6 +2511,7 @@ function DialogueTab({
           {localizeUi("ui.characters.dialoguetab.useStartToSeparateExchangesUseUserAndChar")}
         </p>
         <MacroTextarea
+          showTokenCount
           value={formData.mes_example}
           onChange={(value) => updateField("mes_example", value)}
           rows={10}
@@ -2411,6 +2556,7 @@ function AdvancedTab({
           />
         </span>
         <MacroTextarea
+          showTokenCount
           value={formData.system_prompt}
           onChange={(value) => updateField("system_prompt", value)}
           rows={6}
@@ -2430,6 +2576,7 @@ function AdvancedTab({
           <HelpTooltip text={localizeUi("ui.characters.advancedtab.textInsertedAfterTheChatHistoryRightBeforeThe")} />
         </span>
         <MacroTextarea
+          showTokenCount
           value={formData.post_history_instructions}
           onChange={(value) => updateField("post_history_instructions", value)}
           rows={4}
@@ -2448,7 +2595,9 @@ function AdvancedTab({
           <HelpTooltip text={localizeUi("ui.characters.advancedtab.injectsTextAtASpecificPositionInTheChat")} />
         </span>
         <MacroTextarea
+          showTokenCount
           value={depthPrompt.prompt}
+          tokenCountAlign="start"
           onChange={(value) => updateExtension("depth_prompt", { ...depthPrompt, prompt: value })}
           rows={4}
           title={localizeUi("ui.characters.advancedtab.depthPrompt")}
@@ -2456,34 +2605,36 @@ function AdvancedTab({
           selfCharacterId={characterId}
           className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-3 text-sm outline-none focus:border-[var(--primary)]/40"
           placeholder={localizeUi("ui.characters.advancedtab.promptInjectedAtASpecificDepthInTheChat")}
+          tokenCountFooter={
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 text-xs">
+                <span className="text-[var(--muted-foreground)]">{localizeUi("ui.characters.advancedtab.depth")}</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={depthPrompt.depth}
+                  onChange={(e) =>
+                    updateExtension("depth_prompt", { ...depthPrompt, depth: parseInt(e.target.value) || 0 })
+                  }
+                  className="w-16 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-center text-xs outline-none"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-xs">
+                <span className="text-[var(--muted-foreground)]">{localizeUi("ui.characters.advancedtab.role")}</span>
+                <select
+                  value={depthPrompt.role}
+                  onChange={(e) => updateExtension("depth_prompt", { ...depthPrompt, role: e.target.value })}
+                  className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs outline-none"
+                >
+                  <option value="system">{localizeUi("ui.characters.advancedtab.system")}</option>
+                  <option value="user">{localizeUi("ui.characters.advancedtab.user")}</option>
+                  <option value="assistant">{localizeUi("ui.characters.advancedtab.assistant")}</option>
+                </select>
+              </label>
+            </div>
+          }
         />
-        <div className="flex gap-4">
-          <label className="flex items-center gap-2 text-xs">
-            <span className="text-[var(--muted-foreground)]">{localizeUi("ui.characters.advancedtab.depth")}</span>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={depthPrompt.depth}
-              onChange={(e) =>
-                updateExtension("depth_prompt", { ...depthPrompt, depth: parseInt(e.target.value) || 0 })
-              }
-              className="w-16 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-center text-xs outline-none"
-            />
-          </label>
-          <label className="flex items-center gap-2 text-xs">
-            <span className="text-[var(--muted-foreground)]">{localizeUi("ui.characters.advancedtab.role")}</span>
-            <select
-              value={depthPrompt.role}
-              onChange={(e) => updateExtension("depth_prompt", { ...depthPrompt, role: e.target.value })}
-              className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs outline-none"
-            >
-              <option value="system">{localizeUi("ui.characters.advancedtab.system")}</option>
-              <option value="user">{localizeUi("ui.characters.advancedtab.user")}</option>
-              <option value="assistant">{localizeUi("ui.characters.advancedtab.assistant")}</option>
-            </select>
-          </label>
-        </div>
       </div>
 
       <CharacterRegexSection characterId={characterId} characterName={formData.name} />
@@ -2751,6 +2902,10 @@ function CharacterGalleryTab({
   const setAvatar = useSetCharacterGalleryImageAsAvatar(characterId);
   const tag = useTagCharacterGalleryImage(characterId);
   const [lightbox, setLightbox] = useState<CharacterGalleryImage | null>(null);
+  const lightboxRef = useRef<HTMLDivElement>(null);
+  const lightboxCloseRef = useRef<HTMLButtonElement>(null);
+  // Nested confirmations own focus while retaining the preview's original return target.
+  useDialogFocusScope(!!lightbox, lightboxRef, lightboxCloseRef, undefined, '[data-component="Modal"]');
   const [selectingImages, setSelectingImages] = useState(false);
   const [selectedImageIds, setSelectedImageIds] = useState<Set<string>>(() => new Set());
   const selectedImages = useMemo(
@@ -2829,6 +2984,18 @@ function CharacterGalleryTab({
     },
     [setAvatar, localizeUi],
   );
+
+  const handleDownloadImage = async (image: CharacterGalleryImage) => {
+    if (shouldUseIosImageShare()) {
+      setLightbox(image);
+      return;
+    }
+    try {
+      await downloadUrlToDevice(image.url, image.filePath.split(/[\\/]/).pop() || `gallery-${image.id}.png`);
+    } catch {
+      toast.error(localizeUi("ui.chat.chatgallery.downloadFailed"));
+    }
+  };
 
   const handleBatchDownload = useCallback(async () => {
     if (selectedImages.length === 0) return;
@@ -3093,15 +3260,17 @@ function CharacterGalleryTab({
                           <Download size="0.75rem" />
                         </button>
                       ) : (
-                        <a
-                          href={image.url}
-                          download
+                        <button
+                          type="button"
                           className="rounded-lg bg-white/15 p-1.5 text-white transition-colors hover:bg-white/25"
                           title={localizeUi("ui.characters.charactergallerytab.download")}
-                          onClick={(e) => e.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleDownloadImage(image);
+                          }}
                         >
                           <Download size="0.75rem" />
-                        </a>
+                        </button>
                       )}
                       <button
                         type="button"
@@ -3140,6 +3309,17 @@ function CharacterGalleryTab({
       {lightbox && (
         <div
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 max-md:pt-[env(safe-area-inset-top)]"
+          ref={lightboxRef}
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              setLightbox(null);
+            }
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-label={localizeUi("ui.chat.chatimagelightbox.imagePreview")}
           onClick={() => setLightbox(null)}
         >
           <div className="relative max-h-[90vh] max-w-[90vw] w-[min(90vw,90vh)]" onClick={(e) => e.stopPropagation()}>
@@ -3158,13 +3338,10 @@ function CharacterGalleryTab({
               >
                 {setAvatar.isPending ? <Loader2 size="0.875rem" className="animate-spin" /> : <User size="0.875rem" />}
               </button>
-              <a
-                href={lightbox.url}
-                download
-                className="rounded-lg bg-black/60 p-2 text-white transition-colors hover:bg-black/80"
-              >
-                <Download size="0.875rem" />
-              </a>
+              <ImageDownloadButton
+                url={lightbox.url}
+                filename={lightbox.filePath.split(/[\\/]/).pop() || `gallery-${lightbox.id}.png`}
+              />
               <button
                 type="button"
                 onClick={() => void handleDelete(lightbox)}
@@ -3176,7 +3353,9 @@ function CharacterGalleryTab({
               </button>
               <button
                 type="button"
+                ref={lightboxCloseRef}
                 onClick={() => setLightbox(null)}
+                aria-label={localizeUi("ui.chat.chatimagelightbox.closeImage")}
                 className="rounded-lg bg-black/60 p-2 text-white transition-colors hover:bg-black/80"
               >
                 <X size="0.875rem" />
@@ -4064,6 +4243,7 @@ function SpritesTab({
   );
   const uploadSprite = useUploadSprite();
   const deleteSprite = useDeleteSprite();
+  const renameSprite = useRenameSprite();
   const exportSprites = useExportSprites();
   const cleanupSavedSprites = useCleanupSavedSprites();
   const restoreSpriteCleanupBackup = useRestoreSpriteCleanupBackup();
@@ -4132,9 +4312,10 @@ function SpritesTab({
     </div>
   );
 
-  const normalizeExpressionForCategory = (raw: string) => {
-    return normalizeSpriteExpressionLabel(raw, { fullBody: category === "full-body" });
-  };
+  const normalizeExpressionForCategory = useCallback(
+    (raw: string) => normalizeSpriteExpressionLabel(raw, { fullBody: category === "full-body" }),
+    [category],
+  );
 
   const displayExpression = useCallback(
     (stored: string) => (category === "full-body" ? stored.replace(/^full_/, "") : stored),
@@ -4221,6 +4402,36 @@ function SpritesTab({
     }
   }, [characterId, deleteSprite, deleteSpriteRequest]);
 
+  const handleRenameSprite = useCallback(
+    async (sprite: SpriteInfo) => {
+      const nextExpression = await showPromptDialog({
+        title: localizeUi("ui.characters.spritestab.renameSprite"),
+        message: localizeUi("ui.characters.spritestab.renameSpriteFor", {
+          value1: displayExpression(sprite.expression),
+        }),
+        defaultValue: displayExpression(sprite.expression),
+        placeholder: localizeUi("ui.characters.spritestab.expressionNameEGHappySadAngry"),
+        confirmLabel: localizeUi("ui.characters.spritestab.rename"),
+        tone: "accent",
+      });
+      const normalized = nextExpression ? normalizeExpressionForCategory(nextExpression) : "";
+      if (!normalized || normalized === sprite.expression) return;
+      try {
+        await renameSprite.mutateAsync({
+          characterId,
+          expression: sprite.expression,
+          nextExpression: normalized,
+        });
+        toast.success(localizeUi("ui.characters.spritestab.renamedSprite"));
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : localizeUi("ui.characters.spritestab.failedToRenameSprite"),
+        );
+      }
+    },
+    [characterId, displayExpression, localizeUi, normalizeExpressionForCategory, renameSprite],
+  );
+
   const handleDeleteVisibleSprites = useCallback(async () => {
     if (visibleSprites.length === 0) return;
     setDeletingSprites("all");
@@ -4244,26 +4455,27 @@ function SpritesTab({
         const scopeLabel =
           modeLabel === "all" ? "sprites" : category === "full-body" ? "full-body-sprites" : "expressions";
         const folderName = sanitizeSpriteExportFolderName(`${characterName || "character"}-${scopeLabel}`, "sprites");
-        await exportSprites.mutateAsync({
+        const saveStatus = await exportSprites.mutateAsync({
           characterId,
           expressions: spritesToExport.map((sprite) => sprite.expression),
           folderName,
         });
-        toast.success(
-          modeLabel === "all"
-            ? localizeUi("ui.characters.spritestab.exportedValue1SpriteValue2AsAFolder", {
-                value1: spritesToExport.length,
-                value2: spritesToExport.length === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s"),
-              })
-            : localizeUi("ui.characters.spritestab.exportedValue1Value2SpriteValue3AsAFolder", {
-                value1: spritesToExport.length,
-                value2:
-                  category === "full-body"
-                    ? localizeUi("ui.characters.spritestab.fullBody_0fbbc4a")
-                    : localizeUi("ui.characters.spritestab.expression"),
-                value3: spritesToExport.length === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s"),
-              }),
-        );
+        if (saveStatus === "saved")
+          toast.success(
+            modeLabel === "all"
+              ? localizeUi("ui.characters.spritestab.exportedValue1SpriteValue2AsAFolder", {
+                  value1: spritesToExport.length,
+                  value2: spritesToExport.length === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s"),
+                })
+              : localizeUi("ui.characters.spritestab.exportedValue1Value2SpriteValue3AsAFolder", {
+                  value1: spritesToExport.length,
+                  value2:
+                    category === "full-body"
+                      ? localizeUi("ui.characters.spritestab.fullBody_0fbbc4a")
+                      : localizeUi("ui.characters.spritestab.expression"),
+                  value3: spritesToExport.length === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s"),
+                }),
+          );
       } catch (error) {
         toast.error(
           error instanceof Error
@@ -4748,6 +4960,14 @@ function SpritesTab({
                   </button>
                   <button
                     type="button"
+                    onClick={() => void handleRenameSprite(sprite)}
+                    className="rounded-lg p-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                    title={localizeUi("ui.characters.spritestab.renameSprite")}
+                  >
+                    <Pencil size="0.6875rem" />
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => startUpload(sprite.expression)}
                     className="rounded-lg p-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
                     title={localizeUi("settings.notifications.customSound.actions.replace")}
@@ -4886,9 +5106,11 @@ function createNewRpgPool(existing: readonly RPGStatPool[]): RPGStatPool {
 function StatsTab({
   formData,
   updateExtension,
+  onDraftChange,
 }: {
   formData: CharacterData;
   updateExtension: (key: string, value: unknown) => void;
+  onDraftChange: () => void;
 }) {
   const { t: localizeUi } = useUiTranslation();
   const stats: RPGStatsConfig = (formData.extensions.rpgStats as RPGStatsConfig) ?? DEFAULT_RPG_STATS;
@@ -5021,8 +5243,14 @@ function StatsTab({
                     }
                   />
                   <input
-                    value={pool.name}
-                    onChange={(e) => updatePool(i, { name: e.target.value })}
+                    key={pool.name}
+                    defaultValue={pool.name}
+                    onChange={onDraftChange}
+                    onBlur={(e) => {
+                      const name = e.currentTarget.value.trim() || pool.name;
+                      e.currentTarget.value = name;
+                      if (name !== pool.name) updatePool(i, { name });
+                    }}
                     className="min-w-0 rounded-lg border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-xs font-medium"
                     placeholder={localizeUi("ui.characters.metadatatab.name")}
                   />
@@ -5171,6 +5399,11 @@ function StatsTab({
           </div>
         )}
       </div>
+
+      <RulesetSheetsSection
+        sheets={formData.extensions.rulesetSheets as Record<string, unknown> | undefined}
+        onChange={(sheets) => updateExtension("rulesetSheets", sheets)}
+      />
     </div>
   );
 }
@@ -5320,6 +5553,55 @@ function ColorsTab({
         onChange={(next) => updateExtension("nameAliases", next)}
         nameColor={nameColor}
       />
+    </div>
+  );
+}
+
+function VoiceTab({
+  characterId,
+  characterName,
+  formData,
+  updateExtension,
+}: {
+  characterId: string;
+  characterName: string;
+  formData: CharacterData;
+  updateExtension: (key: string, value: unknown) => void;
+}) {
+  const { t: localizeUi } = useUiTranslation();
+  const phoneticName = typeof formData.extensions?.phoneticName === "string" ? formData.extensions.phoneticName : "";
+
+  return (
+    <div className="space-y-5">
+      <SectionHeader
+        title={localizeUi("editor.tabs.voice")}
+        subtitle={localizeUi("ui.characters.voice.subtitle")}
+        helpText={localizeUi("ui.characters.voice.help")}
+      />
+      <div className="space-y-1.5">
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)]">
+          {localizeUi("ui.characters.voice.label")}
+        </span>
+        <CharacterVoicePicker
+          characterId={characterId}
+          characterName={characterName}
+          spokenName={phoneticName.trim() || formData.name}
+        />
+      </div>
+      <label className="block space-y-1.5">
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)]">
+          {localizeUi("ui.characters.metadatatab.phoneticName")}{" "}
+          <HelpTooltip
+            text={localizeUi("ui.characters.metadatatab.optionalPronunciationOverrideUsedOnlyWhenThisCharacterS")}
+          />
+        </span>
+        <input
+          value={phoneticName}
+          onChange={(e) => updateExtension("phoneticName", e.target.value)}
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm outline-none focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
+          placeholder={formData.name}
+        />
+      </label>
     </div>
   );
 }

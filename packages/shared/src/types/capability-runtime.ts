@@ -1,3 +1,5 @@
+import type { CapabilityAchievementHost } from "./achievement.js";
+import type { CapabilityIntegrationHost } from "./generation-integration.js";
 import type { ChatMode, MessageRole } from "./chat.js";
 import type { SpatialContextSnapshot, SpatialSnapshotSource } from "./spatial-context.js";
 
@@ -202,6 +204,13 @@ export interface CapabilityMessageRecord {
 }
 
 export interface CapabilitySpatialSnapshotWrite {
+  /**
+   * Must be globally unique across ALL chats (use a UUID). The store rejects
+   * an id that collides with a loaded chat's snapshot, but under lazy storage
+   * (#5592) a collision with a chat that is not yet in memory cannot be
+   * detected at write time — the duplicate is resolved later by dropping one
+   * copy, so a package that reuses ids across chats loses data silently.
+   */
   id: string;
   chatId: string;
   messageId: string;
@@ -215,7 +224,8 @@ export interface CapabilitySpatialSnapshotWrite {
 }
 
 export interface CapabilitySpatialSnapshotStore {
-  getById(id: string): Promise<SpatialContextSnapshot | null>;
+  /** chatId is optional but keeps the lazy file store from loading every chat's shards for a bare-id probe. */
+  getById(id: string, chatId?: string): Promise<SpatialContextSnapshot | null>;
   getByAnchor(chatId: string, messageId: string, swipeIndex: number): Promise<SpatialContextSnapshot | null>;
   getByCommand(chatId: string, commandId: string): Promise<SpatialContextSnapshot | null>;
   listByAnchors(
@@ -359,7 +369,14 @@ export interface CapabilityEmbeddingHost {
 }
 
 export interface CapabilityRuntimeHost {
+  /** Read and unlock the package's own achievements. Requires the `achievements`
+   *  permission and capability API 1.36. */
+  achievements: CapabilityAchievementHost;
+  /** Live provider/media services. Requires capability API 1.31. */
+  integrations?: CapabilityIntegrationHost;
   embeddings: CapabilityEmbeddingHost;
+  /** Resolve the package's current embedding configuration. Requires capability API 1.15. */
+  resolveEmbeddings(): Promise<CapabilityEmbeddingHost>;
   getAgentConfig(): Promise<{ connectionId: string | null; settings: Record<string, unknown> } | null>;
   isDebugAgentsEnabled(): boolean;
   json: CapabilityJsonHost;

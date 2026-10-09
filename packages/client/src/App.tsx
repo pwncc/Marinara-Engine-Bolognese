@@ -1,3 +1,4 @@
+import { useRefreshLocalContext } from "./hooks/use-connections";
 // ──────────────────────────────────────────────
 // App: Root component with layout
 // ──────────────────────────────────────────────
@@ -35,8 +36,10 @@ import {
 } from "./stores/ui.store";
 import { useSidecarStore } from "./stores/sidecar.store";
 import { useDialogStore } from "./stores/dialog.store";
-import { api } from "./lib/api-client";
-import { forceRefreshSpa } from "./lib/browser-runtime";
+import { api, requestTimeoutSignal } from "./lib/api-client";
+import { forceRefreshSpa, reloadBrowser } from "./lib/browser-runtime";
+import { recordClientError } from "./lib/client-runtime-diagnostics";
+import { showAppUpdatePrompt } from "./lib/app-update-prompt";
 import { formatRuntimeBuild, getServerRuntimeBuild, isRuntimeBuildCurrent } from "./lib/runtime-build";
 import {
   getCssColorFallback,
@@ -45,6 +48,12 @@ import {
   RAINBOW_GRADIENT_PRESET,
 } from "./lib/css-colors";
 import { normalizeThemeCss } from "./lib/theme-css";
+import {
+  CHAT_WIDGET_COLOR_PROPERTIES,
+  getChatWidgetColorRoles,
+  getChatWidgetColorStyle,
+} from "./lib/chat-widget-colors";
+import { getChatWidgetFontFamily, stripFontFamilyQuotes, toCssFontFamilyValue } from "./lib/font-family";
 import { useLegacyThemeMigration, useThemes } from "./hooks/use-themes";
 import { useSettingsSync } from "./hooks/use-settings-sync";
 import { useStorageMigrationNotice } from "./hooks/use-storage-migration-notice";
@@ -55,8 +64,11 @@ import { getStoreBackLayers } from "./lib/back-layers";
 import { initBackNavigation, syncBackNavigation } from "./lib/back-navigation";
 import { setCustomNotificationSoundUrl } from "./lib/notification-sound";
 
-const VERSION_RECOVERY_KEY = "marinara:pwa-version-recovery";
 const VERSION_CHECK_INTERVAL_MS = 5 * 60_000;
+// Against a frozen host the connection opens but is never answered; without a
+// deadline every visibility flip leaks one permanently-pending health fetch
+// until the browser's per-host connection pool is saturated (#5658).
+const VERSION_CHECK_TIMEOUT_MS = 10_000;
 const CLIENT_BUILD = formatRuntimeBuild(APP_VERSION, __MARINARA_BUILD_COMMIT__);
 const LazyModalRenderer = lazy(() =>
   import("./components/layout/ModalRenderer").then((module) => ({ default: module.ModalRenderer })),
@@ -118,9 +130,9 @@ function formatRecoveryError(error: unknown) {
 
 function getRecoveryChromeStyle(): CSSProperties {
   const { appAccentColor, chatChromeTextColor, theme } = useUIStore.getState();
-  const defaultAccent = getDefaultAppAccentColor(theme);
+  const defaultAccent = getDefaultAppAccentColor();
   const accentSource = appAccentColor.trim() || defaultAccent;
-  const accent = getCssColorFallback(accentSource, defaultAccent);
+  const accent = getCssColorFallback(accentSource, getCssColorFallback(defaultAccent, "currentColor"));
   const accentGradient = isCssGradient(accentSource) ? accentSource : getSolidAccentGradient(accent);
   const textColor = chatChromeTextColor.trim();
   const chromeText = textColor
@@ -146,6 +158,7 @@ export class AppRecoveryBoundary extends Component<{ children: ReactNode }, { er
   }
 
   componentDidCatch(error: unknown, info: ErrorInfo) {
+    recordClientError("render-error", error);
     console.error("[AppRecoveryBoundary] Unhandled render error", error, info.componentStack);
   }
 
@@ -158,7 +171,7 @@ export class AppRecoveryBoundary extends Component<{ children: ReactNode }, { er
     } catch {
       /* ignore storage reset errors */
     }
-    window.location.reload();
+    reloadBrowser("reset-ui");
   };
 
   render() {
@@ -186,7 +199,7 @@ export class AppRecoveryBoundary extends Component<{ children: ReactNode }, { er
               <div className="mt-4 flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={() => window.location.reload()}
+                  onClick={() => reloadBrowser("render-recovery")}
                   className="mari-chrome-control mari-chrome-control--selected px-3 py-2 text-sm"
                 >
                   {t("ui.app.recovery.reload")}
@@ -207,23 +220,6 @@ export class AppRecoveryBoundary extends Component<{ children: ReactNode }, { er
   }
 }
 
-function stripFontFamilyQuotes(family: string): string {
-  const trimmed = family.trim();
-  if (trimmed.length < 2) return trimmed;
-
-  const quote = trimmed[0];
-  if ((quote !== `"` && quote !== `'`) || trimmed[trimmed.length - 1] !== quote) {
-    return trimmed;
-  }
-
-  return trimmed.slice(1, -1).trim();
-}
-
-function toCssFontFamilyValue(family: string): string {
-  const cleanFamily = stripFontFamilyQuotes(family);
-  return `"${cleanFamily.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
 function customFontFaceKey(family: string, font: CustomFontFace): string {
   return [family, font.url, font.weight ?? "400", font.style ?? "normal", font.unicodeRange ?? ""].join("|");
 }
@@ -241,7 +237,7 @@ function escapeSvgAttribute(value: string) {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-let cursorColorProbe: HTMLSpanElement | null = null;
+let colorProbe: HTMLSpanElement | null = null;
 let cursorCanvasContext: CanvasRenderingContext2D | null | undefined;
 
 function clampCursorColorByte(value: number) {
@@ -300,30 +296,32 @@ function normalizeCursorColorForSvg(color: string, fallback: string) {
   return normalizeCursorColorWithCanvas(clean) || clean;
 }
 
-function resolveCursorColor(color: string, fallback: string) {
+function resolveCssColor(color: string, fallback: string) {
   if (typeof document === "undefined") return fallback;
-  if (!cursorColorProbe) {
-    cursorColorProbe = document.createElement("span");
-    cursorColorProbe.setAttribute("aria-hidden", "true");
-    cursorColorProbe.style.position = "fixed";
-    cursorColorProbe.style.pointerEvents = "none";
-    cursorColorProbe.style.visibility = "hidden";
-    cursorColorProbe.style.width = "0";
-    cursorColorProbe.style.height = "0";
-    document.body.appendChild(cursorColorProbe);
-  } else if (!cursorColorProbe.isConnected) {
-    document.body.appendChild(cursorColorProbe);
+  if (!colorProbe) {
+    colorProbe = document.createElement("span");
+    colorProbe.setAttribute("aria-hidden", "true");
+    colorProbe.style.position = "fixed";
+    colorProbe.style.pointerEvents = "none";
+    colorProbe.style.visibility = "hidden";
+    colorProbe.style.width = "0";
+    colorProbe.style.height = "0";
+    colorProbe.style.transition = "none";
+    document.body.appendChild(colorProbe);
+  } else if (!colorProbe.isConnected) {
+    document.body.appendChild(colorProbe);
   }
 
-  cursorColorProbe.style.color = "";
-  cursorColorProbe.style.color = color;
-  if (!cursorColorProbe.style.color) return fallback;
+  colorProbe.style.color = "";
+  colorProbe.style.color = color;
+  if (!colorProbe.style.color) return fallback;
 
-  return normalizeCursorColorForSvg(getComputedStyle(cursorColorProbe).color, fallback);
+  return getComputedStyle(colorProbe).color || fallback;
 }
 
 function getAccentCursorColors(accent: string, theme: "dark" | "light") {
-  const fill = resolveCursorColor(accent, getDefaultAppAccentColor(theme));
+  const fallback = getCssColorFallback(getDefaultAppAccentColor(), "currentColor");
+  const fill = normalizeCursorColorForSvg(resolveCssColor(accent, fallback), fallback);
   const stroke = theme === "light" ? "#1a1025" : "#050312";
 
   return { fill, stroke };
@@ -467,24 +465,32 @@ function isTextEntryFocused() {
 }
 
 async function recoverFromVersionSkew(serverVersion: string) {
-  if (sessionStorage.getItem(VERSION_RECOVERY_KEY) === serverVersion) {
-    return;
-  }
-
-  sessionStorage.setItem(VERSION_RECOVERY_KEY, serverVersion);
   await forceRefreshSpa({
+    reason: "version-update",
     queryParamKey: "v",
     queryParamValue: serverVersion,
   });
 }
 
 export function App() {
+  useRefreshLocalContext();
   const theme = useUIStore((s) => s.theme);
+  const notificationPosition = useUIStore((s) => s.notificationPosition);
   const isLite = import.meta.env.VITE_MARINARA_LITE === "true";
   const fontSize = useUIStore((s) => s.fontSize);
   const language = useUIStore((s) => s.language);
   const visualTheme = useUIStore((s) => s.visualTheme);
   const fontFamily = useUIStore((s) => s.fontFamily);
+  const chatWidgetPreset = useUIStore((s) => s.chatWidgetPreset);
+  const chatWidgetFont = useUIStore((s) => s.chatWidgetFont);
+  const chatWidgetShape = useUIStore((s) => s.chatWidgetShape);
+  const chatWidgetButtonSize = useUIStore((s) => s.chatWidgetButtonSize);
+  const chatWidgetBorderColor = useUIStore((s) => s.chatWidgetBorderColor);
+  const chatWidgetBackgroundColor = useUIStore((s) => s.chatWidgetBackgroundColor);
+  const chatWidgetTextColor = useUIStore((s) => s.chatWidgetTextColor);
+  const chatWidgetApplyFont = useUIStore((s) => s.chatWidgetApplyFont);
+  const chatWidgetApplyShape = useUIStore((s) => s.chatWidgetApplyShape);
+  const chatWidgetApplyColors = useUIStore((s) => s.chatWidgetApplyColors);
   const appBackgroundColor = useUIStore((s) => s.appBackgroundColor);
   const appAccentColor = useUIStore((s) => s.appAccentColor);
   const appAccentPulseMode = useUIStore((s) => s.appAccentPulseMode);
@@ -504,8 +510,6 @@ export function App() {
     () => getThemeAccentPulseConfig(activeCustomTheme?.css),
     [activeCustomTheme?.css],
   );
-  const pauseChromeEffectsForAppearance =
-    appearanceSettingsActive && !appAccentRgbMode && !appAccentPulseMode && !themeAccentPulseConfig.enabled;
   useLegacyThemeMigration();
   useSettingsSync();
   const showDownloadModal = useSidecarStore((s) => s.showDownloadModal);
@@ -514,6 +518,10 @@ export function App() {
   const hasAppDialogOpen = useDialogStore((s) => s.dialog !== null);
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
   const [whatsNewResolved, setWhatsNewResolved] = useState(false);
+  const [agentUpdateOpen, setAgentUpdateOpen] = useState(false);
+  const [agentUpdatesResolved, setAgentUpdatesResolved] = useState(false);
+  const handleAgentUpdatesResolved = useCallback(() => setAgentUpdatesResolved(true), []);
+  const [chatWindowIntroOpen, setChatWindowIntroOpen] = useState(false);
   const handleWhatsNewResolved = useCallback(() => setWhatsNewResolved(true), []);
   // Shares the modal's query via the cache; gating the prompter on the QUERY
   // (pending or a notice still waiting) instead of the modal's open state
@@ -635,10 +643,35 @@ export function App() {
       // background-color, not from resolved custom properties (see index.html).
       // Read the rendered variable so visual themes and injected custom theme
       // CSS are reflected instead of falling back to the stock scheme.
-      const computedBackground = getComputedStyle(root).getPropertyValue("--background").trim();
-      const literalBackground = getCssColorFallback(computedBackground, resolvedBackground);
+      const computedStyle = getComputedStyle(root);
+      const computedBackground = computedStyle.getPropertyValue("--background").trim();
+      let literalBackground = getCssColorFallback(computedBackground, resolvedBackground);
+      // Flatten translucent shell surfaces over the app background. Browser
+      // chrome needs an opaque color, and sidebars retain the Home menu surface.
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext("2d");
+      if (context) {
+        context.fillStyle = defaultBackground;
+        context.fillRect(0, 0, 1, 1);
+        context.fillStyle = literalBackground;
+        context.fillRect(0, 0, 1, 1);
+        const backgroundPixels = context.getImageData(0, 0, 1, 1);
+        context.fillStyle = computedStyle.getPropertyValue("--card").trim();
+        context.fillRect(0, 0, 1, 1);
+        const [red, green, blue] = context.getImageData(0, 0, 1, 1).data;
+        const shellSurface = `rgb(${red}, ${green}, ${blue})`;
+        root.style.setProperty("--marinara-shell-surface", shellSurface);
+        context.putImageData(backgroundPixels, 0, 0);
+        context.fillStyle = computedStyle.getPropertyValue("--marinara-topbar-surface").trim();
+        context.fillRect(0, 0, 1, 1);
+        const [topbarRed, topbarGreen, topbarBlue] = context.getImageData(0, 0, 1, 1).data;
+        literalBackground = `rgb(${topbarRed}, ${topbarGreen}, ${topbarBlue})`;
+      }
+      root.style.setProperty("--marinara-page-backing", literalBackground);
       root.style.setProperty("background-color", literalBackground, "important");
       document.body.style.setProperty("background-color", literalBackground, "important");
+      document.querySelector('meta[name="theme-color"]')?.setAttribute("content", literalBackground);
     };
 
     syncLiteralBackground();
@@ -648,12 +681,9 @@ export function App() {
 
   useEffect(() => {
     const root = document.documentElement;
+    // Keep the accent preview independent of Home's covered ambient effects.
     const syncEffectsPausedState = () => {
-      const paused = !(
-        document.visibilityState === "visible" &&
-        document.hasFocus() &&
-        !pauseChromeEffectsForAppearance
-      );
+      const paused = !(document.visibilityState === "visible" && document.hasFocus() && !appearanceSettingsActive);
       if (!paused) {
         delete root.dataset.marinaraEffectsPaused;
       } else {
@@ -677,15 +707,16 @@ export function App() {
       window.removeEventListener("pagehide", syncEffectsPausedState);
       delete root.dataset.marinaraEffectsPaused;
     };
-  }, [pauseChromeEffectsForAppearance]);
+  }, [appearanceSettingsActive]);
 
   useEffect(() => {
     const root = document.documentElement;
     const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
     const accent = appAccentColor.trim();
-    const defaultAccent = getDefaultAppAccentColor(theme);
+    const defaultAccent = getDefaultAppAccentColor();
+    const defaultSolidAccent = getCssColorFallback(defaultAccent, "currentColor");
     const accentSource = themeAccentPulseConfig.source || accent || defaultAccent;
-    const solidAccent = getCssColorFallback(accentSource, defaultAccent);
+    const solidAccent = getCssColorFallback(accentSource, defaultSolidAccent);
     const accentIsGradient = isCssGradient(accentSource);
     const animatedAccentSource = appAccentRgbMode ? RAINBOW_GRADIENT_PRESET : accentSource;
     const animatedSolidAccent = getCssColorFallback(animatedAccentSource, solidAccent);
@@ -773,10 +804,13 @@ export function App() {
     };
 
     const applyLiveAccent = () => {
-      const liveAccent =
+      const mixedAccent =
         animatedAccentIsGradient && animatedGradientStops.length > 1
           ? getGradientRgbAccent(animatedGradientStops)
           : getSolidRgbAccent(animatedSolidAccent);
+      // Resolve on the small probe before changing inherited tokens. Nested
+      // color-mix() values can abort WebKit while it resolves control backgrounds.
+      const liveAccent = resolveCssColor(mixedAccent, defaultSolidAccent);
 
       const liveGradient = getSolidAccentGradient(liveAccent);
       if (appAccentRgbMode) {
@@ -824,10 +858,7 @@ export function App() {
 
       accentAnimationTimer = window.setTimeout(() => {
         accentAnimationTimer = null;
-        if (
-          !accentAnimationEnabled ||
-          !canRunAccentAnimation(reducedMotionQuery, pauseChromeEffectsForAppearance || reduceAmbientEffects)
-        ) {
+        if (!accentAnimationEnabled || !canRunAccentAnimation(reducedMotionQuery, reduceAmbientEffects)) {
           stopAccentAnimation();
           return;
         }
@@ -846,10 +877,7 @@ export function App() {
     };
 
     const syncAccentAnimationState = () => {
-      if (
-        accentAnimationEnabled &&
-        canRunAccentAnimation(reducedMotionQuery, pauseChromeEffectsForAppearance || reduceAmbientEffects)
-      ) {
+      if (accentAnimationEnabled && canRunAccentAnimation(reducedMotionQuery, reduceAmbientEffects)) {
         if (isTextEntryFocused()) {
           // Root accent ticks invalidate styles across the entire Roleplay
           // surface in Firefox. Freeze the current accent while the user is
@@ -868,9 +896,8 @@ export function App() {
     };
 
     if (accentAnimationEnabled) {
-      // Keep the custom cursor on the selected solid accent. Resolving a
-      // color-mix() cursor through getComputedStyle on every live accent tick
-      // causes a synchronous style flush that becomes noticeable in long sessions.
+      // Keep the custom cursor on the selected solid accent. Resolving it after
+      // live root-token writes forces a synchronous app-wide style flush.
       applyCursorAccent(solidAccent);
       setAccentModeDataset();
     } else {
@@ -915,7 +942,6 @@ export function App() {
     appAccentPulseMode,
     appAccentRgbMode,
     customCursorEnabled,
-    pauseChromeEffectsForAppearance,
     reduceAmbientEffects,
     theme,
     themeAccentPulseConfig.enabled,
@@ -954,14 +980,20 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    // In-flight guard: visibility flips against a frozen server must reuse the
+    // one pending check instead of stacking a new leaked fetch each time.
+    let checkInFlight = false;
 
     const checkVersion = async () => {
+      if (checkInFlight) return;
+      checkInFlight = true;
       try {
         const res = await fetch("/api/health", {
           cache: "no-store",
           headers: {
             Accept: "application/json",
           },
+          signal: requestTimeoutSignal(VERSION_CHECK_TIMEOUT_MS),
         });
 
         if (!res.ok) {
@@ -975,13 +1007,14 @@ export function App() {
 
         const serverBuild = getServerRuntimeBuild(health);
         if (isRuntimeBuildCurrent(APP_VERSION, CLIENT_BUILD, health)) {
-          sessionStorage.removeItem(VERSION_RECOVERY_KEY);
           return;
         }
 
-        await recoverFromVersionSkew(serverBuild);
+        showAppUpdatePrompt(() => recoverFromVersionSkew(serverBuild));
       } catch {
-        // Ignore version checks when the network is unavailable.
+        // Ignore version checks when the network is unavailable or timed out.
+      } finally {
+        checkInFlight = false;
       }
     };
 
@@ -1016,6 +1049,64 @@ export function App() {
       document.documentElement.style.removeProperty("--font-user");
     }
   }, [fontFamily]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (chatWidgetPreset === "default") delete root.dataset.chatWidgetPreset;
+    else root.dataset.chatWidgetPreset = chatWidgetPreset;
+    const shape =
+      chatWidgetShape !== "preset"
+        ? chatWidgetShape
+        : chatWidgetPreset === "dottore"
+          ? "cut-corner"
+          : chatWidgetPreset === "mari"
+            ? "arched"
+            : null;
+    if (shape) root.dataset.chatWidgetShape = shape;
+    else delete root.dataset.chatWidgetShape;
+    const font = getChatWidgetFontFamily(chatWidgetFont);
+    if (font) root.style.setProperty("--mari-widget-font-override", font);
+    else root.style.removeProperty("--mari-widget-font-override");
+  }, [chatWidgetPreset, chatWidgetFont, chatWidgetShape]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (chatWidgetButtonSize === null) {
+      delete root.dataset.chatWidgetButtonSize;
+      root.style.removeProperty("--mari-window-bubble-size");
+    } else {
+      root.dataset.chatWidgetButtonSize = String(chatWidgetButtonSize);
+      root.style.setProperty("--mari-window-bubble-size", `${chatWidgetButtonSize}px`);
+    }
+  }, [chatWidgetButtonSize]);
+
+  useEffect(() => {
+    const colors = getChatWidgetColorStyle({
+      border: chatWidgetBorderColor,
+      background: chatWidgetBackgroundColor,
+      text: chatWidgetTextColor,
+    });
+    const roles = getChatWidgetColorRoles(colors);
+    if (roles) document.documentElement.dataset.chatWidgetColors = roles;
+    else delete document.documentElement.dataset.chatWidgetColors;
+    for (const property of CHAT_WIDGET_COLOR_PROPERTIES) {
+      const value = colors[property];
+      if (value) document.documentElement.style.setProperty(property, value);
+      else document.documentElement.style.removeProperty(property);
+    }
+  }, [chatWidgetBorderColor, chatWidgetBackgroundColor, chatWidgetTextColor]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    for (const [attribute, enabled] of [
+      ["data-chat-widget-apply-font", chatWidgetApplyFont],
+      ["data-chat-widget-apply-shape", chatWidgetApplyShape],
+      ["data-chat-widget-apply-colors", chatWidgetApplyColors],
+    ] as const) {
+      if (enabled) root.setAttribute(attribute, "true");
+      else root.removeAttribute(attribute);
+    }
+  }, [chatWidgetApplyFont, chatWidgetApplyShape, chatWidgetApplyColors]);
 
   // Register custom font faces without forcing every shard to load at startup.
   const { data: customFonts } = useQuery<CustomFontFace[]>({
@@ -1069,7 +1160,20 @@ export function App() {
       <PersonalExtensionInjector />
       <ChibiProfessorMariEasterEgg />
       <Suspense fallback={null}>
-        <LazyAppShell />
+        <LazyAppShell
+          chatWindowIntroAllowed={
+            whatsNewResolved &&
+            !hasModalOpen &&
+            !hasAppDialogOpen &&
+            !whatsNewOpen &&
+            !migrationNoticePending &&
+            !migrationNotice &&
+            agentUpdatesResolved &&
+            !agentUpdateOpen &&
+            (isLite || !showDownloadModal)
+          }
+          onChatWindowIntroOpenChange={setChatWindowIntroOpen}
+        />
       </Suspense>
       <WhatsNewModal
         presentationAllowed={!hasModalOpen && !hasAppDialogOpen && (isLite || !showDownloadModal)}
@@ -1082,6 +1186,8 @@ export function App() {
         }
       />
       <AgentUpdatePrompter
+        onOpenChange={setAgentUpdateOpen}
+        onResolved={handleAgentUpdatesResolved}
         presentationAllowed={
           whatsNewResolved &&
           !hasModalOpen &&
@@ -1089,6 +1195,7 @@ export function App() {
           !whatsNewOpen &&
           !migrationNoticePending &&
           !migrationNotice &&
+          !chatWindowIntroOpen &&
           (isLite || !showDownloadModal)
         }
       />
@@ -1113,8 +1220,8 @@ export function App() {
         }}
       >
         <Toaster
-          position="top-center"
-          swipeDirections={["left", "right", "top"]}
+          position={notificationPosition === "bottom" ? "bottom-center" : "top-center"}
+          swipeDirections={["left", "right", notificationPosition === "bottom" ? "bottom" : "top"]}
           offset="4rem"
           theme={theme}
           closeButton
@@ -1123,7 +1230,7 @@ export function App() {
           toastOptions={{
             style: {
               background: "var(--card)",
-              border: "1px solid var(--border)",
+              border: "1px solid var(--marinara-chat-chrome-panel-border)",
               color: "var(--foreground)",
               userSelect: "text",
               WebkitUserSelect: "text",

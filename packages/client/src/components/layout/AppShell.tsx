@@ -12,6 +12,7 @@ import { ChatResourceMobileDropDock } from "../chat/ChatResourceMobileDropDock";
 import { hasProfessorMariFloatingFollowup } from "../chat/professor-mari-floating-events";
 import {
   getTrackerPanelWidthForProfile,
+  isMobileShellViewport,
   MOBILE_SHELL_MEDIA_QUERY,
   RIGHT_PANEL_WIDTH_MAX,
   RIGHT_PANEL_WIDTH_MIN,
@@ -21,6 +22,7 @@ import {
   useUIStore,
 } from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
+import { useDialogStore } from "../../stores/dialog.store";
 import { useBackgroundAutonomousPolling } from "../../hooks/use-background-autonomous";
 import { useClearAutonomousUnread, useUpdateChatMetadata } from "../../hooks/use-chats";
 import { lorebookKeys } from "../../hooks/use-lorebooks";
@@ -33,8 +35,10 @@ import { FeatureAgentDetailHost } from "../agents/FeatureAgentDetailHost";
 import { getCssBackgroundStyle } from "../../lib/css-colors";
 import { resolveFeatureAgentPackage } from "../../lib/feature-agent-package";
 import { showConfirmDialog } from "../../lib/app-dialogs";
+import { isIosWebKitBrowser } from "../../lib/generation-stream-policy";
 import { cn } from "../../lib/utils";
 import { parseChatMetadata } from "../../lib/chat-display";
+import { openGlobalSearch } from "../../lib/chat-insights";
 import { requestChatSummaryOpen } from "../../lib/chat-floating-ui-events";
 import { resolveTrackerPanelContentScale, resolveTrackerPanelDesktopWidth } from "../../lib/tracker-panel-layout";
 import {
@@ -62,6 +66,8 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useTranslation as useUiTranslation } from "react-i18next";
+import { TRACKER_PANEL_BUBBLE_ID, useFloatingWindowStore } from "../../stores/floating-window.store";
+import { closeTrackerPanel } from "../../lib/tracker-panel-surface";
 
 const ChatArea = lazy(() => import("../chat/ChatArea").then((module) => ({ default: module.ChatArea })));
 const CharacterEditor = lazy(() =>
@@ -121,12 +127,13 @@ const TRACKER_PANEL_DESKTOP_MOTION_MS = 260;
 const TRACKER_PANEL_DESKTOP_EXIT_MS = 240;
 const TRACKER_PANEL_DESKTOP_EASE = [0.16, 1, 0.3, 1] as const;
 const TRACKER_PANEL_DESKTOP_EXIT_EASE = [0.4, 0, 1, 1] as const;
-const TRACKER_PANEL_TOGGLE_SELECTOR = '[data-tracker-panel-toggle="roleplay-hud"]';
+const TRACKER_PANEL_TOGGLE_SELECTOR = '[data-tracker-panel-toggle="bubble"]';
 const TRACKER_PANEL_ANCHOR_SELECTOR = '[data-tracker-panel-anchor="roleplay-hud"]';
 const ROLEPLAY_CHAT_COLUMN_SELECTOR = '[data-roleplay-chat-column="true"]';
 const TOP_BAR_SELECTOR = '[data-component="TopBar"]';
 const MOBILE_SHELL_PANEL_TOP_CLASS = "top-[calc(env(safe-area-inset-top)_+_3rem)]";
-const MOBILE_SHELL_PANEL_BOTTOM_PADDING_CLASS = "pb-[min(max(env(safe-area-inset-bottom),0.5rem),3rem)]";
+const MOBILE_SHELL_PANEL_BOTTOM_PADDING_CLASS =
+  "pb-[min(max(var(--mari-safe-area-inset-bottom,env(safe-area-inset-bottom)),0.5rem),3rem)]";
 const CENTER_COMPACT_WIDTH = 768;
 const CENTER_COMPACT_HYSTERESIS = 80;
 const CENTER_COMPACT_SCAN_DEPTH = 6;
@@ -225,8 +232,15 @@ function SidePanelFallback() {
   );
 }
 
-export function AppShell() {
+export function AppShell({
+  chatWindowIntroAllowed = false,
+  onChatWindowIntroOpenChange,
+}: {
+  chatWindowIntroAllowed?: boolean;
+  onChatWindowIntroOpenChange?: (open: boolean) => void;
+}) {
   const { t: localizeUi } = useUiTranslation();
+  const chatWindowIntroNavigationBlocked = useUIStore((state) => state.hasAnyDetailOpen());
   const queryClient = useQueryClient();
   const capabilityAgents = useCapabilityAgentRegistry();
   const installedCapabilities = useCapabilityClientModules();
@@ -242,40 +256,87 @@ export function AppShell() {
   useIdleDetection();
 
   useEffect(() => {
+    const handleGlobalSearchShortcut = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.repeat ||
+        !event.shiftKey ||
+        event.altKey ||
+        !(event.ctrlKey || event.metaKey) ||
+        event.key.toLowerCase() !== "f"
+      ) {
+        return;
+      }
+
+      const target = event.target;
+      if (target instanceof HTMLElement && target.isContentEditable) return;
+      if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
+      if (
+        target instanceof HTMLInputElement &&
+        !["button", "checkbox", "color", "file", "hidden", "radio", "range", "reset", "submit"].includes(target.type)
+      ) {
+        return;
+      }
+      if (useUIStore.getState().modal || useDialogStore.getState().dialog) return;
+
+      event.preventDefault();
+      openGlobalSearch();
+    };
+
+    document.addEventListener("keydown", handleGlobalSearchShortcut);
+    return () => document.removeEventListener("keydown", handleGlobalSearchShortcut);
+  }, []);
+
+  useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") return;
     const root = document.documentElement;
     let frame = 0;
     let focusTimers: number[] = [];
     let orientationTimers: number[] = [];
-    let largestViewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    let largestViewportHeight = 0;
+    let viewportWidth = window.innerWidth;
+    let previousLayoutHeight = root.clientHeight || window.innerHeight;
     const supportsVirtualKeyboard = navigator.maxTouchPoints > 0 || window.matchMedia("(any-pointer: coarse)").matches;
-    const isIOSWebKit =
-      /iP(?:ad|hone|od)/i.test(navigator.userAgent) ||
-      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-    // iOS doesn't track the keyboard's visualViewport.offsetTop/height
-    // reliably, so we force offsetTop to 0 and instead counter the scroll
-    // drift iOS applies with a `transform: translateY()` (a GPU compositor
-    // update, unlike window.scrollTo() it doesn't fight WebKit's own
-    // animation).
+    const isIosWebKit = isIosWebKitBrowser(navigator.userAgent, navigator.platform, navigator.maxTouchPoints);
+    root.toggleAttribute("data-mari-ios-webkit", isIosWebKit);
     const updateVisualViewportGeometry = () => {
       if (frame) cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         frame = 0;
         const viewport = window.visualViewport;
-        const heightCandidates = [viewport?.height, window.innerHeight, root.clientHeight].filter(
-          (value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0,
-        );
-        const height = heightCandidates.length > 0 ? Math.min(...heightCandidates) : window.innerHeight;
-        const maxOffsetTop = Math.max(0, window.innerHeight - height);
-        const visualViewportOffsetTop = Math.min(maxOffsetTop, Math.max(0, viewport?.offsetTop ?? 0));
-        const offsetTop = isIOSWebKit ? 0 : visualViewportOffsetTop;
-        largestViewportHeight = Math.max(largestViewportHeight, height);
+        const scale = viewport && Number.isFinite(viewport.scale) && viewport.scale > 0 ? viewport.scale : 1;
+        // Compare heights at the same zoom level so pinch zoom alone does not
+        // look like a keyboard. Keyboard changes must still update a zoomed chat.
+        const heightCandidates = [
+          viewport ? viewport.height * scale : undefined,
+          window.innerHeight,
+          root.clientHeight,
+        ].filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
+        const unzoomedHeight = heightCandidates.length > 0 ? Math.min(...heightCandidates) : window.innerHeight;
+        const currentLayoutHeight = root.clientHeight || window.innerHeight;
+        // Account for split-view resizing without losing an already-open
+        // keyboard's height. Height-only keyboard changes retain the baseline.
+        // ponytail: with resizes-content, a keyboard change in the same sample
+        // as a width change shifts the baseline too; the page has no signal to
+        // split them. Upgrade path: keyboard geometry from the VirtualKeyboard API.
+        if (window.innerWidth !== viewportWidth) {
+          viewportWidth = window.innerWidth;
+          largestViewportHeight += currentLayoutHeight - previousLayoutHeight;
+        }
+        previousLayoutHeight = currentLayoutHeight;
+        largestViewportHeight = Math.max(largestViewportHeight, unzoomedHeight);
+        const keyboardOpen = supportsVirtualKeyboard && largestViewportHeight - unzoomedHeight >= 80;
+        // Preserve normal pinch magnification, but fit the visible area while
+        // the keyboard is open. Closing it restores the layout even while zoomed.
+        const height =
+          keyboardOpen && viewport && viewport.height > 0 ? Math.min(unzoomedHeight, viewport.height) : unzoomedHeight;
+        const layoutViewportHeight = isIosWebKit ? largestViewportHeight : window.innerHeight;
+        const maxOffsetTop = Math.max(0, layoutViewportHeight - height);
+        const visualViewportTop = Math.max(0, viewport?.offsetTop ?? 0, viewport?.pageTop ?? 0);
+        const offsetTop = Math.min(maxOffsetTop, visualViewportTop);
         root.style.setProperty("--mari-visual-viewport-height", `${Math.max(0, Math.round(height))}px`);
         root.style.setProperty("--mari-visual-viewport-offset-top", `${Math.round(offsetTop)}px`);
-        if (isIOSWebKit) {
-          root.style.setProperty("--mari-app-scroll-compensate", `${Math.round(window.scrollY)}px`);
-        }
-        const keyboardOpen = supportsVirtualKeyboard && largestViewportHeight - height >= 80;
         root.toggleAttribute("data-mari-software-keyboard-open", keyboardOpen);
         dispatchChatVisualViewportChange({
           height,
@@ -327,7 +388,7 @@ export function AppShell() {
       document.removeEventListener("focusout", refreshAfterFocusChange);
       root.style.removeProperty("--mari-visual-viewport-height");
       root.style.removeProperty("--mari-visual-viewport-offset-top");
-      root.style.removeProperty("--mari-app-scroll-compensate");
+      root.removeAttribute("data-mari-ios-webkit");
       root.removeAttribute("data-mari-software-keyboard-open");
     };
   }, []);
@@ -359,6 +420,7 @@ export function AppShell() {
   const openAgentCatalog = useUIStore((s) => s.openAgentCatalog);
   const setTrackerPanelOpen = useUIStore((s) => s.setTrackerPanelOpen);
   const restoreTrackerPanelOpenForChat = useUIStore((s) => s.restoreTrackerPanelOpenForChat);
+  const trackerPanelSurfaceOpen = useFloatingWindowStore((s) => s.open[TRACKER_PANEL_BUBBLE_ID] === true);
   const refreshLorebooks = useCallback(
     () => queryClient.invalidateQueries({ queryKey: lorebookKeys.all }),
     [queryClient],
@@ -404,16 +466,19 @@ export function AppShell() {
     ? getCssBackgroundStyle(trackerPanelBackgroundColor)
     : undefined;
 
-  // Track mobile breakpoint for right-panel animation strategy
-  const [isMobile, setIsMobile] = useState(
-    () => typeof window !== "undefined" && window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches,
-  );
+  // Use the same available-width decision as navigation and back dismissal.
+  const [isMobile, setIsMobile] = useState(isMobileShellViewport);
   useEffect(() => {
     const mq = window.matchMedia(MOBILE_SHELL_MEDIA_QUERY);
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    const handler = () => setIsMobile(isMobileShellViewport());
+    handler();
     mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
+    window.addEventListener("resize", handler);
+    return () => {
+      mq.removeEventListener("change", handler);
+      window.removeEventListener("resize", handler);
+    };
+  }, [sharedSidebarWidth]);
 
   const [viewportWidth, setViewportWidth] = useState(getViewportWidth);
   useEffect(() => {
@@ -434,7 +499,7 @@ export function AppShell() {
   }, []);
 
   const shellOverlayMode = isMobile;
-  const mobileNavigationPanel = shellOverlayMode ? (sidebarOpen ? "chats" : rightPanelOpen ? "right" : null) : null;
+  const mobileNavigationPanel = shellOverlayMode ? (rightPanelOpen ? "right" : sidebarOpen ? "chats" : null) : null;
   const [rightPanelEverOpened, setRightPanelEverOpened] = useState(rightPanelOpen);
   useEffect(() => {
     if (rightPanelOpen) setRightPanelEverOpened(true);
@@ -468,6 +533,7 @@ export function AppShell() {
   // width even when the viewport itself is desktop-sized. Switch that pane to the
   // compact chat layout before toolbar controls begin colliding.
   const mainRef = useRef<HTMLElement>(null);
+  const overlayTrackerPanelRef = useRef<HTMLElement>(null);
   const compactWidthRef = useRef(0); // width when we last switched to compact
   const centerCompact = useUIStore((s) => s.centerCompact);
   const setCenterCompact = useUIStore((s) => s.setCenterCompact);
@@ -779,7 +845,7 @@ export function AppShell() {
         enabledForChat={selectedFeatureEnabledForChat}
         onEnabledForChatChange={setSelectedFeatureEnabledForChat}
         onClose={closeFeatureDetail}
-        onManagePackage={openAgentCatalog}
+        onManagePackage={() => openAgentCatalog(selectedFeaturePackage?.id)}
         capabilityProps={{
           debugMode,
           confirmAction: showConfirmDialog,
@@ -810,10 +876,11 @@ export function AppShell() {
   const showAmbientDecor = isPageActive && !activeChatId && !detailView && !botBrowserOpen && !gameAssetsBrowserOpen;
   const hasDetailView = detailView != null;
   const trackerPanelModeAvailable = activeChat?.mode === "roleplay";
-  const trackerPanelActive = trackerPanelEnabled && trackerPanelOpen;
+  const trackerPanelActive = trackerPanelEnabled && trackerPanelOpen && trackerPanelSurfaceOpen;
   const trackerPanelDetached = trackerPanelWindowTarget !== null;
   const trackerPanelSurfaceAvailable =
     trackerPanelModeAvailable && !botBrowserOpen && !gameAssetsBrowserOpen && !hasDetailView;
+  // The chat preference chooses the surface; its Trackers button controls visibility.
   const trackerPanelVisible = trackerPanelActive && trackerPanelSurfaceAvailable && !trackerPanelDetached;
   const chatSurfaceActive =
     !botBrowserOpen &&
@@ -855,19 +922,16 @@ export function AppShell() {
     }
   }, [localizeUi, trackerPanelWidth]);
 
-  const handleTrackerPanelWindowClosed = useCallback(
-    (closedTarget: TrackerPanelWindowTarget) => {
-      if (trackerPanelDockingPopupRef.current === closedTarget.popup) {
-        trackerPanelDockingPopupRef.current = null;
-        return;
-      }
-      if (trackerPanelWindowTargetRef.current?.popup !== closedTarget.popup) return;
-      trackerPanelWindowTargetRef.current = null;
-      setTrackerPanelWindowTarget(null);
-      setTrackerPanelOpen(false, activeChatId);
-    },
-    [activeChatId, setTrackerPanelOpen],
-  );
+  const handleTrackerPanelWindowClosed = useCallback((closedTarget: TrackerPanelWindowTarget) => {
+    if (trackerPanelDockingPopupRef.current === closedTarget.popup) {
+      trackerPanelDockingPopupRef.current = null;
+      return;
+    }
+    if (trackerPanelWindowTargetRef.current?.popup !== closedTarget.popup) return;
+    trackerPanelWindowTargetRef.current = null;
+    setTrackerPanelWindowTarget(null);
+    closeTrackerPanel();
+  }, []);
 
   const professorMariFloatingActive =
     hasProfessorMariFloatingFollowup() &&
@@ -877,6 +941,13 @@ export function AppShell() {
       gameAssetsBrowserOpen ||
       (shellOverlayMode && Boolean(mobileNavigationPanel)));
 
+  // The overlay Tracker Panel hides the chat control that opened it (globals.css), so keyboard focus moves into the panel.
+  useEffect(() => {
+    if (!shellOverlayMode || !trackerPanelVisible) return;
+    if (document.activeElement?.closest('[data-chat-covered="true"]')) {
+      overlayTrackerPanelRef.current?.focus({ preventScroll: true });
+    }
+  }, [shellOverlayMode, trackerPanelVisible]);
   useEffect(() => {
     restoreTrackerPanelOpenForChat(activeChatId);
   }, [activeChatId, restoreTrackerPanelOpenForChat, trackerPanelEnabled]);
@@ -1139,6 +1210,9 @@ export function AppShell() {
       ? trackerPanelResolvedWidth + TRACKER_PANEL_HUD_GAP
       : 0;
   const trackerPanelHudClearance = trackerPanelHideHudWidgets ? trackerPanelOverlayClearance : 0;
+  // Room a Roleplay column placed on the panel's side (Chat position) leaves for it. It uses the chosen
+  // width, not the width measured beside that column, so the two never resize each other.
+  const trackerPanelChatClearance = trackerPanelOverlayClearance > 0 ? trackerPanelWidth + TRACKER_PANEL_CHAT_GAP : 0;
   const trackerPanelContentScale = resolveTrackerPanelContentScale(trackerPanelWidth, trackerPanelResolvedWidth);
   const trackerPanelPortal =
     trackerPanelActive &&
@@ -1205,7 +1279,7 @@ export function AppShell() {
         data-tracker-size-profile={trackerPanelSizeProfile}
         aria-label={localizeUi("ui.layout.appshell.trackerDataPanel")}
         className={cn(
-          "mari-tracker-panel fixed z-30 hidden overflow-hidden bg-zinc-950/95 shadow-2xl ring-1 ring-[var(--marinara-app-accent-static)] backdrop-blur-2xl transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] will-change-[transform,opacity] md:block",
+          "mari-tracker-panel fixed z-30 hidden overflow-hidden bg-zinc-950/95 shadow-2xl ring-1 ring-[var(--marinara-app-accent-solid)] backdrop-blur-2xl transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] will-change-[transform,opacity] md:block",
           side === "left" ? "rounded-r-xl" : "rounded-l-xl",
         )}
         style={{
@@ -1322,9 +1396,9 @@ export function AppShell() {
           shellOverlayMode && hasDetailView && "z-50",
         )}
       >
-        {/* iOS safe area spacer — pushes TopBar below status bar and fills that gap with topbar bg */}
-        <div className="flex-shrink-0 md:hidden h-[env(safe-area-inset-top)] bg-[var(--marinara-topbar-surface)] backdrop-blur-sm" />
-        <TopBar />
+        {/* Keep the status-bar inset on the same opaque backing as the page. */}
+        <div className="flex-shrink-0 md:hidden h-[env(safe-area-inset-top)] bg-[var(--marinara-page-backing,var(--background))]" />
+        <TopBar mobileTopbarNavigation={shellOverlayMode} />
         <div className="mari-app-background-paint relative flex flex-1 flex-col overflow-hidden">
           {/* Browser — kept mounted once opened so state persists across close/reopen */}
           <MountOnceWhenOpened open={botBrowserOpen} overlay>
@@ -1334,7 +1408,9 @@ export function AppShell() {
           <MountOnceWhenOpened open={gameAssetsBrowserOpen} overlay>
             <GameAssetsBrowserView />
           </MountOnceWhenOpened>
+          {/* Overlay mode keeps the chat mounted under panels and editors; globals.css hides its windows then. */}
           <div
+            data-chat-covered={chatSurfaceActive ? undefined : "true"}
             className={cn(
               "mari-app-background-paint flex flex-1 flex-col overflow-hidden",
               (botBrowserOpen || gameAssetsBrowserOpen || (!shellOverlayMode && hasDetailView)) && "hidden",
@@ -1344,11 +1420,25 @@ export function AppShell() {
                 "--tracker-panel-hud-clear-left": `${trackerPanelSide === "left" ? trackerPanelHudClearance : 0}px`,
                 "--tracker-panel-hud-clear-right": `${trackerPanelSide === "right" ? trackerPanelHudClearance : 0}px`,
                 "--tracker-panel-overlay-clearance": `${trackerPanelOverlayClearance}px`,
+                "--tracker-panel-chat-clearance": `${trackerPanelChatClearance}px`,
               } as CSSProperties
             }
           >
             <Suspense fallback={<MainPaneFallback />}>
-              {noodleOpen ? <NoodleView /> : (shellOverlayMode || !hasDetailView) && <ChatArea />}
+              {noodleOpen ? (
+                <NoodleView />
+              ) : (
+                (shellOverlayMode || !hasDetailView) && (
+                  <ChatArea
+                    chatWindowIntroAllowed={
+                      chatWindowIntroAllowed &&
+                      !chatWindowIntroNavigationBlocked &&
+                      (!shellOverlayMode || (!mobileNavigationPanel && !trackerPanelVisible))
+                    }
+                    onChatWindowIntroOpenChange={onChatWindowIntroOpenChange}
+                  />
+                )
+              )}
             </Suspense>
           </div>
           {/* Keep the detail host at one React tree position across the mobile breakpoint.
@@ -1364,6 +1454,7 @@ export function AppShell() {
                 transition={{ type: "spring", damping: 30, stiffness: 360 }}
                 data-component={shellOverlayMode ? "MobileDetailSheet" : "DetailEditor"}
                 aria-label={localizeUi("ui.layout.appshell.detailEditor")}
+                tabIndex={-1}
                 className={cn(
                   "mari-app-background-paint flex min-h-0 flex-1 flex-col overflow-hidden",
                   shellOverlayMode &&
@@ -1403,7 +1494,7 @@ export function AppShell() {
       {trackerPanelVisible && shellOverlayMode && (
         <div
           className={cn("fixed inset-x-0 bottom-0 z-[45] bg-black/50 backdrop-blur-sm", MOBILE_SHELL_PANEL_TOP_CLASS)}
-          onClick={() => setTrackerPanelOpen(false, activeChatId)}
+          onClick={closeTrackerPanel}
         />
       )}
 
@@ -1412,6 +1503,8 @@ export function AppShell() {
         <AnimatePresence mode="wait">
           {trackerPanelVisible && (
             <motion.aside
+              ref={overlayTrackerPanelRef}
+              tabIndex={-1}
               key="mobile-tracker"
               initial={{ x: trackerPanelSide === "left" ? "-100%" : "100%" }}
               animate={{ x: 0 }}
@@ -1420,7 +1513,7 @@ export function AppShell() {
               data-component="TrackerDataSidebarMobile"
               aria-label={localizeUi("ui.layout.appshell.trackerDataPanel")}
               className={cn(
-                "mari-tracker-panel !fixed bottom-0 z-50 w-screen max-w-none overflow-hidden bg-zinc-950/95 shadow-2xl ring-1 ring-[var(--marinara-app-accent-static)] backdrop-blur-xl",
+                "mari-tracker-panel !fixed bottom-0 z-50 w-screen max-w-none overflow-hidden bg-zinc-950/95 shadow-2xl outline-none ring-1 ring-[var(--marinara-app-accent-solid)] backdrop-blur-xl",
                 MOBILE_SHELL_PANEL_TOP_CLASS,
                 MOBILE_SHELL_PANEL_BOTTOM_PADDING_CLASS,
                 trackerPanelSide === "left" ? "left-0" : "right-0",
@@ -1521,7 +1614,7 @@ export function AppShell() {
           onMouseDown={startRightPanelResize}
           onKeyDown={adjustRightPanelWidth}
           className="absolute inset-y-0 z-40 hidden w-1 cursor-col-resize bg-transparent transition-colors hover:bg-[var(--primary)]/30 focus-visible:bg-[var(--primary)]/40 focus-visible:outline-none md:block"
-          style={{ right: rightPanelOpen ? liveRightPanelWidth : 0 }}
+          style={{ right: rightPanelOpen ? Math.max(0, liveRightPanelWidth - 4) : 0 }}
         />
       )}
 

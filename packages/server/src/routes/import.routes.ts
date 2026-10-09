@@ -7,7 +7,7 @@ import { inflateSync } from "node:zlib";
 import { platform, homedir } from "os";
 import { readdir, stat } from "fs/promises";
 import { resolve as pathResolve } from "path";
-import { MAX_FILE_SIZES, normalizeTextForMatch, type ChatMode } from "@marinara-engine/shared";
+import { containsDecisionStatements, normalizeTextForMatch, type ChatMode } from "@marinara-engine/shared";
 import { importSTChat } from "../services/import/st-chat.importer.js";
 import {
   importSTCharacter,
@@ -29,10 +29,15 @@ import { normalizeTimestampOverrides } from "../services/import/import-timestamp
 import { getImportAllowedRoots } from "../config/runtime-config.js";
 import { requirePrivilegedAccess } from "../middleware/privileged-gate.js";
 import { assertInsideDir, safeCompareString, tokenForPath } from "../utils/security.js";
+import { logger } from "../lib/logger.js";
+import { parseJsonBytes } from "../utils/large-json.js";
 
 const PICK_FOLDER_TIMEOUT_MS = 60_000; // 60s — prevents infinite hang on headless servers
 const FOLDER_TOKEN_TTL_MS = 15 * 60_000;
-const MAX_CHARACTER_CARD_CHUNK_SIZE = Math.ceil(MAX_FILE_SIZES.CHARACTER_JSON / 3) * 4;
+const IMPORT_BODY_LIMIT_BYTES = 256 * 1024 * 1024;
+const NATIVE_PACKAGE_UPLOAD_LIMIT_BYTES = 1024 * 1024 * 1024;
+const MAX_BATCH_IMPORT_FILES = 128;
+const NATIVE_PACKAGE_ENTRY_LIMIT_BYTES = 256 * 1024 * 1024;
 
 const folderTokens = new Map<string, { path: string; expiresAt: number }>();
 
@@ -240,9 +245,9 @@ export function extractCharaFromPng(buf: Buffer): Record<string, unknown> | null
         const keyword = payload.subarray(0, nullIdx).toString("ascii");
         if (CHARA_KEYWORDS.has(keyword) && !found.has(keyword) && payload[nullIdx + 1] === 0) {
           try {
-            const text = inflateSync(payload.subarray(nullIdx + 2), {
-              maxOutputLength: MAX_CHARACTER_CARD_CHUNK_SIZE,
-            }).toString("utf-8");
+            const text = inflateSync(payload.subarray(nullIdx + 2), { maxOutputLength: 4 * 1024 * 1024 }).toString(
+              "utf-8",
+            );
             const parsed = parseCharaChunkText(text);
             if (parsed) found.set(keyword, parsed);
           } catch {
@@ -407,7 +412,7 @@ async function readMultipartFileWithFields(req: FastifyRequest) {
   let file: MultipartImportFile | null = null;
   const fields: Record<string, unknown> = {};
 
-  for await (const part of req.parts()) {
+  for await (const part of req.parts({ limits: { files: 1, parts: 8, fileSize: IMPORT_BODY_LIMIT_BYTES } })) {
     if (part.type === "file") {
       file = {
         filename: part.filename,
@@ -420,6 +425,15 @@ async function readMultipartFileWithFields(req: FastifyRequest) {
   }
 
   return { file, fields };
+}
+
+/**
+ * Tell the importer when an imported file uses decision statements (#6569). A PNG,
+ * .charx or .marinara file is parsed here, not in the browser, so only the server can
+ * see them.
+ */
+function flagDecisionStatements<T extends { success?: boolean }>(result: T, parsed: unknown): T {
+  return result.success && containsDecisionStatements(parsed) ? { ...result, usesDecisions: true } : result;
 }
 
 async function importCharacterBuffer(
@@ -444,13 +458,16 @@ async function importCharacterBuffer(
     const avatarB64 = buffer.toString("base64");
     charData._avatarDataUrl = `data:image/png;base64,${avatarB64}`;
     try {
-      return await importSTCharacter(charData, db, {
-        timestampOverrides,
-        importEmbeddedLorebook,
-        tagImportMode,
-        existingTagKeys,
-        regexScriptScope,
-      });
+      return flagDecisionStatements(
+        await importSTCharacter(charData, db, {
+          timestampOverrides,
+          importEmbeddedLorebook,
+          tagImportMode,
+          existingTagKeys,
+          regexScriptScope,
+        }),
+        charData,
+      );
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
@@ -477,13 +494,16 @@ async function importCharacterBuffer(
     };
   }
   try {
-    return await importSTCharacter(json, db, {
-      timestampOverrides,
-      importEmbeddedLorebook,
-      tagImportMode,
-      existingTagKeys,
-      regexScriptScope,
-    });
+    return flagDecisionStatements(
+      await importSTCharacter(json, db, {
+        timestampOverrides,
+        importEmbeddedLorebook,
+        tagImportMode,
+        existingTagKeys,
+        regexScriptScope,
+      }),
+      json,
+    );
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
@@ -563,8 +583,14 @@ export async function importRoutes(app: FastifyInstance) {
           }
         }
       }
-    } catch {
-      // header parse failed — import without character link
+    } catch (err) {
+      // Non-fatal: import without a character link. Only the error type is logged at warn, since a
+      // JSON parse message can quote chat text; the full error stays at debug.
+      logger.warn(
+        { errorType: err instanceof Error ? err.name : typeof err },
+        "[import] SillyTavern chat header unreadable; importing without a character link",
+      );
+      logger.debug(err, "[import] SillyTavern chat header parse error");
     }
 
     return importSTChat(text, app.db, {
@@ -653,6 +679,7 @@ export async function importRoutes(app: FastifyInstance) {
       ...(inheritedCharacterIds.length > 0 ? { characterIds: inheritedCharacterIds } : {}),
       ...(speakerMap ? { speakerMap } : {}),
       personaId: targetChat.personaId ?? null,
+      personaCharacterId: targetChat.personaCharacterId ?? null,
       connectionId: targetChat.connectionId ?? null,
       promptPresetId: targetChat.promptPresetId ?? null,
       ...(timestampOverrides ? { timestampOverrides } : {}),
@@ -662,7 +689,7 @@ export async function importRoutes(app: FastifyInstance) {
   });
 
   /** Import a Marinara Engine export (.marinara.json). */
-  app.post("/marinara", async (req) => {
+  app.post("/marinara", { bodyLimit: IMPORT_BODY_LIMIT_BYTES }, async (req) => {
     const body = req.body as Record<string, unknown>;
     const timestampOverrides = readTimestampOverridesFromBody(body);
     const payload =
@@ -686,14 +713,42 @@ export async function importRoutes(app: FastifyInstance) {
 
   /**
    * Import a Marinara Engine native package (.marinara file — a zip with
-   * data.json plus the avatar binary). Single-file multipart upload.
+   * data.json plus the avatar binary). Single-file multipart upload. A native
+   * .marinara.json too large for the JSON route (a big gallery) is uploaded
+   * here as a file too and read in pieces.
    */
-  app.post("/marinara-package", async (req, reply) => {
-    const file = await req.file();
+  app.post("/marinara-package", { bodyLimit: NATIVE_PACKAGE_UPLOAD_LIMIT_BYTES }, async (req, reply) => {
+    const file = await req.file({
+      limits: { fields: 1, parts: 2, files: 1, fieldSize: 64 * 1024, fileSize: NATIVE_PACKAGE_UPLOAD_LIMIT_BYTES },
+    });
     if (!file) return reply.status(400).send({ success: false, error: "No file uploaded" });
     const buffer = await file.toBuffer();
+    const importEnvelope = async (envelope: Record<string, unknown>) => {
+      const timestampOverrides = readTimestampOverridesFromMultipart(file as any);
+      if (timestampOverrides && envelope.data && typeof envelope.data === "object") {
+        const data = envelope.data as Record<string, unknown>;
+        const existingMeta =
+          data.metadata && typeof data.metadata === "object" ? (data.metadata as Record<string, unknown>) : {};
+        data.metadata = { ...existingMeta, timestamps: timestampOverrides };
+      }
+      return flagDecisionStatements(await importMarinara(envelope as any, app.db), envelope);
+    };
     if (buffer.length < 4 || buffer[0] !== 0x50 || buffer[1] !== 0x4b) {
-      return reply.status(400).send({ success: false, error: "Not a .marinara package (zip signature missing)" });
+      const firstChar = buffer
+        .subarray(0, 64)
+        .toString("utf8")
+        .replace(/^\uFEFF/, "")
+        .trimStart()[0];
+      if (firstChar !== "{") {
+        return reply.status(400).send({ success: false, error: "Not a .marinara package (zip signature missing)" });
+      }
+      let envelope: Record<string, unknown>;
+      try {
+        envelope = parseJsonBytes(buffer) as Record<string, unknown>;
+      } catch {
+        return reply.status(400).send({ success: false, error: "The file is not valid JSON" });
+      }
+      return importEnvelope(envelope);
     }
     const AdmZip = (await import("adm-zip")).default;
     let zip: InstanceType<typeof AdmZip>;
@@ -702,24 +757,29 @@ export async function importRoutes(app: FastifyInstance) {
     } catch {
       return reply.status(400).send({ success: false, error: "Could not read .marinara package" });
     }
-    // Bounds checks before any getData() call — a legitimate .marinara package
-    // ships data.json plus at most one avatar.* entry, so anything way past
-    // that is either accidental cruft or a zip-bomb-style decompression
-    // attempt. Sizes are read off the entry headers, not the decompressed
-    // stream, so we reject before paying the memory cost.
+    // Native packages contain data.json plus an optional avatar. Keep the
+    // structural entry boundary, but do not reject legitimate large embedded
+    // galleries or avatars by byte size.
     const MAX_PACKAGE_ENTRIES = 8;
-    const MAX_DATA_JSON_BYTES = 5 * 1024 * 1024;
-    const MAX_AVATAR_BYTES = 20 * 1024 * 1024;
     const entries = zip.getEntries();
     if (entries.length > MAX_PACKAGE_ENTRIES) {
       return reply.status(400).send({ success: false, error: ".marinara package has too many entries" });
     }
+    let totalUncompressedBytes = 0;
+    for (const entry of entries) {
+      if (entry.isDirectory) continue;
+      const size = entry.header.size;
+      if (!Number.isSafeInteger(size) || size < 0 || size > NATIVE_PACKAGE_ENTRY_LIMIT_BYTES) {
+        return reply.status(413).send({ success: false, error: ".marinara package entry is too large" });
+      }
+      totalUncompressedBytes += size;
+      if (totalUncompressedBytes > NATIVE_PACKAGE_UPLOAD_LIMIT_BYTES) {
+        return reply.status(413).send({ success: false, error: ".marinara package contents are too large" });
+      }
+    }
     const dataEntry = zip.getEntry("data.json");
     if (!dataEntry) {
       return reply.status(400).send({ success: false, error: ".marinara package is missing data.json" });
-    }
-    if ((dataEntry.header.size ?? 0) > MAX_DATA_JSON_BYTES) {
-      return reply.status(400).send({ success: false, error: "data.json in package is too large" });
     }
     let envelope: Record<string, unknown>;
     try {
@@ -728,9 +788,6 @@ export async function importRoutes(app: FastifyInstance) {
       return reply.status(400).send({ success: false, error: "data.json is not valid JSON" });
     }
     const avatarEntry = entries.find((e) => /^avatar\.(png|jpe?g|webp|gif|avif)$/i.test(e.entryName));
-    if (avatarEntry && (avatarEntry.header.size ?? 0) > MAX_AVATAR_BYTES) {
-      return reply.status(400).send({ success: false, error: "Avatar image in package is too large" });
-    }
     if (avatarEntry && envelope.data && typeof envelope.data === "object") {
       const ext = avatarEntry.entryName.split(".").pop()!.toLowerCase();
       const mime =
@@ -746,23 +803,18 @@ export async function importRoutes(app: FastifyInstance) {
       const dataUrl = `data:${mime};base64,${avatarEntry.getData().toString("base64")}`;
       (envelope.data as Record<string, unknown>).avatar = dataUrl;
     }
-    const timestampOverrides = readTimestampOverridesFromMultipart(file as any);
-    if (timestampOverrides && envelope.data && typeof envelope.data === "object") {
-      const data = envelope.data as Record<string, unknown>;
-      const existingMeta =
-        data.metadata && typeof data.metadata === "object" ? (data.metadata as Record<string, unknown>) : {};
-      data.metadata = { ...existingMeta, timestamps: timestampOverrides };
-    }
-    return importMarinara(envelope as any, app.db);
+    return importEnvelope(envelope);
   });
 
   /** Import a SillyTavern character (JSON body or PNG file upload). */
-  app.post("/st-character", async (req) => {
+  app.post("/st-character", { bodyLimit: IMPORT_BODY_LIMIT_BYTES }, async (req) => {
     const contentType = req.headers["content-type"] ?? "";
 
     // Handle multipart file upload (PNG character cards)
     if (contentType.includes("multipart/form-data")) {
-      const file = await req.file();
+      const file = await req.file({
+        limits: { fields: 8, parts: 9, files: 1, fieldSize: 64 * 1024, fileSize: IMPORT_BODY_LIMIT_BYTES },
+      });
       if (!file) return { success: false, error: "No file uploaded" };
       const timestampOverrides = readTimestampOverridesFromMultipart(file as any);
       const importEmbeddedLorebook = readMultipartBooleanField(file as any, "importEmbeddedLorebook");
@@ -815,14 +867,26 @@ export async function importRoutes(app: FastifyInstance) {
   });
 
   /** Inspect character cards before importing, so clients can ask about embedded lorebooks. */
-  app.post("/st-character/inspect", async (req) => {
-    const parts = req.parts();
+  app.post("/st-character/inspect", { bodyLimit: IMPORT_BODY_LIMIT_BYTES }, async (req, reply) => {
+    const parts = req.parts({
+      limits: { files: MAX_BATCH_IMPORT_FILES, parts: MAX_BATCH_IMPORT_FILES + 8, fileSize: IMPORT_BODY_LIMIT_BYTES },
+    });
+    let totalBytes = 0;
     const results: Array<{ filename: string } & STCharacterImportPreview> = [];
 
     for await (const part of parts) {
       if (part.type !== "file") continue;
+      const buffer = await part.toBuffer();
+      totalBytes += buffer.length;
+      if (totalBytes > IMPORT_BODY_LIMIT_BYTES) {
+        return reply.status(413).send({
+          success: false,
+          error: "Import exceeds the total upload limit",
+          results: [],
+        });
+      }
       try {
-        const result = await inspectCharacterBuffer(part.filename ?? "character", await part.toBuffer());
+        const result = await inspectCharacterBuffer(part.filename ?? "character", buffer);
         results.push({ filename: part.filename ?? "character", ...result });
       } catch (error) {
         results.push({
@@ -842,9 +906,12 @@ export async function importRoutes(app: FastifyInstance) {
   });
 
   /** Import multiple character cards in one multipart request. */
-  app.post("/st-character/batch", async (req) => {
-    const parts = req.parts();
+  app.post("/st-character/batch", { bodyLimit: IMPORT_BODY_LIMIT_BYTES }, async (req, reply) => {
+    const parts = req.parts({
+      limits: { files: MAX_BATCH_IMPORT_FILES, parts: MAX_BATCH_IMPORT_FILES + 8, fileSize: IMPORT_BODY_LIMIT_BYTES },
+    });
     const files: Array<{ filename: string; buffer: Buffer }> = [];
+    let totalBytes = 0;
     const timestampEntries: Array<{ name?: string; lastModified?: number | string }> = [];
     let importEmbeddedLorebook: boolean | undefined;
     let tagImportMode: STCharacterTagImportMode | undefined;
@@ -854,9 +921,18 @@ export async function importRoutes(app: FastifyInstance) {
 
     for await (const part of parts) {
       if (part.type === "file") {
+        const buffer = await part.toBuffer();
+        totalBytes += buffer.length;
+        if (totalBytes > IMPORT_BODY_LIMIT_BYTES) {
+          return reply.status(413).send({
+            success: false,
+            error: "Import exceeds the total upload limit",
+            results: [],
+          });
+        }
         files.push({
           filename: part.filename ?? "character",
-          buffer: await part.toBuffer(),
+          buffer,
         });
         continue;
       }

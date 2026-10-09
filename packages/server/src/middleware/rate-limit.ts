@@ -24,8 +24,18 @@ type RateLimitRule = {
 
 const DEFAULT_RULE: RateLimitRule = { key: "default", limit: 600, windowMs: 60_000 };
 
+export const UPDATE_CHANNEL_RATE_LIMIT = {
+  max: 30,
+  timeWindow: 60_000,
+} as const satisfies MarinaraRouteRateLimit;
+
 export const AVATAR_STORAGE_RATE_LIMIT = {
   max: 20,
+  timeWindow: 60_000,
+} as const satisfies MarinaraRouteRateLimit;
+
+export const SPRITE_RENAME_RATE_LIMIT = {
+  max: 60,
   timeWindow: 60_000,
 } as const satisfies MarinaraRouteRateLimit;
 
@@ -34,12 +44,84 @@ export const ADMIN_RESTART_RATE_LIMIT = {
   timeWindow: 60_000,
 } as const satisfies MarinaraRouteRateLimit;
 
+export const REQUEST_TIMEOUT_SETTINGS_RATE_LIMIT = {
+  max: 30,
+  timeWindow: 60_000,
+} as const satisfies MarinaraRouteRateLimit;
+
+/** Support snapshot of storage residency and package runtimes; a person reads it a few times, not in a loop. */
+export const RUNTIME_DIAGNOSTICS_RATE_LIMIT = {
+  max: 30,
+  timeWindow: 60_000,
+} as const satisfies MarinaraRouteRateLimit;
+
+/** One document per guest frame mount; each response reads and embeds the trusted bundle. */
+export const MULTIPLAYER_GUEST_VIEW_RATE_LIMIT = {
+  max: 30,
+  timeWindow: 60_000,
+} as const satisfies MarinaraRouteRateLimit;
+
+/**
+ * Operator corrections to Beholder's physical state.
+ *
+ * A person fixing slots clicks Apply a handful of times a minute; this is far above
+ * that and still bounds an authorized write to the state the next prompt is built from.
+ */
+export const BEHOLDER_STATE_RATE_LIMIT = {
+  max: 60,
+  timeWindow: 60_000,
+} as const satisfies MarinaraRouteRateLimit;
+
 export const BACKUP_RATE_LIMIT = {
   max: 60,
   timeWindow: 60_000,
 } as const satisfies MarinaraRouteRateLimit;
 
+/**
+ * The utility model slot's API.
+ *
+ * Generous enough for the UI to poll status and routing while a page is open, tight
+ * enough that install and start — which spawn processes and download hundreds of
+ * megabytes — cannot be hammered.
+ */
+export const UTILITY_SIDECAR_RATE_LIMIT = {
+  max: 60,
+  timeWindow: 60_000,
+} as const satisfies MarinaraRouteRateLimit;
+
+/**
+ * The managed decision sidecar's API.
+ *
+ * Sized like the utility slot's: room for the panel to re-read its status while open,
+ * a wall in front of install and remove, which download or delete about ten gigabytes.
+ */
+export const DECISION_SIDECAR_RATE_LIMIT = {
+  max: 60,
+  timeWindow: 60_000,
+} as const satisfies MarinaraRouteRateLimit;
+
+/**
+ * The health probe. Launchers, Docker, the Android bootstrap and the open app poll it, so it keeps the
+ * default allowance in a bucket of its own; it now also decides whether to include local model details.
+ */
+export const HEALTH_RATE_LIMIT = {
+  max: 600,
+  timeWindow: 60_000,
+} as const satisfies MarinaraRouteRateLimit;
+
 const ROUTE_RULES: Array<{ pattern: RegExp; rule: RateLimitRule }> = [
+  {
+    pattern: /^\/api\/health(?:\?|$)/,
+    rule: { key: "health", limit: HEALTH_RATE_LIMIT.max, windowMs: HEALTH_RATE_LIMIT.timeWindow },
+  },
+  {
+    pattern: /^\/api\/multiplayer\/guest-view(?:\?|$)/,
+    rule: {
+      key: "multiplayer-guest-view",
+      limit: MULTIPLAYER_GUEST_VIEW_RATE_LIMIT.max,
+      windowMs: MULTIPLAYER_GUEST_VIEW_RATE_LIMIT.timeWindow,
+    },
+  },
   { pattern: /^\/api\/generate(?:\/|$)/, rule: { key: "generate", limit: 60, windowMs: 60_000 } },
   { pattern: /^\/api\/tts(?:\/|$)/, rule: { key: "tts", limit: 90, windowMs: 60_000 } },
   {
@@ -63,10 +145,42 @@ const ROUTE_RULES: Array<{ pattern: RegExp; rule: RateLimitRule }> = [
     pattern: /^\/api\/admin\/restart(?:\?|$)/,
     rule: { key: "admin-restart", limit: ADMIN_RESTART_RATE_LIMIT.max, windowMs: ADMIN_RESTART_RATE_LIMIT.timeWindow },
   },
+  {
+    pattern: /^\/api\/admin\/request-timeouts(?:\?|$)/,
+    rule: {
+      key: "request-timeout-settings",
+      limit: REQUEST_TIMEOUT_SETTINGS_RATE_LIMIT.max,
+      windowMs: REQUEST_TIMEOUT_SETTINGS_RATE_LIMIT.timeWindow,
+    },
+  },
+  {
+    pattern: /^\/api\/admin\/runtime-diagnostics(?:\?|$)/,
+    rule: {
+      key: "runtime-diagnostics",
+      limit: RUNTIME_DIAGNOSTICS_RATE_LIMIT.max,
+      windowMs: RUNTIME_DIAGNOSTICS_RATE_LIMIT.timeWindow,
+    },
+  },
   { pattern: /^\/api\/updates\/apply(?:\?|$)/, rule: { key: "updates-apply", limit: 5, windowMs: 60_000 } },
+  {
+    pattern: /^\/api\/updates\/channel(?:\?|$)/,
+    rule: {
+      key: "updates-channel",
+      limit: UPDATE_CHANNEL_RATE_LIMIT.max,
+      windowMs: UPDATE_CHANNEL_RATE_LIMIT.timeWindow,
+    },
+  },
   {
     pattern: /^\/api\/sidecar\/(?:runtime\/install|reinstall|download|model|speech\/download|speech\/model)(?:\/|\?|$)/,
     rule: { key: "sidecar-privileged", limit: 20, windowMs: 60_000 },
+  },
+  {
+    pattern: /^\/api\/decision\/sidecar(?:\/|\?|$)/,
+    rule: {
+      key: "decision-sidecar",
+      limit: DECISION_SIDECAR_RATE_LIMIT.max,
+      windowMs: DECISION_SIDECAR_RATE_LIMIT.timeWindow,
+    },
   },
   { pattern: /^\/api\/haptic\/command(?:\?|$)/, rule: { key: "haptic-command", limit: 30, windowMs: 60_000 } },
   // One-shot LLM call per user click; keep it out of the 600/min default

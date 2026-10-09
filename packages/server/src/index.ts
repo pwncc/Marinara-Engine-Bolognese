@@ -6,7 +6,27 @@ import { fileURLToPath } from "url";
 import { buildApp } from "./app.js";
 import { StorageWriterLeaseError } from "./db/file-backed-store.js";
 import { logger } from "./lib/logger.js";
-import { getHost, getPort, getServerProtocol, loadTlsOptions, logStorageDiagnostics } from "./config/runtime-config.js";
+import { startup } from "./lib/startup-timeline.js";
+import { startFreezeDetector, stopFreezeDetector } from "./lib/freeze-detector.js";
+import { finalizeSessionExit, noteSessionExitKind, startSessionPostmortem } from "./lib/session-postmortem.js";
+import { armShutdownDeadline } from "./lib/shutdown-deadline.js";
+import {
+  createShutdownSignalController,
+  installShutdownSignalHandlers,
+  runtimeStopBudgetFor,
+  shutdownDeadlinesFor,
+} from "./lib/shutdown-signals.js";
+import { setRuntimeStopBudgetMs } from "./lib/shutdown-steps.js";
+import { isSharpLoaderRejection } from "./services/image/sharp-runtime.js";
+import { flushDB } from "./db/connection.js";
+import {
+  getHost,
+  getPort,
+  getServerProtocol,
+  isShutdownEarlyFlushEnabled,
+  loadTlsOptions,
+  logStorageDiagnostics,
+} from "./config/runtime-config.js";
 import { logCsrfTrustSummary } from "./middleware/csrf-protection.js";
 import { startEnvWatcher } from "./config/env-watcher.js";
 import { migrateTaskbarShortcuts } from "./services/setup/taskbar-shortcut-migration.js";
@@ -49,9 +69,9 @@ function stopDevelopmentWatcherAfterLeaseConflict(error: unknown): void {
 }
 
 async function main() {
-  const tls = loadTlsOptions();
-  logStorageDiagnostics();
-  const app = await buildApp(tls ?? undefined);
+  const tls = await startup.phase("config.tls", () => loadTlsOptions());
+  await startup.phase("storage.diagnostics", () => logStorageDiagnostics());
+  const app = await startup.phase("app.build", () => buildApp(tls ?? undefined));
   const envWatcher = startEnvWatcher();
   const protocol = tls ? "https" : getServerProtocol();
   const port = getPort();
@@ -64,13 +84,29 @@ async function main() {
   };
 
   process.once("exit", reapSidecar);
+  // #5506 diagnostics: stamp how this session ended. Every deliberate ending
+  // reaches process "exit" (signal shutdown, in-app update, Advanced Settings
+  // restart, a fatal crash); an external SIGKILL reaches nothing, which is
+  // precisely the signal the postmortem reports at the next startup.
+  process.once("exit", (code) => {
+    finalizeSessionExit(code);
+  });
   process.on("uncaughtException", (err) => {
     logFatalProcessError(err, "[process] Uncaught exception; reaping sidecar before exit");
+    noteSessionExitKind("crash");
     reapSidecar();
     process.exit(1);
   });
   process.on("unhandledRejection", (reason) => {
+    if (isSharpLoaderRejection(reason)) {
+      logger.warn(
+        reason as Error,
+        "[image] sharp's image runtime failed to start; image processing stays off until dependencies are reinstalled",
+      );
+      return;
+    }
     logFatalProcessError(reason, "[process] Unhandled rejection; reaping sidecar before exit");
+    noteSessionExitKind("crash");
     reapSidecar();
     process.exit(1);
   });
@@ -78,15 +114,31 @@ async function main() {
   const shutdown = async (signal: NodeJS.Signals) => {
     if (isShuttingDown) {
       logger.warn("Received %s while shutdown is already in progress", signal);
-      process.exit(1);
+      return;
     }
 
     isShuttingDown = true;
     logger.info("Received %s; shutting down Marinara Engine", signal);
+    // #5838: bound the whole close - sever connections at 4 s, force-exit at
+    // 8 s - so a supervisor's stop window (earlyoom ~10 s, Docker 10 s) never
+    // expires on a connection-wait and escalates to a write-dropping SIGKILL.
+    // A Windows console close gets a tighter budget (see shutdownDeadlinesFor);
+    // every other signal keeps the defaults above.
+    armShutdownDeadline(app, signal, shutdownDeadlinesFor(signal));
+    setRuntimeStopBudgetMs(runtimeStopBudgetFor(signal));
+
+    // Opt-in (SHUTDOWN_EARLY_FLUSH): start writing pending saves now, while
+    // app.close() may still be waiting on open connections; the store close
+    // inside onClose writes the rest.
+    if (isShutdownEarlyFlushEnabled()) {
+      // The store already logs a failed flush at error level, and the store close retries it.
+      void flushDB().catch(() => {});
+    }
 
     try {
       envWatcher.stop();
       stopRuntimeMemoryMonitor();
+      stopFreezeDetector();
       await app.close();
       logger.info("Shutdown complete");
       process.exit(0);
@@ -96,16 +148,25 @@ async function main() {
     }
   };
 
-  process.on("SIGTERM", () => {
-    void shutdown("SIGTERM");
-  });
-  process.on("SIGINT", () => {
-    void shutdown("SIGINT");
-  });
+  // Same signals and repeat handling as before by default. Opt-in:
+  // SHUTDOWN_WINDOWS_CONSOLE_SIGNALS adds Ctrl+Break and the console close on
+  // Windows, SHUTDOWN_FORCE_EXIT_ON_REPEAT lets a deliberate second Ctrl+C
+  // force the exit.
+  installShutdownSignalHandlers(
+    createShutdownSignalController({
+      onShutdown: (signal) => {
+        void shutdown(signal);
+      },
+    }),
+  );
 
   try {
-    await app.listen({ port, host });
+    await startup.phase("http.listen", () => app.listen({ port, host }));
     logger.info(`Marinara Engine server listening on ${protocol}://${host}:${port}`);
+    const ready = startup.summary();
+    logger.info(ready, "[startup] Ready in %d ms", ready.elapsedMs);
+    startFreezeDetector();
+    startSessionPostmortem();
     stopRuntimeMemoryMonitor = startRuntimeMemoryMonitor();
     logCsrfTrustSummary();
     scheduleTaskbarShortcutMigration();
@@ -129,7 +190,12 @@ async function main() {
 }
 
 main().catch((err) => {
-  logger.error(err, "[startup] Unhandled error during server bootstrap");
+  const stage = startup.stageOf(err);
+  logger.error(
+    { err, event: "startup.failed", stage },
+    "[startup] Unhandled error during server bootstrap (in %s)",
+    stage ?? "unknown step",
+  );
   stopDevelopmentWatcherAfterLeaseConflict(err);
   process.exit(1);
 });

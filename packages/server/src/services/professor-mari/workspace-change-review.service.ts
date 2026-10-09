@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { nanoid } from "nanoid";
 import type {
   MariDependencyInstallApproval,
@@ -16,7 +16,7 @@ import { logger } from "../../lib/logger.js";
 const APPROVAL_TIMEOUT_MS = 10 * 60_000;
 const INSTALL_TIMEOUT_MS = 10 * 60_000;
 const MAX_REGISTRY_RESPONSE_BYTES = 1_000_000;
-const MAX_REVIEW_FILE_BYTES = 512_000;
+export const MAX_REVIEW_FILE_BYTES = 512_000;
 const MAX_REVIEW_DIFF_BYTES = 64_000;
 const MAX_PROCESS_OUTPUT = 32_000;
 const PUBLIC_NPM_REGISTRY = "https://registry.npmjs.org/";
@@ -78,6 +78,7 @@ const TARGET_FILTERS: Partial<Record<MariDependencyTarget, string>> = {
 
 type FileReviewRecord = MariSensitiveFileApproval & {
   absolutePath: string;
+  realTarget: string;
   beforeContent: string | null;
   afterContent: string;
   processing: boolean;
@@ -143,12 +144,13 @@ function normalizeRelativePath(path: string) {
   return path.split(sep).join("/").replace(/^\.\//, "");
 }
 
-function isEnvironmentSecretName(name: string) {
-  const normalized = name.toLowerCase();
+// Takes a name already folded by fileSystemName. The auto-generated encryption key (utils/crypto.ts) sits in
+// DATA_DIR, inside the workspace by default, and unlocks every saved API key, so it is a secret like .env.
+function isServerSecretName(normalized: string) {
   if (normalized === ".env.example" || normalized === ".env.sample" || normalized === ".env.template") {
     return false;
   }
-  return normalized === ".env" || normalized.startsWith(".env.");
+  return normalized === ".env" || normalized.startsWith(".env.") || normalized === ".encryption-key";
 }
 
 export function workspacePathAccessPolicy(
@@ -161,22 +163,169 @@ export function workspacePathAccessPolicy(
   if (rel === ".." || rel.startsWith(`..${sep}`) || resolve(root, rel) !== absolute) return "forbidden";
   const normalized = normalizeRelativePath(rel).toLowerCase();
   const parts = normalized.split("/").filter(Boolean);
-  const name = parts.at(-1) ?? "";
+  // Folded the way the file system reads names, so ".ENV", ".git." or ".encryption-key::$DATA" still match.
+  const fileSystemParts = parts.map(fileSystemName);
 
-  if (parts.includes(".git") || isEnvironmentSecretName(name)) return "forbidden";
-  if (PACKAGE_CONTROL_FILES.has(name)) return "sensitive";
-  if (parts.length === 1 && ROOT_LAUNCHER_FILES.has(name)) return "sensitive";
-  if (normalized === ".github/workflows" || normalized.startsWith(".github/workflows/")) return "sensitive";
-  if (normalized === "win/installer" || normalized.startsWith("win/installer/")) return "sensitive";
+  if (fileSystemParts.includes(".git") || isServerSecretName(fileSystemParts.at(-1) ?? "")) return "forbidden";
+  // The sensitive checks use the same folded names, so "package.json." or "start.sh::$DATA" still count.
+  const folded = fileSystemParts.join("/");
+  const foldedName = fileSystemParts.at(-1) ?? "";
+  if (PACKAGE_CONTROL_FILES.has(foldedName)) return "sensitive";
+  if (fileSystemParts.length === 1 && ROOT_LAUNCHER_FILES.has(foldedName)) return "sensitive";
+  if (folded === ".github/workflows" || folded.startsWith(".github/workflows/")) return "sensitive";
+  if (folded === "win/installer" || folded.startsWith("win/installer/")) return "sensitive";
   if (
-    normalized === "android/app/build.gradle" ||
-    normalized === "android/build.gradle" ||
-    normalized === "android/settings.gradle" ||
-    normalized.startsWith("android/gradle/wrapper/")
+    folded === "android/app/build.gradle" ||
+    folded === "android/build.gradle" ||
+    folded === "android/settings.gradle" ||
+    folded.startsWith("android/gradle/wrapper/")
   ) {
     return "sensitive";
   }
   return "normal";
+}
+
+/** #6984: what Professor Mari is told, to pass on, when a change would land in build output. */
+export const BUILD_OUTPUT_WRITE_REFUSAL =
+  "Build files are generated and must not be edited; change the source and rebuild instead.";
+
+// Windows ignores trailing dots and spaces in a name and reads "name:stream" as the name itself, so
+// "dist." and "dist::$INDEX_ALLOCATION" open dist there. Volumes that ignore case match more than toLowerCase
+// does: APFS opens dist for "diſt" (long s) and "diﬆ" (ligature), which upper- then lower-casing folds, and HFS+
+// skips zero-width and direction marks, all default-ignorable. Folding them everywhere costs nothing.
+const fileSystemName = (segment = "") =>
+  segment
+    .replace(/\p{Default_Ignorable_Code_Point}/gu, "")
+    .toUpperCase()
+    .toLowerCase()
+    .replace(/:.*$/su, "")
+    .replace(/[. ]+$/u, "");
+
+/**
+ * #6984: build output is every package's dist folder and the private server builds beside it, such as
+ * dist-sandbox. A build writes those files, so Professor Mari may read them but never change them. Every write
+ * path asks this about each path it would really touch: the requested one and, through links, the real one.
+ */
+export function isBuildOutputPath(workspaceRoot: string, absolutePath: string): boolean {
+  const rel = relative(resolve(workspaceRoot), resolve(absolutePath));
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
+  const [top, , output] = normalizeRelativePath(rel).split("/").map(fileSystemName);
+  return top === "packages" && output !== undefined && /^dist(?:-|$)/u.test(output);
+}
+
+// #6984: where a write to `path` lands: its folder's real path, through any links, then the rest. The file name
+// itself is replaced by the write's rename, not followed.
+function realWriteTarget(path: string) {
+  let folder = dirname(path);
+  while (!existsSync(folder) && folder !== dirname(folder)) folder = dirname(folder);
+  return join(realpathSync(folder), relative(folder, path));
+}
+
+export const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+const PACKAGE_CONTROL_NAME_PATTERN = [...PACKAGE_CONTROL_FILES].map(escapeRegExp).join("|");
+const ROOT_LAUNCHER_NAME_PATTERN = [...ROOT_LAUNCHER_FILES].map(escapeRegExp).join("|");
+// Mirrors workspacePathAccessPolicy's scoping: package-control names are
+// sensitive at ANY depth (they may take a path prefix), while launcher names
+// and the workflow/installer/gradle paths are sensitive only at the workspace
+// root (no path prefix beyond an optional "./"). The left lookbehinds start a
+// match only where a path starts, so ordinary names that merely END with a
+// sensitive name (mypackage.json, new-start.sh) and a nested docs/start.sh
+// never match, and a long path is read once rather than again after every "/".
+const SENSITIVE_ROOT_SCOPED_PATTERN =
+  `(?:${ROOT_LAUNCHER_NAME_PATTERN})(?![\\w.-])` +
+  `|\\.github/workflows/|win/installer/|android/gradle/wrapper/` +
+  `|android/(?:app/)?build\\.gradle(?![\\w.-])|android/settings\\.gradle(?![\\w.-])`;
+const SENSITIVE_PATH_TARGET_PATTERN =
+  `(?<![\\w./~-])(?:[\\w./~-]*/)?(?:${PACKAGE_CONTROL_NAME_PATTERN})(?![\\w.-])` +
+  `|(?<![\\w./-])(?:\\./)?(?:${SENSITIVE_ROOT_SCOPED_PATTERN})`;
+
+/**
+ * #6984: whether a shell command writes a target. Each writer is a list of steps checked inside one simple command
+ * (the text between ; & | and line breaks): every step must match after the previous one, and only its first match
+ * is taken. A later match could only find what the first one does, so each step is one linear pass. A single regex
+ * retried from every command word costs quadratic time or worse, minutes for a long one-line command, and these
+ * checks run on the server's event loop.
+ */
+function commandWritesTarget(command: string, writers: RegExp[][]): boolean {
+  return command
+    .replace(/\\/gu, "/")
+    .toLowerCase()
+    .split(/[;&|\n]/u)
+    .some((simpleCommand) =>
+      writers.some((steps) => {
+        let from = 0;
+        for (const step of steps) {
+          step.lastIndex = from;
+          const match = step.exec(simpleCommand);
+          if (!match) return false;
+          from = match.index + match[0].length;
+        }
+        return true;
+      }),
+    );
+}
+const writer = (...steps: string[]) => steps.map((step) => new RegExp(step, "gu"));
+const commandWord = (names: string) => String.raw`(?:^|\s)(?:${names})\b`;
+
+const SENSITIVE_PATH_TARGET = `(?:${SENSITIVE_PATH_TARGET_PATTERN})`;
+const SENSITIVE_PATH_WRITERS = [
+  // cp/mv/rm/touch/truncate/tee with a sensitive path in the same segment
+  writer(commandWord("cp|mv|rm|touch|truncate|tee"), SENSITIVE_PATH_TARGET),
+  // in-place sed/perl on a sensitive path
+  writer(commandWord("sed|perl"), String.raw`\s-i\b`, SENSITIVE_PATH_TARGET),
+  // shell redirection into a sensitive path - quoted targets included, since
+  // LLM-written redirects quote paths more often than not
+  writer(String.raw`>>?\s*["']?${SENSITIVE_PATH_TARGET}`),
+  // interpreter one-liners writing a sensitive path (node -e writeFileSync,
+  // python open(...,'w')) and dd's of= target
+  writer(commandWord("node|python(?:3)?"), String.raw`writefile|appendfile|\bopen\(`, SENSITIVE_PATH_TARGET),
+  writer(commandWord("dd"), `of=["']?${SENSITIVE_PATH_TARGET}`),
+  // git checkout/restore of a sensitive file rewrites it in place
+  writer(String.raw`\bgit\s+(?:checkout|restore)\b`, SENSITIVE_PATH_TARGET),
+];
+
+/**
+ * #5777: the shell sandbox denies writes to EXISTING supply-chain-sensitive
+ * paths, but the denial is silent - an error-tolerant compound command
+ * (`x; echo done`) exits 0 and the verification guard would count a write
+ * that never happened. For sensitive files that do not exist yet (a new
+ * package.json in a fresh directory) the sandbox has no deny rule at all, so
+ * this check is the primary guard there, not just a nicety. It is still a
+ * best-effort heuristic (like bashLooksMutating): it catches the common
+ * shapes so the failure is loud and redirects to the write/edit staging flow.
+ */
+export function bashCommandTargetsSensitivePath(command: string): boolean {
+  return commandWritesTarget(command, SENSITIVE_PATH_WRITERS);
+}
+
+// #6984: a path into build output (see isBuildOutputPath) inside a shell command, after any prefix. Like the
+// sensitive paths above, it starts only where a word starts, so a long path is read once.
+const BUILD_OUTPUT_TARGET = String.raw`(?<![^\s"'\x60=(<>;&|])(?:[^\s"'<>;&|]*/)?packages/[^/\s"'<>;&|]+/dist(?:-[^/\s"'<>;&|]*)?(?![^/\s"'<>;&|])`;
+const BUILD_OUTPUT_WRITERS = [
+  // Commands that change every path they name; a move empties its source too.
+  writer(commandWord("mv|rm|rmdir|mkdir|touch|truncate|tee"), BUILD_OUTPUT_TARGET),
+  // Copies and links write only their last path, so copying a build file out stays a read.
+  writer(
+    commandWord("cp|ln|install|rsync"),
+    String.raw`\s["']?${BUILD_OUTPUT_TARGET}[^\s"';&|]*["']?\s*(?:\d*>[^;&|\n]*)?$`,
+  ),
+  writer(commandWord("sed|perl"), String.raw`\s-(?:[a-z]*i|-in-place)`, BUILD_OUTPUT_TARGET),
+  writer(String.raw`>>?\s*["']?${BUILD_OUTPUT_TARGET}`),
+  writer(
+    commandWord("node|python(?:3)?"),
+    String.raw`writefile|appendfile|rmsync|unlink|rename|mkdir|copyfile|cpsync|\bopen\(`,
+    BUILD_OUTPUT_TARGET,
+  ),
+  writer(commandWord("dd"), String.raw`of=["']?${BUILD_OUTPUT_TARGET}`),
+];
+
+/**
+ * #6984: the shell sandbox keeps build output read-only, but a refused write inside an error-tolerant compound
+ * (`x; echo done`) still exits 0 and would read as done. Refusing the common write shapes before running makes
+ * the refusal loud. Best effort, like bashCommandTargetsSensitivePath: the sandbox rule is what enforces it.
+ */
+export function bashCommandWritesBuildOutput(command: string): boolean {
+  return commandWritesTarget(command, BUILD_OUTPUT_WRITERS);
 }
 
 export function isPackageManagerMutationCommand(command: string) {
@@ -256,6 +405,7 @@ function publicApproval(record: SecurityReviewRecord): MariSensitiveFileApproval
   if (record.kind === "sensitive_file") {
     const {
       absolutePath: _absolutePath,
+      realTarget: _realTarget,
       beforeContent: _beforeContent,
       afterContent: _afterContent,
       processing: _processing,
@@ -405,6 +555,14 @@ export class WorkspaceChangeReviewService {
     sessionId: string;
   }): Promise<MariSensitiveFileApproval> {
     const absolutePath = resolve(input.absolutePath);
+    const realTarget = realWriteTarget(absolutePath);
+    // #6984: an approved review writes the file, so build output cannot be staged either, by name or through a link.
+    if (
+      isBuildOutputPath(this.workspaceRoot, absolutePath) ||
+      isBuildOutputPath(realpathSync(this.workspaceRoot), realTarget)
+    ) {
+      throw new Error(BUILD_OUTPUT_WRITE_REFUSAL);
+    }
     if (workspacePathAccessPolicy(this.workspaceRoot, absolutePath) !== "sensitive") {
       throw new Error("Only dependency, launcher, installer, and workflow files use the sensitive-change review.");
     }
@@ -413,6 +571,28 @@ export class WorkspaceChangeReviewService {
     }
     const beforeContent = await readOptionalText(absolutePath);
     const path = normalizeRelativePath(relative(this.workspaceRoot, absolutePath));
+    const beforeHash = beforeContent === null ? null : sha256(beforeContent);
+    const afterHash = sha256(input.afterContent);
+    // #5756: re-staging the identical change is idempotent - hand back the
+    // live approval instead of stacking duplicate cards for one decision.
+    // A record mid-approval still matches: minting a sibling would capture
+    // stale beforeContent and die as state_changed once the first applies.
+    // Windows resolves paths case-insensitively, so the comparison folds
+    // case there (elsewhere a fold could match a genuinely different file).
+    const samePath =
+      process.platform === "win32"
+        ? (candidate: string) => candidate.toLowerCase() === absolutePath.toLowerCase()
+        : (candidate: string) => candidate === absolutePath;
+    for (const existing of this.pending.values()) {
+      if (
+        existing.kind === "sensitive_file" &&
+        samePath(existing.absolutePath) &&
+        existing.beforeHash === beforeHash &&
+        existing.afterHash === afterHash
+      ) {
+        return publicApproval(existing) as MariSensitiveFileApproval;
+      }
+    }
     const id = `mari-file-${nanoid()}`;
     const requestedAt = new Date().toISOString();
     const expiresAt = new Date(Date.now() + APPROVAL_TIMEOUT_MS).toISOString();
@@ -425,13 +605,14 @@ export class WorkspaceChangeReviewService {
       sessionId: input.sessionId,
       path,
       changeType: beforeContent === null ? "create" : "update",
-      beforeHash: beforeContent === null ? null : sha256(beforeContent),
-      afterHash: sha256(input.afterContent),
+      beforeHash,
+      afterHash,
       ...preview,
       reason: input.reason?.trim() || null,
       requestedAt,
       expiresAt,
       absolutePath,
+      realTarget,
       beforeContent,
       afterContent: input.afterContent,
       processing: false,
@@ -588,7 +769,8 @@ export class WorkspaceChangeReviewService {
   private async approveFile(record: FileReviewRecord): Promise<WorkspaceSecurityApprovalResult> {
     const approval = publicApproval(record) as MariSensitiveFileApproval;
     const current = await readOptionalText(record.absolutePath);
-    if (current !== record.beforeContent) {
+    // #6984: a link added since staging (src/gen -> ../dist) would carry the write somewhere the user never saw.
+    if (current !== record.beforeContent || realWriteTarget(record.absolutePath) !== record.realTarget) {
       clearTimeout(record.timer);
       this.pending.delete(record.id);
       return {

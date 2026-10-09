@@ -1,6 +1,8 @@
 import dotenv from "dotenv";
+import { randomUUID } from "node:crypto";
+import { REQUEST_TIMEOUTS, requestTimeoutSettingsSchema, type RequestTimeoutSettings } from "@marinara-engine/shared";
 import { logger as sharedLogger } from "../lib/logger.js";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -154,20 +156,24 @@ export function loadRuntimeEnv() {
   const envPath = getEnvFilePath();
   ensureEnvFileExists(envPath);
   if (existsSync(envPath)) {
-    const result = dotenv.config({ path: envPath });
+    const result = dotenv.config({ path: envPath, quiet: true });
     if (result.parsed) {
       envFileKeys = new Set(Object.keys(result.parsed));
     }
   } else {
-    dotenv.config();
+    dotenv.config({ quiet: true });
   }
 
+  applySavedRequestTimeouts();
   normalizeRuntimeTimezoneEnv();
 
   envLoaded = true;
 }
 
 loadRuntimeEnv();
+
+// Deliberately restart-only: a hot reload or a saved UI preference cannot open peer networking.
+export const multiplayerAvailable = process.env.MULTIPLAYER_ENABLED === "true";
 
 export interface EnvReloadResult {
   added: string[];
@@ -194,6 +200,7 @@ export function reloadRuntimeEnv(): EnvReloadResult {
       delete process.env[key];
     }
     envFileKeys = new Set();
+    applySavedRequestTimeouts();
     return { added: [], updated: [], removed, unchanged: [] };
   }
 
@@ -226,6 +233,7 @@ export function reloadRuntimeEnv(): EnvReloadResult {
     }
   }
 
+  applySavedRequestTimeouts();
   normalizeRuntimeTimezoneEnv();
   envFileKeys = newKeys;
   return { added, updated, removed, unchanged };
@@ -263,6 +271,15 @@ function isDisabledFlag(value: string | undefined | null) {
 
 function isEnabledFlag(value: string | undefined | null) {
   return ["1", "true", "yes", "on"].includes((value ?? "").trim().toLowerCase());
+}
+
+/**
+ * An on/off environment variable that pins a feature switch: null when unset or blank (the saved
+ * setting applies), otherwise true for 1/true/yes/on and false for anything else. Read per call.
+ */
+export function readEnvFlagOverride(envVar: string): boolean | null {
+  const raw = normalizeEnvValue(process.env[envVar]);
+  return raw === null ? null : isEnabledFlag(raw);
 }
 
 function parsePositiveIntEnv(value: string | undefined | null, fallback: number, max: number) {
@@ -467,6 +484,22 @@ export function isUpdatesApplyEnabled() {
   return isEnabledFlag(process.env.UPDATES_APPLY_ENABLED);
 }
 
+/**
+ * Hard refusal for server-side update application (#5646). The dev and e2e
+ * launchers set UPDATES_APPLY_DISABLED so a loopback browser tab pointed at a
+ * server booted from a working repo can never stash/checkout/rebuild that
+ * checkout via the channel selector. Wins over UPDATES_APPLY_ENABLED and the
+ * loopback channel-switch bypass.
+ */
+const BOOT_UPDATES_APPLY_HARD_DISABLED = isEnabledFlag(process.env.UPDATES_APPLY_DISABLED);
+
+export function isUpdatesApplyHardDisabled() {
+  // Latched at boot: the launchers set this in the environment, and a later
+  // .env hot-reload writing UPDATES_APPLY_DISABLED=false must not lift a
+  // guard whose whole point is protecting the checkout this process runs from.
+  return BOOT_UPDATES_APPLY_HARD_DISABLED || isEnabledFlag(process.env.UPDATES_APPLY_DISABLED);
+}
+
 export function isUpdatesRemoteApplyAllowed() {
   return isEnabledFlag(process.env.UPDATES_ALLOW_REMOTE_APPLY);
 }
@@ -476,6 +509,69 @@ export function isProviderLocalUrlsEnabled() {
     return true;
   }
   return isEnabledFlag(process.env.PROVIDER_LOCAL_URLS_ENABLED);
+}
+
+/**
+ * Opt-in: keep the full text of activated lorebook entries only on the newest generated message of a chat (its row
+ * and its swipes) and store older messages' scans without it. Off by default, which keeps today's storage shape.
+ * Read per call, so a `.env` change applies on the next generation.
+ */
+export function isLorebookScanCompactionEnabled() {
+  return isEnabledFlag(process.env.LOREBOOK_COMPACT_STORED_SCANS);
+}
+
+// Robustness settings. Every one is off by default, which keeps today's behaviour exactly, and each can be turned on
+// by itself. Read per call unless noted, so a `.env` change applies without a restart where the code path allows it.
+
+// LOREBOOK_STABLE_GROUP_WINNERS and PROVIDER_RETRY_TRANSIENT_ERRORS are feature switches now
+// (stableLorebookGroupPicks, providerRetry): services/features/feature-settings.ts reads them with
+// readEnvFlagOverride, where a set variable wins over Settings > Advanced > Features.
+
+/** Opt-in: a storage flush skips a shard or manifest write whose content matches this process's last durable write. */
+export function isStorageSkipUnchangedWritesEnabled() {
+  return isEnabledFlag(process.env.STORAGE_SKIP_UNCHANGED_WRITES);
+}
+
+/** Opt-in: large shards serialize in short slices that yield the event loop instead of one blocking call. */
+export function isStorageYieldingSerializeEnabled() {
+  return isEnabledFlag(process.env.STORAGE_YIELDING_SERIALIZE);
+}
+
+/**
+ * Opt-in, Windows only: cache the writer-lease boot id probe (about 1.5 to 2 s of PowerShell on every start) for the
+ * rest of the OS boot. Read once, when the storage module loads.
+ */
+export function isWindowsBootIdCacheEnabled() {
+  return isEnabledFlag(process.env.STORAGE_CACHE_WINDOWS_BOOT_ID);
+}
+
+/** The Windows boot id cache file: inside DATA_DIR, never in a per-user application or install folder. */
+export function getWindowsBootIdCachePath() {
+  return resolve(getDataDir(), ".writer-boot-id.json");
+}
+
+/** Opt-in, Windows only: Ctrl+Break and closing the console window also start the graceful shutdown. */
+export function isShutdownWindowsConsoleSignalsEnabled() {
+  return isEnabledFlag(process.env.SHUTDOWN_WINDOWS_CONSOLE_SIGNALS);
+}
+
+/** Opt-in: a second Ctrl+C (or Ctrl+Break) more than 1.5 s after the first forces the exit. */
+export function isShutdownForceExitOnRepeatEnabled() {
+  return isEnabledFlag(process.env.SHUTDOWN_FORCE_EXIT_ON_REPEAT);
+}
+
+/** Opt-in: start writing pending saves as soon as a stop signal arrives, while connections are still closing. */
+export function isShutdownEarlyFlushEnabled() {
+  return isEnabledFlag(process.env.SHUTDOWN_EARLY_FLUSH);
+}
+
+/**
+ * Opt-in budget (ms) for the runtime stops that run before the store close. 0 or unset waits for every stop, as
+ * before; a positive value moves on to the store close once it has passed. Capped at 2.5 s so the 4 s connection
+ * cut, the budget and the store close still fit inside the 8 s shutdown force exit.
+ */
+export function getShutdownRuntimeStopBudgetMs() {
+  return parsePositiveIntEnv(process.env.SHUTDOWN_RUNTIME_STOP_BUDGET_MS, 0, 2_500);
 }
 
 export function getEmbeddingRequestTimeoutMs() {
@@ -500,6 +596,89 @@ export function getAgentCallTimeoutMs() {
 /** Dynamic Game image-prompt LLM timeout. Read per request so .env hot reloads apply without a restart. */
 export function getGameDynamicImagePromptTimeoutMs() {
   return readGameDynamicImagePromptTimeoutMs();
+}
+
+/**
+ * SteamOS ships games that claim most of the Deck's 16 GiB of shared RAM, so
+ * unbounded load-and-keep gets the server OOM-killed mid session (#5838). The
+ * cap matches the one the Termux launcher exports, but lives engine-side so it
+ * covers every launch method (start.sh, systemd units, direct node) and so an
+ * explicit MARINARA_MAX_RESIDENT_CHATS - including 0 to disable - always wins
+ * at boot AND on .env hot reload. A launcher export could not offer that: the
+ * initial .env load never overrides inherited shell variables, while hot
+ * reloads do, so the same .env line would flap between boots and reloads.
+ */
+const CONSTRAINED_PLATFORM_DEFAULT_MAX_RESIDENT_CHATS = 8;
+
+let cachedSteamOsDetection: boolean | null = null;
+
+/** Exported for the regression lane; production goes through the cached path. */
+export function detectSteamOs(
+  osReleasePath = "/etc/os-release",
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform !== "linux") return false;
+  try {
+    return /^ID=["']?steamos["']?\s*$/mu.test(readFileSync(osReleasePath, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Android means Termux - the only way this server runs there. Its launcher
+ * already exports 8 when the variable is unset, so this engine-side default
+ * matters for launcher-less launches and for invalid values, which bash's
+ * ${VAR:-8} substitution passes through verbatim.
+ */
+function constrainedPlatformDetected(): boolean {
+  if (process.platform === "android") return true;
+  if (cachedSteamOsDetection === null) cachedSteamOsDetection = detectSteamOs();
+  return cachedSteamOsDetection;
+}
+
+/** The parameter is a test seam; production callers use the detected value. */
+export function platformDefaultMaxResidentChatUnits(constrained = constrainedPlatformDetected()): number {
+  return constrained ? CONSTRAINED_PLATFORM_DEFAULT_MAX_RESIDENT_CHATS : 0;
+}
+
+/**
+ * Resident chat-unit cap for the lazy file store (#5592 Phase 2 PR-B).
+ * When unset or invalid, the platform default applies: 8 on SteamOS (#5838),
+ * otherwise 0, which disables eviction entirely and preserves load-and-keep
+ * behavior. Read per sweep so .env hot reloads apply without a restart. The
+ * floor of 2 keeps multi-chat operations (branching, cross-chat notes) from
+ * thrashing their own working set.
+ */
+let lastInvalidMaxResidentChats: string | null = null;
+
+export function getMaxResidentChatUnits() {
+  const raw = normalizeEnvValue(process.env.MARINARA_MAX_RESIDENT_CHATS);
+  if (!raw) {
+    lastInvalidMaxResidentChats = null;
+    return platformDefaultMaxResidentChatUnits();
+  }
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    // Warn once per distinct value. An invalid value falls back to the
+    // platform default rather than to 0, because a typo silently disabling
+    // eviction would remove the memory bound on exactly the constrained
+    // targets - Android/Termux and SteamOS, both covered by the platform
+    // default above (the Termux launcher's ${VAR:-8} only covers unset, not
+    // invalid text, which it exports verbatim).
+    if (lastInvalidMaxResidentChats !== raw) {
+      lastInvalidMaxResidentChats = raw;
+      sharedLogger.warn(
+        "[runtime-config] Ignoring invalid MARINARA_MAX_RESIDENT_CHATS=%s; expected 0 (disabled) or a positive integer — using the platform default (%d)",
+        raw,
+        platformDefaultMaxResidentChatUnits(),
+      );
+    }
+    return platformDefaultMaxResidentChatUnits();
+  }
+  lastInvalidMaxResidentChats = null;
+  if (parsed === 0) return 0;
+  return Math.max(2, Math.min(parsed, 10_000));
 }
 
 export function getMaxToolRounds() {
@@ -685,4 +864,49 @@ export function isAutoCreateDefaultConnectionDisabled(value = process.env.AUTO_C
 export function logStorageDiagnostics(logger: { info(...args: any[]): void } = sharedLogger) {
   logger.info("[storage] DATA_DIR=%s", getDataDir());
   logger.info("[storage] FILE_STORAGE_DIR=%s", getFileStorageDir());
+}
+
+/** Kept beside the active .env, so server-wide preferences survive profile changes. */
+function requestTimeoutSettingsPath() {
+  return `${getEnvFilePath()}.timeouts.json`;
+}
+
+function applySavedRequestTimeouts() {
+  const path = requestTimeoutSettingsPath();
+  if (!existsSync(path)) return;
+  try {
+    const settings = requestTimeoutSettingsSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+    for (const [key, spec] of Object.entries(REQUEST_TIMEOUTS)) {
+      process.env[spec.env] = String(settings[key as keyof RequestTimeoutSettings] * spec.unit);
+    }
+  } catch (error) {
+    setImmediate(() => sharedLogger.warn(error, "Ignoring invalid saved request timeout settings"));
+  }
+}
+
+export function getRequestTimeoutSettings(): RequestTimeoutSettings {
+  return Object.fromEntries(
+    Object.entries(REQUEST_TIMEOUTS).map(([key, spec]) => {
+      const seconds = Number(process.env[spec.env]) / spec.unit;
+      return [
+        key,
+        Number.isInteger(seconds) && seconds >= 10 && seconds <= spec.maxSeconds ? seconds : spec.defaultSeconds,
+      ];
+    }),
+  ) as RequestTimeoutSettings;
+}
+
+export function saveRequestTimeoutSettings(input: unknown): RequestTimeoutSettings {
+  const settings = requestTimeoutSettingsSchema.parse(input);
+  const path = requestTimeoutSettingsPath();
+  const temporaryPath = `${path}.${randomUUID()}.tmp`;
+  mkdirSync(dirname(path), { recursive: true });
+  try {
+    writeFileSync(temporaryPath, JSON.stringify(settings, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+    renameSync(temporaryPath, path);
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
+  applySavedRequestTimeouts();
+  return settings;
 }

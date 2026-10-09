@@ -13,10 +13,25 @@ import {
   VenetianMask,
   AtSign,
   Orbit,
+  Menu,
+  Check,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { MOBILE_SHELL_MEDIA_QUERY, useUIStore } from "../../stores/ui.store";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
+import { useUIStore } from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
 import { cn } from "../../lib/utils";
 import { SpotifyMiniPlayer } from "../spotify/SpotifyMiniPlayer";
@@ -24,6 +39,11 @@ import { YouTubePlayer } from "../chat/YouTubePlayer";
 import { LocalMusicPlayer } from "../chat/LocalMusicPlayer";
 import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
 import { useLocalizedUiText } from "../../localization/use-localized-ui-text";
+import {
+  activatePersonalExtensionContribution,
+  usePersonalExtensionContributions,
+} from "../../lib/personal-extension-contributions";
+import { PersonalExtensionContributionIcon } from "../extensions/PersonalExtensionContributionIcon";
 import {
   PersonalExtensionContributionsMenu,
   PersonalExtensionTopbarButtons,
@@ -83,22 +103,20 @@ const RIGHT_PANEL_BUTTONS: readonly RightPanelButtonConfig[] = [
 const SPOTIFY_TOPBAR_MIN_WIDTH = 320;
 const SPOTIFY_TOPBAR_MIN_WIDTH_WITH_VOLUME = 416;
 const SPOTIFY_TOPBAR_LAYOUT_BUFFER = 32;
-const TOPBAR_BUTTON_CLASS =
-  "mari-topbar-action relative flex h-8 w-8 items-center justify-center rounded-lg p-0 transition-all hover:bg-[var(--accent)] active:scale-95 max-sm:h-7 max-sm:w-7";
-const TOPBAR_PANEL_BUTTON_CLASS =
-  "mari-topbar-action relative flex h-8 w-8 items-center justify-center rounded-lg p-0 transition-all duration-200 max-sm:h-7 max-sm:w-7";
+const PHONE_TOPBAR_QUERY = "(max-width: 639px)";
+const PHONE_OVERFLOW_HIDDEN_CLASS = "max-sm:hidden";
+const TOPBAR_COARSE_TARGET_CLASS = "[@media(pointer:coarse)]:h-9 [@media(pointer:coarse)]:w-9";
+const TOPBAR_BUTTON_CLASS = `mari-topbar-action relative flex h-8 w-8 items-center justify-center rounded-lg p-0 transition-all hover:bg-[var(--accent)] active:scale-95 ${TOPBAR_COARSE_TARGET_CLASS}`;
+const TOPBAR_PANEL_BUTTON_CLASS = `mari-topbar-action relative flex h-8 w-8 items-center justify-center rounded-lg p-0 transition-all duration-200 ${TOPBAR_COARSE_TARGET_CLASS}`;
 const TOPBAR_ACTIVE_BUTTON_CLASS = "bg-[var(--accent)] shadow-sm";
 const TOPBAR_FORCE_HOVER_CLASS = "bg-[var(--accent)]";
 const TOPBAR_ACCENT_ICON_CLASS = "mari-topbar-accent-icon mari-accent-animated";
 const CHAT_TOPBAR_GRADIENT_ID = "mari-topbar-chats-gradient";
 
-function isMobileTopbarNavigation() {
-  return typeof window !== "undefined" && window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches;
-}
-
-export function TopBar() {
+export function TopBar({ mobileTopbarNavigation }: { mobileTopbarNavigation: boolean }) {
   const { t: localizeUi } = useUiTranslation();
   const localize = useLocalizedUiText();
+  const { contributions } = usePersonalExtensionContributions();
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
@@ -127,7 +145,6 @@ export function TopBar() {
   const [spotifyDesktopViewport, setSpotifyDesktopViewport] = useState(false);
   const [spotifyUseFloatingFallback, setSpotifyUseFloatingFallback] = useState(false);
   const [hoveredTopbarKey, setHoveredTopbarKey] = useState<string | null>(null);
-  const [mobileTopbarNavigation, setMobileTopbarNavigation] = useState(isMobileTopbarNavigation);
   const { data: installedCapabilities = [] } = useInstalledCapabilityPackages();
   const musicDjInstalled = installedCapabilities.some(
     (capability) => capability.id === "spotify" && capability.status === "active",
@@ -172,11 +189,12 @@ export function TopBar() {
   // Noodle stays in-core in this fork (the world engine depends on it).
   const openNoodle = useUIStore((s) => s.openNoodle);
   const noodleOpen = useUIStore((s) => s.noodleOpen);
+  const phoneTopbar = usePhoneTopbar();
 
   const prepareMobileTopbarNavigation = useCallback(() => {
-    if (!isMobileTopbarNavigation()) return;
+    if (!mobileTopbarNavigation) return;
     closeAllDetails();
-  }, [closeAllDetails]);
+  }, [closeAllDetails, mobileTopbarNavigation]);
 
   const handleSidebarClick = useCallback(() => {
     prepareMobileTopbarNavigation();
@@ -195,10 +213,10 @@ export function TopBar() {
     window.dispatchEvent(new Event("marinara:home-professor-mari-close"));
     setActiveChatId(null);
     closeAllDetails();
-    if (!isMobileTopbarNavigation()) return;
+    if (!mobileTopbarNavigation) return;
     setSidebarOpen(false);
     closeRightPanel();
-  }, [closeAllDetails, closeRightPanel, setActiveChatId, setSidebarOpen]);
+  }, [closeAllDetails, closeRightPanel, mobileTopbarNavigation, setActiveChatId, setSidebarOpen]);
 
   const handleTopbarPointerOver = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.pointerType !== "mouse") return;
@@ -213,13 +231,42 @@ export function TopBar() {
 
   const clearTopbarHover = useCallback(() => setHoveredTopbarKey(null), []);
 
-  useEffect(() => {
-    const mediaQuery = window.matchMedia(MOBILE_SHELL_MEDIA_QUERY);
-    const syncMobileNavigation = () => setMobileTopbarNavigation(mediaQuery.matches);
-    syncMobileNavigation();
-    mediaQuery.addEventListener("change", syncMobileNavigation);
-    return () => mediaQuery.removeEventListener("change", syncMobileNavigation);
-  }, []);
+  const overflowItems: TopbarOverflowItem[] = [
+    {
+      key: "characters",
+      icon: <Users size={16} />,
+      iconClassName: "mari-panel-gradient--characters text-[var(--mari-panel-gradient-start)]",
+      label: localize("Characters"),
+      active: isCharactersPanelActive,
+      onSelect: () => handleRightPanelClick("characters"),
+    },
+    ...RIGHT_PANEL_BUTTONS.map(({ panel, icon: Icon, label, gradientClass }) => ({
+      key: panel,
+      icon: <Icon size={16} />,
+      iconClassName: cn(gradientClass, "text-[var(--mari-panel-gradient-start)]"),
+      label: localize(label),
+      active: panelContextActive[panel],
+      onSelect: () => handleRightPanelClick(panel),
+    })),
+    ...contributions
+      .filter((contribution) => contribution.kind === "button" && (contribution.surface ?? "top-bar") === "top-bar")
+      .slice(0, 2)
+      .map((contribution) => ({
+        key: `extension:${contribution.key}`,
+        icon: <PersonalExtensionContributionIcon icon={contribution.icon} size={16} />,
+        label: contribution.label,
+        hint: contribution.extensionName,
+        onSelect: () => activatePersonalExtensionContribution(contribution.key),
+      })),
+    {
+      key: "settings",
+      icon: <Settings size={16} />,
+      iconClassName: "mari-panel-gradient--settings text-[var(--mari-panel-gradient-start)]",
+      label: localize("Settings"),
+      active: rightPanelOpen && rightPanel === "settings",
+      onSelect: () => handleRightPanelClick("settings"),
+    },
+  ];
 
   useEffect(() => {
     const header = headerRef.current;
@@ -281,16 +328,17 @@ export function TopBar() {
     };
   }, [clearTopbarHover]);
 
+  const chatsActive = sidebarOpen && (!mobileTopbarNavigation || !rightPanelOpen);
   const chatsButton = (
     <button
       key="chats"
       onClick={handleSidebarClick}
-      aria-pressed={sidebarOpen}
+      aria-pressed={chatsActive}
       data-tour="sidebar-toggle"
       data-topbar-hover-key="chats"
       className={cn(
         TOPBAR_BUTTON_CLASS,
-        sidebarOpen
+        chatsActive
           ? cn(TOPBAR_ACTIVE_BUTTON_CLASS, !mobileTopbarNavigation && "mari-topbar-chat-gradient-icon")
           : cn(
               "text-[var(--muted-foreground)]",
@@ -311,7 +359,7 @@ export function TopBar() {
           </linearGradient>
         </defs>
       </MessageSquareText>
-      {sidebarOpen && (
+      {chatsActive && (
         <span className="mari-topbar-chat-gradient-underline absolute -bottom-0.5 left-1/2 h-0.5 w-3 -translate-x-1/2 rounded-full" />
       )}
     </button>
@@ -407,6 +455,7 @@ export function TopBar() {
           data-topbar-hover-key="characters"
           className={cn(
             TOPBAR_PANEL_BUTTON_CLASS,
+            PHONE_OVERFLOW_HIDDEN_CLASS,
             isCharactersPanelActive
               ? TOPBAR_ACTIVE_BUTTON_CLASS
               : cn(
@@ -439,6 +488,7 @@ export function TopBar() {
               className={cn(
                 TOPBAR_PANEL_BUTTON_CLASS,
                 "mari-topbar-panel-icon",
+                PHONE_OVERFLOW_HIDDEN_CLASS,
                 gradientClass,
                 isHovered && cn(TOPBAR_FORCE_HOVER_CLASS, "mari-topbar-panel-icon--hovered"),
                 isActive && cn(TOPBAR_ACTIVE_BUTTON_CLASS, "mari-topbar-panel-icon--active"),
@@ -466,6 +516,7 @@ export function TopBar() {
           aria-pressed={rightPanelOpen && rightPanel === "settings"}
           className={cn(
             TOPBAR_PANEL_BUTTON_CLASS,
+            PHONE_OVERFLOW_HIDDEN_CLASS,
             rightPanelOpen && rightPanel === "settings"
               ? cn(TOPBAR_ACTIVE_BUTTON_CLASS, "text-gray-300")
               : cn(
@@ -481,9 +532,222 @@ export function TopBar() {
           )}
         </button>
 
-        <PersonalExtensionTopbarButtons />
+        <PersonalExtensionTopbarButtons className={PHONE_OVERFLOW_HIDDEN_CLASS} />
         <PersonalExtensionContributionsMenu />
+        <TopbarMoreMenu items={overflowItems} headerRef={headerRef} phoneTopbar={phoneTopbar} />
       </nav>
     </header>
+  );
+}
+
+function subscribePhoneTopbar(onChange: () => void) {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
+  const query = window.matchMedia(PHONE_TOPBAR_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+function readPhoneTopbar() {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia(PHONE_TOPBAR_QUERY).matches
+    : false;
+}
+
+function usePhoneTopbar() {
+  return useSyncExternalStore(subscribePhoneTopbar, readPhoneTopbar, () => false);
+}
+
+type TopbarOverflowItem = {
+  key: string;
+  icon: ReactNode;
+  iconClassName?: string;
+  label: string;
+  hint?: string;
+  active?: boolean;
+  onSelect: () => void;
+};
+
+function TopbarMoreMenu({
+  items,
+  headerRef,
+  phoneTopbar,
+}: {
+  items: TopbarOverflowItem[];
+  headerRef: RefObject<HTMLElement | null>;
+  phoneTopbar: boolean;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [menuTop, setMenuTop] = useState(48);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const initialFocusRef = useRef<"first" | "last" | null>(null);
+  const menuId = useId();
+  const label = t("navigation.topbar.more");
+
+  const close = useCallback((restoreFocus: boolean) => {
+    setOpen(false);
+    if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus());
+  }, []);
+
+  const openMenu = (focus: "first" | "last" | null) => {
+    setMenuTop(Math.round(headerRef.current?.getBoundingClientRect().bottom ?? 48));
+    initialFocusRef.current = focus;
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    if (!phoneTopbar) setOpen(false);
+  }, [phoneTopbar]);
+
+  useEffect(() => {
+    if (!open) return;
+    const rows = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+    const target = initialFocusRef.current;
+    initialFocusRef.current = null;
+    const activeRow = rows.find((row) => row.dataset.active === "true");
+    (target === "last" ? rows.at(-1) : target === "first" ? rows[0] : (activeRow ?? rows[0]))?.focus();
+
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      const node = event.target;
+      if (!(node instanceof Node)) return;
+      if (triggerRef.current?.contains(node) || menuRef.current?.contains(node)) return;
+      setOpen(false);
+    };
+    const closeOnViewportChange = () => setOpen(false);
+    document.addEventListener("pointerdown", closeOnOutsidePress);
+    window.addEventListener("orientationchange", closeOnViewportChange);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePress);
+      window.removeEventListener("orientationchange", closeOnViewportChange);
+    };
+  }, [open]);
+
+  const handleTriggerKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    openMenu(event.key === "ArrowDown" ? "first" : "last");
+  };
+
+  const handleMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const rows = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+    const index = rows.indexOf(document.activeElement as HTMLElement);
+    const focusAt = (next: number) => rows[(next + rows.length) % rows.length]?.focus();
+    switch (event.key) {
+      case "ArrowDown":
+        event.preventDefault();
+        focusAt(index + 1);
+        break;
+      case "ArrowUp":
+        event.preventDefault();
+        focusAt(index - 1);
+        break;
+      case "Home":
+        event.preventDefault();
+        focusAt(0);
+        break;
+      case "End":
+        event.preventDefault();
+        focusAt(rows.length - 1);
+        break;
+      case "Escape":
+        if (event.nativeEvent.isComposing) return;
+        event.preventDefault();
+        event.stopPropagation();
+        close(true);
+        break;
+      case "Tab":
+        // Let native traversal continue from the trigger after the portal closes.
+        triggerRef.current?.focus();
+        close(false);
+        break;
+    }
+  };
+
+  const select = (item: TopbarOverflowItem) => {
+    if (!item.key.startsWith("extension:")) triggerRef.current?.focus({ preventScroll: true });
+    close(false);
+    item.onSelect();
+    requestAnimationFrame(() => {
+      if (document.activeElement === document.body) triggerRef.current?.focus({ preventScroll: true });
+    });
+  };
+
+  const menu = open ? (
+    <div
+      ref={menuRef}
+      id={menuId}
+      role="menu"
+      aria-label={t("navigation.topbar.moreMenu")}
+      data-component="TopbarMoreMenu"
+      onKeyDown={handleMenuKeyDown}
+      style={{
+        top: menuTop + 4,
+        maxHeight: `calc(100dvh - ${menuTop + 12}px)`,
+        backgroundColor: "var(--background)",
+        backgroundImage: "linear-gradient(var(--card), var(--card))",
+      }}
+      className="mari-chrome-token-scope fixed right-[max(0.5rem,env(safe-area-inset-right))] z-[9000] w-[min(16.5rem,calc(100vw-1rem))] overflow-y-auto overscroll-contain rounded-xl border border-[var(--marinara-chat-chrome-panel-border)] p-1.5 text-[var(--foreground)] shadow-2xl"
+    >
+      {items.map((item) => (
+        <button
+          key={item.key}
+          type="button"
+          role="menuitem"
+          data-topbar-panel={item.key.startsWith("extension:") ? undefined : item.key}
+          data-active={item.active ? "true" : undefined}
+          aria-current={item.active ? "true" : undefined}
+          onClick={() => select(item)}
+          className={cn(
+            "flex min-h-11 w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-[var(--accent)] focus-visible:bg-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]",
+            item.active && "bg-[var(--accent)] font-semibold",
+          )}
+        >
+          <span
+            aria-hidden="true"
+            className={cn(
+              "relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--secondary)] text-[var(--marinara-chat-chrome-button-text-active)]",
+              item.iconClassName,
+            )}
+          >
+            {item.icon}
+          </span>
+          <span className="min-w-0 flex-1 truncate">{item.label}</span>
+          {item.hint ? (
+            <span className="max-w-[40%] shrink-0 truncate text-[0.6875rem] text-[var(--muted-foreground)]">
+              {item.hint}
+            </span>
+          ) : null}
+          {item.active ? <Check aria-hidden="true" size={15} className="shrink-0 text-[var(--primary)]" /> : null}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        data-topbar-more=""
+        onClick={() => (open ? close(false) : openMenu(null))}
+        onKeyDown={handleTriggerKeyDown}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        aria-label={label}
+        title={label}
+        className={cn(
+          TOPBAR_PANEL_BUTTON_CLASS,
+          "ml-auto sm:hidden",
+          open
+            ? TOPBAR_ACTIVE_BUTTON_CLASS
+            : "text-[var(--muted-foreground)] hover:text-[var(--marinara-chat-chrome-button-text-hover)]",
+        )}
+      >
+        <Menu size={15} className={TOPBAR_ACCENT_ICON_CLASS} />
+      </button>
+      {typeof document === "undefined" ? null : createPortal(menu, document.body)}
+    </>
   );
 }

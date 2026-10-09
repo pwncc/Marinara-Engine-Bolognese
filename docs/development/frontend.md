@@ -513,7 +513,6 @@ Agent memory tools use `/api/agents/memory/:agentType/:chatId`, where `agentType
 | Prefix                          | Description                  |
 | ------------------------------- | ---------------------------- |
 | `/api/bot-browser/chub/*`       | Chub character search        |
-| `/api/bot-browser/chartavern/*` | CharacterTavern search       |
 | `/api/bot-browser/janny/*`      | JannyAI search               |
 | `/api/bot-browser/pygmalion/*`  | Pygmalion search             |
 | `/api/bot-browser/wyvern/*`     | Wyvern search                |
@@ -601,7 +600,7 @@ The lightweight Engine ships with an empty runtime agent registry. Packages inst
 | `storyboard`             | post_processing | Plans still or animated Game and Roleplay storyboards             |
 | `conversation-calls`     | feature         | Adds Conversation audio/video calls and related settings          |
 | `hierarchical-maps`      | feature         | Adds Roleplay/Game maps, spatial context, and movement             |
-| `noodle`                 | feature         | Adds the local Noodle and NoodleR social feeds to Home             |
+| `noodle`                 | feature         | Adds the local Noodle and Slurp social feeds to Home               |
 | `uno`                    | feature         | Adds the Conversation UNO table                                   |
 | `chess`                  | feature         | Adds the Conversation Chess board                                 |
 | `poker`                  | feature         | Adds the Conversation Texas Hold'em table                         |

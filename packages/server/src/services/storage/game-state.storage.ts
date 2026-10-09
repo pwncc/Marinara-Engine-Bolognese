@@ -8,15 +8,18 @@ import { newId, now } from "../../utils/id-generator.js";
 import { ensureTimestampAfter } from "../import/import-timestamps.js";
 import {
   coerceGameStateTextValue,
+  applyTrackerFieldLocksToGameStatePatch,
   normalizeWorldCustomFields,
   normalizeTrackerFieldLocks,
   normalizeTrackerFieldLocksForState,
   normalizeTrackerHiddenFields,
   parseTrackerFieldLocks,
   parseTrackerHiddenFields,
+  rulesetLiveStatesSchema,
   trackerFieldLocksAreEmpty,
   trackerHiddenFieldsAreEmpty,
   type GameState,
+  type RulesetLiveStates,
   type TrackerFieldLocks,
   type TrackerHiddenFields,
 } from "@marinara-engine/shared";
@@ -39,6 +42,7 @@ type GameStateUpdateFields = Partial<
     | "personaStats"
     | "fieldLocks"
     | "hiddenTrackerFields"
+    | "rulesetLive"
   >
 >;
 
@@ -97,6 +101,18 @@ function serializeFieldLocks(fieldLocks: TrackerFieldLocks | null | undefined) {
 function serializeHiddenTrackerFields(hiddenFields: TrackerHiddenFields | null | undefined) {
   const normalized = normalizeTrackerHiddenFields(hiddenFields);
   return trackerHiddenFieldsAreEmpty(normalized) ? null : JSON.stringify(normalized);
+}
+
+/** Live ruleset sheet state is bounded at every read and write: an unreadable or oversized value
+ *  reads as none, which the sheet math treats as every pool at its default. */
+export function parseStoredRulesetLive(value: unknown): RulesetLiveStates | null {
+  const parsed = rulesetLiveStatesSchema.safeParse(parseSnapshotJson<unknown>(value, null));
+  return parsed.success && Object.keys(parsed.data).length > 0 ? parsed.data : null;
+}
+
+function serializeRulesetLive(value: unknown): string | null {
+  const live = parseStoredRulesetLive(value);
+  return live ? JSON.stringify(live) : null;
 }
 
 function parseSnapshotJson<T>(value: unknown, fallback: T): T {
@@ -161,8 +177,11 @@ export function createGameStateStorage(db: DB) {
         .limit(Math.max(1, Math.min(500, limit)));
     },
 
-    async getById(id: string) {
-      const rows = await db.select().from(gameStateSnapshots).where(eq(gameStateSnapshots.id, id)).limit(1);
+    async getById(id: string, chatId?: string) {
+      const condition = chatId
+        ? and(eq(gameStateSnapshots.chatId, chatId), eq(gameStateSnapshots.id, id))
+        : eq(gameStateSnapshots.id, id);
+      const rows = await db.select().from(gameStateSnapshots).where(condition).limit(1);
       return rows[0] ?? null;
     },
 
@@ -273,17 +292,7 @@ export function createGameStateStorage(db: DB) {
       return rows[0] ?? null;
     },
 
-    async getByMessage(messageId: string, swipeIndex: number = 0) {
-      const rows = await db
-        .select()
-        .from(gameStateSnapshots)
-        .where(and(eq(gameStateSnapshots.messageId, messageId), eq(gameStateSnapshots.swipeIndex, swipeIndex)))
-        .orderBy(desc(gameStateSnapshots.createdAt))
-        .limit(1);
-      return rows[0] ?? null;
-    },
-
-    /** Chat-scoped variant of getByMessage (avoids cross-chat collisions for messageId=""). */
+    /** Chat-scoped message lookup (the chatId also keeps the lazy store from loading other chats' shards). */
     async getByChatAndMessage(chatId: string, messageId: string, swipeIndex: number = 0) {
       const rows = await db
         .select()
@@ -300,8 +309,11 @@ export function createGameStateStorage(db: DB) {
       return rows[0] ?? null;
     },
 
-    /** Batch-fetch committed snapshots for multiple messages. Returns a Map of messageId → row. */
-    async getCommittedForMessages(messagesOrIds: Array<string | { id: string; activeSwipeIndex?: number | null }>) {
+    /** Batch-fetch committed snapshots for multiple messages in one chat. Returns a Map of messageId → row. */
+    async getCommittedForMessages(
+      chatId: string,
+      messagesOrIds: Array<string | { id: string; activeSwipeIndex?: number | null }>,
+    ) {
       const activeSwipeByMessageId = new Map<string, number>();
       const messageIds = messagesOrIds.map((messageOrId) => {
         if (typeof messageOrId === "string") return messageOrId;
@@ -314,7 +326,13 @@ export function createGameStateStorage(db: DB) {
       const rows = await db
         .select()
         .from(gameStateSnapshots)
-        .where(and(inArray(gameStateSnapshots.messageId, messageIds), eq(gameStateSnapshots.committed, 1)))
+        .where(
+          and(
+            eq(gameStateSnapshots.chatId, chatId),
+            inArray(gameStateSnapshots.messageId, messageIds),
+            eq(gameStateSnapshots.committed, 1),
+          ),
+        )
         .orderBy(desc(gameStateSnapshots.createdAt));
       const map = new Map<string, typeof gameStateSnapshots.$inferSelect>();
       for (const row of rows) {
@@ -326,18 +344,49 @@ export function createGameStateStorage(db: DB) {
     },
 
     /** Mark a specific snapshot as committed. */
-    async commit(id: string) {
-      await db.update(gameStateSnapshots).set({ committed: 1 }).where(eq(gameStateSnapshots.id, id));
+    async commit(id: string, chatId?: string) {
+      const condition = chatId
+        ? and(eq(gameStateSnapshots.chatId, chatId), eq(gameStateSnapshots.id, id))
+        : eq(gameStateSnapshots.id, id);
+      await db.update(gameStateSnapshots).set({ committed: 1 }).where(condition);
     },
 
-    async create(state: Omit<GameState, "id" | "createdAt">, manualOverrides?: Record<string, string> | null) {
+    async create(
+      state: Omit<GameState, "id" | "createdAt">,
+      manualOverrides?: Record<string, string> | null,
+      options?: {
+        /** Keep the detailed inventory of the row being replaced, for a caller that carries the
+         *  previous turn's stats forward (the world-state tracker). The turn's own inventory tags
+         *  wrote that inventory and no tracker works one out, so carrying the stats would undo them. */
+        keepReplacedInventory?: boolean;
+      },
+    ) {
       const latestBeforeInsert = await this.getLatest(state.chatId);
+      // Most callers rebuild a snapshot from the fields they know and have never heard of ruleset
+      // live state. When such a caller replaces the row of a message + swipe, the live state that
+      // row already carried (written right after the message was saved) stays with it.
+      const replaced = state.messageId
+        ? await this.getByChatAndMessage(state.chatId, state.messageId, state.swipeIndex)
+        : null;
+      const replacedInventory = (() => {
+        if (!options?.keepReplacedInventory || !replaced?.playerStats || !state.playerStats) return undefined;
+        const stats = parseSnapshotJson<{ inventory?: unknown } | null>(replaced.playerStats, null);
+        return Array.isArray(stats?.inventory) ? stats.inventory : undefined;
+      })();
+      const playerStats =
+        state.playerStats && replacedInventory
+          ? { ...state.playerStats, inventory: replacedInventory as NonNullable<typeof state.playerStats>["inventory"] }
+          : state.playerStats;
       // Remove any prior snapshot for the same message + swipe so duplicates don't accumulate
       if (state.messageId) {
         await db
           .delete(gameStateSnapshots)
           .where(
-            and(eq(gameStateSnapshots.messageId, state.messageId), eq(gameStateSnapshots.swipeIndex, state.swipeIndex)),
+            and(
+              eq(gameStateSnapshots.chatId, state.chatId),
+              eq(gameStateSnapshots.messageId, state.messageId),
+              eq(gameStateSnapshots.swipeIndex, state.swipeIndex),
+            ),
           );
       }
       const id = newId();
@@ -350,15 +399,50 @@ export function createGameStateStorage(db: DB) {
         worldCustomFields: JSON.stringify(normalizeWorldCustomFields(state.worldCustomFields)),
         presentCharacters: JSON.stringify(state.presentCharacters),
         recentEvents: JSON.stringify(state.recentEvents),
-        playerStats: state.playerStats ? JSON.stringify(state.playerStats) : null,
+        playerStats: playerStats ? JSON.stringify(playerStats) : null,
         personaStats: state.personaStats ? JSON.stringify(state.personaStats) : null,
         manualOverrides: serializeManualOverrides(manualOverrides),
         fieldLocks: serializeFieldLocks(state.fieldLocks),
         hiddenTrackerFields: serializeHiddenTrackerFields(state.hiddenTrackerFields),
+        rulesetLive: serializeRulesetLive(state.rulesetLive !== undefined ? state.rulesetLive : replaced?.rulesetLive),
         committed: state.committed ? 1 : 0,
         createdAt: ensureTimestampAfter(now(), latestBeforeInsert?.createdAt),
       });
       return id;
+    },
+
+    /** Apply one model-requested field with its lock check and write in the same transaction. */
+    async updateFromTool(
+      chatId: string,
+      field: "location" | "time",
+      value: string,
+      locationIsAuthoritative: boolean,
+      target: {
+        messageId: string;
+        swipeIndex: number;
+        baseSnapshot: typeof gameStateSnapshots.$inferSelect | null;
+        compatibilityLocation?: string | null;
+      },
+    ) {
+      if (field === "location" && locationIsAuthoritative) {
+        throw new Error("Location is controlled by Spatial Context. Use the game's movement controls.");
+      }
+      return db.transaction(async (tx) => {
+        const store = createGameStateStorage(tx);
+        const base = target.baseSnapshot ? await store.getById(target.baseSnapshot.id, chatId) : null;
+        const snapshot = (await store.getByChatAndMessage(chatId, target.messageId, target.swipeIndex)) ?? base;
+        if (!snapshot) throw new Error("No game-state snapshot is available to update.");
+        const patch = applyTrackerFieldLocksToGameStatePatch({ [field]: value }, buildLockMigrationState(snapshot));
+        if (patch[field] !== value) throw new Error(`The ${field} field is locked; no change was applied.`);
+        const stored = await store.updateByMessage(target.messageId, target.swipeIndex, chatId, patch, undefined, {
+          baseSnapshot: base,
+          ...(target.compatibilityLocation !== undefined
+            ? { compatibilityLocation: target.compatibilityLocation }
+            : {}),
+        });
+        if (stored?.[field] !== value) throw new Error("The game-state update could not be stored.");
+        return { [field]: stored[field] };
+      });
     },
 
     async updateLatest(
@@ -398,7 +482,7 @@ export function createGameStateStorage(db: DB) {
         compatibilityLocation?: string | null;
       },
     ) {
-      const snap = await this.getByMessage(messageId, swipeIndex);
+      const snap = await this.getByChatAndMessage(chatId, messageId, swipeIndex);
       if (snap) return this._applyUpdate(snap, fields, manual);
 
       // No snapshot for this swipe yet — clone the chosen base into a new row
@@ -445,6 +529,7 @@ export function createGameStateStorage(db: DB) {
           : null,
         fieldLocks: parseTrackerFieldLocks(latest?.fieldLocks),
         hiddenTrackerFields: parseTrackerHiddenFields(latest?.hiddenTrackerFields),
+        rulesetLive: parseStoredRulesetLive(latest?.rulesetLive),
       };
       baseState.fieldLocks = normalizeTrackerFieldLocksForState(
         baseState.fieldLocks,
@@ -471,6 +556,7 @@ export function createGameStateStorage(db: DB) {
       if (fields.hiddenTrackerFields !== undefined) {
         baseState.hiddenTrackerFields = normalizeTrackerHiddenFields(fields.hiddenTrackerFields);
       }
+      if (fields.rulesetLive !== undefined) baseState.rulesetLive = parseStoredRulesetLive(fields.rulesetLive);
 
       const manualOverrides = manual
         ? MANUAL_OVERRIDE_FIELDS.reduce<Record<string, string>>((acc, key) => {
@@ -482,7 +568,7 @@ export function createGameStateStorage(db: DB) {
         : {};
       // Manual overrides are one-shot — carry only overrides from this edit.
       await this.create(baseState as any, Object.keys(manualOverrides).length > 0 ? manualOverrides : null);
-      return this.getByMessage(messageId, swipeIndex);
+      return this.getByChatAndMessage(chatId, messageId, swipeIndex);
     },
 
     /** Internal: apply field updates + optional manual-override tracking to a snapshot row. */
@@ -503,6 +589,7 @@ export function createGameStateStorage(db: DB) {
         updates.personaStats = fields.personaStats ? JSON.stringify(fields.personaStats) : null;
       if (fields.hiddenTrackerFields !== undefined)
         updates.hiddenTrackerFields = serializeHiddenTrackerFields(fields.hiddenTrackerFields);
+      if (fields.rulesetLive !== undefined) updates.rulesetLive = serializeRulesetLive(fields.rulesetLive);
 
       if (manual) {
         const storedOverrides = parseStoredManualOverrides(row.manualOverrides) ?? {};
@@ -543,7 +630,10 @@ export function createGameStateStorage(db: DB) {
 
       if (Object.keys(updates).length === 0) return row;
 
-      await db.update(gameStateSnapshots).set(updates).where(eq(gameStateSnapshots.id, row.id));
+      await db
+        .update(gameStateSnapshots)
+        .set(updates)
+        .where(and(eq(gameStateSnapshots.chatId, row.chatId), eq(gameStateSnapshots.id, row.id)));
       return { ...row, ...updates };
     },
 

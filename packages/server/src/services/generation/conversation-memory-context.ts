@@ -1,3 +1,4 @@
+import { currentRoomGeneration } from "../multiplayer/generation-policy.js";
 import type { WrapFormat } from "@marinara-engine/shared";
 
 import { logger } from "../../lib/logger.js";
@@ -39,8 +40,17 @@ export async function mergeConversationCharacterMemories({
   const memoryLines: string[] = [];
   const today = getZonedDayBounds(new Date(), timeZone).start;
   const leaf = (text: string) => sanitizePromptLeaf(text, wrapFormat);
+  const room = currentRoomGeneration();
 
   for (const characterId of characterIds) {
+    if (room) {
+      for (const memory of room.memories[characterId] ?? []) {
+        memoryLines.push(
+          `Memory from ${sanitizePromptLeaf(memory.from, wrapFormat)}: ${sanitizePromptLeaf(memory.summary, wrapFormat)}`,
+        );
+      }
+      continue;
+    }
     const charRow = await chars.getById(characterId);
     if (!charRow) continue;
 
@@ -59,9 +69,7 @@ export async function mergeConversationCharacterMemories({
     // Everything from today, plus a bounded tail of older memories so people
     // who met weeks ago still vividly remember each other.
     const fresh = memories.filter((memory) => new Date(memory.createdAt) >= today);
-    const older = memories
-      .filter((memory) => new Date(memory.createdAt) < today)
-      .slice(-CARRIED_OLDER_MEMORIES);
+    const older = memories.filter((memory) => new Date(memory.createdAt) < today).slice(-CARRIED_OLDER_MEMORIES);
 
     for (const memory of older) {
       memoryLines.push(`Memory from ${leaf(memory.from)} (${memory.createdAt.slice(0, 10)}): ${leaf(memory.summary)}`);
@@ -85,7 +93,9 @@ export async function mergeConversationCharacterMemories({
         const row = await chars.getById(id);
         try {
           const parsed = typeof row?.data === "string" ? JSON.parse(row.data) : row?.data;
-          return typeof (parsed as { name?: unknown })?.name === "string" ? String((parsed as { name: string }).name) : "someone";
+          return typeof (parsed as { name?: unknown })?.name === "string"
+            ? String((parsed as { name: string }).name)
+            : "someone";
         } catch {
           return "someone";
         }

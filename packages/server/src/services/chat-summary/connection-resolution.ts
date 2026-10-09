@@ -8,7 +8,7 @@ import { resolveStoredChatOptions } from "../generation/generation-parameters.js
 
 type ConnectionsStorage = ReturnType<typeof createConnectionsStorage>;
 type ConnectionWithKey = NonNullable<Awaited<ReturnType<ConnectionsStorage["getWithKey"]>>>;
-type SummaryConnectionSource = "summary" | "agent-default" | "chat";
+type SummaryConnectionSource = "summary" | "agent-default" | "default" | "chat";
 
 type SummaryConnectionCandidate = {
   id: string;
@@ -52,6 +52,7 @@ export function resolveChatSummaryTemperatureOptions(connection: {
     enabledParameters: {
       ...connection.enabledParameters,
       temperature: hasTemperature,
+      maxTokens: true,
     },
   };
 }
@@ -81,6 +82,7 @@ async function loadSummaryConnection(
 
 export async function resolveChatSummaryConnection(args: {
   chatConnectionId?: string | null;
+  defaultConnectionId?: string | null;
   chatMetadata: Record<string, unknown>;
   connections: ConnectionsStorage;
   resolveBaseUrl: (connection: Pick<ConnectionWithKey, "baseUrl" | "provider">) => string;
@@ -94,7 +96,7 @@ export async function resolveChatSummaryConnection(args: {
     withConnectionFallbackProvider({
       primary: provider,
       primaryConnectionId,
-      fallbackConnection: fallbackAgentConnection,
+      fallbackConnection: fallbackAgentConnection ? { ...fallbackAgentConnection, maxTokensOverride: null } : null,
       fallbackBaseUrl: fallbackAgentConnection ? args.resolveBaseUrl(fallbackAgentConnection) : "",
       category: "agents",
     });
@@ -103,6 +105,10 @@ export async function resolveChatSummaryConnection(args: {
   pushUniqueCandidate(
     candidates,
     defaultAgentConnection?.id ? { id: defaultAgentConnection.id, source: "agent-default" } : null,
+  );
+  pushUniqueCandidate(
+    candidates,
+    args.defaultConnectionId ? { id: args.defaultConnectionId, source: "default" } : null,
   );
   pushUniqueCandidate(candidates, args.chatConnectionId ? { id: args.chatConnectionId, source: "chat" } : null);
 
@@ -150,7 +156,7 @@ export async function resolveChatSummaryConnection(args: {
           conn.apiKey,
           conn.maxContext,
           conn.openrouterProvider,
-          conn.maxTokensOverride,
+          null, // Chat Summary → Maximum output size is authoritative for these calls.
           conn.claudeFastMode === "true",
           conn.treatAsLocalEndpoint === "true",
           conn.defaultParameters,

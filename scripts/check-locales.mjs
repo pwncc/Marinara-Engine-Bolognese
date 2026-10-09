@@ -1,15 +1,11 @@
 import { readdir, readFile } from "node:fs/promises";
-import { basename, extname, join } from "node:path";
+import { basename, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const LOCALES_DIR = join(ROOT, "packages", "client", "src", "localization", "locales");
 const DEFAULT_LOCALE = "en";
 const KEY_PATTERN = /^[a-z][a-zA-Z0-9]*(?:_[a-zA-Z0-9]+)*(?:\.[a-z][a-zA-Z0-9]*(?:_[a-zA-Z0-9]+)*)*$/u;
-const INTENTIONALLY_EMPTY_TRANSLATION_KEYS = new Set([
-  "ui.lorebooks.lorebookeditor.es",
-  "ui.noodle.stageprofileview.s",
-]);
 
 function canonicalizeLocale(value) {
   try {
@@ -46,13 +42,6 @@ function extractTokens(value, context) {
   }
   richTextTags.sort();
   return { interpolation, richTextTags };
-}
-
-function sameTokens(left, right) {
-  return (
-    left.interpolation.join("\u0000") === right.interpolation.join("\u0000") &&
-    left.richTextTags.join("\u0000") === right.richTextTags.join("\u0000")
-  );
 }
 
 async function readLocale(filename) {
@@ -95,9 +84,7 @@ async function readLocale(filename) {
     if (!KEY_PATTERN.test(key)) {
       throw new Error(`${filename}: ${key} is not a semantic localization key`);
     }
-    const intentionallyEmpty =
-      value === "" && code !== DEFAULT_LOCALE && INTENTIONALLY_EMPTY_TRANSLATION_KEYS.has(key);
-    if (typeof value !== "string" || (!value.trim() && !intentionallyEmpty)) {
+    if (typeof value !== "string" || !value.trim()) {
       throw new Error(`${filename}: ${key} must contain non-empty text`);
     }
   }
@@ -105,39 +92,37 @@ async function readLocale(filename) {
   return { code, filename, messages };
 }
 
-async function main() {
-  const filenames = (await readdir(LOCALES_DIR))
-    .filter((filename) => filename.endsWith(".json"))
-    .sort((left, right) => left.localeCompare(right, "en"));
-  const locales = await Promise.all(filenames.map(readLocale));
-  const canonical = locales.find((locale) => locale.code === DEFAULT_LOCALE);
-  if (!canonical) {
-    throw new Error(`Missing canonical ${DEFAULT_LOCALE}.json locale`);
+// A literal key the client renders but English lacks shows up as the raw key text.
+async function findMissingUsedKeys(keys) {
+  const known = new Set(keys.map((key) => key.replace(/_(?:zero|one|two|few|many|other)$/u, "")));
+  const clientSource = join(ROOT, "packages", "client", "src");
+  const missing = [];
+  for (const entry of await readdir(clientSource, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || !/\.tsx?$/u.test(entry.name)) continue;
+    const file = join(entry.parentPath, entry.name);
+    // Skip comment lines, which show example keys.
+    const source = (await readFile(file, "utf8")).replace(/^\s*(?:\*|\/\/).*$/gmu, "");
+    for (const [, key] of source.matchAll(/(?<![\w.$])(?:t|localizeUi)\(\s*["'`]([a-z]\w*(?:\.\w+)+)["'`]/gu)) {
+      if (!known.has(key)) missing.push(`${relative(ROOT, file)}: ${key}`);
+    }
   }
+  return missing;
+}
 
+async function main() {
+  // Community packs and their coverage/token validator live on docs-i18n/ui.
+  const canonical = await readLocale(`${DEFAULT_LOCALE}.json`);
   const canonicalKeys = Object.keys(canonical.messages);
   if (canonicalKeys.length === 0) {
     throw new Error(`${canonical.filename}: canonical locale cannot be empty`);
   }
 
-  for (const locale of locales) {
-    const localeKeys = Object.keys(locale.messages);
-    const unknown = localeKeys.filter((key) => !(key in canonical.messages));
-    if (unknown.length > 0) {
-      throw new Error(`${locale.filename}: unknown keys: ${unknown.join(", ")}`);
-    }
-
-    for (const key of localeKeys) {
-      const expected = extractTokens(canonical.messages[key], `${canonical.filename}: ${key}`);
-      const actual = extractTokens(locale.messages[key], `${locale.filename}: ${key}`);
-      if (!sameTokens(expected, actual)) {
-        throw new Error(`${locale.filename}: ${key} must preserve English interpolation and rich-text tokens`);
-      }
-    }
-
-    const coverage = Math.round((localeKeys.length / canonicalKeys.length) * 100);
-    console.info(`[localization] ${locale.code}: ${localeKeys.length}/${canonicalKeys.length} keys (${coverage}%)`);
+  for (const key of canonicalKeys) extractTokens(canonical.messages[key], `${canonical.filename}: ${key}`);
+  const missing = await findMissingUsedKeys(canonicalKeys);
+  if (missing.length > 0) {
+    throw new Error(`keys used in the client are missing from ${canonical.filename}:\n${missing.join("\n")}`);
   }
+  console.info(`[localization] en: ${canonicalKeys.length} canonical keys`);
 }
 
 main().catch((error) => {

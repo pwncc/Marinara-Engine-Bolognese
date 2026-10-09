@@ -151,6 +151,7 @@ async function createCharacter(
   try {
     const charData = {
       name: command.name,
+      summary: (command.summary ?? "").trim().slice(0, 500),
       description: command.description ?? "",
       personality: command.personality ?? "",
       first_mes: command.firstMessage ?? "",
@@ -213,6 +214,7 @@ async function updateCharacter(
     const updates: Record<string, unknown> = {};
     const extensionUpdates: Record<string, unknown> = {};
     if (command.description !== undefined) updates.description = command.description;
+    if (command.summary !== undefined) updates.summary = command.summary.trim().slice(0, 500);
     if (command.personality !== undefined) updates.personality = command.personality;
     if (command.firstMessage !== undefined) updates.first_mes = command.firstMessage;
     if (command.scenario !== undefined) updates.scenario = command.scenario;
@@ -584,6 +586,7 @@ async function createPreset(command: CreatePresetCommand, args: Parameters<typeo
           injectionDepth: Math.max(0, section.injectionDepth ?? 0),
           injectionOrder: section.injectionOrder ?? (index + 1) * 100,
           forbidOverrides: section.forbidOverrides ?? false,
+          skipWrap: section.skipWrap ?? false,
         });
         sectionCount += 1;
       }
@@ -976,6 +979,7 @@ async function fetchPresetContent(
         `  Group: ${group?.name ?? "none"}`,
         `  Injection: ${section.injectionPosition} depth=${section.injectionDepth} order=${section.injectionOrder}`,
         `  Forbid Overrides: ${String(section.forbidOverrides) === "true" ? "true" : "false"}`,
+        `  Skip Wrap: ${String(section.skipWrap) === "true" ? "true" : "false"}`,
         `  Content:\n${truncateMariFetchedText(section.content, 3000)}`,
       ].join("\n"),
     );

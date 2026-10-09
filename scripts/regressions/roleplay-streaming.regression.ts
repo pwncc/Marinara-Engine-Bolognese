@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { UI_PERSISTENCE } from "../../packages/client/src/lib/ui-persistence.js";
 import {
   getRoleplayTypewriterRevealCharsPerSecond,
   getStreamingCharsPerSecond,
@@ -111,7 +112,7 @@ assert.match(
 );
 assert.match(
   generateRouteSource,
-  /fullResponse \+= chunk;\s*if \(holdForTextRewrite\) \{\s*recordReasoningDuration\(chunk\);\s*return;/u,
+  /fullResponse \+= chunk;\s*if \(holdForTextRewrite\) \{\s*recordReasoningDuration\(chunk\);/u,
   "Tool-streamed text-rewrite responses must still capture reasoning duration",
 );
 assert.match(
@@ -120,7 +121,7 @@ assert.match(
   "Generator-streamed text-rewrite responses must still capture reasoning duration",
 );
 const generationInfoPersistenceSource =
-  /const extraUpdate: Record<string, unknown> = \{\s*generationInfo: \{[\s\S]*?\n\s*\},\s*\};/u.exec(
+  /const extraUpdate: Record<string, unknown> = \{[\s\S]*?generationInfo: \{[\s\S]*?\n\s*\},\s*\};/u.exec(
     generateRouteSource,
   )?.[0];
 assert.ok(generationInfoPersistenceSource, "The committed generation metadata block must remain available");
@@ -141,7 +142,12 @@ assert.equal(
 );
 assert.match(
   generateRouteSource,
-  /const agentAbortController = new AbortController\(\);\s*const agentSignal = AbortSignal\.any\(\[abortController\.signal, agentAbortController\.signal\]\)/u,
+  /const roomSignal = currentRoomGeneration\(\)\?\.signal;\s*const generationSignal = roomSignal\s*\? AbortSignal\.any\(\[abortController\.signal, roomSignal\]\)\s*: abortController\.signal;/u,
+  "room cancellation must compose with the primary response signal while ordinary generations retain their signal",
+);
+assert.match(
+  generateRouteSource,
+  /const agentAbortController = new AbortController\(\);\s*const agentSignal = AbortSignal\.any\(\[generationSignal, agentAbortController\.signal\]\)/u,
   "normal generations must keep an agent-only cancellation signal alongside the primary response signal",
 );
 assert.match(
@@ -406,6 +412,7 @@ const echoChamberPanelSource = readSourceText(
   "utf8",
 );
 const uiStoreSource = readSourceText(new URL("../../packages/client/src/stores/ui.store.ts", import.meta.url), "utf8");
+const { normalizeConversationBackgroundImageOpacity } = await import("../../packages/client/src/stores/ui.store.js");
 const globalStylesSource = readSourceText(
   new URL("../../packages/client/src/styles/globals.css", import.meta.url),
   "utf8",
@@ -429,7 +436,7 @@ const chatStoreSource = readSourceText(
   "utf8",
 );
 const summaryPopoverSource = readSourceText(
-  new URL("../../packages/client/src/components/chat/SummaryPopover.tsx", import.meta.url),
+  new URL("../../packages/client/src/components/chat/ChatSummaryPanel.tsx", import.meta.url),
   "utf8",
 );
 const professorMariHomeSource = readSourceText(
@@ -466,7 +473,8 @@ assert.match(
   "active Roleplay tracker agents should expose their saved prompt templates",
 );
 assert.match(reducedAmbientEffectsHookSource, /manualPreference \|\| systemPreference/u);
-assert.match(uiStoreSource, /version: 96/u);
+assert.match(uiStoreSource, /version: UI_PERSISTENCE.version/u);
+assert.ok(UI_PERSISTENCE.version >= 99, "the Roleplay persistence migration must remain applied");
 assert.match(globalStylesSource, /data-marinara-reduced-effects/u);
 const accentTransitionStyles =
   globalStylesSource.match(
@@ -518,22 +526,20 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(pageActivitySource, /document\.hasFocus|addEventListener\(\s*["'](?:blur|focus)["']/u);
 assert.match(pageActivitySource, /document\.visibilityState === "visible"/u);
-const activeContextLinksButtonSource =
-  chatRoleplaySurfaceSource.match(/function ActiveContextLinksButton[\s\S]*?\nfunction SummaryButton/u)?.[0] ?? "";
-assert.match(
+const activeContextLinksPanelSource =
+  chatRoleplaySurfaceSource.match(/function ActiveContextLinksPanel[\s\S]*?\nfunction RoleplaySummaryPanel/u)?.[0] ??
+  "";
+assert.match(activeContextLinksPanelSource, /data-component="RoleplayActiveContextPanel"/u);
+// Both are drawers in the Chat Settings window now, so they render inline instead of portaling over the chat.
+assert.doesNotMatch(
   summaryPopoverSource,
-  /className="fixed z-\[9999\]"[\s\S]*?return createPortal\(content, document\.body\)/u,
-  "the Roleplay Chat Summary panel should portal above independent floating-panel stacking contexts",
-);
-assert.match(
-  activeContextLinksButtonSource,
-  /desktopAnchor &&[\s\S]*?createPortal\([\s\S]*?data-component="RoleplayActiveContextPanel"[\s\S]*?fixed z-\[9999\][\s\S]*?document\.body/u,
-  "the desktop Roleplay Active Context panel should portal above independent floating-panel stacking contexts",
+  /createPortal|fixed z-\[9999\]/u,
+  "the Roleplay Chat Summary drawer should render inline in Chat Settings",
 );
 assert.doesNotMatch(
-  activeContextLinksButtonSource,
-  /absolute right-0 top-full/u,
-  "the desktop Roleplay Active Context panel must not remain trapped in the toolbar stacking context",
+  activeContextLinksPanelSource,
+  /createPortal|fixed z-\[9999\]/u,
+  "the Roleplay Active Context drawer should render inline in Chat Settings",
 );
 const spatialTransitionEventSource =
   useGenerateSource.match(/case "spatial_transition_committed": \{[\s\S]*?case "token":/u)?.[0] ?? "";
@@ -674,29 +680,27 @@ assert.match(
 );
 assert.match(
   echoChamberPanelSource,
-  /if \(activeChatId\) setEchoChamberSizeForChat\(activeChatId, nextSize\);/u,
-  "Echo Chamber should persist a completed resize against the active chat",
+  /<FloatingWindow\s+id=\{ECHO_WINDOW_ID\}/u,
+  "Echo Chamber should reuse the shared window's drag and resize behavior",
 );
 assert.match(
   echoChamberPanelSource,
-  /onPointerCancel=\{handleResizeCancel\}/u,
-  "a canceled Echo Chamber resize should use its rollback path",
+  /useFloatingWindowStore\(\(s\) => s\.layouts\[ECHO_WINDOW_ID\]\)/u,
+  "Echo Chamber should read the shared per-chat layout before falling back to legacy dimensions",
 );
 assert.match(
   echoChamberPanelSource,
-  /onLostPointerCapture=\{handleResizeLostCapture\}/u,
-  "Echo Chamber should still commit a finished drag when the browser drops pointer capture",
-);
-assert.doesNotMatch(
-  echoChamberPanelSource,
-  /onPointerCancel=\{handleResizeEnd\}/u,
-  "pointer cancellation must not persist an incomplete Echo Chamber resize",
+  /const minimized = savedLayout\?\.minimized \?\? !echoChamberOpen/u,
+  "a saved Echo Chamber close should take precedence over the old global open preference",
 );
 assert.match(
   uiStoreSource,
   /echoChamberSizeByChatId: state\.echoChamberSizeByChatId/u,
   "per-chat Echo Chamber dimensions should survive UI-store rehydration",
 );
+assert.equal(normalizeConversationBackgroundImageOpacity(-10), 0);
+assert.equal(normalizeConversationBackgroundImageOpacity(140), 100);
+assert.equal(normalizeConversationBackgroundImageOpacity("invalid"), 45);
 assert.match(
   uiStoreSource,
   /previous\.echoChamberSizes !== next\.echoChamberSizes/u,
@@ -1100,8 +1104,8 @@ assert.match(
 );
 assert.match(
   firefoxSupportsSource,
-  /(?:^|\})\s*\[data-chat-mode="roleplay"\] \.marinara-chat-input-shell\s*\{[^{}]*background:\s*linear-gradient\(var\(--card\), var\(--card\)\),\s*var\(--background\) !important;[^{}]*\}/u,
-  "Firefox should use an opaque Roleplay composer surface after disabling backdrop blur",
+  /(?:^|\})\s*\[data-chat-mode="roleplay"\] \.marinara-chat-input-shell\s*\{[^{}]*--mari-chat-existing-bg:\s*linear-gradient\(var\(--card\), var\(--card\)\),\s*var\(--background\);[^{}]*background:\s*var\(--mari-chat-surface-paint,\s*var\(--mari-chat-existing-bg\)\) !important;[^{}]*\}/u,
+  "Firefox should retain the opaque Roleplay composer fallback while allowing the selected chat surface paint",
 );
 assert.doesNotMatch(
   chatInputSource,
@@ -1145,8 +1149,8 @@ assert.match(
 );
 assert.match(
   chatRoleplaySurfaceSource,
-  /paddingBottom: "var\(--mari-roleplay-content-padding-bottom, 16px\)"/u,
-  "Roleplay transcript padding should consume the imperatively measured composer inset",
+  /paddingBottom:\s*"calc\(var\(--mari-roleplay-content-padding-bottom, 16px\) \+ var\(--mari-message-editor-scroll-space, 0px\)\)"/u,
+  "Roleplay transcript padding should combine the measured composer inset with editor scroll space",
 );
 assert.match(
   chatMessageSource,
@@ -1479,12 +1483,12 @@ const illustrationHandlerSource =
   useGenerateSource.match(/case "illustration": \{[\s\S]*?case "illustration_queued":/u)?.[0] ?? "";
 assert.match(
   illustrationHandlerSource,
-  /if \(!streamingEnabled && !isGameGeneration\) \{[\s\S]*?refreshMessagesAuthoritatively/u,
-  "illustrations should not refresh the visible cache during Game generation",
+  /if \(!isGameGeneration && canRefreshCurrentMessagesNow\(\)\) \{[\s\S]*?refreshMessagesAuthoritatively/u,
+  "illustrations refresh after the live presentation hands off, but never during Game generation",
 );
 assert.match(
   useGenerateSource,
-  /if \(isGameGeneration\) \{[\s\S]*?await refreshMessagesAuthoritatively\(qc, params\.chatId, persistedForRefresh\);[\s\S]*?setStreaming\(false\);/u,
+  /if \(isGameGeneration(?: \|\| \(receivedContent && persistedForRefresh\.length === 0\))?\) \{\s*await refreshMessagesAuthoritatively\(qc, params\.chatId, persistedForRefresh\);[\s\S]*?setStreaming\(false\);/u,
   "Game generation should publish the authoritative scene before releasing its presentation stream",
 );
 const updateMessageHookSource =
@@ -1531,6 +1535,23 @@ assert.equal(merged.length, 2, "the three built-in rewrite agents should share o
 assert.match(merged[0]!.name, /prose-guardian.*continuity.*html/u);
 assert.equal(getAgentBatchLane(merged[0]!), "rewrite");
 assert.equal(getAgentBatchLane(trackerAgent), "standard");
+// #6977: a rewrite agent with sharing turned off keeps its own editor request.
+const soloContinuity = {
+  ...rewriteAgents[1]!,
+  settings: { ...rewriteAgents[1]!.settings, batchWithOtherAgents: false },
+};
+const partlyMerged = mergePairedBuiltInRewriteAgents([
+  rewriteAgents[0]!,
+  soloContinuity,
+  rewriteAgents[2]!,
+  trackerAgent,
+]);
+assert.deepEqual(
+  partlyMerged.map((agent) => agent.name),
+  ["prose-guardian + html", "continuity", "world-state"],
+  "a rewrite agent that may not share runs on its own beside the merged editor",
+);
+assert.doesNotMatch(partlyMerged[0]!.promptTemplate, /continuity prompt/u, "the merged editor leaves out its tasks");
 assert.equal(
   estimateAgentLoadCost(
     [
@@ -1553,6 +1574,20 @@ assert.equal(
   ).extraCalls,
   2,
   "rewrite editors should count as one call separate from the tracker call",
+);
+assert.equal(
+  estimateAgentLoadCost(
+    ["notes-a", "notes-b", "notes-solo"].map((type) => ({
+      type,
+      phase: "post_processing" as const,
+      connectionId: "connection-1",
+      promptTemplate: `${type} prompt`,
+      ownRequest: type === "notes-solo",
+    })),
+    null,
+  ).extraCalls,
+  2,
+  "#6977: an agent with its own request counts as a call of its own",
 );
 
 class CountingTrackerBatchProvider extends BaseLLMProvider {
@@ -1666,6 +1701,45 @@ assert.deepEqual(
   ],
   "tracker batch debug output should describe the real combined request",
 );
+
+// Agent output and persisted history are untrusted even when the API is typed.
+const malformedEchoReactions = [
+  null,
+  "not a reaction",
+  { reaction: "Missing name" },
+  { characterName: 42, reaction: "Wrong name type" },
+  { characterName: "   ", reaction: "Empty name" },
+  { characterName: "Watcher", reaction: { text: "Wrong reaction type" } },
+  { characterName: "Watcher", reaction: "  " },
+  { characterName: "Watcher", reaction: "A valid reaction" },
+];
+useAgentStore.getState().clearEchoMessages();
+useAgentStore.getState().enqueueEchoMessages(malformedEchoReactions);
+assert.deepEqual(
+  useAgentStore.getState().echoMessages.map(({ characterName, reaction }) => ({ characterName, reaction })),
+  [{ characterName: "Watcher", reaction: "A valid reaction" }],
+  "a malformed reaction must not enter the UI queue or hide valid siblings",
+);
+useAgentStore
+  .getState()
+  .setEchoMessages([
+    ...malformedEchoReactions,
+    { characterName: "Reader", reaction: "Valid saved reaction", timestamp: 12 },
+  ]);
+assert.equal(useAgentStore.getState().echoMessages.length, 2);
+assert.equal(useAgentStore.getState().echoMessages[0]?.timestamp, 7);
+assert.equal(useAgentStore.getState().echoMessages[1]?.timestamp, 12);
+for (const value of [null, {}, "malformed", 7]) {
+  useAgentStore.getState().enqueueEchoMessages(value);
+  assert.equal(useAgentStore.getState().echoMessages.length, 2);
+  useAgentStore.getState().setEchoMessages(value);
+  assert.equal(useAgentStore.getState().echoMessages.length, 0);
+  useAgentStore.getState().setEchoMessages([
+    { characterName: "A", reaction: "A" },
+    { characterName: "B", reaction: "B" },
+  ]);
+}
+useAgentStore.getState().clearEchoMessages();
 
 const queuedEchoBatch = enqueueEchoChamberMessages(
   {

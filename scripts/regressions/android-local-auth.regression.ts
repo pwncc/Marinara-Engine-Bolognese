@@ -9,6 +9,7 @@ import {
   androidLocalAuthRoutes,
   androidLocalAuthTesting,
   androidLocalLoginRoute,
+  isAndroidLocalAuthSatisfied,
 } from "../../packages/server/src/middleware/android-local-auth.js";
 import { csrfProtectionHook } from "../../packages/server/src/middleware/csrf-protection.js";
 
@@ -25,7 +26,8 @@ app.addHook("onRequest", androidLocalAuthHook);
 await app.register(androidLocalAuthRoutes, { prefix: "/api/android-auth" });
 await androidLocalLoginRoute(app);
 app.get("/", async () => ({ ok: true }));
-app.get("/api/health", async () => ({ status: "ok" }));
+// Mirrors app.ts: the probe stays public, the local model and GPU details need the app's own sign-in.
+app.get("/api/health", async (request) => ({ status: "ok", detailed: isAndroidLocalAuthSatisfied(request) }));
 app.get("/api/private", async () => ({ private: true }));
 app.post("/api/private-mutation", async () => ({ mutated: true }));
 app.get("/api/spotify/callback", async () => ({ callback: true }));
@@ -38,6 +40,7 @@ try {
 
   const health = await app.inject({ method: "GET", url: "/api/health" });
   assert.equal(health.statusCode, 200, "local readiness checks must remain available without a browser session");
+  assert.equal(health.json().detailed, false, "another app on the device must not read the health details");
 
   const spotifyCallback = await app.inject({
     method: "GET",
@@ -97,6 +100,10 @@ try {
     headers: { cookie: sessionCookie },
   });
   assert.equal(accepted.statusCode, 200);
+  const signedInHealth = await app.inject({ method: "GET", url: "/api/health", headers: { cookie: sessionCookie } });
+  assert.equal(signedInHealth.json().detailed, true, "the Android app's own diagnostics keep the health details");
+  const remoteHealth = await app.inject({ method: "GET", url: "/api/health", remoteAddress: "192.0.2.77" });
+  assert.equal(remoteHealth.json().detailed, true, "LAN callers are left to the normal sign-in rules");
 
   const replay = await app.inject({
     method: "POST",
@@ -105,6 +112,93 @@ try {
     payload: new URLSearchParams({ clientNonce, serverNonce: challenge.serverNonce, proof: clientProof }).toString(),
   });
   assert.equal(replay.statusCode, 401, "a challenge must be one-time use");
+
+  async function browserTicket() {
+    const clientNonce = "ab".repeat(32);
+    const challenge = (
+      await app.inject({ method: "POST", url: "/api/android-auth/challenge", payload: { clientNonce } })
+    ).json<{ serverNonce: string }>();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/android-auth/session",
+      payload: {
+        clientNonce,
+        serverNonce: challenge.serverNonce,
+        browser: true,
+        proof: androidLocalAuthTesting.hmac(secret, `client:${clientNonce}:${challenge.serverNonce}`),
+      },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(
+      response.headers["set-cookie"],
+      undefined,
+      "browser handoffs must not authenticate the native HTTP client",
+    );
+    assert.equal(response.headers["cache-control"], "no-store");
+    const ticket = response.json<{ browserTicket: string }>().browserTicket;
+    assert.match(ticket, /^[a-f0-9]{64}$/);
+    assert.notEqual(ticket, secret, "a handoff must never expose the permanent install secret");
+    return ticket;
+  }
+  const ticket = await browserTicket();
+  const handoff = await app.inject({ method: "POST", url: "/api/android-auth/browser-session", payload: { ticket } });
+  assert.equal(handoff.statusCode, 303);
+  assert.match(String(handoff.headers["set-cookie"]), /HttpOnly; SameSite=Strict/);
+  assert.equal(
+    (await app.inject({ method: "POST", url: "/api/android-auth/browser-session", payload: { ticket } })).statusCode,
+    401,
+    "browser links must be single-use",
+  );
+  assert.equal(
+    (await app.inject({ method: "POST", url: "/api/android-auth/session", payload: { browser: true } })).statusCode,
+    401,
+    "ticket creation requires the existing authenticated challenge",
+  );
+  const expiredTicket = await browserTicket();
+  const now = Date.now;
+  try {
+    Date.now = () => now() + 61_000;
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/android-auth/browser-session",
+          payload: { ticket: expiredTicket },
+        })
+      ).statusCode,
+      401,
+      "browser tickets expire after one minute",
+    );
+  } finally {
+    Date.now = now;
+  }
+  const remoteTicket = await browserTicket();
+  assert.equal(
+    (
+      await app.inject({
+        method: "POST",
+        url: "/api/android-auth/browser-session",
+        remoteAddress: "192.0.2.77",
+        payload: { ticket: remoteTicket },
+      })
+    ).statusCode,
+    401,
+    "handoffs are restricted to the Android device",
+  );
+  assert.equal(
+    (
+      await app.inject({
+        method: "POST",
+        url: "/api/android-auth/browser-session",
+        payload: { ticket: remoteTicket },
+      })
+    ).statusCode,
+    303,
+    "a rejected remote handoff cannot consume the device's valid ticket",
+  );
+  assert.match(login.headers["content-security-policy"] as string, /script-src 'nonce-/);
+  assert.match(login.body, /history.replaceState/);
+  assert.match(login.body, /Open in browser/);
 
   const capacityChallenges: Array<{ clientNonce: string; serverNonce: string }> = [];
   for (let index = 0; index < 64; index += 1) {
@@ -348,7 +442,7 @@ try {
   );
   assert.match(
     wrapperProperties,
-    /distributionSha256Sum=9d926787066a081739e8200858338b4a69e837c3a821a33aca9db09dd4a41026/u,
+    /distributionSha256Sum=bafd5ce9cfaea0fbccfdc8439a1ac42fbd4cd9c89dc9a988228d8a2639a58e6c/u,
   );
 
   console.info("Android local authentication regressions passed.");

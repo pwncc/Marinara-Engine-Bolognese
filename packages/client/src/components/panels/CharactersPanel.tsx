@@ -1,7 +1,16 @@
 // ──────────────────────────────────────────────
 // Panel: Characters (overhauled — search, folders, avatars)
 // ──────────────────────────────────────────────
-import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, type UIEvent } from "react";
+import {
+  useState,
+  useMemo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  type UIEvent,
+} from "react";
 import { useTranslation, useTranslation as useUiTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -17,6 +26,7 @@ import {
   useDuplicateCharacter,
 } from "../../hooks/use-characters";
 import { api } from "../../lib/api-client";
+import { EXPORT_FAILED_TOAST_ID } from "../../lib/file-download";
 import { confirmNonEmptyFolderDelete, showChoiceDialog, showConfirmDialog } from "../../lib/app-dialogs";
 import {
   Plus,
@@ -48,27 +58,30 @@ import {
   parseCardLibrarySearchQuery,
 } from "../../lib/card-library-search";
 import { useUIStore, type CharacterLibrarySort } from "../../stores/ui.store";
+import { sortPanelFolders } from "../../lib/panel-sort";
 import { handleFolderRenameKeyDown, useFolderRenameGesture } from "../../hooks/use-folder-rename-gesture";
 import { useTouchFolderDrag } from "../../hooks/use-touch-folder-drag";
 import { normalizeAvatarCrop } from "@marinara-engine/shared";
+import type { CharacterCatalogEntry } from "@marinara-engine/shared";
 import { cn, getAvatarCropStyle } from "../../lib/utils";
-import { estimateCharacterCardTokens, formatEstimatedTokens } from "../../lib/character-token-count";
+import { formatEstimatedTokens } from "../../lib/character-token-count";
 import { SelectionActionBar } from "../ui/SelectionActionBar";
 import { SmoothFolderContent } from "../ui/SmoothFolderContent";
 import { TouchDragHandle } from "../ui/TouchDragHandle";
 import { PanelLoadMoreBar } from "./PanelLoadMoreBar";
 import { clearActiveChatResourceDrag, writeChatResourceDragPayload } from "../../lib/chat-resource-drag";
 import { ChatResourceActionButton } from "../chat/ChatResourceActionButton";
+import { CharacterBulkTagsModal } from "../characters/CharacterBulkTagsModal";
 
-type CharacterRow = {
+type CharacterRow = CharacterCatalogEntry;
+type GroupRow = {
   id: string;
-  data: string;
-  comment?: string | null;
+  name: string;
+  description: string;
+  characterIds: string;
   avatarPath: string | null;
   createdAt: string;
-  updatedAt: string;
 };
-type GroupRow = { id: string; name: string; description: string; characterIds: string; avatarPath: string | null };
 type ParsedCharacterRow = CharacterRow & { parsed: Record<string, any> };
 type ParsedGroupRow = GroupRow & { memberIds: string[] };
 
@@ -95,8 +108,20 @@ function getCharacterTags(char: ParsedCharacterRow): string[] {
 
 function parseCharacterRow(char: CharacterRow): ParsedCharacterRow {
   try {
-    const parsed = typeof char.data === "string" ? JSON.parse(char.data) : char.data;
-    return { ...char, parsed: (parsed as ParsedCharacterRow["parsed"]) ?? {} };
+    const parsed = {
+      name: char.name,
+      summary: char.explicitSummary,
+      description: char.description,
+      personality: char.personality,
+      scenario: char.scenario,
+      first_mes: char.firstMessage,
+      creator_notes: char.creatorNotes,
+      tags: char.tags,
+      creator: char.creator,
+      character_version: char.version,
+      extensions: { fav: char.favorite, avatarCrop: char.avatarCrop, nameColor: char.nameColor },
+    };
+    return { ...char, parsed: parsed as unknown as ParsedCharacterRow["parsed"] };
   } catch {
     return { ...char, parsed: { name: "Unknown", description: "" } };
   }
@@ -171,7 +196,8 @@ export function CharactersPanel() {
   const favFilter = useUIStore((s) => s.characterPanelFavoriteFilter);
   const setFavFilter = useUIStore((s) => s.setCharacterPanelFavoriteFilter);
   const setCharacterPanelScrollTop = useUIStore((s) => s.setCharacterPanelScrollTop);
-  const serverSearch = useMemo(() => parseCardLibrarySearchQuery(search).text, [search]);
+  const deferredSearch = useDeferredValue(search);
+  const serverSearch = useMemo(() => parseCardLibrarySearchQuery(deferredSearch).text, [deferredSearch]);
   const serverFavoriteFilter = favFilter === "favorites" || favFilter === "non-favorites" ? favFilter : "";
   const characterPages = useCharacterPages({ search: serverSearch, sort, favoriteFilter: serverFavoriteFilter });
   const characters = useMemo(() => flattenCharacterPages(characterPages.data), [characterPages.data]);
@@ -193,6 +219,7 @@ export function CharactersPanel() {
   const [selectedCharacterIds, setSelectedCharacterIds] = useState<Set<string>>(new Set());
   const [exportingSelected, setExportingSelected] = useState(false);
   const [movingSelected, setMovingSelected] = useState(false);
+  const [bulkTagsOpen, setBulkTagsOpen] = useState(false);
 
   // Parse character data and filter by search
   const parsedCharacters = useMemo(() => {
@@ -223,7 +250,7 @@ export function CharactersPanel() {
 
   const filteredCharacters = useMemo(() => {
     let list = parsedCharacters;
-    const query = parseCardLibrarySearchQuery(search);
+    const query = parseCardLibrarySearchQuery(deferredSearch);
     // Filter by favorites
     if (favFilter === "favorites") {
       list = list.filter((c) => c.parsed.extensions?.fav);
@@ -255,7 +282,12 @@ export function CharactersPanel() {
           name: c.parsed.name,
           title: getCharacterTitle({ name: c.parsed.name ?? "", comment: c.comment }),
           meta: formatCardLibraryMeta(c.parsed.creator, c.parsed.character_version),
-          summary: getCardLibrarySummary([c.parsed.creator_notes, c.parsed.description, c.parsed.personality]),
+          summary: getCardLibrarySummary([
+            c.parsed.summary,
+            c.parsed.creator_notes,
+            c.parsed.description,
+            c.parsed.personality,
+          ]),
           tags,
           sections: [
             { content: c.parsed.description },
@@ -268,7 +300,7 @@ export function CharactersPanel() {
       );
     });
     return list;
-  }, [parsedCharacters, search, includedTags, excludedTags, favFilter]);
+  }, [parsedCharacters, deferredSearch, includedTags, excludedTags, favFilter]);
 
   // Collect all unique tags across characters for the filter bar
   const allTags = useMemo(() => {
@@ -435,6 +467,18 @@ export function CharactersPanel() {
     });
   }, [groups]);
 
+  const sortedGroups = useMemo(() => {
+    const folders = sortPanelFolders(parsedGroups, sort === "favorites" ? "name-asc" : sort);
+    if (sort !== "favorites") return folders;
+    const favorites = new Set(
+      sortedCharacters.filter((character) => character.parsed.extensions?.fav).map((character) => character.id),
+    );
+    return folders.sort(
+      (a, b) =>
+        Number(b.memberIds.some((id) => favorites.has(id))) - Number(a.memberIds.some((id) => favorites.has(id))),
+    );
+  }, [parsedGroups, sort, sortedCharacters]);
+
   const folderedCharacterIds = useMemo(() => {
     const ids = new Set<string>();
     for (const folder of parsedGroups) {
@@ -442,8 +486,8 @@ export function CharactersPanel() {
     }
     return ids;
   }, [parsedGroups]);
-  const visibleCharacterById = useMemo(
-    () => new Map(sortedCharacters.map((character) => [character.id, character])),
+  const characterOrder = useMemo(
+    () => new Map(sortedCharacters.map((character, index) => [character.id, index])),
     [sortedCharacters],
   );
   const folderFilterActive =
@@ -612,7 +656,7 @@ export function CharactersPanel() {
     }
   }, []);
 
-  const { startTouchDrag: startCharacterTouchDrag } = useTouchFolderDrag({
+  const { startTouchDrag: startCharacterTouchDrag, startMouseDrag: startCharacterMouseDrag } = useTouchFolderDrag({
     onActivate: (characterId) => {
       suppressCharacterClickRef.current = true;
       setDraggedCharacterId(characterId);
@@ -639,20 +683,22 @@ export function CharactersPanel() {
     if (selectedCharacterIds.size === 0) return;
     setExportingSelected(true);
     try {
-      await api.downloadPost(
+      const saveStatus = await api.downloadPost(
         "/characters/export-bulk",
         { ids: [...selectedCharacterIds], format: "native" },
         "marinara-characters.zip",
       );
-      toast.success(
-        localizeUi("ui.panels.characterspanel.exportedValue1CharacterValue2", {
-          value1: selectedCharacterIds.size,
-          value2: selectedCharacterIds.size === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s"),
-        }),
-      );
+      if (saveStatus === "saved")
+        toast.success(
+          localizeUi("ui.panels.characterspanel.exportedValue1CharacterValue2", {
+            value1: selectedCharacterIds.size,
+            value2: selectedCharacterIds.size === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s"),
+          }),
+        );
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : localizeUi("ui.panels.characterspanel.failedToExportCharacters"),
+        { id: EXPORT_FAILED_TOAST_ID },
       );
     } finally {
       setExportingSelected(false);
@@ -764,7 +810,7 @@ export function CharactersPanel() {
         </button>
         <button
           type="button"
-          onClick={openCharacterLibrary}
+          onClick={() => openCharacterLibrary()}
           className="mari-chrome-segmented__button min-w-0 justify-center gap-1 overflow-hidden px-1.5 py-2 text-[0.625rem] leading-normal"
           title={localizeUi("ui.panels.characterspanel.openCharactersLibrary")}
         >
@@ -818,7 +864,7 @@ export function CharactersPanel() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder={t("search.panels.charactersWithExcludedTag", { query: '-tag:"tag name"' })}
+            placeholder={t("search.panels.characters")}
             className="mari-chrome-field h-10 w-full py-0 pl-8 pr-3 text-xs md:h-9"
           />
         </div>
@@ -941,10 +987,15 @@ export function CharactersPanel() {
       )}
 
       <div className="flex flex-col gap-0.5">
-        {parsedGroups.map((group) => {
-          const folderMemberIds = folderFilterActive
-            ? group.memberIds.filter((memberId) => visibleCharacterById.has(memberId))
-            : group.memberIds;
+        {sortedGroups.map((group) => {
+          const folderMemberIds = (
+            folderFilterActive
+              ? group.memberIds.filter((memberId) => characterOrder.has(memberId))
+              : [...group.memberIds]
+          ).sort(
+            (a, b) =>
+              (characterOrder.get(a) ?? sortedCharacters.length) - (characterOrder.get(b) ?? sortedCharacters.length),
+          );
           if (folderFilterActive && folderMemberIds.length === 0) return null;
           const isExpanded = (folderFilterActive && folderMemberIds.length > 0) || expandedGroupId === group.id;
           const isEditing = editingGroupId === group.id;
@@ -1016,6 +1067,7 @@ export function CharactersPanel() {
                       onKeyDown={(e) => {
                         if (e.key === "Enter") e.currentTarget.blur();
                         if (e.key === "Escape") {
+                          e.preventDefault();
                           setEditingGroupId(null);
                           setEditGroupName("");
                         }
@@ -1085,13 +1137,29 @@ export function CharactersPanel() {
                     : getCharacterTitle(member);
                   const memberPreviewMetadata = fullMember ? getCharacterPreviewMetadata(fullMember) : null;
                   const memberTags = fullMember ? getCharacterTags(fullMember) : [];
-                  const memberTokenEstimate = fullMember ? estimateCharacterCardTokens(fullMember.parsed) : null;
+                  const memberTokenEstimate = fullMember?.tokenEstimate ?? null;
                   const memberNameColor = (fullMember?.parsed.extensions?.nameColor as string) || undefined;
                   const memberAvatarCrop = normalizeAvatarCrop(fullMember?.parsed.extensions?.avatarCrop) ?? undefined;
                   return (
                     <div
                       key={memberId}
                       data-touch-drag-card="character"
+                      onMouseDown={(event) => {
+                        const ids = getDraggedCharacterIds(memberId);
+                        startCharacterMouseDrag(event, memberId, {
+                          chatResourcePayload: {
+                            version: 1,
+                            kind: "character",
+                            ids,
+                            label:
+                              ids.length === 1
+                                ? memberName
+                                : localizeUi("ui.chat.chatresourcedropoverlay.characterCount", {
+                                    count: ids.length,
+                                  }),
+                          },
+                        });
+                      }}
                       onClick={() => {
                         if (suppressCharacterClickRef.current) return;
                         if (selectionMode) {
@@ -1252,7 +1320,7 @@ export function CharactersPanel() {
                             )}
                           >
                             <Hash size="0.5rem" />
-                            {formatEstimatedTokens(memberTokenEstimate)}
+                            {formatEstimatedTokens(memberTokenEstimate, localizeUi)}
                           </span>
                         )}
                         {memberTags.length > 0 && (
@@ -1436,13 +1504,29 @@ export function CharactersPanel() {
           const isFavorite = !!char.parsed.extensions?.fav;
           const avatarUrl = char.avatarPath;
           const previewMetadata = getCharacterPreviewMetadata(char);
-          const tokenEstimate = estimateCharacterCardTokens(char.parsed);
+          const tokenEstimate = char.tokenEstimate;
 
           return (
             <div
               key={char.id}
               data-character-id={char.id}
               data-touch-drag-card="character"
+              onMouseDown={(event) => {
+                const ids = getDraggedCharacterIds(char.id);
+                startCharacterMouseDrag(event, char.id, {
+                  chatResourcePayload: {
+                    version: 1,
+                    kind: "character",
+                    ids,
+                    label:
+                      ids.length === 1
+                        ? charName
+                        : localizeUi("ui.chat.chatresourcedropoverlay.characterCount", {
+                            count: ids.length,
+                          }),
+                  },
+                });
+              }}
               onClick={() => {
                 if (suppressCharacterClickRef.current) return;
                 if (selectionMode) {
@@ -1586,7 +1670,7 @@ export function CharactersPanel() {
                   )}
                 >
                   <Hash size="0.5625rem" />
-                  {formatEstimatedTokens(tokenEstimate)}
+                  {formatEstimatedTokens(tokenEstimate, localizeUi)}
                 </div>
                 {charTags.length > 0 && (
                   <div data-character-row-tags className="mt-0.5 flex flex-wrap gap-0.5">
@@ -1709,22 +1793,46 @@ export function CharactersPanel() {
           placement="panel"
           selectedCount={selectedCharacterIds.size}
           extraAction={
-            <button
-              type="button"
-              onClick={() => void handleMoveSelected()}
-              disabled={selectedCharacterIds.size === 0 || parsedGroups.length === 0 || movingSelected}
-              className="mari-chrome-control flex-1 px-3 py-2 text-xs"
-              title={localizeUi("lorebook.editor.batch.move")}
-            >
-              <FolderInput size="0.75rem" />
-              {localizeUi("lorebook.editor.batch.move")}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => void handleMoveSelected()}
+                disabled={selectedCharacterIds.size === 0 || parsedGroups.length === 0 || movingSelected}
+                className="mari-chrome-control flex-1 px-3 py-2 text-xs"
+                title={localizeUi("lorebook.editor.batch.move")}
+              >
+                <FolderInput size="0.75rem" />
+                {localizeUi("lorebook.editor.batch.move")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setBulkTagsOpen(true)}
+                disabled={selectedCharacterIds.size === 0}
+                className="mari-chrome-control flex-1 px-3 py-2 text-xs"
+              >
+                <Tag size="0.75rem" />
+                {localizeUi("characters.bulkTags.actionShort")}
+              </button>
+            </>
           }
           onExport={() => void handleExportSelected()}
           onDelete={handleDeleteSelected}
           exporting={exportingSelected}
         />
       )}
+      <CharacterBulkTagsModal
+        open={bulkTagsOpen}
+        onClose={() => setBulkTagsOpen(false)}
+        selectedIds={selectedCharacterIds}
+        onApplied={(failedIds) => {
+          setBulkTagsOpen(false);
+          if (failedIds.length > 0) {
+            setSelectedCharacterIds(new Set(failedIds));
+            return;
+          }
+          exitSelectionMode();
+        }}
+      />
     </div>
   );
 }

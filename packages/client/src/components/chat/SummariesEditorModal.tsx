@@ -4,13 +4,20 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { X, Plus, Trash2, CalendarClock, ChevronRight, ChevronsDownUp, ChevronsUpDown, RefreshCw } from "lucide-react";
 import { cn } from "../../lib/utils";
-import type { Chat, ChatMetadata, DaySummaryEntry, WeekSummaryEntry } from "@marinara-engine/shared";
+import { useBackdropDismiss } from "../../hooks/use-backdrop-dismiss";
+import {
+  estimateTextTokens,
+  type Chat,
+  type ChatMetadata,
+  type DaySummaryEntry,
+  type WeekSummaryEntry,
+} from "@marinara-engine/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { chatKeys, useBackfillConversationSummaries, useUpdateChatSummaries } from "../../hooks/use-chats";
 import { useTranslation as useUiTranslation } from "react-i18next";
 
 function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  return estimateTextTokens(text);
 }
 
 function fmtTokens(n: number): string {
@@ -113,6 +120,7 @@ function computeDelta(
 
 export function SummariesEditorModal({ chat, open, onClose }: SummariesEditorModalProps) {
   const { t: localizeUi } = useUiTranslation();
+  const backdropDismiss = useBackdropDismiss(onClose);
   const metadata = useMemo(
     () => (typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {})),
     [chat.metadata],
@@ -274,7 +282,7 @@ export function SummariesEditorModal({ chat, open, onClose }: SummariesEditorMod
     <div
       data-chat-floating-panel
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm max-md:pt-[env(safe-area-inset-top)]"
-      onClick={onClose}
+      {...backdropDismiss}
     >
       <div
         className="mx-4 flex max-h-[85vh] w-full max-w-3xl flex-col rounded-2xl border border-[var(--border)] bg-[var(--background)] shadow-2xl"

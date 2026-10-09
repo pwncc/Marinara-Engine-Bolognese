@@ -7,12 +7,22 @@ import {
 import type { DB } from "../../db/connection.js";
 import { logger } from "../../lib/logger.js";
 import type { ResolvedAgent } from "../agents/agent-pipeline.js";
-import { normalizeAgentContextSize } from "../agents/agent-executor.js";
+import {
+  agentRequestOptions,
+  gateAgentTemperature,
+  normalizeAgentContextSize,
+  resolveAgentCallMaxTokens,
+} from "../agents/agent-executor.js";
 import {
   buildBackgroundProviderPrompt,
   generateChatBackground,
   type ChatBackgroundGenRequest,
 } from "../game/game-asset-generation.js";
+import {
+  buildIllustratorCharacterPromptInstruction,
+  resolveNovelAiCharacterPromptLimit,
+  supportsNovelAiCharacterPrompts,
+} from "../image/character-prompts.js";
 import { resolveConnectionImageDefaults, resolveConnectionImageQuality } from "../image/image-generation-defaults.js";
 import { loadImageGenerationUserSettings } from "../image/image-generation-settings.js";
 import { resolveImagePromptReviewSize } from "../image/image-prompt-review.js";
@@ -218,17 +228,20 @@ async function writeIllustratorBackgroundPlan(args: {
   const callPromptWriter = async (messages: Array<{ role: "system" | "user" | "assistant"; content: string }>) =>
     args.illustratorAgent.provider.chatComplete(messages, {
       model: args.illustratorAgent.model,
-      temperature: 0.35,
-      maxTokens: Math.min(
+      // The prompt writer keeps its own temperature; the connection decides whether one is sent (#7131).
+      temperature: gateAgentTemperature(args.illustratorAgent, 0.35),
+      maxTokens: resolveAgentCallMaxTokens(
+        args.illustratorAgent.provider,
+        args.illustratorAgent,
         BACKGROUND_PLAN_MAX_TOKENS,
-        args.illustratorAgent.maxOutputTokens && args.illustratorAgent.maxOutputTokens > 0
-          ? args.illustratorAgent.maxOutputTokens
-          : BACKGROUND_PLAN_MAX_TOKENS,
+        {
+          messages,
+        },
       ),
       enableCaching: args.illustratorAgent.enableCaching,
       anthropicExtendedCacheTtl: args.illustratorAgent.anthropicExtendedCacheTtl,
       cachingAtDepth: args.illustratorAgent.cachingAtDepth,
-      customParameters: args.illustratorAgent.customParameters,
+      ...agentRequestOptions(args.illustratorAgent, false),
       signal: args.signal,
     });
 
@@ -314,6 +327,30 @@ export async function resolveIllustratorPromptStyle(args: {
     imageDefaults?.styleProfileId,
     imageSettings.styleProfiles,
   );
+}
+
+/**
+ * Resolve the native NovelAI character-caption instruction for the Illustrator's
+ * prompt writer. Empty unless the image connection this chat will render with is
+ * NovelAI's own host on a V4+ model; the limit follows the model generation.
+ */
+export async function resolveIllustratorCharacterPromptInstruction(args: {
+  connections: Pick<ConnectionsStorage, "getWithKey" | "getDefaultForImageGeneration">;
+  illustratorAgent: ResolvedAgent;
+  chatMode: unknown;
+  chatMetadata: Record<string, unknown>;
+}): Promise<{ instruction: string; limit: number }> {
+  const configuredImageConnectionId = resolveIllustratorImageConnectionId(
+    args.chatMode,
+    args.chatMetadata,
+    args.illustratorAgent.settings.imageConnectionId,
+  );
+  const imageConnection =
+    (configuredImageConnectionId ? await args.connections.getWithKey(configuredImageConnectionId) : null) ??
+    (await args.connections.getDefaultForImageGeneration());
+  if (!imageConnection || !supportsNovelAiCharacterPrompts(imageConnection)) return { instruction: "", limit: 0 };
+  const limit = resolveNovelAiCharacterPromptLimit(String(imageConnection.model ?? ""));
+  return { instruction: buildIllustratorCharacterPromptInstruction(limit), limit };
 }
 
 async function resolveIllustratorImageConnection(

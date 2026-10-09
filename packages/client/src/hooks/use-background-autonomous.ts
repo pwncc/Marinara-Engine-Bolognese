@@ -15,7 +15,7 @@ import { useChatStore } from "../stores/chat.store";
 import { useUIStore } from "../stores/ui.store";
 import { showLocalMessageNotification, showNativeMessageNotification } from "../lib/local-notifications";
 import { playConfiguredNotificationPing } from "../lib/notification-sound";
-import { chatKeys } from "./use-chats";
+import { captureChatMetadataVersion, chatKeys, guardServerChatSnapshot } from "./use-chats";
 import { characterKeys } from "./use-characters";
 import { upsertPersistedMessages } from "./use-generate";
 
@@ -92,6 +92,7 @@ async function fetchAutonomousCandidates(): Promise<Array<{ id: string }>> {
     try {
       const meta = parseMeta(chat);
       if (meta.internalAssistant === "professor-mari") return false;
+      if (meta.multiplayerSetup || meta.multiplayer) return false;
       return !!meta.autonomousMessages;
     } catch {
       return false;
@@ -280,10 +281,14 @@ export function useBackgroundAutonomousPolling() {
                 upsertPersistedMessages(qc, chat.id, Array.from(savedMessages.values()));
                 void qc.invalidateQueries({ queryKey: chatKeys.messages(chat.id) });
                 qc.invalidateQueries({ queryKey: characterKeys.list() });
+                const unreadMetadataVersion = captureChatMetadataVersion(chat.id);
                 void api
                   .post<Chat>(`/chats/${chat.id}/autonomous-unread`, { characterId })
                   .then((updatedChat) => {
-                    qc.setQueryData(chatKeys.detail(chat.id), updatedChat);
+                    qc.setQueryData(
+                      chatKeys.detail(chat.id),
+                      guardServerChatSnapshot(qc, updatedChat, unreadMetadataVersion),
+                    );
                     qc.invalidateQueries({ queryKey: chatKeys.list() });
                   })
                   .catch(() => {

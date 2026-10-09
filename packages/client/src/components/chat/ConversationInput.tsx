@@ -20,17 +20,21 @@ import {
 import { toast } from "sonner";
 import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { useChatStore } from "../../stores/chat.store";
+import { hasActiveTextSelection } from "../../lib/text-selection";
 import { useAgentStore } from "../../stores/agent.store";
 import { useUIStore } from "../../stores/ui.store";
+import { useSidecarStore } from "../../stores/sidecar.store";
 import { useConversationGamesStore } from "../../stores/conversation-games.store";
 import { useGenerate } from "../../hooks/use-generate";
 import { useApplyRegex } from "../../hooks/use-apply-regex";
 import { useCreateMessage, useDeleteMessage, useUpdateMessageExtra, useChat, chatKeys } from "../../hooks/use-chats";
+import { useConnections } from "../../hooks/use-connections";
 import { characterKeys } from "../../hooks/use-characters";
 import {
   matchSlashCommand,
   shouldExecuteQuickPostAsCommand,
   getSlashCompletions,
+  getSlashCommandUsage,
   type ConversationGameSlashContribution,
   type SlashCommand,
   type SlashCommandContext,
@@ -44,7 +48,7 @@ import { translateDraftText } from "../../lib/draft-translation";
 import { prepareImageAttachment } from "../../lib/chat-attachment-images";
 import { isFileDrag } from "../../lib/chat-resource-drag";
 import { CARD_ASSET_INSERT_EVENT, type CardAssetInsertDetail } from "../../lib/card-asset-links";
-import { isGenerationSendBlocked } from "../../lib/generation-stream-policy";
+import { isGenerationSendBlocked, isIosWebKitBrowser } from "../../lib/generation-stream-policy";
 import { requestChatScrollToBottom } from "../../lib/chat-scroll-events";
 import { searchStandardEmojiShortcodes, type StandardEmojiShortcode } from "../../lib/emoji-shortcodes";
 import { QuickConnectionSwitcher } from "./QuickConnectionSwitcher";
@@ -54,9 +58,11 @@ import { showChoiceDialog } from "../../lib/app-dialogs";
 import { useConversationCustomEmojis, type ConversationCustomEmoji } from "../../hooks/use-conversation-custom-emojis";
 import { SpeechToTextButton } from "../ui/SpeechToTextButton";
 import { SlashCommandFeedback } from "./SlashCommandFeedback";
+import { MessageReplyPreview } from "./MessageReplyPreview";
 import { QuickReplyMenu, type QuickReplyAction } from "./QuickReplyMenu";
 import { getChatInputShellClass } from "./chat-input-styles";
 import { MariSuggestionChips } from "./MariSuggestionChips";
+import { resolveChatContextBudget } from "../../lib/professor-mari-context-budget";
 import {
   ConversationMediaPickerPanel,
   type ConversationMediaPickerTab,
@@ -84,8 +90,7 @@ interface Attachment {
 }
 
 type EmojiCompletion =
-  | ({ kind: "custom" } & ConversationCustomEmoji)
-  | ({ kind: "standard"; source: "Standard" } & StandardEmojiShortcode);
+  ({ kind: "custom" } & ConversationCustomEmoji) | ({ kind: "standard"; source: "Standard" } & StandardEmojiShortcode);
 
 const TEXT_ATTACHMENT_EXTENSIONS = new Set([
   "csv",
@@ -108,6 +113,7 @@ type MobilePickerTab = ConversationMediaPickerTabId;
 type ConversationSlashCompletion = {
   key: string;
   label: string;
+  command?: SlashCommand;
   description?: string;
   insertValue: string;
   cursor: number;
@@ -115,6 +121,7 @@ type ConversationSlashCompletion = {
 };
 
 type SubmittedConversationInput = {
+  replyTo?: import("@marinara-engine/shared").MessageReply;
   chatId: string;
   draft: string;
   height: string;
@@ -240,6 +247,7 @@ function buildConversationSlashCompletions(
       return {
         key: `command:${command.name}`,
         label: `/${command.name}`,
+        command,
         description:
           command.name === "status"
             ? `${command.description}. Use online, idle, dnd, offline, or clear, then a character name.`
@@ -324,7 +332,7 @@ interface ConversationInputProps {
     conversationActivity?: string;
   }>;
   onPeekPrompt?: () => void;
-  onIllustrate?: () => void | Promise<void>;
+  onIllustrate?: (prompt?: string, messageRange?: [string, string]) => void | Promise<void>;
   onGenerateSelfie?: (characterId?: string) => void | Promise<void>;
 }
 
@@ -372,9 +380,11 @@ export function ConversationInput({
   const activeChatId = useChatStore((s) => s.activeChatId);
   const mariChips = useAgentStore((s) => s.mariChips);
   const mariChipsChatId = useAgentStore((s) => s.mariChipsChatId);
-  const clearMariChips = useAgentStore((s) => s.clearMariChips);
   const professorMariSuggestionsEnabled = useUIStore((s) => s.professorMariSuggestionsEnabled);
   const { data: activeChat } = useChat(activeChatId);
+  const { data: contextConnections = [] } = useConnections();
+  const sidecarMaxContext = useSidecarStore((state) => state.config.contextSize);
+  const showContextUsage = useUIStore((s) => s.showContextUsage);
   const { data: installedCapabilities = [] } = useInstalledCapabilityPackages();
   const availableCapabilityIds = useMemo(
     () => new Set(installedCapabilities.filter((item) => item.status === "active").map((item) => item.id)),
@@ -421,6 +431,8 @@ export function ConversationInput({
   });
   // Show stop button only during actual generation, not during busy delay
   const isActuallyGenerating = isStreaming && !delayedCharacterInfo;
+  const replyDraft = useChatStore((s) => (activeChatId ? s.replyDrafts.get(activeChatId) : undefined));
+  const setReplyDraft = useChatStore((s) => s.setReplyDraft);
   const setInputDraft = useChatStore((s) => s.setInputDraft);
   const clearInputDraft = useChatStore((s) => s.clearInputDraft);
   const setCurrentInput = useChatStore((s) => s.setCurrentInput);
@@ -491,6 +503,11 @@ export function ConversationInput({
     });
   }, [activeChatId, qc]);
   const messagesData = qc.getQueryData<InfiniteData<Message[]>>(chatKeys.messages(activeChatId ?? ""));
+  const contextMessages = useMemo(() => [...(messagesData?.pages ?? [])].reverse().flat(), [messagesData]);
+  const contextBudget = useMemo(
+    () => resolveChatContextBudget(contextMessages, activeChat?.connectionId, contextConnections, sidecarMaxContext),
+    [activeChat?.connectionId, contextConnections, contextMessages, sidecarMaxContext],
+  );
   const isProfessorMariChat = activeChatCharacters?.some((character) => character.id === PROFESSOR_MARI_ID) ?? false;
   const hasMessages = (messagesData?.pages ?? []).some((page) => page.length > 0);
   const visibleMariChips =
@@ -630,12 +647,6 @@ export function ConversationInput({
     [activeChatId, setInputDraft, syncInputState, guidedPlanStep, recordMariPlanAnswer, clearMariPlan],
   );
   useEffect(() => {
-    if (professorMariSuggestionsEnabled) return;
-    clearMariChips();
-    clearMariPlan();
-  }, [clearMariChips, clearMariPlan, professorMariSuggestionsEnabled]);
-
-  useEffect(() => {
     const handleCardAssetInsert = (event: Event) => {
       const detail = (event as CustomEvent<CardAssetInsertDetail>).detail;
       if (!detail?.markdown) return;
@@ -657,6 +668,8 @@ export function ConversationInput({
 
   const restoreSubmittedInput = useCallback(
     (submitted: SubmittedConversationInput) => {
+      if (submitted.replyTo && !useChatStore.getState().replyDrafts.has(submitted.chatId))
+        useChatStore.getState().setReplyDraft(submitted.chatId, submitted.replyTo);
       const activeChatIdAfterFailure = useChatStore.getState().activeChatId;
       const currentValue = textareaRef.current?.value ?? "";
       const canRestoreVisibleDraft = activeChatIdAfterFailure === submitted.chatId && currentValue.length === 0;
@@ -700,6 +713,7 @@ export function ConversationInput({
           role: "user",
           content,
           characterId: null,
+          ...(submitted.replyTo ? { extra: { replyTo: submitted.replyTo } } : {}),
         });
         createdMessageId = created.id;
         if (persistedAttachments.length > 0) {
@@ -716,7 +730,7 @@ export function ConversationInput({
         let rollbackFailed = false;
         if (createdMessageId) {
           try {
-            await deleteMessage.mutateAsync(createdMessageId);
+            await deleteMessage.mutateAsync({ messageId: createdMessageId, skipTrash: true });
           } catch {
             rollbackFailed = true;
           }
@@ -1125,6 +1139,7 @@ export function ConversationInput({
 
     const submittedInput: SubmittedConversationInput = {
       chatId: activeChatId,
+      replyTo: replyDraft,
       draft: textareaRef.current?.value ?? raw,
       height: textareaRef.current?.style.height ?? "auto",
       attachments,
@@ -1139,6 +1154,11 @@ export function ConversationInput({
       name: attachment.name,
     }));
 
+    // Cancel the pending draft save so it cannot restore the sent text after clearInputDraft.
+    if (draftTimerRef.current) {
+      clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = null;
+    }
     if (textareaRef.current) {
       textareaRef.current.value = "";
       textareaRef.current.style.height = "auto";
@@ -1149,6 +1169,8 @@ export function ConversationInput({
     setCompletions([]);
     setMentionQuery(null);
     setMentionCompletions([]);
+
+    setReplyDraft(activeChatId, null);
 
     // Extract @mentions from the raw message (before regex transforms)
     const mentioned = extractMentions(raw);
@@ -1166,15 +1188,24 @@ export function ConversationInput({
       return;
     }
 
-    await generate({
-      chatId: activeChatId,
-      connectionId: null,
-      userMessage: message,
-      ...(pendingAttachments.length ? { attachments: pendingAttachments } : {}),
-      ...(mentioned.length ? { mentionedCharacterNames: mentioned } : {}),
-    });
+    try {
+      const succeeded = await generate({
+        chatId: activeChatId,
+        connectionId: null,
+        userMessage: message,
+        ...(replyDraft ? { replyTo: replyDraft } : {}),
+        ...(pendingAttachments.length ? { attachments: pendingAttachments } : {}),
+        ...(mentioned.length ? { mentionedCharacterNames: mentioned } : {}),
+      });
+      if (succeeded === false) restoreSubmittedInput(submittedInput);
+    } catch (error) {
+      restoreSubmittedInput(submittedInput);
+      toast.error(error instanceof Error ? error.message : localizeUi("chat.reply.sendFailed"));
+    }
   }, [
     activeChatId,
+    replyDraft,
+    setReplyDraft,
     availableConversationGames,
     activeChatCharacters,
     lastMessageRole,
@@ -1356,6 +1387,7 @@ export function ConversationInput({
     message = resolveInputMacros(message);
     const submittedInput: SubmittedConversationInput = {
       chatId: submittingChatId,
+      replyTo: replyDraft,
       draft: raw,
       height: textareaRef.current?.style.height ?? "auto",
       attachments,
@@ -1381,6 +1413,7 @@ export function ConversationInput({
     setMentionQuery(null);
     setMentionCompletions([]);
 
+    setReplyDraft(submittingChatId, null);
     await createDurableMessageWithRollback({
       content: message,
       attachments: pendingAttachments,
@@ -1388,6 +1421,8 @@ export function ConversationInput({
     });
   }, [
     activeChatId,
+    replyDraft,
+    setReplyDraft,
     isSendBlocked,
     isReadingAttachments,
     attachments,
@@ -1820,22 +1855,13 @@ export function ConversationInput({
     [activeChatId, isSendBlocked, generate, insertStickerToken],
   );
   const showDraftTranslateButton = chatMetadata.showInputTranslateButton === true;
-  const showMobileToolsTab =
-    showDraftTranslateButton || speechToTextEnabled || (showQuickRepliesMenu && quickReplyActions.length > 0);
-  const mobilePickerTabs = useMemo<ConversationMediaPickerTab[]>(() => {
-    const tabs: ConversationMediaPickerTab[] = [
-      { id: "emoji", label: "Emoji" },
-      { id: "kaomoji", label: "Kaomoji" },
-      { id: "gifs", label: "GIFs" },
-      { id: "stickers", label: "Stickers" },
-    ];
-    if (showMobileToolsTab) tabs.push({ id: "tools", label: "Tools" });
-    return tabs;
-  }, [showMobileToolsTab]);
-
-  useEffect(() => {
-    if (!showMobileToolsTab && mobilePickerTab === "tools") setMobilePickerTab("emoji");
-  }, [mobilePickerTab, showMobileToolsTab]);
+  const mobilePickerTabs: ConversationMediaPickerTab[] = [
+    { id: "emoji", label: "Emoji" },
+    { id: "kaomoji", label: "Kaomoji" },
+    { id: "gifs", label: "GIFs" },
+    { id: "stickers", label: "Stickers" },
+    { id: "tools", label: t("chat.input.tools") },
+  ];
 
   const handleTranslateDraft = useCallback(async () => {
     if (!activeChatId || isTranslatingDraft) return;
@@ -1884,6 +1910,7 @@ export function ConversationInput({
 
   const ensureInputVisible = useCallback(() => {
     if (typeof window === "undefined" || !window.matchMedia("(max-width: 767px)").matches) return;
+    if (isIosWebKitBrowser(navigator.userAgent, navigator.platform, navigator.maxTouchPoints)) return;
     const scroll = () => {
       const inputBar = inputBarRef.current;
       const viewport = window.visualViewport;
@@ -1912,31 +1939,29 @@ export function ConversationInput({
     mobilePickerTab === "tools" ? (
       <div className="flex h-full flex-col gap-3 overflow-y-auto p-3">
         <div className="grid gap-2">
-          {showDraftTranslateButton && (
-            <button
-              type="button"
-              onClick={() => {
-                setMobilePickerOpen(false);
-                void handleTranslateDraft();
-              }}
-              disabled={!activeChatId || !hasInput || isTranslatingDraft}
-              className={cn(
-                "flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors",
-                activeChatId && hasInput && !isTranslatingDraft
-                  ? "text-foreground/80 hover:bg-foreground/10"
-                  : "cursor-not-allowed text-foreground/25",
-              )}
-            >
-              {isTranslatingDraft ? (
-                <Loader2 size="1rem" className="shrink-0 animate-spin" />
-              ) : (
-                <Languages size="1rem" className="shrink-0" />
-              )}
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                {localizeUi("chat.input.translateDraft")}
-              </span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => {
+              setMobilePickerOpen(false);
+              void handleTranslateDraft();
+            }}
+            disabled={!activeChatId || !hasInput || isTranslatingDraft}
+            className={cn(
+              "flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors",
+              activeChatId && hasInput && !isTranslatingDraft
+                ? "text-foreground/80 hover:bg-foreground/10"
+                : "cursor-not-allowed text-foreground/25",
+            )}
+          >
+            {isTranslatingDraft ? (
+              <Loader2 size="1rem" className="shrink-0 animate-spin" />
+            ) : (
+              <Languages size="1rem" className="shrink-0" />
+            )}
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">
+              {localizeUi("chat.input.translateDraft")}
+            </span>
+          </button>
 
           {speechToTextEnabled && (
             <div className="flex min-h-11 items-center justify-between gap-2 rounded-lg px-3 py-2">
@@ -2012,7 +2037,10 @@ export function ConversationInput({
     <div className="mari-chat-input chat-input-container relative px-2 sm:px-3 pb-3">
       {/* Slash command autocomplete */}
       {completions.length > 0 && (
-        <div className="absolute bottom-full left-3 right-3 z-40 mb-1 max-h-[min(18rem,45dvh)] overflow-y-auto rounded-lg border border-foreground/10 bg-[var(--card)] shadow-lg [-webkit-overflow-scrolling:touch]">
+        <div
+          data-chat-input-popup="commands"
+          className="mari-chat-style-surface mari-chat-input-popup absolute bottom-full left-3 right-3 z-40 mb-1 max-h-[min(18rem,45dvh)] overflow-y-auto rounded-lg border border-foreground/10 bg-[var(--card)] shadow-lg [-webkit-overflow-scrolling:touch]"
+        >
           {completions.map((cmd, i) => (
             <button
               key={cmd.key}
@@ -2028,20 +2056,24 @@ export function ConversationInput({
                 }
               }}
               className={cn(
-                "flex w-full min-w-0 items-start gap-2 px-3 py-2.5 text-left text-sm transition-colors",
+                "flex w-full min-w-0 flex-col items-start gap-1 px-3 py-2.5 text-left text-sm transition-colors",
                 i === selectedCompletion ? "bg-foreground/10 text-foreground" : "hover:bg-foreground/10",
               )}
             >
               <span
                 className={cn(
-                  "shrink-0 whitespace-nowrap text-xs",
+                  "min-w-0 whitespace-normal text-xs [overflow-wrap:anywhere]",
                   cmd.kind === "character" ? "font-medium" : "font-mono",
                 )}
               >
-                {cmd.label}
+                {cmd.command
+                  ? getSlashCommandUsage(cmd.command, t)
+                  : cmd.kind === "status"
+                    ? t("ui.chat.slash.statusCompletionUsage", { status: cmd.label })
+                    : cmd.label}
               </span>
               {cmd.description && (
-                <span className="min-w-0 flex-1 text-[0.6875rem] leading-snug text-foreground/45 [overflow-wrap:anywhere]">
+                <span className="min-w-0 text-[0.6875rem] leading-snug text-foreground/45 [overflow-wrap:anywhere]">
                   {cmd.description}
                 </span>
               )}
@@ -2052,7 +2084,10 @@ export function ConversationInput({
 
       {/* @mention autocomplete */}
       {mentionCompletions.length > 0 && (
-        <div className="absolute bottom-full left-0 right-0 mb-1 overflow-hidden rounded-lg border border-foreground/10 bg-[var(--card)] shadow-lg">
+        <div
+          data-chat-input-popup="mentions"
+          className="mari-chat-style-surface mari-chat-input-popup absolute bottom-full left-0 right-0 mb-1 overflow-hidden rounded-lg border border-foreground/10 bg-[var(--card)] shadow-lg"
+        >
           {mentionCompletions.map((name, i) => (
             <button
               key={name}
@@ -2074,7 +2109,10 @@ export function ConversationInput({
 
       {/* :emoji: autocomplete */}
       {emojiCompletions.length > 0 && (
-        <div className="absolute bottom-full left-0 right-0 mb-1 max-h-56 overflow-y-auto rounded-lg border border-foreground/10 bg-[var(--card)] shadow-lg sm:left-[2%] sm:right-[2%]">
+        <div
+          data-chat-input-popup="emoji-completions"
+          className="mari-chat-style-surface mari-chat-input-popup absolute bottom-full left-0 right-0 mb-1 max-h-56 overflow-y-auto rounded-lg border border-foreground/10 bg-[var(--card)] shadow-lg sm:left-[2%] sm:right-[2%]"
+        >
           {emojiCompletions.map((em, i) => (
             <button
               key={em.name}
@@ -2170,6 +2208,10 @@ export function ConversationInput({
       )}
       <MariSuggestionChips chips={chipRowChips} onSelect={handleMariChipSelect} disabled={isSendBlocked} />
 
+      {replyDraft && (
+        <MessageReplyPreview reply={replyDraft} onCancel={() => activeChatId && setReplyDraft(activeChatId, null)} />
+      )}
+
       {/* Input bar */}
       <div
         ref={inputBarRef}
@@ -2178,6 +2220,7 @@ export function ConversationInput({
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onPointerDown={(event) => {
+          if (hasActiveTextSelection()) return;
           const target = event.target as HTMLElement;
           if (target.closest("button, input, textarea, select, a, [role='button']")) return;
           event.preventDefault();
@@ -2220,11 +2263,11 @@ export function ConversationInput({
 
         {/* Quick Switchers — desktop: inline, mobile: chevron */}
         <div className="hidden shrink-0 items-center gap-1 sm:flex">
-          <QuickConnectionSwitcher />
+          <QuickConnectionSwitcher contextBudget={showContextUsage ? contextBudget : null} />
           <QuickPersonaSwitcher />
         </div>
         <div className="flex shrink-0 sm:hidden">
-          <QuickSwitcherMobile />
+          <QuickSwitcherMobile contextBudget={showContextUsage ? contextBudget : null} />
         </div>
 
         {/* Textarea */}
@@ -2232,6 +2275,7 @@ export function ConversationInput({
         <textarea
           ref={textareaRef}
           data-chat-composer="true"
+          data-chat-id={activeChatId}
           placeholder={inputPlaceholder}
           rows={1}
           onInput={handleInput}
@@ -2261,20 +2305,8 @@ export function ConversationInput({
                 ? "bg-foreground/10 text-foreground/75 ring-1 ring-foreground/20"
                 : "text-foreground/40 hover:bg-foreground/10 hover:text-foreground/70",
             )}
-            title={
-              mobilePickerOpen
-                ? t("chat.input.showKeyboard")
-                : showMobileToolsTab
-                  ? t("chat.input.mediaAndTools")
-                  : t("chat.input.media")
-            }
-            aria-label={
-              mobilePickerOpen
-                ? t("chat.input.showKeyboard")
-                : showMobileToolsTab
-                  ? t("chat.input.mediaAndTools")
-                  : t("chat.input.media")
-            }
+            title={mobilePickerOpen ? t("chat.input.showKeyboard") : t("chat.input.mediaAndTools")}
+            aria-label={mobilePickerOpen ? t("chat.input.showKeyboard") : t("chat.input.mediaAndTools")}
           >
             {mobilePickerOpen ? <Keyboard size="1.25rem" /> : <Smile size="1.25rem" />}
           </button>
@@ -2291,8 +2323,8 @@ export function ConversationInput({
                   ? "bg-foreground/10 text-foreground/75 ring-1 ring-foreground/20"
                   : "text-foreground/40 hover:bg-foreground/10 hover:text-foreground/70",
               )}
-              title={t(showMobileToolsTab ? "chat.input.mediaAndTools" : "chat.input.media")}
-              aria-label={t(showMobileToolsTab ? "chat.input.mediaAndTools" : "chat.input.media")}
+              title={t("chat.input.mediaAndTools")}
+              aria-label={t("chat.input.mediaAndTools")}
               aria-expanded={mobilePickerOpen}
             >
               <Smile size="1.25rem" />

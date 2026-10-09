@@ -1,10 +1,11 @@
+import { resolveSceneBusyCharacterIds } from "../services/generation/scene-context-runtime.js";
 // ──────────────────────────────────────────────
 // Routes: Conversation Mode Services
 // ──────────────────────────────────────────────
 // Endpoints for schedule generation, status checking,
 // autonomous message polling, and busy-delay responses.
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { logger } from "../lib/logger.js";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
@@ -17,6 +18,7 @@ import {
   generateCharacterSchedule,
   generateCharacterDaySchedule,
   generateScheduleRoutineSummary,
+  ScheduleDraftError,
   getEffectiveCurrentStatus,
   scheduleNeedsRefresh,
   getMonday,
@@ -26,10 +28,13 @@ import {
   type WeekScheduleDraftMode,
 } from "../services/conversation/schedule.service.js";
 import {
+  buildAutonomousDailyBudgetPatch,
   checkAutonomousMessaging,
   checkCharacterExchange,
   getActivityState,
+  getAutonomousDailyBudget,
   isAutonomousDailyBudgetExhausted,
+  sharesAutonomousDailyBudget,
   recordUserActivity,
   recordAssistantActivity,
   recordAutonomousClientPresence,
@@ -76,7 +81,22 @@ function parseWeekScheduleDraftMode(value: unknown): WeekScheduleDraftMode {
 }
 
 function getScheduleGenerationError(error: unknown, fallback: string): string {
+  if (error instanceof SyntaxError || (error instanceof ScheduleDraftError && error.cause instanceof SyntaxError))
+    return "The model returned invalid schedule JSON. Try again or choose another model.";
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+/** Schedule work belongs to the editor/request and stops when it disconnects. */
+function scheduleRequestSignal(reply: FastifyReply): AbortSignal {
+  const controller = new AbortController();
+  const onClose = () => {
+    if (!reply.raw.writableFinished) controller.abort(new Error("Schedule generation cancelled"));
+    reply.raw.off("finish", onFinish);
+  };
+  const onFinish = () => reply.raw.off("close", onClose);
+  reply.raw.once("close", onClose);
+  reply.raw.once("finish", onFinish);
+  return controller.signal;
 }
 
 type AutonomousUserStatus = "active" | "idle" | "dnd";
@@ -89,8 +109,18 @@ type AutonomousIntentPayload = {
 };
 
 type AutonomousCandidateEvaluation =
-  | { ok: true; intent: AutonomousIntentPayload }
-  | { ok: false; reason: "daily_budget_exhausted" | "intent_cooldown" };
+  { ok: true; intent: AutonomousIntentPayload } | { ok: false; reason: "daily_budget_exhausted" | "intent_cooldown" };
+
+/**
+ * Chats whose in-memory activity state has been seeded from the transcript
+ * this process (#5592 PR-B). Latched even when the transcript could not seed
+ * a state (e.g. no user messages yet) — live recordUserActivity covers those
+ * from the first real message — so a repeat autonomous check NEVER re-reads
+ * the transcript, keeping idle checks free of lazy-table queries.
+ */
+const seededAutonomousActivityChats = new Set<string>();
+/** In-flight transcript seeds, so concurrent checks share one read and a failed read is retried. */
+const autonomousActivitySeeds = new Map<string, Promise<void>>();
 
 function normalizeAutonomousUserStatus(value: unknown): AutonomousUserStatus {
   return value === "idle" || value === "dnd" ? value : "active";
@@ -146,11 +176,16 @@ function resolveAutonomousIntentPayload(
   const msSinceUserLastSpoke = state?.lastUserMessageAt ? Date.now() - state.lastUserMessageAt : 0;
   const hadUnansweredUserMessage = state ? state.lastUserMessageAt > state.lastAssistantMessageAt : false;
   const intent = resolveIntent(schedule, msSinceUserLastSpoke, hadUnansweredUserMessage, now);
+  // A shared-limit group checks in after a long absence once, not once per character (#7055).
+  const cooldownIds =
+    intent === "long_absence_check_in" && sharesAutonomousDailyBudget(meta)
+      ? Object.keys((meta.intentCooldowns as object | undefined) ?? {})
+      : [characterId];
   return {
     autonomousIntent: getIntentHint(intent),
     autonomousIntentPrompt: `What prompted this message: ${getIntentHint(intent)}`,
     autonomousIntentKey: intent,
-    onCooldown: isIntentOnCooldown(meta, characterId, intent),
+    onCooldown: cooldownIds.some((id) => isIntentOnCooldown(meta, id, intent)),
   };
 }
 
@@ -243,7 +278,11 @@ async function resolveConversationScheduleConnection(connections: ConnectionsSto
     return { conn: null, error: "No connection configured" };
   }
 
-  return { conn: await connections.getWithKey(connId), error: null };
+  const conn = await connections.getWithKey(connId);
+  if (conn && ["image_generation", "video_generation", "audio", "decision"].includes(conn.provider)) {
+    return { conn: null, error: "Choose a language connection for schedule generation" };
+  }
+  return { conn, error: conn ? null : "The selected connection is unavailable. Choose another connection." };
 }
 
 function parseDateKeyMs(dateKey: string): number {
@@ -373,6 +412,24 @@ export async function conversationRoutes(app: FastifyInstance) {
   const chars = createCharactersStorage(app.db);
   const connections = createConnectionsStorage(app.db);
 
+  /** Characters without a schedule (or with schedules off) are paced by their card talkativeness. */
+  async function withSchedulelessAutonomySchedules(
+    characterIds: string[],
+    schedules: CharacterSchedules,
+    userStatus: AutonomousUserStatus,
+  ): Promise<CharacterSchedules> {
+    const autonomySchedules: CharacterSchedules = { ...schedules };
+    for (const cid of characterIds) {
+      if (autonomySchedules[cid]) continue;
+      const charRow = await chars.getById(cid);
+      autonomySchedules[cid] = createSchedulelessAutonomySchedule(
+        getCharacterCardTalkativeness(charRow?.data),
+        userStatus,
+      );
+    }
+    return autonomySchedules;
+  }
+
   async function rememberConversationTimeZone(timeZone: string): Promise<number> {
     const allChats = await chats.list();
     let updatedChats = 0;
@@ -415,14 +472,21 @@ export async function conversationRoutes(app: FastifyInstance) {
    * no chat open, in which case the default connection and the client-supplied
    * timezone stand in for the chat's.
    */
-  async function resolveScheduleGenerationContext(chatId: string | undefined, characterId: string) {
+  async function resolveScheduleGenerationContext(
+    chatId: string | undefined,
+    characterId: string,
+    connectionId?: unknown,
+  ) {
+    if (connectionId != null && (typeof connectionId !== "string" || !connectionId.trim())) {
+      return { errorStatus: 400 as const, error: "connectionId must be a non-empty string" };
+    }
     const chat = chatId ? await chats.getById(chatId) : null;
     if (chatId && !chat) return { errorStatus: 404 as const, error: "Chat not found" };
     if (chat && chat.mode !== "conversation") return { errorStatus: 400 as const, error: "Not a conversation chat" };
 
     const { conn, error: connectionError } = await resolveConversationScheduleConnection(
       connections,
-      chat?.connectionId ?? null,
+      typeof connectionId === "string" ? connectionId : (chat?.connectionId ?? null),
     );
     if (!conn) return { errorStatus: 400 as const, error: connectionError ?? "No connection configured" };
     const baseUrl = resolveBaseUrl(conn);
@@ -484,12 +548,15 @@ export async function conversationRoutes(app: FastifyInstance) {
       dayGuidance?: string;
       draftMode?: string;
       timeZone?: unknown;
+      connectionId?: string;
+      debugMode?: boolean;
     };
   }>("/schedule/draft", async (req, reply) => {
+    const signal = scheduleRequestSignal(reply);
     const { chatId, characterId, mode } = req.body;
     const guidance = typeof req.body.guidance === "string" ? req.body.guidance.trim() : "";
     const dayGuidance = typeof req.body.dayGuidance === "string" ? req.body.dayGuidance.trim() : "";
-    const context = await resolveScheduleGenerationContext(chatId, characterId);
+    const context = await resolveScheduleGenerationContext(chatId, characterId, req.body.connectionId);
     if ("error" in context) return reply.status(context.errorStatus ?? 400).send({ error: context.error });
     const requestedTimeZone = normalizePromptTimeZone(req.body.timeZone);
     if (req.body.timeZone != null && !requestedTimeZone) {
@@ -520,9 +587,14 @@ export async function conversationRoutes(app: FastifyInstance) {
           req.body.schedule,
           guidance,
           dayGuidance,
-          scheduleTimeZone,
+          {
+            timeZone: scheduleTimeZone,
+            draftMode: req.body.draftMode === undefined ? "vary" : parseWeekScheduleDraftMode(req.body.draftMode),
+            debugMode: req.body.debugMode === true,
+            signal,
+          },
         );
-        return reply.send({ day, blocks });
+        return reply.send({ day, blocks, weekStart: getMonday(scheduleNow).toISOString() });
       }
 
       const { schedule } = await generateCharacterSchedule(
@@ -538,6 +610,8 @@ export async function conversationRoutes(app: FastifyInstance) {
         {
           draftMode: parseWeekScheduleDraftMode(req.body.draftMode),
           timeZone: scheduleTimeZone,
+          debugMode: req.body.debugMode === true,
+          signal,
         },
       );
       const fullSchedule = preserveDraftScheduleFields(
@@ -546,8 +620,12 @@ export async function conversationRoutes(app: FastifyInstance) {
       );
       return reply.send({ schedule: fullSchedule });
     } catch (error) {
+      if (signal.aborted) return;
       logger.error(error instanceof Error ? error : undefined, "[schedule] Draft generation failed");
-      return reply.status(502).send({ error: getScheduleGenerationError(error, "Schedule draft generation failed") });
+      return reply.status(502).send({
+        error: getScheduleGenerationError(error, "Schedule draft generation failed"),
+        ...(error instanceof ScheduleDraftError ? { rawResponse: error.rawResponse } : {}),
+      });
     }
   });
 
@@ -557,18 +635,30 @@ export async function conversationRoutes(app: FastifyInstance) {
       characterId: string;
       schedule: WeekSchedule;
       guidance?: string;
+      connectionId?: string;
+      debugMode?: boolean;
     };
   }>("/schedule/summary", async (req, reply) => {
+    const signal = scheduleRequestSignal(reply);
     const { chatId, characterId, schedule } = req.body;
     if (!schedule) return reply.status(400).send({ error: "schedule is required" });
     const guidance = typeof req.body.guidance === "string" ? req.body.guidance.trim() : "";
-    const context = await resolveScheduleGenerationContext(chatId, characterId);
+    const context = await resolveScheduleGenerationContext(chatId, characterId, req.body.connectionId);
     if ("error" in context) return reply.status(context.errorStatus ?? 400).send({ error: context.error });
     const { charData, provider, model } = context;
     try {
-      const { summary } = await generateScheduleRoutineSummary(provider, model, charData.name, schedule, guidance);
+      const { summary } = await generateScheduleRoutineSummary(
+        provider,
+        model,
+        charData.name,
+        schedule,
+        guidance,
+        req.body.debugMode === true,
+        signal,
+      );
       return reply.send({ summary, generatedAt: new Date().toISOString() });
     } catch (error) {
+      if (signal.aborted) return;
       logger.error(error instanceof Error ? error : undefined, "[schedule] Summary generation failed");
       return reply.status(502).send({ error: getScheduleGenerationError(error, "Schedule summary generation failed") });
     }
@@ -579,13 +669,15 @@ export async function conversationRoutes(app: FastifyInstance) {
   // ─────────────────────────────────────────────
   app.post<{
     Body: {
-      chatId: string;
+      chatId?: string;
       forceRefresh?: boolean;
+      automatic?: boolean;
       characterIds?: string[];
       scheduleGenerationPreferences?: string;
       timeZone?: unknown;
     };
   }>("/schedule/generate", async (req, reply) => {
+    const signal = scheduleRequestSignal(reply);
     const { chatId, forceRefresh } = req.body;
     // Runtime guard: TypeScript's Body type is compile-time only. If a client sends a non-string,
     // .trim() would throw and surface as a 500. Reject explicitly with 400 instead.
@@ -595,25 +687,25 @@ export async function conversationRoutes(app: FastifyInstance) {
     }
     const userSchedulePreferences = typeof rawPrefs === "string" ? rawPrefs.trim() : "";
 
-    const chat = await chats.getById(chatId);
-    if (!chat) return reply.status(404).send({ error: "Chat not found" });
-    if (chat.mode !== "conversation") return reply.status(400).send({ error: "Not a conversation chat" });
+    const chat = chatId ? await chats.getById(chatId) : null;
+    if (chatId && !chat) return reply.status(404).send({ error: "Chat not found" });
+    if (chat && chat.mode !== "conversation") return reply.status(400).send({ error: "Not a conversation chat" });
     const requestedTimeZone = normalizePromptTimeZone(req.body.timeZone);
     if (req.body.timeZone != null && !requestedTimeZone) {
       return reply.status(400).send({ error: "timeZone must be a valid IANA timezone" });
     }
-    if (requestedTimeZone) await rememberConversationTimeZone(requestedTimeZone);
+    if (requestedTimeZone && chatId) await rememberConversationTimeZone(requestedTimeZone);
 
     // Resolve connection (need decrypted API key; "random" is a sentinel, not a persisted connection id)
     const { conn, error: connectionError } = await resolveConversationScheduleConnection(
       connections,
-      chat.connectionId,
+      chat?.connectionId ?? null,
     );
     if (!conn) return reply.status(400).send({ error: connectionError ?? "No connection configured" });
     const baseUrl = resolveBaseUrl(conn);
     if (!baseUrl) return reply.status(400).send({ error: "No base URL" });
 
-    const meta = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
+    const meta = chat ? (typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {})) : {};
     if (requestedTimeZone) meta.conversationTimeZone = requestedTimeZone;
     const scheduleTimeZone = requestedTimeZone ?? resolveConversationTimeZone(meta);
     const nowInstant = new Date();
@@ -623,9 +715,9 @@ export async function conversationRoutes(app: FastifyInstance) {
     const characterIds: string[] =
       Array.isArray(req.body.characterIds) && req.body.characterIds.length > 0
         ? req.body.characterIds
-        : typeof chat.characterIds === "string"
+        : typeof chat?.characterIds === "string"
           ? JSON.parse(chat.characterIds)
-          : chat.characterIds;
+          : (chat?.characterIds ?? []);
 
     const provider = await createConversationAgentProvider(conn, baseUrl);
     const model = conn.model ?? "";
@@ -652,6 +744,7 @@ export async function conversationRoutes(app: FastifyInstance) {
     const results: Record<string, { status: string; schedule?: WeekSchedule }> = {};
 
     for (const charId of characterIds) {
+      if (signal.aborted) return;
       // Load character data
       const charRow = await chars.getById(charId);
       if (!charRow) {
@@ -663,6 +756,15 @@ export async function conversationRoutes(app: FastifyInstance) {
       // The character owns its schedule; the chat map is only a cache, so a
       // legacy chat-only schedule still counts as existing.
       const existing = readCharacterSchedule(charData) ?? existingSchedules[charId];
+      if (req.body.automatic === true && (!existing || charData.extensions?.conversationScheduleAutoRenew !== true)) {
+        results[charId] = { status: "renewal_disabled" };
+        continue;
+      }
+      if (existing && !forceRefresh && charData.extensions?.conversationScheduleAutoRenew !== true) {
+        newSchedules[charId] = existing;
+        results[charId] = { status: "renewal_disabled" };
+        continue;
+      }
       if (existing && !forceRefresh && !scheduleNeedsRefresh(existing, scheduleNow)) {
         newSchedules[charId] = existing;
         results[charId] =
@@ -689,8 +791,9 @@ export async function conversationRoutes(app: FastifyInstance) {
           charData.personality ?? "",
           userSchedulePreferences,
           recentContinuityContext,
-          { timeZone: scheduleTimeZone },
+          { timeZone: scheduleTimeZone, signal },
         );
+        signal.throwIfAborted();
         logger.info("[schedule] Generated schedule for %s, days: %s", charData.name, Object.keys(schedule.days ?? {}));
 
         const fullSchedule = preserveTimingSettings(
@@ -722,6 +825,7 @@ export async function conversationRoutes(app: FastifyInstance) {
 
         results[charId] = { status: "generated", schedule: fullSchedule };
       } catch (err) {
+        if (signal.aborted) return;
         const msg = err instanceof Error ? err.message : "Schedule generation failed";
         logger.error(err instanceof Error ? err : undefined, "[schedule] ERROR for %s: %s", charData.name, msg);
         results[charId] = { status: `error: ${msg}` };
@@ -729,25 +833,27 @@ export async function conversationRoutes(app: FastifyInstance) {
     }
 
     // Only save if we actually have schedules to persist (avoids overwriting real data with empty object)
+    if (signal.aborted) return;
     if (Object.keys(newSchedules).length > 0) {
       const changedCharIds = Object.entries(results)
         .filter(([, result]) => result.status === "generated" || result.status === "shared")
         .map(([id]) => id);
       if (changedCharIds.length > 0) {
-        await chats.patchMetadata(chatId, (current) => {
-          const currentSchedules: CharacterSchedules = hasSchedules(current.characterSchedules)
-            ? (current.characterSchedules as CharacterSchedules)
-            : {};
-          const mergedSchedules: CharacterSchedules = { ...currentSchedules };
-          for (const id of changedCharIds) {
-            mergedSchedules[id] = preserveTimingSettings(newSchedules[id]!, currentSchedules[id]);
-          }
-          return {
-            conversationSchedulesEnabled: true,
-            characterSchedules: mergedSchedules,
-            scheduleWeekStart: mondayStr,
-          };
-        });
+        if (chatId)
+          await chats.patchMetadata(chatId, (current) => {
+            const currentSchedules: CharacterSchedules = hasSchedules(current.characterSchedules)
+              ? (current.characterSchedules as CharacterSchedules)
+              : {};
+            const mergedSchedules: CharacterSchedules = { ...currentSchedules };
+            for (const id of changedCharIds) {
+              mergedSchedules[id] = preserveTimingSettings(newSchedules[id]!, currentSchedules[id]);
+            }
+            return {
+              conversationSchedulesEnabled: true,
+              characterSchedules: mergedSchedules,
+              scheduleWeekStart: mondayStr,
+            };
+          });
       }
       // Other chats pick the new schedule up on their next resolve, because it
       // now lives on the character card rather than in each chat's metadata.
@@ -780,8 +886,11 @@ export async function conversationRoutes(app: FastifyInstance) {
       string,
       { status: string; activity: string; schedule?: WeekSchedule; override?: object; lastContact?: string }
     > = {};
+    let needsRefresh = false;
 
     for (const charId of characterIds) {
+      const charRow = await chars.getById(charId);
+      const charData = charRow ? (JSON.parse(charRow.data as string) as CharacterData) : null;
       const schedule = schedules[charId];
       if (!schedule) {
         const { status, activity, override } = getEffectiveCurrentStatus(
@@ -791,14 +900,13 @@ export async function conversationRoutes(app: FastifyInstance) {
           "",
           scheduleNow,
         );
-        const charRow = await chars.getById(charId);
         if (charRow) {
-          const charData = JSON.parse(charRow.data as string) as CharacterData;
-          const currentExtensions = (charData.extensions as Record<string, unknown> | undefined) ?? {};
+          const currentData = charData!;
+          const currentExtensions = (currentData.extensions as Record<string, unknown> | undefined) ?? {};
           // The card's status is global. Only reset it when the character truly
           // has no schedule — if it has one and this chat simply has schedules
           // switched off, writing here would clear presence in every other chat.
-          const characterOwnsSchedule = !!readCharacterSchedule(charData);
+          const characterOwnsSchedule = !!readCharacterSchedule(currentData);
           if (
             !characterOwnsSchedule &&
             (currentExtensions.conversationStatus !== status || currentExtensions.conversationActivity !== activity)
@@ -823,17 +931,18 @@ export async function conversationRoutes(app: FastifyInstance) {
         "free time",
         scheduleNow,
       );
+      if (scheduleNeedsRefresh(schedule, scheduleNow) && charData?.extensions?.conversationScheduleAutoRenew === true) {
+        needsRefresh = true;
+      }
 
       // Sync the character's conversationStatus in the database
-      const charRow = await chars.getById(charId);
       if (charRow) {
-        const charData = JSON.parse(charRow.data as string) as CharacterData;
         if (
-          charData.extensions?.conversationStatus !== status ||
-          charData.extensions?.conversationActivity !== activity
+          charData!.extensions?.conversationStatus !== status ||
+          charData!.extensions?.conversationActivity !== activity
         ) {
           const extensions = {
-            ...(charData.extensions ?? {}),
+            ...(charData!.extensions ?? {}),
             conversationStatus: status,
             conversationActivity: activity,
           };
@@ -848,7 +957,7 @@ export async function conversationRoutes(app: FastifyInstance) {
 
     return reply.send({
       statuses,
-      needsRefresh: Object.values(schedules).some((schedule) => scheduleNeedsRefresh(schedule, scheduleNow)),
+      needsRefresh,
     });
   });
 
@@ -916,20 +1025,13 @@ export async function conversationRoutes(app: FastifyInstance) {
     const characterIds: string[] =
       typeof chat.characterIds === "string" ? JSON.parse(chat.characterIds) : chat.characterIds;
     const isGroup = characterIds.length > 1;
+    const sharedCadence = isGroup && sharesAutonomousDailyBudget(meta);
     const hasRoutineSchedules = hasSchedules(schedules);
 
-    const autonomySchedules: CharacterSchedules = { ...schedules };
-    const schedulelessCharacterIds = characterIds.filter((cid) => !autonomySchedules[cid]);
-    for (const cid of schedulelessCharacterIds) {
-      const charRow = await chars.getById(cid);
-      autonomySchedules[cid] = createSchedulelessAutonomySchedule(
-        getCharacterCardTalkativeness(charRow?.data),
-        userStatus,
-      );
-    }
+    const autonomySchedules = await withSchedulelessAutonomySchedules(characterIds, schedules, userStatus);
 
-    // Update each character's conversationStatus to match current schedule
-    for (const cid of characterIds) {
+    // Shared-room eligibility must not mutate private character cards.
+    for (const cid of meta.multiplayer ? [] : characterIds) {
       const schedule = schedules[cid];
       if (!schedule) continue;
       const { status } = getEffectiveCurrentStatus(schedule, statusOverrides[cid], nowInstant, "free time", promptNow);
@@ -943,15 +1045,51 @@ export async function conversationRoutes(app: FastifyInstance) {
       }
     }
 
-    // Initialize activity state from DB if not already in memory (handles server restart / fresh load)
-    const messages = await chats.listMessages(chatId);
-    initializeActivityFromMessages(
-      chatId,
-      messages as Array<{ role: string; createdAt?: string; characterId?: string | null }>,
-    );
+    // Initialize activity state from DB once per process (handles server
+    // restart / fresh load). Gated so REPEAT idle checks make NO lazy-table
+    // queries (#5592 PR-B): an unconditional transcript read here would load
+    // and LRU-touch every scheduled chat's whole storage unit on every 30s
+    // poll, churning the Termux eviction cap and out-competing the chat the
+    // user is actually looking at. After the seed, the in-memory activity
+    // tracker answers everything this route needs, and an evicted unit stays
+    // on disk until a message is genuinely due.
+    if (!seededAutonomousActivityChats.has(chatId)) {
+      // One in-flight seed per chat: latching BEFORE the read would let a
+      // concurrent check proceed unseeded (and a rejected read would latch
+      // the chat with no state until restart). Concurrent checks await the
+      // same promise; the latch lands only after the seed succeeds.
+      let seeding = autonomousActivitySeeds.get(chatId);
+      if (!seeding) {
+        seeding = (async () => {
+          const seedMessages = await chats.listMessages(chatId);
+          initializeActivityFromMessages(
+            chatId,
+            seedMessages as Array<{ role: string; createdAt?: string; characterId?: string | null }>,
+          );
+          seededAutonomousActivityChats.add(chatId);
+        })();
+        autonomousActivitySeeds.set(chatId, seeding);
+        // The .finally chain is a DERIVED promise: when the seed rejects, it
+        // rejects too, and leaving it unhandled would trip the process-level
+        // unhandledRejection exit. The route still awaits (and surfaces) the
+        // original rejection below.
+        void seeding.finally(() => autonomousActivitySeeds.delete(chatId)).catch(() => undefined);
+      }
+      await seeding;
+    }
+
+    // Shared-room activity belongs to accepted host actions, not any viewer's
+    // local idle timer. Reconcile after the transcript seed without clearing a
+    // concurrently held generation marker or moving the activity clock back.
+    if (meta.multiplayer && typeof meta.multiplayer === "object") {
+      const activityAt = Date.parse(String(meta.multiplayer.lastActivityAt ?? ""));
+      if (Number.isFinite(activityAt) && activityAt > (getActivityState(chatId)?.lastUserMessageAt ?? 0)) {
+        recordUserActivity(chatId, { occurredAt: activityAt, preserveGenerationInProgress: true });
+      }
+    }
 
     // Filter out characters busy in an active scene
-    const sceneBusyCharIds: string[] = meta.sceneBusyCharIds ?? [];
+    const sceneBusyCharIds = meta.multiplayer ? [] : await resolveSceneBusyCharacterIds(chats, chatId, meta);
     const filteredSchedules = { ...autonomySchedules };
     for (const busyId of sceneBusyCharIds) {
       delete filteredSchedules[busyId];
@@ -962,24 +1100,35 @@ export async function conversationRoutes(app: FastifyInstance) {
       return reply.send({ shouldTrigger: false, characterIds: [], reason: "scene_active", inactivityMs: 0 });
     }
 
-    // Skip autonomous while a turn-game (UNO, etc.) is active. The game's bot turns
-    // already drive generation; an autonomous message here would seize the chat's
-    // single generation lock and 409 the next bot-turn request, stalling the game.
-    if (await getActiveTurnGame(app.db, chatId)) {
-      return reply.send({ shouldTrigger: false, characterIds: [], reason: "turn_game_active", inactivityMs: 0 });
-    }
+    // Turn-game guard (UNO, etc.): an autonomous message would seize the
+    // chat's single generation lock and 409 the next bot-turn request,
+    // stalling the game. Checked LAZILY at the trigger points below instead
+    // of on every idle tick — the gameEngineState read loads the chat's
+    // storage unit, and an idle check must stay storage-free (#5592 PR-B).
+    // Only observable difference: an idle check during an active game now
+    // reports the ordinary not-due reason instead of "turn_game_active".
+    const turnGameBlocks = async () => Boolean(await getActiveTurnGame(app.db, chatId));
+    const turnGameActiveResponse = () =>
+      reply.send({ shouldTrigger: false, characterIds: [], reason: "turn_game_active", inactivityMs: 0 });
 
     const result = checkAutonomousMessaging(chatId, filteredSchedules, isGroup, {
       maxFollowups: req.body.maxFollowups,
       statusOverrides,
       actualNow: nowInstant,
       scheduleNow: promptNow,
+      sharedCadence,
     });
     if (result.reason === "generation_in_progress") return reply.send(result);
 
     if (result.shouldTrigger) {
+      if (await turnGameBlocks()) return turnGameActiveResponse();
       let blockedReason: "daily_budget_exhausted" | "intent_cooldown" | null = null;
-      for (const characterId of result.characterIds) {
+      // With a shared limit, whoever has checked in least today goes first.
+      const todayCounts = getAutonomousDailyBudget(meta).counts;
+      const candidateIds = sharedCadence
+        ? [...result.characterIds].sort((a, b) => (todayCounts[a] ?? 0) - (todayCounts[b] ?? 0))
+        : result.characterIds;
+      for (const characterId of candidateIds) {
         const evaluation = evaluateAutonomousCandidate(
           chatId,
           characterId,
@@ -1007,6 +1156,7 @@ export async function conversationRoutes(app: FastifyInstance) {
     );
     if (longAbsence) {
       if ("blockedReason" in longAbsence) return reply.send(blockedAutonomousResponse(longAbsence.blockedReason));
+      if (await turnGameBlocks()) return turnGameActiveResponse();
       const state = getActivityState(chatId);
       const generationStartedAt = markGenerationInProgress(chatId);
       return reply.send({
@@ -1036,10 +1186,14 @@ export async function conversationRoutes(app: FastifyInstance) {
         return status !== "offline";
       });
 
-      if (onlineCharIds.length > 0 && messages.length > 0) {
-        // Check if the last message (or consecutive last messages) are all from the user
-        const last = messages[messages.length - 1]!;
-        if (last.role === "user") {
+      // The tracker's lastMessageRole substitutes for reading the transcript
+      // (#5592 PR-B): seeded from the last message once, then kept live by
+      // the send paths. A trailing narrator/system message recorded only in
+      // the transcript can differ, but the catch-up reply is still sensible
+      // in that corner and the idle path stays storage-free.
+      if (onlineCharIds.length > 0) {
+        if (getActivityState(chatId)?.lastMessageRole === "user") {
+          if (await turnGameBlocks()) return turnGameActiveResponse();
           let blockedReason: "daily_budget_exhausted" | "intent_cooldown" | null = null;
           for (const catchUpCharacterId of onlineCharIds) {
             const evaluation = evaluateAutonomousCandidate(
@@ -1141,10 +1295,12 @@ export async function conversationRoutes(app: FastifyInstance) {
     }
 
     const { schedules, statusOverrides } = await chats.resolveConversationPresenceState(chatId);
+    // Exchanges only read status and talkativeness, so the user status here does not matter.
+    const autonomySchedules = await withSchedulelessAutonomySchedules(characterIds, schedules, "idle");
     const now = new Date();
     const scheduleNow = toZonedWallClockDate(now, resolveConversationTimeZone(meta));
-    const sceneBusyCharIds: string[] = meta.sceneBusyCharIds ?? [];
-    const filteredSchedules = { ...schedules };
+    const sceneBusyCharIds = await resolveSceneBusyCharacterIds(chats, chatId, meta);
+    const filteredSchedules = { ...autonomySchedules };
     for (const busyId of sceneBusyCharIds) {
       delete filteredSchedules[busyId];
     }
@@ -1163,8 +1319,17 @@ export async function conversationRoutes(app: FastifyInstance) {
       scheduleNow,
     );
     if (result.shouldTrigger) {
+      // With a shared limit, a reply never takes the day's last check-in, so a
+      // check-in and its exchanges cannot spend the whole day at once (#7055).
       const allowedCharacterId = result.characterIds.find(
-        (characterId) => !isAutonomousDailyBudgetExhausted(characterId, schedules[characterId], meta),
+        (characterId) =>
+          !isAutonomousDailyBudgetExhausted(
+            characterId,
+            autonomySchedules[characterId],
+            sharesAutonomousDailyBudget(meta)
+              ? { ...meta, ...buildAutonomousDailyBudgetPatch(meta, characterId) }
+              : meta,
+          ),
       );
       if (!allowedCharacterId) {
         return reply.send({

@@ -13,13 +13,7 @@ import { newId, now } from "../../utils/id-generator.js";
 import { logger } from "../../lib/logger.js";
 
 export type CheckpointTrigger =
-  | "manual"
-  | "session_start"
-  | "session_end"
-  | "combat_start"
-  | "combat_end"
-  | "location_change"
-  | "auto_interval";
+  "manual" | "session_start" | "session_end" | "combat_start" | "combat_end" | "location_change" | "auto_interval";
 
 export interface CreateCheckpointInput {
   chatId: string;
@@ -117,7 +111,9 @@ export async function pruneAutoCheckpoints(db: DB, chatId: string, protectId?: s
   }
 
   if (overflowIds.length > 0) {
-    await db.delete(gameCheckpoints).where(inArray(gameCheckpoints.id, overflowIds));
+    await db
+      .delete(gameCheckpoints)
+      .where(and(eq(gameCheckpoints.chatId, chatId), inArray(gameCheckpoints.id, overflowIds)));
     logger.debug("Pruned %d expired auto-checkpoint(s) for chat %s", overflowIds.length, chatId);
   }
 }
@@ -146,7 +142,7 @@ export function createCheckpointService(db: DB) {
       const capturedGameRows = await db
         .select()
         .from(gameStateSnapshots)
-        .where(eq(gameStateSnapshots.id, input.snapshotId))
+        .where(and(eq(gameStateSnapshots.chatId, input.chatId), eq(gameStateSnapshots.id, input.snapshotId)))
         .limit(1);
       const capturedGameSnapshot = capturedGameRows[0];
       if (!capturedGameSnapshot || capturedGameSnapshot.chatId !== input.chatId) {
@@ -157,7 +153,12 @@ export function createCheckpointService(db: DB) {
         ? await db
             .select()
             .from(spatialContextSnapshots)
-            .where(eq(spatialContextSnapshots.id, input.spatialSnapshotId))
+            .where(
+              and(
+                eq(spatialContextSnapshots.chatId, input.chatId),
+                eq(spatialContextSnapshots.id, input.spatialSnapshotId),
+              ),
+            )
             .limit(1)
         : await db
             .select()
@@ -243,8 +244,11 @@ export function createCheckpointService(db: DB) {
       return rows as CheckpointRow[];
     },
 
-    async getById(id: string): Promise<StoredCheckpointRow | null> {
-      const rows = await db.select().from(gameCheckpoints).where(eq(gameCheckpoints.id, id)).limit(1);
+    async getById(id: string, chatId?: string): Promise<StoredCheckpointRow | null> {
+      const condition = chatId
+        ? and(eq(gameCheckpoints.chatId, chatId), eq(gameCheckpoints.id, id))
+        : eq(gameCheckpoints.id, id);
+      const rows = await db.select().from(gameCheckpoints).where(condition).limit(1);
       return (rows[0] as StoredCheckpointRow) ?? null;
     },
 
@@ -252,8 +256,11 @@ export function createCheckpointService(db: DB) {
       await db.delete(gameCheckpoints).where(eq(gameCheckpoints.chatId, chatId));
     },
 
-    async deleteById(id: string): Promise<void> {
-      await db.delete(gameCheckpoints).where(eq(gameCheckpoints.id, id));
+    async deleteById(id: string, chatId?: string): Promise<void> {
+      const condition = chatId
+        ? and(eq(gameCheckpoints.chatId, chatId), eq(gameCheckpoints.id, id))
+        : eq(gameCheckpoints.id, id);
+      await db.delete(gameCheckpoints).where(condition);
     },
   };
 }

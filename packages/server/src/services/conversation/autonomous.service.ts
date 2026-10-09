@@ -55,6 +55,14 @@ export interface ChatActivityState {
   autonomousMessages: Map<string, { count: number; lastSentAt: number }>;
   /** Timestamp when generation started, or null if not in progress */
   generationInProgressSince: number | null;
+  /**
+   * Role of the chat's last message ("user"/"assistant"/other), maintained so
+   * repeat autonomous checks can answer "did the user speak last?" without
+   * reading the transcript — an unconditional read would load the chat's
+   * whole storage unit on every 30s poll (#5592 PR-B). Seeded from the
+   * transcript once, then kept live by the record* calls on the send paths.
+   */
+  lastMessageRole?: string | null;
   /** Last status reported by a connected client autonomous poller. */
   clientPresence?: { status: AutonomousClientPresenceStatus; updatedAt: number };
 }
@@ -100,15 +108,20 @@ export function getAutonomousDailyBudget(chatMeta: Record<string, unknown>, now:
   return budget?.date === today ? budget : { date: today, counts: {} };
 }
 
-function readAutonomousDailyCapOverride(value: unknown, maximum?: number): number | null {
+function readAutonomousDailyCapOverride(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  const normalized = Math.max(1, Math.floor(value));
-  return maximum === undefined ? normalized : Math.min(maximum, normalized);
+  return Math.max(1, Math.floor(value));
 }
 
-export function dailyCapForCharacter(schedule: WeekSchedule | undefined, chatMeta?: Record<string, unknown>): number {
+/** Only these fields set the cap, so a scheduleless character can pass its card talkativeness. */
+type DailyCapSchedule = Pick<WeekSchedule, "talkativeness" | "autonomousDailyCapOverride">;
+
+export function dailyCapForCharacter(
+  schedule: DailyCapSchedule | undefined,
+  chatMeta?: Record<string, unknown>,
+): number {
   const chatCap = chatMeta ? readAutonomousDailyCapOverride(chatMeta.autonomousDailyCapOverride) : null;
-  const characterCap = readAutonomousDailyCapOverride(schedule?.autonomousDailyCapOverride, 8);
+  const characterCap = readAutonomousDailyCapOverride(schedule?.autonomousDailyCapOverride);
   if (chatCap != null && characterCap != null) return Math.min(chatCap, characterCap);
   if (characterCap != null) return characterCap;
   if (chatCap != null) return chatCap;
@@ -121,17 +134,21 @@ export function dailyCapForCharacter(schedule: WeekSchedule | undefined, chatMet
   return 2;
 }
 
+/** Individual-mode groups share one daily check-in count across their characters (#3887). */
+export function sharesAutonomousDailyBudget(chatMeta: Record<string, unknown>): boolean {
+  return chatMeta.groupChatMode === "individual";
+}
+
 export function isAutonomousDailyBudgetExhausted(
   characterId: string,
-  schedule: WeekSchedule | undefined,
+  schedule: DailyCapSchedule | undefined,
   chatMeta: Record<string, unknown>,
   now: Date = new Date(),
 ): boolean {
   const budget = getAutonomousDailyBudget(chatMeta, now);
-  const checkInCount =
-    chatMeta.groupChatMode === "individual"
-      ? Object.values(budget.counts).reduce((total, count) => total + count, 0)
-      : (budget.counts[characterId] ?? 0);
+  const checkInCount = sharesAutonomousDailyBudget(chatMeta)
+    ? Object.values(budget.counts).reduce((total, count) => total + count, 0)
+    : (budget.counts[characterId] ?? 0);
   return checkInCount >= dailyCapForCharacter(schedule, chatMeta);
 }
 
@@ -155,11 +172,18 @@ export function buildAutonomousDailyBudgetPatch(
 /**
  * Record that the user sent a message in a chat.
  */
-export function recordUserActivity(chatId: string, opts: { preserveGenerationInProgress?: boolean } = {}): void {
-  const now = Date.now();
+export function recordUserActivity(
+  chatId: string,
+  opts: { preserveGenerationInProgress?: boolean; occurredAt?: number } = {},
+): void {
+  const now =
+    typeof opts.occurredAt === "number" && Number.isFinite(opts.occurredAt)
+      ? Math.min(Date.now(), opts.occurredAt)
+      : Date.now();
   const existing = activityStates.get(chatId);
   if (existing) {
     existing.lastUserMessageAt = now;
+    existing.lastMessageRole = "user";
     existing.autonomousMessages.clear(); // Reset — user is active again
     if (!opts.preserveGenerationInProgress) {
       existing.generationInProgressSince = null;
@@ -168,6 +192,7 @@ export function recordUserActivity(chatId: string, opts: { preserveGenerationInP
     activityStates.set(chatId, {
       lastUserMessageAt: now,
       lastAssistantMessageAt: 0,
+      lastMessageRole: "user",
       autonomousMessages: new Map(),
       generationInProgressSince: null,
     });
@@ -199,11 +224,20 @@ export function recordUserReaction(chatId: string): void {
 /**
  * Record that an assistant message was sent (either user-triggered or autonomous).
  */
-export function recordAssistantActivity(chatId: string, characterId?: string): void {
+export function recordAssistantActivity(chatId: string, characterId?: string, messageTimestampMs?: number): void {
   const existing = activityStates.get(chatId);
   if (existing) {
     const now = Date.now();
     existing.lastAssistantMessageAt = now;
+    // Ordering guard for lastMessageRole: the record call runs a few awaits
+    // AFTER the assistant row persisted, and a user message can land in that
+    // window — its record already set the role. When the caller can supply
+    // the assistant MESSAGE's timestamp, an older-than-the-user's message
+    // must not steal the role back; callers without a message (generic
+    // activity pings) keep last-writer-wins.
+    if (messageTimestampMs === undefined || messageTimestampMs >= existing.lastUserMessageAt) {
+      existing.lastMessageRole = "assistant";
+    }
     if (characterId) {
       const prev = existing.autonomousMessages.get(characterId);
       existing.autonomousMessages.set(characterId, {
@@ -254,8 +288,16 @@ export function initializeActivityFromMessages(
   chatId: string,
   messages: Array<{ role: string; createdAt?: string; characterId?: string | null }>,
 ): void {
-  // Already tracked — don't overwrite
-  if (activityStates.has(chatId)) return;
+  // A PARTIAL state routinely exists before the seed runs:
+  // recordAutonomousClientPresence creates a zeroed one at the top of the
+  // same request. Bailing on mere existence would let the seed latch with
+  // the transcript timestamps and lastMessageRole never populated (the
+  // pre-#5592 code tolerated this because the catch-up branch re-read the
+  // transcript each tick; it no longer does). Merge instead: fill only the
+  // fields live activity has not already set, so real recorded activity is
+  // never overwritten by transcript-derived values.
+  const existing = activityStates.get(chatId);
+  if (existing && (existing.lastUserMessageAt > 0 || existing.lastAssistantMessageAt > 0)) return;
   if (messages.length === 0) return;
 
   let lastUserAt = 0;
@@ -272,9 +314,17 @@ export function initializeActivityFromMessages(
 
   if (!lastUserAt) return; // No user messages — can't initialize
 
+  const lastMessageRole = messages[messages.length - 1]!.role ?? null;
+  if (existing) {
+    existing.lastUserMessageAt = lastUserAt;
+    existing.lastAssistantMessageAt = lastAssistantAt;
+    existing.lastMessageRole ??= lastMessageRole;
+    return;
+  }
   activityStates.set(chatId, {
     lastUserMessageAt: lastUserAt,
     lastAssistantMessageAt: lastAssistantAt,
+    lastMessageRole,
     autonomousMessages: new Map(),
     generationInProgressSince: null,
   });
@@ -319,6 +369,13 @@ export function checkAutonomousMessaging(
     statusOverrides?: Record<string, ConversationStatusOverride>;
     actualNow?: Date;
     scheduleNow?: Date;
+    /**
+     * Pace the whole chat like one character: once anyone checks in, the next
+     * check-in waits the doubled follow-up time, and anyone whose own first wait
+     * has passed may take it. Used where the daily limit is shared, so it is not
+     * spent in one burst (#7055).
+     */
+    sharedCadence?: boolean;
   } = {},
 ): AutonomousCheckResult {
   const noTrigger: AutonomousCheckResult = {
@@ -354,11 +411,22 @@ export function checkAutonomousMessaging(
 
   // ── Check each character for inactivity threshold ──
   const eligibleCharacters: Array<{ id: string; priority: number; reactionDriven: boolean }> = [];
+  // Shared cadence: characters whose own first wait has passed may take a turn once one is due.
+  const readyForSharedTurn: typeof eligibleCharacters = [];
 
   // Maximum autonomous follow-ups before a character stops messaging
   const maxFollowups = Math.max(1, Math.min(3, Math.floor(opts.maxFollowups ?? 3)));
   const actualNow = opts.actualNow ?? new Date();
   const scheduleNow = opts.scheduleNow ?? actualNow;
+
+  let chatSentCount = 0;
+  let chatLastSentAt = 0;
+  if (opts.sharedCadence) {
+    for (const sent of state.autonomousMessages.values()) {
+      chatSentCount += sent.count;
+      chatLastSentAt = Math.max(chatLastSentAt, sent.lastSentAt);
+    }
+  }
 
   for (const [charId, schedule] of Object.entries(characterSchedules)) {
     const { status } = getEffectiveCurrentStatus(
@@ -379,7 +447,9 @@ export function checkAutonomousMessaging(
         : schedule.inactivityThresholdMinutes * 60 * 1000;
 
     const prevAutonomous = state.autonomousMessages.get(charId);
-    const sentCount = prevAutonomous?.count ?? 0;
+    const ownSentCount = prevAutonomous?.count ?? 0;
+    const sentCount = opts.sharedCadence ? chatSentCount : ownSentCount;
+    const lastSentAt = opts.sharedCadence ? chatLastSentAt : (prevAutonomous?.lastSentAt ?? 0);
 
     // Cap follow-ups — don't spam the user endlessly
     if (sentCount >= maxFollowups) continue;
@@ -408,19 +478,23 @@ export function checkAutonomousMessaging(
       // accelerate follow-ups (keeps characters un-needy after the first reach-out).
       const cooldownMultiplier = Math.pow(2, sentCount);
       const followUpThresholdMs = baseThresholdMs * cooldownMultiplier;
-      const timeSinceLastAutonomous = now - (prevAutonomous?.lastSentAt ?? 0);
+      const timeSinceLastAutonomous = now - lastSentAt;
 
-      if (timeSinceLastAutonomous >= followUpThresholdMs) {
-        eligibleCharacters.push({
-          id: charId,
-          priority: schedule.talkativeness + (status === "online" ? 20 : 0) - sentCount * 10, // Lower priority for repeat messages
-          reactionDriven: false,
-        });
+      const candidate = {
+        id: charId,
+        priority: schedule.talkativeness + (status === "online" ? 20 : 0) - ownSentCount * 10, // Lower priority for repeat messages
+        reactionDriven: false,
+      };
+      if (timeSinceLastAutonomous >= followUpThresholdMs) eligibleCharacters.push(candidate);
+      else if (opts.sharedCadence && state.lastUserMessageAt > 0 && inactivityMs >= baseThresholdMs) {
+        readyForSharedTurn.push(candidate);
       }
     }
   }
 
   if (eligibleCharacters.length === 0) return noTrigger;
+  // The chattiest character sets the shared pace; it doesn't get every turn (#7055).
+  eligibleCharacters.push(...readyForSharedTurn);
 
   // Sort by priority (highest first)
   eligibleCharacters.sort((a, b) => b.priority - a.priority);

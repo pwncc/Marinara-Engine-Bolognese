@@ -71,7 +71,7 @@ import {
 } from "@marinara-engine/shared";
 import { cn, getAvatarCropStyle } from "../../lib/utils";
 import { renderInlineWithCustomEmojis } from "../../lib/custom-emoji-render";
-import { useActivePersona, useCharacterGroups, useCharacters, usePersonas } from "../../hooks/use-characters";
+import { useCharacterGroups, useCharacters, usePersonas } from "../../hooks/use-characters";
 import { useConnections } from "../../hooks/use-connections";
 import { useNoodleCustomEmojiMap } from "../../hooks/use-noodle-custom-emojis";
 import {
@@ -961,7 +961,6 @@ export function NoodleView() {
     }
   };
   const { data, isLoading } = useNoodle();
-  const { data: activePersona } = useActivePersona();
   const { data: personasRaw } = usePersonas();
   const { data: charactersRaw } = useCharacters();
   const { data: characterGroupsRaw } = useCharacterGroups();
@@ -1196,11 +1195,10 @@ export function NoodleView() {
     // still empty during initial hydration.
     if (!data || personas === null) return;
     if (selectedPersonaId && personaAccounts.some((account) => account.entityId === selectedPersonaId)) return;
-    const activeId = readString((activePersona as RawPersona | null)?.id);
-    const activeAccount = personaAccounts.find((account) => account.entityId === activeId);
-    const nextPersonaId = activeAccount?.entityId ?? sortedPersonaAccounts[0]?.entityId ?? "";
+    // Personas are per chat now, so there is no global "active" one to prefer.
+    const nextPersonaId = sortedPersonaAccounts[0]?.entityId ?? "";
     if (selectedPersonaId !== nextPersonaId) setSelectedPersonaId(nextPersonaId);
-  }, [activePersona, data, personaAccounts, personas, selectedPersonaId, setSelectedPersonaId, sortedPersonaAccounts]);
+  }, [data, personaAccounts, personas, selectedPersonaId, setSelectedPersonaId, sortedPersonaAccounts]);
 
   useEffect(() => {
     if (accountSwitcherOpen) setPersonaAccountLimit(NOODLE_PERSONA_SWITCHER_PAGE_SIZE);

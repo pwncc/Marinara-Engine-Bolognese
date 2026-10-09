@@ -1,26 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { TFunction } from "i18next";
-import {
-  AlertTriangle,
-  BookOpen,
-  ChevronDown,
-  ChevronRight,
-  Loader2,
-  MapPin,
-  PenLine,
-  Sparkles,
-  X,
-} from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Loader2, MapPin, Sparkles } from "lucide-react";
 import { useUpdateChatMetadata } from "../../hooks/use-chats";
 import { type BudgetSkippedLorebookEntry, useActiveLorebookEntries } from "../../hooks/use-lorebooks";
 import { cn } from "../../lib/utils";
 import { useUIStore } from "../../stores/ui.store";
-import {
-  NEUTRAL_PANEL_CLOSE_BUTTON,
-  NEUTRAL_PANEL_CLOSE_ICON_SIZE,
-  NEUTRAL_PANEL_SUBTITLE,
-  NEUTRAL_PANEL_TITLE,
-} from "../ui/neutral-surface-styles";
+import { NEUTRAL_PANEL_SUBTITLE } from "../ui/neutral-surface-styles";
 import { useTranslation as useUiTranslation } from "react-i18next";
 import { MacroTextarea } from "../ui/MacroTextarea";
 
@@ -68,7 +53,7 @@ function formatSemanticScore(score: number | null | undefined) {
 }
 
 function formatActivationSource(
-  source: "current_location" | "keyword" | "semantic" | "constant" | "sticky" | "recursive",
+  source: "current_location" | "keyword" | "semantic" | "constant" | "sticky" | "recursive" | "decision",
   t: TFunction,
 ) {
   return t(`chat.activeContext.source.${source}`);
@@ -86,9 +71,11 @@ function ActiveLorebookEntryRow({
     order: number;
     lorebookId: string;
     lorebookName: string;
-    activationSources: Array<"current_location" | "keyword" | "semantic" | "constant" | "sticky" | "recursive">;
+    activationSources: Array<
+      "current_location" | "keyword" | "semantic" | "constant" | "sticky" | "recursive" | "decision"
+    >;
     matchedKeys?: string[];
-    matchType?: "keyword" | "semantic" | "constant" | "sticky";
+    matchType?: "keyword" | "semantic" | "constant" | "sticky" | "decision";
     semanticScore?: number;
   };
 }) {
@@ -370,40 +357,12 @@ export function ActiveLorebookEntriesContent({ chatId }: { chatId: string }) {
   );
 }
 
-export function ActiveLorebookEntriesPanel({ chatId, onClose }: { chatId: string; onClose: () => void }) {
-  const { t: localizeUi } = useUiTranslation();
-  return (
-    <>
-      <h3 className={cn(NEUTRAL_PANEL_TITLE, "mb-2")}>
-        <BookOpen size="0.75rem" />
-        {localizeUi("ui.chat.activelorebookentriespanel.activeContext")}
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label={localizeUi("ui.chat.activelorebookentriespanel.closeActiveContext")}
-          className={cn(NEUTRAL_PANEL_CLOSE_BUTTON, "ml-auto -my-1")}
-        >
-          <X size={NEUTRAL_PANEL_CLOSE_ICON_SIZE} />
-        </button>
-      </h3>
-      <ActiveLorebookEntriesContent chatId={chatId} />
-    </>
-  );
-}
-
-export function AuthorNotesPanel({
-  chatId,
-  chatMeta,
-  onClose,
-}: {
-  chatId: string;
-  chatMeta: Record<string, any>;
-  onClose: () => void;
-}) {
+/** Author's Notes for one chat (a Chat Settings drawer). */
+export function AuthorNotesPanel({ chatId, chatMeta }: { chatId: string; chatMeta: Record<string, any> }) {
   const { t: localizeUi } = useUiTranslation();
   const [notes, setNotes] = useState((chatMeta.authorNotes as string) ?? "");
   const [depthStr, setDepthStr] = useState(String((chatMeta.authorNotesDepth as number) ?? 4));
-  const updateMeta = useUpdateChatMetadata();
+  const updateMeta = useUpdateChatMetadata({ serialize: true });
 
   const initialBaseline = {
     notes: (chatMeta.authorNotes as string) ?? "",
@@ -454,23 +413,13 @@ export function AuthorNotesPanel({
 
   return (
     <>
-      <h3 className={cn(NEUTRAL_PANEL_TITLE, "mb-2")}>
-        <PenLine size="0.75rem" />
-        {localizeUi("ui.chat.authornotespanel.authorSNotes")}
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label={localizeUi("ui.chat.authornotespanel.closeAuthorSNotes")}
-          className={cn(NEUTRAL_PANEL_CLOSE_BUTTON, "ml-auto -my-1")}
-        >
-          <X size={NEUTRAL_PANEL_CLOSE_ICON_SIZE} />
-        </button>
-      </h3>
       <p className={cn(NEUTRAL_PANEL_SUBTITLE, "mb-2")}>
         {localizeUi("ui.chat.authornotespanel.textHereIsInjectedIntoThePromptAtThe")}
       </p>
       <MacroTextarea
+        showTokenCount
         value={notes}
+        tokenCountAlign="start"
         onChange={setNotes}
         onBlur={handleSave}
         onExpandedClose={handleSave}
@@ -479,25 +428,28 @@ export function AuthorNotesPanel({
         rows={4}
         ariaLabel={localizeUi("ui.chat.authornotespanel.authorSNotes")}
         wrapperClassName="mari-author-notes-field min-w-0"
+        tokenCountFooter={
+          <div className="flex items-center gap-2">
+            <span className="shrink-0 text-[0.625rem] text-[var(--muted-foreground)]">
+              {localizeUi("ui.chat.authornotespanel.injectionDepth")}
+            </span>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={depthStr}
+              onChange={(e) => setDepthStr(e.target.value.replace(/[^0-9]/g, ""))}
+              onBlur={() => {
+                const nextDepth = Math.max(0, parseInt(depthStr, 10) || 0);
+                setDepthStr(String(nextDepth));
+                updateMeta.mutate({ id: chatId, authorNotes: notes, authorNotesDepth: nextDepth });
+              }}
+              className="mari-chrome-field mari-chrome-field--compact w-14 !rounded-md px-2 py-0.5 text-center text-[0.625rem] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            />
+          </div>
+        }
         className="mari-chrome-field resize-none !rounded-md px-2.5 py-2 text-xs leading-relaxed"
       />
-      <div className="mt-2 flex items-center gap-2">
-        <span className="shrink-0 text-[0.625rem] text-[var(--muted-foreground)]">
-          {localizeUi("ui.chat.authornotespanel.injectionDepth")}
-        </span>
-        <input
-          type="text"
-          inputMode="numeric"
-          value={depthStr}
-          onChange={(e) => setDepthStr(e.target.value.replace(/[^0-9]/g, ""))}
-          onBlur={() => {
-            const nextDepth = Math.max(0, parseInt(depthStr, 10) || 0);
-            setDepthStr(String(nextDepth));
-            updateMeta.mutate({ id: chatId, authorNotes: notes, authorNotesDepth: nextDepth });
-          }}
-          className="mari-chrome-field mari-chrome-field--compact w-14 !rounded-md px-2 py-0.5 text-center text-[0.625rem] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-        />
-      </div>
+
       <p className="mt-1 text-[0.5625rem] text-[var(--muted-foreground)]/60">
         {localizeUi("ui.chat.authornotespanel.depth0AfterTheLatestMessage4FourMessages")}
       </p>

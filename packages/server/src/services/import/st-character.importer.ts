@@ -1,3 +1,4 @@
+import { syncCharacterBookFromLorebook } from "../lorebook/character-book-sync.js";
 // ──────────────────────────────────────────────
 // Importer: SillyTavern Character (JSON / V2 Card / CharX)
 // ──────────────────────────────────────────────
@@ -8,7 +9,7 @@ import { createCharactersStorage } from "../storage/characters.storage.js";
 import { createLorebooksStorage } from "../storage/lorebooks.storage.js";
 import { createRegexScriptsStorage } from "../storage/regex-scripts.storage.js";
 import { importSTLorebook } from "./st-lorebook.importer.js";
-import { isPatternSafe } from "@marinara-engine/shared";
+import { capImportedRulesetSheets, containsDecisionStatements, isPatternSafe } from "@marinara-engine/shared";
 import type {
   CharacterBookEntryPosition,
   CharacterBookEntryRole,
@@ -310,8 +311,7 @@ export async function importSTCharacter(raw: Record<string, unknown>, db: DB, op
           ...(data.extensions[IMPORT_METADATA_KEY] as Record<string, unknown>),
           embeddedLorebook: {
             ...(((data.extensions[IMPORT_METADATA_KEY] as Record<string, unknown>)?.embeddedLorebook as
-              | Record<string, unknown>
-              | undefined) ?? {}),
+              Record<string, unknown> | undefined) ?? {}),
             hasEmbeddedLorebook: true,
             lorebookId: result.lorebookId as string,
           },
@@ -321,6 +321,7 @@ export async function importSTCharacter(raw: Record<string, unknown>, db: DB, op
           updatedAt: normalizedTimestamps?.updatedAt ?? normalizedTimestamps?.createdAt ?? null,
           skipVersionSnapshot: true,
         });
+        await syncCharacterBookFromLorebook(db, result.lorebookId as string);
       } else if (hasEmbeddedLorebook) {
         throw new Error(
           typeof result?.error === "string"
@@ -405,47 +406,11 @@ export function inspectSTCharacter(raw: Record<string, unknown>): STCharacterImp
 }
 
 /**
- * Guard a parsed CharX zip against decompression-bomb abuse before any
- * `getData()` call materializes a decompressed entry into memory.
- *
- * adm-zip's `getData()` allocates the full uncompressed entry as a single
- * Buffer, and the 256 MB multipart cap (`app.ts`) bounds only the
- * *compressed* upload — DEFLATE reaches ~1000:1 on repetitive data, so a
- * few-MB `.charx` can expand to multiple GB and OOM the shared process.
- * Sizes are read off the central-directory headers (`entry.header.size`),
- * not the decompressed stream, so we reject before paying the memory cost.
- * Mirrors the `/marinara-package` cap in `import.routes.ts`. Throws on
- * violation; callers wrap this so the route surfaces a 4xx-style failure
- * instead of crashing.
- */
-function assertCharXWithinLimits(zip: AdmZip): void {
-  const MAX_CHARX_ENTRIES = 512;
-  const MAX_CHARX_ENTRY_BYTES = 64 * 1024 * 1024;
-  const MAX_CHARX_TOTAL_BYTES = 256 * 1024 * 1024;
-  const entries = zip.getEntries();
-  if (entries.length > MAX_CHARX_ENTRIES) {
-    throw new Error(".charx file has too many entries");
-  }
-  let total = 0;
-  for (const entry of entries) {
-    const size = entry.header.size ?? 0;
-    if (size > MAX_CHARX_ENTRY_BYTES) {
-      throw new Error(".charx file has an entry that is too large");
-    }
-    total += size;
-    if (total > MAX_CHARX_TOTAL_BYTES) {
-      throw new Error(".charx file decompresses to too much data");
-    }
-  }
-}
-
-/**
  * Import a CharX (.charx) file — RisuAI Character Card V3 zip format.
  * Extracts card.json and the main icon asset from the zip.
  */
 export async function importCharX(buf: Buffer, db: DB, options?: STCharacterImportOptions) {
   const zip = new AdmZip(buf);
-  assertCharXWithinLimits(zip);
 
   // Extract card.json from root of the zip
   const cardJson = readCharXCardJson(zip);
@@ -493,13 +458,14 @@ export async function importCharX(buf: Buffer, db: DB, options?: STCharacterImpo
     cardJson._avatarDataUrl = avatarDataUrl;
   }
 
-  return importSTCharacter(cardJson as Record<string, unknown>, db, options);
+  const result = await importSTCharacter(cardJson as Record<string, unknown>, db, options);
+  // The importer reports decision statements (#6569); only the server opens a .charx.
+  return result.success && containsDecisionStatements(cardJson) ? { ...result, usesDecisions: true } : result;
 }
 
 export function inspectCharX(buf: Buffer): STCharacterImportPreview {
   try {
     const zip = new AdmZip(buf);
-    assertCharXWithinLimits(zip);
     const cardJson = readCharXCardJson(zip);
     if (!cardJson) {
       return {
@@ -648,6 +614,8 @@ const CHARACTER_BOOK_ENTRY_PASSTHROUGH_FIELDS = [
   "excludeRecursion",
   "delayUntilRecursion",
   "vectorized",
+  "decisionStatement",
+  "decisionMode",
 ];
 
 function buildCardSpecMetadata(raw: Record<string, unknown>) {
@@ -728,9 +696,22 @@ function resolveCharXAsset(zip: AdmZip, uri: string, ext?: string): string | nul
 }
 
 function normalizeV2(raw: Record<string, unknown>): CharacterData {
-  const rawExtensions = optionalRecord(raw.extensions);
+  // Ruleset sheets travel dormant under their key; only one the boundary would refuse is dropped.
+  // The raw key is taken out of the spread below, so a value that is not a sheet map leaves nothing.
+  const { rulesetSheets: rawRulesetSheets, ...rawExtensions } = optionalRecord(raw.extensions);
+  const importedSheets = capImportedRulesetSheets(rawRulesetSheets);
+  if (importedSheets.dropped.length > 0) {
+    logger.warn(
+      "[import] Dropped %d unusable ruleset sheet(s) from an imported character: %s",
+      importedSheets.dropped.length,
+      importedSheets.dropped.join(", "),
+    );
+  }
   return {
     name: String(raw.name ?? "Unknown"),
+    summary: String(raw.summary ?? "")
+      .trim()
+      .slice(0, 500),
     description: String(raw.description ?? ""),
     personality: String(raw.personality ?? ""),
     scenario: String(raw.scenario ?? ""),
@@ -757,6 +738,7 @@ function normalizeV2(raw: Record<string, unknown>): CharacterData {
       },
       backstory: String(rawExtensions.backstory ?? ""),
       appearance: String(rawExtensions.appearance ?? ""),
+      ...(importedSheets.sheets ? { rulesetSheets: importedSheets.sheets } : {}),
     },
     character_book: normalizeCharacterBook(raw.character_book),
     ...pickDefinedFields(raw, V3_CHARACTER_DATA_FIELDS),

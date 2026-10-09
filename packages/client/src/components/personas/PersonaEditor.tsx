@@ -75,6 +75,7 @@ import { formatCardVersionTimestamp, getCardVersionTitle } from "../../lib/card-
 import { dataImageUrlToFile } from "../../lib/data-image-file";
 import { extractColorsFromImage } from "../../lib/avatar-color-extraction";
 import { HelpTooltip } from "../ui/HelpTooltip";
+import { RulesetSheetsSection } from "../rulesets/RulesetSheetsSection";
 import { ColorPicker } from "../ui/ColorPicker";
 import { StatIconPicker } from "../ui/StatIconPicker";
 import { MacroTextarea } from "../ui/MacroTextarea";
@@ -83,7 +84,9 @@ import { CustomEmojiTagButton } from "../ui/CustomEmojiTagButton";
 import { CallClipGenerationModal } from "../ui/CallClipGenerationModal";
 import { api, formatFirstApiValidationIssue } from "../../lib/api-client";
 import { downloadSpriteFile } from "../../lib/sprite-download";
-import { downloadUrlToDevice } from "../../lib/file-download";
+import { downloadUrlToDevice, shouldUseIosImageShare } from "../../lib/file-download";
+import { ImageDownloadButton } from "../ui/ImageDownloadButton";
+import { useDialogFocusScope } from "../../hooks/use-dialog-focus-scope";
 import { parseTrackerCardColorConfig, serializeTrackerCardColorConfig } from "../../lib/tracker-card-colors";
 import {
   getStatNameOccurrence,
@@ -114,6 +117,10 @@ import { SpriteWandCleanupEditor } from "../ui/SpriteWandCleanupEditor";
 import { ExportFormatDialog, type ExportFormatChoice } from "../ui/ExportFormatDialog";
 import { Modal } from "../ui/Modal";
 import { EditorTabNavigation } from "../ui/EditorTabNavigation";
+import { useEditorSections } from "../../hooks/use-editor-sections";
+import { useEditorLeaveSave } from "../../hooks/use-editor-leave-save";
+import { LazyEditorSection } from "../ui/LazyEditorSection";
+import { leaveWithoutSaving } from "../../lib/editor-leave";
 import { EditorSectionAnchor, EditorSectionJumps } from "../ui/EditorSectionJumps";
 import { SettingsSwitch } from "../panels/settings/SettingControls";
 import {
@@ -166,10 +173,6 @@ const PERSONA_CARD_SECTIONS = [
   { id: "persona-card-scenario", label: "Scenario" },
 ] as const;
 
-function formatPersonaTextTokens(value: string): string {
-  return formatEstimatedTokens(estimateTextTokens(value));
-}
-
 const PERSONA_METADATA_HELP =
   "Use metadata for identity, sharing, and library organization. Name is injected as your persona name, creator/version help track authorship and revisions, tags make the persona searchable, and creator notes stay private.";
 
@@ -218,6 +221,10 @@ interface PersonaFormData {
   scenario: string;
   backstory: string;
   appearance: string;
+  /** Mirrors the card's image-prompt override: `imageAppearance` is used instead of
+   *  `appearance` in image prompts while `imageAppearanceEnabled` is on. */
+  imageAppearanceEnabled: boolean;
+  imageAppearance: string;
   characterSheetImageId: string | null;
   useCharacterSheetAsReference: boolean;
   nameColor: string;
@@ -329,6 +336,8 @@ function personaFormFromPersona(persona: Persona): PersonaFormData {
     scenario: persona.scenario ?? "",
     backstory: persona.backstory ?? "",
     appearance: persona.appearance ?? "",
+    imageAppearanceEnabled: persona.imageAppearanceEnabled === true,
+    imageAppearance: persona.imageAppearance ?? "",
     characterSheetImageId: persona.characterSheetImageId ?? null,
     useCharacterSheetAsReference: persona.useCharacterSheetAsReference === true,
     nameColor: persona.nameColor ?? "",
@@ -408,6 +417,10 @@ function PersonaGalleryTab({
   const remove = useDeletePersonaGalleryImage(personaId);
   const tag = useTagPersonaGalleryImage(personaId);
   const [lightbox, setLightbox] = useState<PersonaGalleryImage | null>(null);
+  const lightboxRef = useRef<HTMLDivElement>(null);
+  const lightboxCloseRef = useRef<HTMLButtonElement>(null);
+  // Nested confirmations own focus while retaining the preview's original return target.
+  useDialogFocusScope(!!lightbox, lightboxRef, lightboxCloseRef, undefined, '[data-component="Modal"]');
   const [selectingImages, setSelectingImages] = useState(false);
   const [selectedImageIds, setSelectedImageIds] = useState<Set<string>>(() => new Set());
   const selectedImages = useMemo(
@@ -468,6 +481,18 @@ function PersonaGalleryTab({
     },
     [lightbox?.id, remove, localizeUi],
   );
+
+  const handleDownloadImage = async (image: PersonaGalleryImage) => {
+    if (shouldUseIosImageShare()) {
+      setLightbox(image);
+      return;
+    }
+    try {
+      await downloadUrlToDevice(image.url, image.filePath.split(/[\\/]/).pop() || `gallery-${image.id}.png`);
+    } catch {
+      toast.error(localizeUi("ui.chat.chatgallery.downloadFailed"));
+    }
+  };
 
   const handleBatchDownload = useCallback(async () => {
     if (selectedImages.length === 0) return;
@@ -706,15 +731,17 @@ function PersonaGalleryTab({
                           <Download size="0.75rem" />
                         </button>
                       ) : (
-                        <a
-                          href={image.url}
-                          download
+                        <button
+                          type="button"
                           className="rounded-lg bg-white/15 p-1.5 text-white transition-colors hover:bg-white/25"
                           title={localizeUi("ui.personas.personagallerytab.download")}
-                          onClick={(e) => e.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleDownloadImage(image);
+                          }}
                         >
                           <Download size="0.75rem" />
-                        </a>
+                        </button>
                       )}
                       <button
                         type="button"
@@ -752,6 +779,17 @@ function PersonaGalleryTab({
       {lightbox && (
         <div
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 max-md:pt-[env(safe-area-inset-top)]"
+          ref={lightboxRef}
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              setLightbox(null);
+            }
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-label={localizeUi("ui.chat.chatimagelightbox.imagePreview")}
           onClick={() => setLightbox(null)}
         >
           <div className="relative max-h-[90vh] max-w-[90vw] w-[min(90vw,90vh)]" onClick={(e) => e.stopPropagation()}>
@@ -770,13 +808,10 @@ function PersonaGalleryTab({
               >
                 {galleryAvatarPending ? <Loader2 size="0.875rem" className="animate-spin" /> : <User size="0.875rem" />}
               </button>
-              <a
-                href={lightbox.url}
-                download
-                className="rounded-lg bg-black/60 p-2 text-white transition-colors hover:bg-black/80"
-              >
-                <Download size="0.875rem" />
-              </a>
+              <ImageDownloadButton
+                url={lightbox.url}
+                filename={lightbox.filePath.split(/[\\/]/).pop() || `gallery-${lightbox.id}.png`}
+              />
               <button
                 type="button"
                 onClick={() => void handleDelete(lightbox)}
@@ -788,7 +823,9 @@ function PersonaGalleryTab({
               </button>
               <button
                 type="button"
+                ref={lightboxCloseRef}
                 onClick={() => setLightbox(null)}
+                aria-label={localizeUi("ui.chat.chatimagelightbox.closeImage")}
                 className="rounded-lg bg-black/60 p-2 text-white transition-colors hover:bg-black/80"
               >
                 <X size="0.875rem" />
@@ -1240,6 +1277,8 @@ function createCharacterDataFromPersona(formData: PersonaFormData): CharacterDat
       depth_prompt: { prompt: "", depth: 4, role: "system" },
       backstory: formData.backstory ?? "",
       appearance: formData.appearance ?? "",
+      imageAppearanceEnabled: formData.imageAppearanceEnabled,
+      imageAppearance: formData.imageAppearance || undefined,
       versioningEnabled: formData.versioningEnabled,
       phoneticName: formData.phoneticName.trim() || undefined,
       nameColor: formData.nameColor || undefined,
@@ -1280,6 +1319,12 @@ export function PersonaEditor() {
   // what asynchronous save/upload continuations read, so reconciliation never
   // depends on a render having happened; the state is what re-renders the UI.
   const [formData, setFormDataState] = useState<PersonaFormData | null>(null);
+  const { contentRef, scrollToSection } = useEditorSections(
+    personaId,
+    !!formData,
+    personaInitialTab ?? "metadata",
+    setActiveTab,
+  );
   const formDataRef = useRef<PersonaFormData | null>(null);
   const [baselineForm, setBaselineFormState] = useState<PersonaFormData | null>(null);
   const baselineFormRef = useRef<PersonaFormData | null>(null);
@@ -1287,6 +1332,7 @@ export function PersonaEditor() {
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [avatarGeneratorOpen, setAvatarGeneratorOpen] = useState(false);
   const [characterSheetGeneratorOpen, setCharacterSheetGeneratorOpen] = useState(false);
+  const { data: characterSheetSprites } = useCharacterSprites(characterSheetGeneratorOpen ? personaId : null);
   const loadedPersonaIdRef = useRef<string | null>(null);
   /** Authoritative avatar path last reconciled into the editor. */
   const authoritativeAvatarPathRef = useRef<string | null>(null);
@@ -1306,7 +1352,7 @@ export function PersonaEditor() {
   const [mutationKind, setMutationKind] = useState<PersonaMutationKind | null>(null);
   const formatQuotes = useQuoteFormatter();
   const setEditorDirty = useUIStore((s) => s.setEditorDirty);
-  const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const commitFormData = useCallback((next: PersonaFormData | null) => {
@@ -1741,7 +1787,8 @@ export function PersonaEditor() {
     if (!deleteToken) return;
     try {
       await deletePersona.mutateAsync(deletedPersonaId);
-      if (isCurrentEditorSession(session) && loadedPersonaIdRef.current === deletedPersonaId) closeDetail();
+      if (isCurrentEditorSession(session) && loadedPersonaIdRef.current === deletedPersonaId)
+        leaveWithoutSaving(closeDetail);
     } catch (error) {
       if (!isCurrentEditorSession(session) || loadedPersonaIdRef.current !== deletedPersonaId) return;
       console.error("[PersonaEditor] Delete failed:", error);
@@ -1821,33 +1868,10 @@ export function PersonaEditor() {
   const handleClose = useCallback(() => {
     // Read immediate refs so a local Back click cannot race a write or draft update.
     if (mutationTokenRef.current) return;
-    const draft = formDataRef.current;
-    const baseline = baselineFormRef.current;
-    const dirtyNow =
-      draft !== null && baseline !== null && personaFieldsDifferingFromBaseline(draft, baseline).length > 0;
-    if (dirtyNow) {
-      setShowUnsavedWarning(true);
-      return;
-    }
     closeDetail();
   }, [closeDetail]);
 
-  const keepEditing = useCallback(() => {
-    setShowUnsavedWarning(false);
-  }, []);
-
-  const discardAndNavigate = useCallback(() => {
-    // A write may have started after the warning opened; never discard under it.
-    if (mutationTokenRef.current) return;
-    closeDetail();
-  }, [closeDetail]);
-
-  const handleSaveAndClose = useCallback(async () => {
-    if (mutationTokenRef.current) return;
-    const savedAndClean = await handleSave();
-    // Only close when the save landed and no edit made during it is still unsaved.
-    if (savedAndClean && !mutationTokenRef.current) closeDetail();
-  }, [closeDetail, handleSave]);
+  useEditorLeaveSave(`personaDetailId:${personaId}`, dirty, handleSave, mutationBusy);
 
   if (isLoading || !formData) {
     return (
@@ -1950,7 +1974,10 @@ export function PersonaEditor() {
         open={avatarGeneratorOpen}
         title={localizeUi("ui.personas.personaeditor.generatePersonaAvatar")}
         entityName={formData.name}
-        defaultAppearance={formData.appearance || formData.description || formData.personality}
+        defaultAppearance={personaImageAppearanceGeneratorSeed(
+          formData,
+          formData.appearance || formData.description || formData.personality,
+        )}
         defaultAvatarUrl={avatarPreview}
         onClose={() => setAvatarGeneratorOpen(false)}
         onUseAvatar={handleGeneratedAvatar}
@@ -1960,8 +1987,12 @@ export function PersonaEditor() {
         mode="character-sheet"
         title={localizeUi("ui.characters.charactersheet.createTitle")}
         entityName={formData.name || localizeUi("ui.characters.charactersheet.characterFallback")}
-        defaultAppearance={formData.appearance || formData.description || formData.personality}
+        defaultAppearance={personaImageAppearanceGeneratorSeed(
+          formData,
+          formData.appearance || formData.description || formData.personality,
+        )}
         defaultAvatarUrl={avatarPreview}
+        neutralFullBodyReferenceUrl={characterSheetSprites?.find((sprite) => sprite.expression === "full_neutral")?.url}
         onClose={() => setCharacterSheetGeneratorOpen(false)}
         onUseAvatar={handleGeneratedCharacterSheet}
       />
@@ -2050,7 +2081,7 @@ export function PersonaEditor() {
           </div>
         </div>
 
-        <EditorTabNavigation tabs={TABS} activeId={activeTab} onChange={setActiveTab} />
+        <EditorTabNavigation tabs={TABS} activeId={activeTab} onChange={scrollToSection} />
 
         <div className="mari-editor-actions flex">
           <button
@@ -2068,47 +2099,12 @@ export function PersonaEditor() {
         </div>
       </div>
 
-      {/* ── Unsaved changes warning ── */}
-      {showUnsavedWarning && (
-        <div className="flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5">
-          <AlertTriangle size="0.9375rem" className="shrink-0 text-amber-500" />
-          <p className="flex-1 text-xs font-medium text-amber-500">
-            {localizeUi("ui.personas.personaeditor.youHaveUnsavedChangesCloseWithoutSaving")}
-          </p>
-          <button
-            type="button"
-            onClick={keepEditing}
-            className="rounded-lg px-3 py-1 text-xs font-medium text-[var(--muted-foreground)] transition-all hover:bg-[var(--accent)]"
-          >
-            {localizeUi("ui.personas.personaeditor.keepEditing")}
-          </button>
-          {/* Blocked while a Persona write is in flight: it cannot be cancelled, so
-              "discard" would drop local state while the server still persists it. */}
-          <button
-            type="button"
-            onClick={discardAndNavigate}
-            disabled={mutationBusy}
-            className="rounded-lg bg-amber-500/15 px-3 py-1 text-xs font-medium text-amber-500 transition-all hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-amber-500/15"
-          >
-            {localizeUi("ui.personas.personaeditor.discardClose")}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleSaveAndClose()}
-            disabled={mutationBusy}
-            className="mari-editor-action mari-editor-action--primary mari-editor-action--compact inline-flex rounded-lg px-3 py-1 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {localizeUi("ui.personas.personaeditor.saveClose")}
-          </button>
-        </div>
-      )}
-
       {/* ── Body ── */}
       <div className="mari-editor-body">
         {/* Tab Content */}
-        <div className="mari-editor-content @max-5xl:p-4">
+        <div ref={contentRef} className="mari-editor-content @max-5xl:p-4">
           <div className="mari-editor-content-inner">
-            {activeTab === "metadata" && (
+            <section data-editor-section="metadata">
               <PersonaMetadataTab
                 personaId={personaId}
                 formData={formData}
@@ -2125,47 +2121,53 @@ export function PersonaEditor() {
                 hasUnsavedChanges={dirty}
                 avatarMutationBusy={mutationBusy}
               />
-            )}
-            {activeTab === "card" && <PersonaCardTab formData={formData} updateField={updateField} />}
-            {activeTab === "convo" && (
-              // Key by the edited persona so the Convo fields' transient state resets on
-              // switch — the editor reuses this instance across personas.
+            </section>
+            <section data-editor-section="card">
+              <PersonaCardTab formData={formData} updateField={updateField} />
+            </section>
+            <section data-editor-section="convo">
               <PersonaConvoTab
                 key={personaId ?? "new-persona"}
                 personaId={personaId}
                 formData={formData}
                 updateField={updateField}
               />
-            )}
-            {activeTab === "lorebook" && personaId && (
-              <PersonaLorebookTab personaId={personaId} personaName={formData.name} />
-            )}
-            {activeTab === "colors" && (
+            </section>
+            <LazyEditorSection key={`lorebook:${personaId}`} id="lorebook">
+              {personaId && <PersonaLorebookTab personaId={personaId} personaName={formData.name} />}
+            </LazyEditorSection>
+            <LazyEditorSection key={`sprites:${personaId}`} id="sprites">
+              {personaId && (
+                <PersonaSpritesTab
+                  personaId={personaId}
+                  personaName={formData.name}
+                  defaultAppearance={formData.appearance || formData.description}
+                  defaultAvatarUrl={avatarPreview}
+                  characterSheetImageId={formData.characterSheetImageId}
+                  useCharacterSheetAsReference={formData.useCharacterSheetAsReference}
+                  updateField={updateField}
+                  onCreateCharacterSheet={() => setCharacterSheetGeneratorOpen(true)}
+                />
+              )}
+            </LazyEditorSection>
+            <LazyEditorSection key={`gallery:${personaId}`} id="gallery">
+              {personaId && (
+                <PersonaGalleryTab
+                  personaId={personaId}
+                  personaName={formData.name}
+                  onCreateCharacterSheet={() => setCharacterSheetGeneratorOpen(true)}
+                  editorBusy={mutationBusy}
+                  galleryAvatarPending={mutationKind === "gallery-avatar"}
+                  onSetAvatar={handleSetGalleryAvatar}
+                />
+              )}
+            </LazyEditorSection>
+            <section data-editor-section="colors">
               <PersonaColorsTab formData={formData} updateField={updateField} avatarUrl={avatarPreview} />
-            )}
-            {activeTab === "sprites" && personaId && (
-              <PersonaSpritesTab
-                personaId={personaId}
-                personaName={formData.name}
-                defaultAppearance={formData.appearance || formData.description}
-                defaultAvatarUrl={avatarPreview}
-                characterSheetImageId={formData.characterSheetImageId}
-                useCharacterSheetAsReference={formData.useCharacterSheetAsReference}
-                updateField={updateField}
-                onCreateCharacterSheet={() => setCharacterSheetGeneratorOpen(true)}
-              />
-            )}
-            {activeTab === "gallery" && personaId && (
-              <PersonaGalleryTab
-                personaId={personaId}
-                personaName={formData.name}
-                onCreateCharacterSheet={() => setCharacterSheetGeneratorOpen(true)}
-                editorBusy={mutationBusy}
-                galleryAvatarPending={mutationKind === "gallery-avatar"}
-                onSetAvatar={handleSetGalleryAvatar}
-              />
-            )}
-            {activeTab === "stats" && <PersonaStatsTab formData={formData} updateField={updateField} />}
+            </section>
+            <section data-editor-section="stats">
+              <PersonaStatsTab formData={formData} updateField={updateField} />
+            </section>
           </div>
         </div>
       </div>
@@ -2393,26 +2395,27 @@ function PersonaSpritesTab({
         const scopeLabel =
           modeLabel === "all" ? "sprites" : category === "full-body" ? "full-body-sprites" : "expressions";
         const folderName = sanitizeSpriteExportFolderName(`${personaName || "persona"}-${scopeLabel}`, "sprites");
-        await exportSprites.mutateAsync({
+        const saveStatus = await exportSprites.mutateAsync({
           characterId: personaId,
           expressions: spritesToExport.map((sprite) => sprite.expression),
           folderName,
         });
-        toast.success(
-          modeLabel === "all"
-            ? localizeUi("ui.personas.personaspritestab.exportedValue1SpriteValue2AsAFolder", {
-                value1: spritesToExport.length,
-                value2: spritesToExport.length === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s"),
-              })
-            : localizeUi("ui.personas.personaspritestab.exportedValue1Value2SpriteValue3AsAFolder", {
-                value1: spritesToExport.length,
-                value2:
-                  category === "full-body"
-                    ? localizeUi("ui.personas.personaspritestab.fullBody_0fbbc4a")
-                    : localizeUi("ui.personas.personaspritestab.expression"),
-                value3: spritesToExport.length === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s"),
-              }),
-        );
+        if (saveStatus === "saved")
+          toast.success(
+            modeLabel === "all"
+              ? localizeUi("ui.personas.personaspritestab.exportedValue1SpriteValue2AsAFolder", {
+                  value1: spritesToExport.length,
+                  value2: spritesToExport.length === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s"),
+                })
+              : localizeUi("ui.personas.personaspritestab.exportedValue1Value2SpriteValue3AsAFolder", {
+                  value1: spritesToExport.length,
+                  value2:
+                    category === "full-body"
+                      ? localizeUi("ui.personas.personaspritestab.fullBody_0fbbc4a")
+                      : localizeUi("ui.personas.personaspritestab.expression"),
+                  value3: spritesToExport.length === 1 ? "" : localizeUi("ui.noodle.stageprofileview.s"),
+                }),
+          );
       } catch (error) {
         toast.error(
           error instanceof Error
@@ -3498,6 +3501,14 @@ function PersonaStatsTab({
           </>
         )}
       </div>
+
+      <RulesetSheetsSection
+        sheets={parsed.rulesetSheets}
+        onChange={(rulesetSheets) => {
+          const { rulesetSheets: _previous, ...rest } = parsed;
+          save(rulesetSheets ? { ...rest, rulesetSheets } : rest);
+        }}
+      />
     </div>
   );
 }
@@ -3931,6 +3942,8 @@ const PERSONA_VERSION_COMPARE_FIELDS: Array<{ key: keyof PersonaCardSnapshot; la
   { key: "scenario", label: "Scenario" },
   { key: "backstory", label: "Backstory" },
   { key: "appearance", label: "Appearance" },
+  { key: "imageAppearance", label: "Image Appearance Override" },
+  { key: "imageAppearanceEnabled", label: "Use Image Appearance Override" },
   { key: "characterSheetImageId", label: "Character Sheet" },
   { key: "useCharacterSheetAsReference", label: "Use Character Sheet as Reference" },
   { key: "avatarCrop", label: "Avatar Crop" },
@@ -3956,6 +3969,8 @@ function buildCurrentPersonaSnapshot(formData: PersonaFormData): PersonaCardSnap
     scenario: formData.scenario,
     backstory: formData.backstory,
     appearance: formData.appearance,
+    imageAppearanceEnabled: String(formData.imageAppearanceEnabled),
+    imageAppearance: formData.imageAppearance,
     characterSheetImageId: formData.characterSheetImageId ?? "",
     useCharacterSheetAsReference: String(formData.useCharacterSheetAsReference),
     avatarCrop: formData.avatarCrop ? JSON.stringify(formData.avatarCrop) : "",
@@ -3975,9 +3990,31 @@ function buildCurrentPersonaSnapshot(formData: PersonaFormData): PersonaCardSnap
   };
 }
 
+/**
+ * #7053: the avatar / character-sheet generator seeds its editable prompt with
+ * the persona appearance. Seed the image override instead when it is on and
+ * filled, or the generated portrait ignores the tags the user wrote for image
+ * models. Personas store the flag as a real boolean in the editor draft.
+ */
+function personaImageAppearanceGeneratorSeed(
+  persona: { imageAppearanceEnabled?: boolean; imageAppearance?: string },
+  fallback: string | undefined,
+): string {
+  const override = typeof persona.imageAppearance === "string" ? persona.imageAppearance.trim() : "";
+  if (persona.imageAppearanceEnabled === true && override) return override;
+  return fallback ?? "";
+}
+
 function formatPersonaVersionValue(data: PersonaCardSnapshot, key: keyof PersonaCardSnapshot): string {
   const value = data[key];
   if (typeof value !== "string") return "";
+  // #7053: the image-appearance switch is snapshotted as the string "true"/"false".
+  // Render it as On/Off so a comparison shows the toggle change that decides which
+  // text image prompts use, instead of the raw storage string. Resolve this BEFORE
+  // the generic empty-value bail-out: a snapshot written before this field existed
+  // has "" here, and that means Off — rendering it blank would make an old version
+  // look unchanged against a new one that explicitly stores "false".
+  if (key === "imageAppearanceEnabled") return value === "true" ? "On" : "Off";
   if (!value.trim()) return "";
   if (key === "avatarCrop" || key === "trackerCardColors" || key === "personaStats" || key === "tags") {
     try {
@@ -4408,6 +4445,32 @@ function PersonaCardTab({
             )}
             rows={8}
           />
+          <div className="mt-3">
+            <SettingsSwitch
+              label={
+                <span className="font-medium">
+                  {localizeUi("ui.characters.charactercardtab.imageAppearanceToggle")}
+                </span>
+              }
+              description={localizeUi("ui.characters.charactercardtab.imageAppearanceToggleHelp")}
+              checked={formData.imageAppearanceEnabled}
+              onChange={(enabled) => updateField("imageAppearanceEnabled", enabled)}
+              labelPosition="start"
+              className="justify-between rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"
+            />
+          </div>
+          {formData.imageAppearanceEnabled && (
+            <div className="mt-3">
+              <TextareaTab
+                title={localizeUi("ui.characters.charactercardtab.imageAppearanceToggle")}
+                subtitle={localizeUi("ui.characters.charactercardtab.imageAppearanceSubtitle")}
+                value={formData.imageAppearance}
+                onChange={(v) => updateField("imageAppearance", v)}
+                placeholder={localizeUi("ui.characters.charactercardtab.imageAppearancePlaceholder")}
+                rows={6}
+              />
+            </div>
+          )}
         </EditorSectionAnchor>
         <EditorSectionAnchor id="persona-card-scenario">
           <TextareaTab
@@ -4468,7 +4531,7 @@ function DescriptionTab({
         className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-4 text-sm leading-relaxed outline-none transition-colors placeholder:text-[var(--muted-foreground)]/40 focus:border-emerald-400/40 focus:ring-1 focus:ring-emerald-400/20"
       />
       <p className="mt-1.5 text-right text-[0.625rem] text-[var(--muted-foreground)]">
-        {formatPersonaTextTokens(formData.description)}
+        {formatEstimatedTokens(estimateTextTokens(formData.description), localizeUi)}
       </p>
     </div>
   );
@@ -4513,6 +4576,7 @@ function TextareaTab({
   placeholder: string;
   rows?: number;
 }) {
+  const { t: localizeUi } = useUiTranslation();
   return (
     <div className="mari-editor-panel space-y-3 p-3">
       <SectionHeader title={title} subtitle={subtitle} helpText={helpText} />
@@ -4526,7 +4590,7 @@ function TextareaTab({
         className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-4 text-sm leading-relaxed outline-none transition-colors placeholder:text-[var(--muted-foreground)]/40 focus:border-emerald-400/40 focus:ring-1 focus:ring-emerald-400/20"
       />
       <p className="mt-1.5 text-right text-[0.625rem] text-[var(--muted-foreground)]">
-        {formatPersonaTextTokens(value)}
+        {formatEstimatedTokens(estimateTextTokens(value), localizeUi)}
       </p>
     </div>
   );

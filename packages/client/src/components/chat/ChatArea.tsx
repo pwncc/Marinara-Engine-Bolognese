@@ -1,3 +1,4 @@
+import { notifyRoleplayTTSParagraph, withRoleplayTTSParagraphs } from "../../lib/roleplay-vn-tts";
 // ──────────────────────────────────────────────
 // Chat: Main chat area — mode-aware rendering
 // ──────────────────────────────────────────────
@@ -33,12 +34,17 @@ import {
 } from "../../hooks/use-chats";
 
 import { getCurrentInputSnapshot, useChatStore } from "../../stores/chat.store";
+import { hasActiveTextSelection } from "../../lib/text-selection";
+import { readChatMetadata } from "../../lib/chat-wizard-defaults";
+import { useChatWindowLayout } from "../../hooks/use-chat-window-layout";
+import { ChatSettingsBubble } from "./ChatSettingsBubble";
+import { ChatWindowWelcomeModal } from "../modals/ChatWindowWelcomeModal";
+import { useGameModeStore } from "../../stores/game-mode.store";
 import { useGenerate } from "../../hooks/use-generate";
 import { useGenerateGallerySelfie } from "../../hooks/use-gallery";
 import {
   characterKeys,
   spriteKeys,
-  useActivePersona,
   useCharacters,
   usePersona,
   useUpdateCharacter,
@@ -48,7 +54,8 @@ import { usePageActivity } from "../../hooks/use-page-activity";
 import { useRenderTimer, useWhyRender } from "../../lib/perf-diagnostics";
 import { usePresenceClock } from "../../hooks/use-presence-clock";
 import { useKeepLatestChatMessageVisible } from "../../hooks/use-visual-viewport-chat-bottom";
-import { api, ApiError } from "../../lib/api-client";
+import { useChatOpeningScroll } from "../../hooks/use-chat-opening-scroll";
+import { api, ApiError, isRequestTimeoutError } from "../../lib/api-client";
 import { getChatDisplayName, getConnectedChatDisplayName, parseChatMetadata } from "../../lib/chat-display";
 import { getChatCharacterIds } from "../../lib/chat-macros";
 import { resolveSpriteExpression } from "../../lib/sprite-expression-match";
@@ -56,17 +63,21 @@ import { parseCharacterDisplayData } from "../../lib/character-display";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { parseMessageExtraRecord } from "../../lib/chat-message-extra";
 import { trimInactiveMessagePageCaches } from "../../lib/message-page-cache";
-import { normalizeSpriteExpressionMap, resolveSpriteExpressionState } from "../../lib/sprite-expression-state";
+import {
+  normalizeSpriteExpressionMap,
+  resolveLatestSpriteExpressionTurn,
+  resolveSpriteExpressionState,
+} from "../../lib/sprite-expression-state";
 import { chatBackgroundMetadataToUrl, chatBackgroundUrlToMetadata } from "../../lib/backgrounds";
 import { useGameStateStore } from "../../stores/game-state.store";
 import { useGalleryStore } from "../../stores/gallery.store";
 import { toast } from "sonner";
 import { Check, X } from "lucide-react";
 import {
-  BUILT_IN_AGENTS,
   PROFESSOR_MARI_ID,
   buildGuidedGenerationInstructionMessage,
   normalizeAvatarCrop,
+  normalizeGroupChatMode,
   normalizeManualTrackerAgentTypes,
   type GeneratedSceneVideo,
   type SpritePlacement,
@@ -76,16 +87,18 @@ import {
 import { resolveLiveConversationStatus } from "../../lib/conversation-presence-status";
 import { useUIStore } from "../../stores/ui.store";
 import { useAgentStore, EMPTY_AGENT_TYPES } from "../../stores/agent.store";
-import { illustratorRetryTargetsForFailures } from "../../lib/agent-failures";
+import { isBuiltInTrackerAgentType, resolveTrackerRerunTypes } from "../../lib/tracker-agents";
 import { Modal } from "../ui/Modal";
 import { useEncounter } from "../../hooks/use-encounter";
 import { useScene } from "../../hooks/use-scene";
 import { useEncounterStore } from "../../stores/encounter.store";
 import { useTranslationStore } from "../../stores/translation.store";
+import { getChatTranslationConfig, type ChatMode } from "@marinara-engine/shared";
 import { ttsService } from "../../lib/tts-service";
 import { useTTSConfig } from "../../hooks/use-tts";
 import {
   buildTTSVoiceRequests,
+  filterTTSText,
   findTTSCharacterIdBySpeakerName,
   withTTSVoiceRequestCacheKeys,
 } from "../../lib/tts-dialogue";
@@ -103,12 +116,17 @@ import {
 } from "../../lib/tts-autoplay";
 import { CHAT_SCROLL_TO_BOTTOM_EVENT, type ChatScrollToBottomDetail } from "../../lib/chat-scroll-events";
 import { CHAT_RESOURCE_AGENT_SETUP_EVENT } from "../../lib/chat-resource-drag";
-import { blurActiveChatFloatingUiControl, CHAT_FLOATING_UI_DISMISS_EVENT } from "../../lib/chat-floating-ui-events";
+import {
+  blurActiveChatFloatingUiControl,
+  CHAT_FLOATING_UI_DISMISS_EVENT,
+  CHAT_SUMMARY_OPEN_REQUEST_EVENT,
+} from "../../lib/chat-floating-ui-events";
 import {
   CHAT_TOOLBAR_ACTION_EVENT,
   readAnnouncedChatToolbarPanelAction,
   readChatToolbarFloatingPanelAnchor,
 } from "./ChatToolbarControls";
+import { SelectionLorebookButton } from "./SelectionLorebookButton";
 import { mirrorCharacterSpritePlacements, mirrorSpritePlacements, normalizeSpritePlacements } from "./sprite-placement";
 import {
   loadLocalSpriteVisualSettings,
@@ -134,6 +152,7 @@ import { HomeCreditsModal } from "./HomeCreditsModal";
 import { HomeBrowserHub } from "./HomeBrowserHub";
 import { NewChatConnectionGate } from "./NewChatConnectionGate";
 import { ChatCommonOverlays, preloadChatSettingsDrawer, type ChatSettingsInitialSection } from "./ChatCommonOverlays";
+import { ADVANCED_MEMORY_SETTINGS_EVENT } from "../../hooks/use-advanced-memory";
 import { CreatorNotesCssInjector, type CardCssMode, type PersonaCssRow } from "./CreatorNotesCssInjector";
 import type { ChatModeFilter } from "../../lib/card-css";
 import {
@@ -144,13 +163,10 @@ import {
 import { useTranslation as useUiTranslation } from "react-i18next";
 import { ChatResourceDropOverlay } from "./ChatResourceDropOverlay";
 import { ChatHelpOverlay } from "./ChatHelpOverlay";
+import { CHAT_SETTINGS_WINDOW_ID, useFloatingWindowStore } from "../../stores/floating-window.store";
 import { readChatHelpMode } from "../../lib/chat-help-events";
 
 export type { CharacterMap };
-
-const isBuiltInAgentType = (agentType: string) => BUILT_IN_AGENTS.some((agent) => agent.id === agentType);
-const isBuiltInTrackerAgentType = (agentType: string) =>
-  BUILT_IN_AGENTS.some((agent) => agent.id === agentType && agent.category === "tracker" && !agent.libraryHidden);
 
 function compareMessagesByCursor(left: MessageWithSwipes, right: MessageWithSwipes): number {
   const createdAtCompare = left.createdAt.localeCompare(right.createdAt);
@@ -284,6 +300,7 @@ const shouldIgnoreIntuitiveSwipeTarget = (
   target: EventTarget | null,
   { allowEmptyMainComposer = false }: { allowEmptyMainComposer?: boolean } = {},
 ): boolean => {
+  if (hasActiveTextSelection()) return true;
   if (!(target instanceof Element)) return false;
   if (
     allowEmptyMainComposer &&
@@ -329,6 +346,8 @@ type AgentInjectionReviewRequest = {
 
 type IllustratorPromptReviewRequest = {
   chatId: string;
+  illustratorMessageRange?: [string, string];
+  subjectOnly?: boolean;
   item: ImagePromptReviewItem;
   resultData: Record<string, unknown>;
 };
@@ -344,19 +363,6 @@ function isCharacterRow(value: unknown): value is CharacterRow {
     typeof (value as { id?: unknown }).id === "string" &&
     typeof (value as { data?: unknown }).data !== "undefined"
   );
-}
-
-function resolveChatPersonaId(chat: unknown): string | null {
-  const rawPersonaId = (chat as { personaId?: unknown } | null | undefined)?.personaId;
-  if (typeof rawPersonaId === "string" && rawPersonaId.trim()) return rawPersonaId.trim();
-
-  const metadata = parseChatMetadata((chat as { metadata?: unknown } | null | undefined)?.metadata);
-  const setupConfig = metadata.gameSetupConfig;
-  const rawSetupPersonaId =
-    setupConfig && typeof setupConfig === "object" && !Array.isArray(setupConfig)
-      ? (setupConfig as { personaId?: unknown }).personaId
-      : null;
-  return typeof rawSetupPersonaId === "string" && rawSetupPersonaId.trim() ? rawSetupPersonaId.trim() : null;
 }
 
 function toCharacterMapValue(char: CharacterRow): CharacterMapValue {
@@ -467,7 +473,145 @@ type TTSGenerationSnapshot = {
   failed: boolean;
 };
 
-export const ChatArea = memo(function ChatArea() {
+function ChatOpeningState({
+  error: chatError,
+  onRetry,
+  onBack,
+}: {
+  error: unknown;
+  onRetry: () => unknown;
+  onBack: () => void;
+}) {
+  const { t: localizeUi } = useUiTranslation();
+  const chatOpenTimedOut = isRequestTimeoutError(chatError);
+  const errorMessage = chatOpenTimedOut
+    ? localizeUi("ui.chat.chatarea.serverUnreachableHint")
+    : chatError instanceof ApiError
+      ? chatError.message
+      : chatError instanceof Error
+        ? chatError.message
+        : localizeUi("ui.chat.chatarea.openingChat");
+  const hasOpenError = !!chatError;
+
+  return (
+    <div
+      data-component="ChatArea.RestoringChat"
+      className="mari-app-background-paint flex flex-1 items-center justify-center overflow-hidden p-6"
+    >
+      <div className="flex flex-col items-center gap-3 text-center">
+        {!hasOpenError && (
+          <div className="h-7 w-7 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--primary)]" />
+        )}
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-[var(--foreground)]">
+            {hasOpenError
+              ? chatOpenTimedOut
+                ? localizeUi("ui.chat.chatarea.serverUnreachable")
+                : localizeUi("ui.chat.chatarea.couldNotOpenThisChat")
+              : localizeUi("ui.chat.chatarea.openingChat")}
+          </p>
+          {hasOpenError && (
+            <p className="mari-chrome-accent-text-muted mari-accent-animated max-w-sm text-xs">{errorMessage}</p>
+          )}
+        </div>
+        {hasOpenError && (
+          <div className="flex items-center gap-2">
+            {/* The unreachable hint tells the user to try again after
+                  foregrounding Termux; with focus-refetch globally off and
+                  timeout retries disabled, this button is the recovery path. */}
+            {chatOpenTimedOut && (
+              <button
+                type="button"
+                onClick={() => void onRetry()}
+                className="mari-chrome-control mari-chrome-control--small text-xs"
+              >
+                {localizeUi("ui.chat.chatarea.tryAgain")}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onBack()}
+              className="mari-chrome-control mari-chrome-control--small text-xs"
+            >
+              {localizeUi("ui.chat.chatarea.backToChats")}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const MultiplayerChat = lazy(() =>
+  import("../../features/multiplayer/MultiplayerChat").then((module) => ({ default: module.MultiplayerChat })),
+);
+
+interface ChatWindowIntroProps {
+  chatWindowIntroAllowed?: boolean;
+  onChatWindowIntroOpenChange?: (open: boolean) => void;
+}
+
+export const ChatArea = memo(function ChatArea({
+  chatWindowIntroAllowed,
+  onChatWindowIntroOpenChange,
+}: ChatWindowIntroProps) {
+  const activeChatId = useChatStore((state) => state.activeChatId);
+  const { data: chat, error, refetch } = useChat(activeChatId);
+  const metadata = chat ? readChatMetadata(chat) : {};
+  // Keep the local host registered while the next chat loads. Multiplayer registers its own host
+  // once the room is ready; its setup screen must not offer Chat Settings.
+  const hostsChatSettings = Boolean(activeChatId && !(metadata.multiplayerSetup === true || metadata.multiplayer));
+  useEffect(() => {
+    if (!hostsChatSettings) return;
+    return useFloatingWindowStore.getState().registerHost(CHAT_SETTINGS_WINDOW_ID);
+  }, [hostsChatSettings]);
+  // The Chat Settings button shows while a chat that hosts Chat Settings is open.
+  const chatSettingsHosted = useFloatingWindowStore((state) => (state.hosts[CHAT_SETTINGS_WINDOW_ID] ?? 0) > 0);
+  // Windows and popped-out drawers follow the open chat's saved layout.
+  useChatWindowLayout(activeChatId ? (chat?.id === activeChatId ? chat : undefined) : null);
+  useEffect(() => {
+    if (activeChatId && error instanceof ApiError && error.status === 404) {
+      useChatStore.getState().setActiveChatId(null);
+    }
+  }, [activeChatId, error]);
+  if (activeChatId && !chat)
+    return (
+      <ChatOpeningState error={error} onRetry={refetch} onBack={() => useChatStore.getState().setActiveChatId(null)} />
+    );
+  const chatSettingsButton =
+    chat && chatSettingsHosted ? <ChatSettingsBubble chatId={chat.id} mode={readChatMode(chat)} /> : null;
+  if (chat && (metadata.multiplayerSetup === true || metadata.multiplayer)) {
+    return (
+      <Suspense fallback={null}>
+        <MultiplayerChat key={chat.id} chat={chat} />
+        {chatSettingsButton}
+      </Suspense>
+    );
+  }
+  return (
+    <>
+      <LocalChatArea
+        chatWindowIntroAllowed={chatWindowIntroAllowed}
+        onChatWindowIntroOpenChange={onChatWindowIntroOpenChange}
+      />
+      <SelectionLorebookButton />
+      {chatSettingsButton}
+    </>
+  );
+});
+
+// Kept outside LocalChatArea, which unmounts while ChatArea opens a chat it has not loaded yet.
+// ponytail: one small entry per chat opened this session; drop entries on chat delete if that ever matters.
+const retainedExpressionTurns = new Map<string, ReturnType<typeof resolveLatestSpriteExpressionTurn>>();
+
+function readChatMode(chat: { mode?: unknown }): ChatMode {
+  return chat.mode === "conversation" || chat.mode === "game" ? chat.mode : "roleplay";
+}
+
+const LocalChatArea = memo(function LocalChatArea({
+  chatWindowIntroAllowed = false,
+  onChatWindowIntroOpenChange,
+}: ChatWindowIntroProps) {
   const { t: localizeUi } = useUiTranslation();
   useRenderTimer("chat-area"); // [#3104 diagnostic]
   const activeChatId = useChatStore((s) => s.activeChatId);
@@ -481,10 +625,13 @@ export const ChatArea = memo(function ChatArea() {
   const isPageActive = usePageActivity();
   const regenerateMessageId = useChatStore((s) => s.regenerateMessageId);
   const chatBackground = useUIStore((s) => s.chatBackground);
+  const chatWindowIntroDismissed = useUIStore((s) => s.chatWindowIntroDismissed);
+  const gameSetupActive = useGameModeStore((state) => state.isSetupActive);
   const weatherEffects = useUIStore((s) => s.weatherEffects);
   const messagesPerPage = useUIStore((s) => s.messagesPerPage);
   const centerCompact = useUIStore((s) => s.centerCompact);
   const guideGenerations = useUIStore((s) => s.guideGenerations);
+  const keepGuidanceAfterRegenerate = useUIStore((s) => s.keepGuidanceAfterRegenerate);
   const intuitiveSwipeNavigation = useUIStore((s) => s.intuitiveSwipeNavigation);
   const intuitiveSwipeRerollLatest = useUIStore((s) => s.intuitiveSwipeRerollLatest);
   const editLastMessageOnArrowUp = useUIStore((s) => s.editLastMessageOnArrowUp);
@@ -500,11 +647,10 @@ export const ChatArea = memo(function ChatArea() {
   // After the first render with messages, new/re-mounted messages
   // skip the entry animation to avoid a visible flash on refetch.
   const hasAnimatedRef = useRef(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsOpen = useFloatingWindowStore((s) => s.open[CHAT_SETTINGS_WINDOW_ID] === true);
+  const settingsPinned = useFloatingWindowStore((s) => s.layouts[CHAT_SETTINGS_WINDOW_ID]?.pinned === true);
   const [settingsInitialSection, setSettingsInitialSection] = useState<ChatSettingsInitialSection>(null);
-  const [galleryOpen, setGalleryOpen] = useState(false);
   const [settingsAnchor, setSettingsAnchor] = useState<FloatingPanelAnchor>(null);
-  const [galleryAnchor, setGalleryAnchor] = useState<FloatingPanelAnchor>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [spriteArrangeMode, setSpriteArrangeMode] = useState(false);
   const [agentInjectionReview, setAgentInjectionReview] = useState<AgentInjectionReviewRequest | null>(null);
@@ -519,6 +665,22 @@ export const ChatArea = memo(function ChatArea() {
   useEffect(() => {
     homeProfessorChatOpenRef.current = homeProfessorChatOpen;
   }, [homeProfessorChatOpen]);
+  // #5889: when Safari's autoplay policy blocks playback, the service parks in
+  // "blocked" and waits for a user gesture instead of retrying - tell the user
+  // the one tap that resumes it. Deduped by toast id across repeat blocks.
+  useEffect(() => {
+    let lastTtsState: ReturnType<typeof ttsService.getState> | null = null;
+    return ttsService.subscribe((state) => {
+      if (state === "blocked" && lastTtsState !== "blocked") {
+        toast.info(localizeUi("ui.chat.chatarea.audioBlockedTapToPlay"), { id: "tts-playback-blocked" });
+      } else if (state !== "blocked" && lastTtsState === "blocked") {
+        // The tap that resumed playback also fulfilled the toast - a lingering
+        // "tap to play" over audio that is already playing reads as broken.
+        toast.dismiss("tts-playback-blocked");
+      }
+      lastTtsState = state;
+    });
+  }, [localizeUi]);
   const handleHomeProfessorChatOpenChange = useCallback((open: boolean) => {
     homeProfessorChatOpenRef.current = open;
     if (open) setHomeProfessorChatActive(true);
@@ -533,7 +695,12 @@ export const ChatArea = memo(function ChatArea() {
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [selectionAnchorIndex, setSelectionAnchorIndex] = useState<number | null>(null);
 
-  const { data: chatDetail, error: chatError, isFetched: chatDetailFetched } = useChat(activeChatId);
+  const {
+    data: chatDetail,
+    error: chatError,
+    isFetched: chatDetailFetched,
+    refetch: refetchChatDetail,
+  } = useChat(activeChatId);
   const { data: allChats } = useChats();
   const listedActiveChat = useMemo(
     () => (activeChatId ? (allChats?.find((candidate) => candidate.id === activeChatId) ?? null) : null),
@@ -545,60 +712,44 @@ export const ChatArea = memo(function ChatArea() {
   const handleOpenSettingsPanel = useCallback(
     (event?: ReactMouseEvent<HTMLElement>, options?: OpenSettingsOptions) => {
       void preloadChatSettingsDrawer();
-      const nextOpen = event ? !settingsOpen : true;
-      setGalleryOpen(false);
-      setGalleryAnchor(null);
+      const windows = useFloatingWindowStore.getState();
+      const nextOpen = event ? !windows.open[CHAT_SETTINGS_WINDOW_ID] : true;
       setSettingsAnchor(nextOpen ? readFloatingPanelAnchor(event) : null);
       setSettingsInitialSection(nextOpen ? (options?.initialSection ?? null) : null);
-      setSettingsOpen(nextOpen);
+      if (nextOpen) windows.openWindow(CHAT_SETTINGS_WINDOW_ID, event?.currentTarget ?? null);
+      else windows.dismissWindow(CHAT_SETTINGS_WINDOW_ID, { force: true });
     },
-    [readFloatingPanelAnchor, settingsOpen],
+    [readFloatingPanelAnchor],
   );
-  const handleOpenGalleryPanel = useCallback(
-    (event?: ReactMouseEvent<HTMLElement>) => {
-      const nextOpen = event ? !galleryOpen : true;
-      setSettingsOpen(false);
-      setSettingsAnchor(null);
-      setSettingsInitialSection(null);
-      setGalleryAnchor(nextOpen ? readFloatingPanelAnchor(event) : null);
-      setGalleryOpen(nextOpen);
-    },
-    [galleryOpen, readFloatingPanelAnchor],
-  );
-  const handleCloseSettingsPanel = useCallback(() => {
-    blurActiveChatFloatingUiControl();
-    setSettingsOpen(false);
+  // Other chat panels and toolbar actions dismiss Chat Settings unless it is pinned; `force` (its own
+  // close button) always closes it.
+  const handleCloseSettingsPanel = useCallback((options?: { force?: boolean }) => {
+    // React unmounts the window after this handler returns, so a field being edited still saves on blur.
+    if (useFloatingWindowStore.getState().dismissWindow(CHAT_SETTINGS_WINDOW_ID, options)) {
+      blurActiveChatFloatingUiControl();
+    }
+  }, []);
+  useEffect(() => {
+    if (settingsOpen) return;
     setSettingsAnchor(null);
     setSettingsInitialSection(null);
-  }, []);
-
-  const handleCloseGalleryPanel = useCallback(() => {
-    blurActiveChatFloatingUiControl();
-    setGalleryOpen(false);
-    setGalleryAnchor(null);
-  }, []);
-
+  }, [settingsOpen]);
   useEffect(() => {
     if (!activeChatId) return;
     homeProfessorChatOpenRef.current = false;
     setHomeProfessorChatOpen(false);
     setHomeProfessorChatActive(false);
   }, [activeChatId]);
-  const closeFloatingChatDrawers = useCallback((event?: Event) => {
-    const preservedPanel = event ? readAnnouncedChatToolbarPanelAction(event) : null;
-    blurActiveChatFloatingUiControl();
-    if (preservedPanel !== "settings") {
-      setSettingsOpen(false);
-      setSettingsAnchor(null);
-      setSettingsInitialSection(null);
-    }
-    if (preservedPanel !== "gallery") {
-      setGalleryOpen(false);
-      setGalleryAnchor(null);
-    }
-    setPeekPromptData(null);
-    setDeleteDialogMessageId(null);
-  }, []);
+  const closeFloatingChatDrawers = useCallback(
+    (event?: Event) => {
+      const preservedPanel = event ? readAnnouncedChatToolbarPanelAction(event) : null;
+      if (preservedPanel !== "settings") handleCloseSettingsPanel();
+      blurActiveChatFloatingUiControl({ keepWindowFocus: true });
+      setPeekPromptData(null);
+      setDeleteDialogMessageId(null);
+    },
+    [handleCloseSettingsPanel],
+  );
   // A dropped agent parks a setup request; open chat settings so its modal can run.
   useEffect(() => {
     const openAgentSetup = (event: Event) => {
@@ -608,6 +759,27 @@ export const ChatArea = memo(function ChatArea() {
     };
     window.addEventListener(CHAT_RESOURCE_AGENT_SETUP_EVENT, openAgentSetup);
     return () => window.removeEventListener(CHAT_RESOURCE_AGENT_SETUP_EVENT, openAgentSetup);
+  }, [handleOpenSettingsPanel]);
+
+  useEffect(() => {
+    const openMemorySettings = (event: Event) => {
+      const chatId = (event as CustomEvent<{ chatId?: string }>).detail?.chatId;
+      if (chatId !== useChatStore.getState().activeChatId) return;
+      handleOpenSettingsPanel(undefined, { initialSection: "memory-recall" });
+    };
+    window.addEventListener(ADVANCED_MEMORY_SETTINGS_EVENT, openMemorySettings);
+    return () => window.removeEventListener(ADVANCED_MEMORY_SETTINGS_EVENT, openMemorySettings);
+  }, [handleOpenSettingsPanel]);
+
+  // The Chat Summary agent's "open summaries" link lands on the Chat Summary drawer.
+  useEffect(() => {
+    const openSummary = (event: Event) => {
+      const chatId = (event as CustomEvent<{ chatId?: string }>).detail?.chatId;
+      if (chatId !== useChatStore.getState().activeChatId) return;
+      handleOpenSettingsPanel(undefined, { initialSection: "summary" });
+    };
+    window.addEventListener(CHAT_SUMMARY_OPEN_REQUEST_EVENT, openSummary);
+    return () => window.removeEventListener(CHAT_SUMMARY_OPEN_REQUEST_EVENT, openSummary);
   }, [handleOpenSettingsPanel]);
 
   useEffect(() => {
@@ -670,6 +842,19 @@ export const ChatArea = memo(function ChatArea() {
     enabled: !!chat?.id && chat.id === activeChatId && isGameChat,
     includeBuiltIn: true,
   });
+  // Only the selected identity card is needed here, so fetch that one row
+  // instead of the whole character library. [PR #5583]
+  const identityCharacterId = isGameChat ? null : (chat?.personaCharacterId ?? null);
+  const identityCharacterQueries = useQueries({
+    queries: (identityCharacterId ? [identityCharacterId] : []).map((id) => ({
+      queryKey: characterKeys.detail(id),
+      queryFn: () => api.get<CharacterRow>(`/characters/${id}`),
+      enabled: !!chat?.id && chat.id === activeChatId,
+      retry: false,
+      staleTime: 5 * 60_000,
+    })),
+  });
+  const identityCharacterRow = identityCharacterQueries[0]?.data ?? null;
   const deleteMessage = useDeleteMessage(activeChatId);
   const deleteMessages = useDeleteMessages(activeChatId);
   const deleteSwipe = useDeleteSwipe(activeChatId);
@@ -692,11 +877,6 @@ export const ChatArea = memo(function ChatArea() {
   const agentProcessing = useAgentStore((s) =>
     activeChatId ? s.processingChatIds.includes(activeChatId) : s.isProcessing,
   );
-
-  useEffect(() => {
-    if (!activeChatId || !(chatError instanceof ApiError) || chatError.status !== 404) return;
-    setActiveChatId(null);
-  }, [activeChatId, chatError, setActiveChatId]);
 
   useEffect(() => {
     if (!activeChatId || !allChats) return;
@@ -757,8 +937,10 @@ export const ChatArea = memo(function ChatArea() {
       if (!override?.prompt.trim()) return;
       setIllustratorPromptReviewSubmitting(true);
       const success = await retryAgents(illustratorPromptReview.chatId, ["illustrator"], {
+        illustratorMessageRange: illustratorPromptReview.illustratorMessageRange,
         illustratorPromptReviewOverride: {
           resultData: illustratorPromptReview.resultData,
+          ...(illustratorPromptReview.subjectOnly ? { subjectOnly: true } : {}),
           prompt: override.prompt,
           ...(override.negativePrompt ? { negativePrompt: override.negativePrompt } : {}),
         },
@@ -775,14 +957,57 @@ export const ChatArea = memo(function ChatArea() {
     setIllustratorPromptReview(null);
   }, [illustratorPromptReviewSubmitting]);
 
+  const handleIllustrateWithAgent = useCallback(
+    async (agentType: string) => {
+      if (activeChatId) await retryAgents(activeChatId, [agentType], { forceImageGeneration: true });
+    },
+    [activeChatId, retryAgents],
+  );
+  const handleIllustrate = useCallback(
+    (prompt?: string, messageRange?: [string, string]) => {
+      if (!activeChatId) return;
+      const resultData = { prompt, characters: [] };
+      if (prompt && useUIStore.getState().reviewImagePromptsBeforeSend) {
+        setIllustratorPromptReview({
+          chatId: activeChatId,
+          subjectOnly: true,
+          illustratorMessageRange: messageRange,
+          resultData,
+          item: {
+            id: "roleplay-scene-illustration",
+            kind: "illustration",
+            title: localizeUi("ui.chat.chatgallery.illustrate"),
+            prompt,
+          },
+        });
+        return;
+      }
+      return retryAgents(activeChatId, ["illustrator"], {
+        illustratorRetryTargets: ["illustration"],
+        illustratorMessageRange: messageRange,
+        ...(prompt ? { illustratorPromptReviewOverride: { prompt, subjectOnly: true, resultData } } : {}),
+      }).then(() => undefined);
+    },
+    [activeChatId, localizeUi, retryAgents],
+  );
+
+  const illustratorPromptReviewModal = (
+    <ImagePromptReviewModal
+      open={!!illustratorPromptReview}
+      items={illustratorPromptReview ? [illustratorPromptReview.item] : []}
+      isSubmitting={illustratorPromptReviewSubmitting}
+      onCancel={handleCloseIllustratorPromptReview}
+      onConfirm={(overrides) => void handleContinueIllustratorPromptReview(overrides)}
+    />
+  );
+
   // Character IDs in the active chat. Keyed on the raw characterIds field
   // (all getChatCharacterIds reads) so chat-detail refetches that only bump
   // other fields don't renew the array identity. [#3164]
   const chatCharacterIdsRaw = chat?.characterIds;
   const chatCharIds = useMemo(() => getChatCharacterIds({ characterIds: chatCharacterIdsRaw }), [chatCharacterIdsRaw]);
-  const chatPersonaId = useMemo(() => resolveChatPersonaId(chat), [chat]);
+  const chatPersonaId = chat?.personaId ?? null;
   const { data: chatPersona } = usePersona(chatPersonaId);
-  const { data: activePersonaFallback } = useActivePersona(!!chat?.id && !chatPersonaId && chatMode === "conversation");
 
   const activeCharacterQueries = useQueries({
     queries: chatCharIds.map((id) => ({
@@ -849,8 +1074,7 @@ export const ChatArea = memo(function ChatArea() {
     // generate. Prefer the live override/schedule-derived status (matching the presence pill, via
     // the shared resolver) over the generation-time snapshot, which only refreshes on generation.
     const chatStatuses = convoMeta.conversationCharacterStatuses as
-      | Record<string, { status?: string; activity?: string }>
-      | undefined;
+      Record<string, { status?: string; activity?: string }> | undefined;
     const presenceIds = new Set<string>([
       ...Object.keys(chatStatuses ?? {}),
       ...Object.keys((convoMeta.conversationStatusOverrides as Record<string, unknown> | undefined) ?? {}),
@@ -948,14 +1172,53 @@ export const ChatArea = memo(function ChatArea() {
     });
   }, [gameLibraryCharacters, isGameChat]);
 
-  // Active persona info (for user message styling: name, avatar, colors)
+  // Chat persona info (for user message styling: name, avatar, colors)
   const personaInfo = useMemo(() => {
-    // Roleplay and Game may intentionally have no Persona; only Conversation
-    // falls back to the globally active account Persona.
-    const persona = chatPersona ?? (chatMode === "conversation" ? activePersonaFallback : null);
+    if (chat?.personaCharacterId) {
+      const row = identityCharacterRow;
+      if (row && row.id === chat.personaCharacterId) {
+        try {
+          const rawData = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          const data = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData : {};
+          const extensions = data?.extensions ?? {};
+          const conversationStatus =
+            extensions.conversationStatus === "online" ||
+            extensions.conversationStatus === "idle" ||
+            extensions.conversationStatus === "dnd" ||
+            extensions.conversationStatus === "offline"
+              ? extensions.conversationStatus
+              : undefined;
+          return {
+            id: row.id,
+            source: "character" as const,
+            name: typeof data?.name === "string" && data.name.trim() ? data.name : "Unknown",
+            convoDisplayName: typeof extensions.convoDisplayName === "string" ? extensions.convoDisplayName : undefined,
+            phoneticName: typeof extensions.phoneticName === "string" ? extensions.phoneticName : undefined,
+            description: typeof data?.description === "string" ? data.description : undefined,
+            personality: typeof data?.personality === "string" ? data.personality : undefined,
+            scenario: typeof data?.scenario === "string" ? data.scenario : undefined,
+            backstory: typeof extensions.backstory === "string" ? extensions.backstory : undefined,
+            appearance: typeof extensions.appearance === "string" ? extensions.appearance : undefined,
+            avatarUrl: row.avatarPath || undefined,
+            avatarCrop: normalizeAvatarCrop(extensions.avatarCrop),
+            nameColor: typeof extensions.nameColor === "string" ? extensions.nameColor : undefined,
+            dialogueColor: typeof extensions.dialogueColor === "string" ? extensions.dialogueColor : undefined,
+            boxColor: typeof extensions.boxColor === "string" ? extensions.boxColor : undefined,
+            conversationStatus,
+            conversationActivity:
+              typeof extensions.conversationActivity === "string" ? extensions.conversationActivity : undefined,
+          };
+        } catch {
+          return undefined;
+        }
+      }
+      return undefined;
+    }
+    const persona = chatPersona;
     if (!persona) return undefined;
     return {
       id: persona.id,
+      source: "persona" as const,
       name: persona.name,
       convoDisplayName: persona.convoDisplayName || undefined,
       phoneticName: persona.phoneticName || undefined,
@@ -970,7 +1233,7 @@ export const ChatArea = memo(function ChatArea() {
       dialogueColor: persona.dialogueColor || undefined,
       boxColor: persona.boxColor || undefined,
     };
-  }, [activePersonaFallback, chatMode, chatPersona]);
+  }, [chat, chatPersona, identityCharacterRow]);
 
   const { startEncounter } = useEncounter();
   const { concludeScene, abandonScene, forkScene, isForking } = useScene();
@@ -1070,7 +1333,23 @@ export const ChatArea = memo(function ChatArea() {
     () => resolveSpriteExpressionState(messages, chatMeta.spriteExpressions),
     [messages, chatMeta.spriteExpressions],
   );
-  const groupChatMode: string | undefined = chatCharIds.length > 1 ? (chatMeta.groupChatMode ?? "merged") : undefined;
+  // Keep each scene across chat switches and temporary Roleplay surface unmounts while a chat loads.
+  const completedExpressionTurn = useMemo(() => resolveLatestSpriteExpressionTurn(messages), [messages]);
+  const retainedExpressionTurn = activeChatId ? retainedExpressionTurns.get(activeChatId) : undefined;
+  const retainedExpressionIndex =
+    messages?.findIndex((message) => message.id === retainedExpressionTurn?.messageId) ?? -1;
+  // Regeneration can replace the current swipe before its expressions finish. Don't rewind to an older scene.
+  const visibleExpressionTurn =
+    retainedExpressionTurn && (!messages || retainedExpressionIndex > (completedExpressionTurn?.messageIndex ?? -1))
+      ? retainedExpressionTurn
+      : completedExpressionTurn;
+  useEffect(() => {
+    if (!activeChatId || !messages) return;
+    // An empty refetch must not erase the retained scene; a chat with no turns has nothing to keep anyway.
+    if (visibleExpressionTurn) retainedExpressionTurns.set(activeChatId, visibleExpressionTurn);
+  }, [activeChatId, messages, visibleExpressionTurn]);
+  const groupChatMode: string | undefined =
+    chatCharIds.length > 1 ? normalizeGroupChatMode(chatMeta.groupChatMode) : undefined;
 
   const updateMeta = useUpdateChatMetadata();
   const [scheduleModalCharacterId, setScheduleModalCharacterId] = useState<string | null>(null);
@@ -1355,9 +1634,9 @@ export const ChatArea = memo(function ChatArea() {
   // (personas have no other data-card-css hook), so only feed it in Convo mode.
   const cardCssPersonas = useMemo<PersonaCssRow[] | undefined>(() => {
     if (chatMode !== "conversation") return undefined;
-    const persona = chatPersona ?? activePersonaFallback;
+    const persona = chatPersona;
     return persona?.id ? [{ id: persona.id, creatorNotes: persona.creatorNotes }] : undefined;
-  }, [chatMode, chatPersona, activePersonaFallback]);
+  }, [chatMode, chatPersona]);
   const cardCssInjector = (
     <CreatorNotesCssInjector
       characterIds={chatCharIds}
@@ -1371,51 +1650,13 @@ export const ChatArea = memo(function ChatArea() {
   // Sync translation config from chat metadata to the translation store
   useEffect(() => {
     if (!chat?.id) return;
-    const legacyTargetLanguage = chatMeta.translationTargetLang?.trim() || "en";
-    const legacySystemPrompt = typeof chatMeta.translationPrompt === "string" ? chatMeta.translationPrompt : undefined;
-    const inputSystemPrompt =
-      chatMeta.translationInputPrompt === undefined
-        ? legacySystemPrompt
-        : typeof chatMeta.translationInputPrompt === "string"
-          ? chatMeta.translationInputPrompt
-          : undefined;
-    const outputSystemPrompt =
-      chatMeta.translationOutputPrompt === undefined
-        ? legacySystemPrompt
-        : typeof chatMeta.translationOutputPrompt === "string"
-          ? chatMeta.translationOutputPrompt
-          : undefined;
-    useTranslationStore.getState().setConfig({
-      provider: chatMeta.translationProvider ?? "google",
-      // A cleared settings field stores "" — fall back to the legacy/default
-      // language so translation never runs with an empty target.
-      inputTargetLanguage: chatMeta.translationInputTargetLang?.trim() || legacyTargetLanguage,
-      outputTargetLanguage: chatMeta.translationOutputTargetLang?.trim() || legacyTargetLanguage,
-      connectionId: chatMeta.translationConnectionId,
-      inputSystemPrompt,
-      outputSystemPrompt,
-      deeplApiKey: chatMeta.translationDeeplApiKey,
-      deeplxUrl: chatMeta.translationDeeplxUrl,
-    });
-  }, [
-    chat?.id,
-    chatMeta.translationProvider,
-    chatMeta.translationTargetLang,
-    chatMeta.translationInputTargetLang,
-    chatMeta.translationOutputTargetLang,
-    chatMeta.translationConnectionId,
-    chatMeta.translationPrompt,
-    chatMeta.translationInputPrompt,
-    chatMeta.translationOutputPrompt,
-    chatMeta.translationDeeplApiKey,
-    chatMeta.translationDeeplxUrl,
-  ]);
+    useTranslationStore.getState().setConfig(getChatTranslationConfig(chat.id, chatMeta));
+  }, [chat?.id, chatMeta]);
 
   // On chat switch, clear in-memory translations and seed from persisted extras.
-  // Also re-seed when new pages are fetched (pagination) so older persisted
-  // translations become visible.
-  const msgPageCount = msgData?.pages.length ?? 0;
-  const prevChatIdRef = useRef(chat?.id);
+  // Also re-seed when message extras arrive after a chat switch or pagination.
+  // This view remounts while an uncached chat loads, so start from the chat the store last held.
+  const prevChatIdRef = useRef(useTranslationStore.getState().config.chatId);
   useEffect(() => {
     if (!messages) return;
     // Clear on actual chat switch
@@ -1430,8 +1671,7 @@ export const ChatArea = memo(function ChatArea() {
         extra?: string | Record<string, unknown> | null;
       }>,
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chat?.id, msgPageCount]);
+  }, [chat?.id, messages]);
 
   // Sync chat background from metadata when switching chats. Set the UI store
   // to whatever the chat's metadata says — including null. The previous version
@@ -1459,7 +1699,6 @@ export const ChatArea = memo(function ChatArea() {
   // stale saved background. We only write null when metadata already had a
   // background — that way a global UI background carried over from a previous
   // chat doesn't pollute a fresh chat's metadata on switch.
-  const bgPersistTimer = useRef<ReturnType<typeof setTimeout>>(null);
   useEffect(() => {
     if (!chat?.id) return;
     const savedBackground = chatBackgroundUrlToMetadata(chatBackgroundMetadataToUrl(chatMeta.background));
@@ -1475,28 +1714,13 @@ export const ChatArea = memo(function ChatArea() {
       restoredBackground.isSyncing = false;
     }
 
-    if (!chatBackground) {
-      if (savedBackground === null) return;
-      if (bgPersistTimer.current) clearTimeout(bgPersistTimer.current);
-      bgPersistTimer.current = setTimeout(() => {
-        updateMeta.mutate({ id: chat!.id, background: null });
-      }, 500);
-      return;
-    }
-
     const nextBackground = chatBackgroundUrlToMetadata(chatBackground);
     if (nextBackground === savedBackground) return;
-    if (bgPersistTimer.current) clearTimeout(bgPersistTimer.current);
-    bgPersistTimer.current = setTimeout(() => {
-      updateMeta.mutate({ id: chat!.id, background: nextBackground });
-    }, 500);
+    // A selection is a discrete action, not typing: save immediately so leaving
+    // the chat cannot cancel a pending background change.
+    updateMeta.mutate({ id: chat.id, background: nextBackground });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatBackground, chat?.id]);
-  useEffect(() => {
-    return () => {
-      if (bgPersistTimer.current) clearTimeout(bgPersistTimer.current);
-    };
-  }, []);
 
   const expressionSaveTimer = useRef<ReturnType<typeof setTimeout>>(null);
   const pendingExpressions = useRef<Record<string, string>>(spriteExpressions);
@@ -1946,16 +2170,37 @@ export const ChatArea = memo(function ChatArea() {
           title: localizeUi("ui.chat.chatarea.regenerateMessage"),
           message: localizeUi("ui.chat.chatarea.regenerateThisMessageAsANewSwipe"),
           confirmLabel: localizeUi("ui.agents.secretplotpanel.regenerate"),
+          chatStyle: true,
         }))
       ) {
         return;
       }
+      // The confirmation can outlive this chat. Never use another chat's draft as guidance.
+      if (useChatStore.getState().activeChatId !== activeChatId) return;
+      const composer = document.querySelector<HTMLTextAreaElement>("textarea[data-chat-composer]");
+      const currentInput = composer?.dataset.chatId === activeChatId ? composer.value : getCurrentInputSnapshot();
+      const isGuided = guideGenerations && currentInput.trim().length > 0;
+      // By default guidance stays in the composer so it can be adjusted for another regeneration (#7060).
+      // With the setting off it is consumed so it cannot go out later as a chat message (#6815).
+      const clearsGuidance = isGuided && !keepGuidanceAfterRegenerate;
+      const replaceGuidanceDraft = (expected: string, text: string) => {
+        const state = useChatStore.getState();
+        const input = document.querySelector<HTMLTextAreaElement>("textarea[data-chat-composer]");
+        if (state.activeChatId === activeChatId && input?.dataset.chatId === activeChatId) {
+          if (input.value !== expected) return;
+          input.value = text;
+          // Reuse each uncontrolled composer's draft debounce, sizing and input-state handling.
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        } else if ((state.inputDrafts.get(activeChatId) ?? "") !== expected) {
+          return;
+        }
+        state.setInputDraft(activeChatId, text);
+      };
+      if (clearsGuidance) replaceGuidanceDraft(currentInput, "");
       try {
         // Regenerate as a new swipe on the existing message
-        const currentInput = getCurrentInputSnapshot();
-        const hasInput = currentInput ? currentInput.trim().length > 0 : false;
-        await generate(
-          guideGenerations && hasInput
+        const consumed = await generate(
+          isGuided
             ? {
                 chatId: activeChatId,
                 connectionId: null,
@@ -1965,35 +2210,18 @@ export const ChatArea = memo(function ChatArea() {
               }
             : { chatId: activeChatId, connectionId: null, regenerateMessageId: messageId },
         );
+        if (clearsGuidance && !consumed) replaceGuidanceDraft("", currentInput);
       } catch {
+        if (clearsGuidance) replaceGuidanceDraft("", currentInput);
         // Error toast is shown by the generate hook
       }
     },
-    [activeChatId, isStreaming, generate, guideGenerations, localizeUi],
+    [activeChatId, isStreaming, generate, guideGenerations, keepGuidanceAfterRegenerate, localizeUi],
   );
-
-  const handleRetryAgents = useCallback(async () => {
-    if (!activeChatId || isStreaming || agentProcessing || failedAgentTypes.length === 0) return;
-    const failureState = useAgentStore.getState();
-    const failures =
-      failureState.failedAgentChatId && failureState.failedAgentChatId !== activeChatId
-        ? []
-        : failureState.failedAgentFailures;
-    const illustratorRetryTargets = illustratorRetryTargetsForFailures(failures);
-    await retryAgents(
-      activeChatId,
-      failedAgentTypes,
-      illustratorRetryTargets ? { illustratorRetryTargets } : undefined,
-    );
-  }, [activeChatId, isStreaming, agentProcessing, failedAgentTypes, retryAgents]);
 
   const handleRerunTrackers = useCallback(async () => {
     if (!activeChatId || isStreaming || agentProcessing) return;
-    const manualTypes = Array.from(manualTrackerTypes);
-    const types =
-      manualTypes.length > 0
-        ? manualTypes
-        : Array.from(enabledAgentTypes).filter((type) => isBuiltInTrackerAgentType(type) || !isBuiltInAgentType(type));
+    const types = resolveTrackerRerunTypes(enabledAgentTypes, manualTrackerTypes);
     if (types.length === 0) return;
     await retryAgents(activeChatId, types);
   }, [activeChatId, isStreaming, agentProcessing, enabledAgentTypes, manualTrackerTypes, retryAgents]);
@@ -2107,6 +2335,7 @@ export const ChatArea = memo(function ChatArea() {
         title: localizeUi("ui.chat.chatarea.createANewBranch"),
         message: localizeUi("ui.chat.chatarea.thisWillCopyTheChatThroughThisMessageAnd"),
         confirmLabel: localizeUi("ui.chat.chatarea.createBranch"),
+        chatStyle: true,
       });
       if (!confirmed || useChatStore.getState().activeChatId !== chatId) {
         branchPendingRef.current = false;
@@ -2152,7 +2381,7 @@ export const ChatArea = memo(function ChatArea() {
     (messageId?: string) => {
       if (!activeChatId) return;
       peekPrompt.mutate(messageId ? { chatId: activeChatId, messageId } : activeChatId, {
-        onSuccess: (data) => setPeekPromptData(data),
+        onSuccess: (data) => setPeekPromptData({ ...data, chatId: activeChatId }),
         onError: (error) => {
           const message =
             error instanceof ApiError
@@ -2207,8 +2436,7 @@ export const ChatArea = memo(function ChatArea() {
   }, [messages]);
 
   const intuitiveSwipeBlocked =
-    settingsOpen ||
-    galleryOpen ||
+    (settingsOpen && !settingsPinned) ||
     wizardOpen ||
     spriteArrangeMode ||
     multiSelectMode ||
@@ -2409,8 +2637,10 @@ export const ChatArea = memo(function ChatArea() {
   const userScrolledAtRef = useRef(0);
   const forcedBottomScrollRef = useRef<{ requestedAt: number; behavior: ScrollBehavior } | null>(null);
   const openedAtBottomChatIdRef = useRef<string | null>(null);
+  const gotoRequest = useChatStore((s) => s.gotoRequest);
   const streamScrollFrameRef = useRef(0);
   const scrollToMessagesBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    if (hasActiveTextSelection()) return;
     const el = scrollRef.current;
     if (el) {
       el.scrollTo({ top: el.scrollHeight, behavior });
@@ -2446,6 +2676,14 @@ export const ChatArea = memo(function ChatArea() {
     [scrollToMessagesBottom],
   );
   useKeepLatestChatMessageVisible(scrollRef, scrollToMessagesBottom);
+  const followOpeningScroll = useChatOpeningScroll(
+    isRoleplay && gotoRequest?.chatId !== activeChatId ? activeChatId : null,
+    scrollRef,
+    scrollToMessagesBottom,
+  );
+  useEffect(() => {
+    openedAtBottomChatIdRef.current = null;
+  }, [activeChatId]);
   useEffect(() => {
     const handleScrollRequest = (event: Event) => {
       const detail = (event as CustomEvent<ChatScrollToBottomDetail>).detail;
@@ -2463,26 +2701,42 @@ export const ChatArea = memo(function ChatArea() {
   }, [activeChatId, scheduleScrollToMessagesBottom]);
 
   useEffect(() => {
-    if (!activeChatId || isFetchingNextPage || isLoadingMoreRef.current) return;
+    if (!activeChatId || !isRoleplay || isFetchingNextPage || isLoadingMoreRef.current) return;
     if (openedAtBottomChatIdRef.current === activeChatId) return;
-    if (isLoading && loadedMessageCount === 0) return;
+    if (!messages || (isLoading && loadedMessageCount === 0) || gotoRequest?.chatId === activeChatId) return;
 
     let frame = 0;
     const scrollWhenSurfaceIsReady = () => {
+      if (frame) cancelAnimationFrame(frame);
+      if (hasActiveTextSelection()) return;
       if (!scrollRef.current && !messagesEndRef.current) {
         frame = requestAnimationFrame(scrollWhenSurfaceIsReady);
         return;
       }
 
+      document.removeEventListener("selectionchange", scrollWhenSurfaceIsReady);
       openedAtBottomChatIdRef.current = activeChatId;
       userScrolledAwayRef.current = false;
       isNearBottomRef.current = true;
-      scheduleScrollToMessagesBottom("auto");
+      followOpeningScroll();
     };
 
+    document.addEventListener("selectionchange", scrollWhenSurfaceIsReady);
     scrollWhenSurfaceIsReady();
-    return () => cancelAnimationFrame(frame);
-  }, [activeChatId, isFetchingNextPage, isLoading, loadedMessageCount, scheduleScrollToMessagesBottom]);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("selectionchange", scrollWhenSurfaceIsReady);
+    };
+  }, [
+    activeChatId,
+    isRoleplay,
+    isFetchingNextPage,
+    isLoading,
+    loadedMessageCount,
+    messages,
+    gotoRequest,
+    followOpeningScroll,
+  ]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -2587,7 +2841,7 @@ export const ChatArea = memo(function ChatArea() {
       if (mode === "roleplay" && cfg.roleplaySpeakerExtractorEnabled) {
         try {
           const extracted = await extractRoleplayTTSSpeakers({
-            message: lastMsg.content,
+            message: filterTTSText(lastMsg.content, cfg),
             group: getChatDisplayName(chat) || characterNames.join(", "),
             user: personaInfo?.name || "User",
             characters: characterNames,
@@ -2631,12 +2885,28 @@ export const ChatArea = memo(function ChatArea() {
         return;
       if (ttsRequests.length === 0) return;
 
+      if (
+        mode === "roleplay" &&
+        (chatMeta.roleplayDisplayStyle ?? useUIStore.getState().roleplayDisplayStyle) === "visual-novel"
+      ) {
+        ttsRequests = withRoleplayTTSParagraphs(ttsRequests, lastMsg.content, cfg);
+      }
+
       await ttsService.speakSequence(withTTSVoiceRequestCacheKeys(ttsRequests, cfg, lastMsg.id), lastMsg.id, {
         progressive: cfg.progressivePlayback,
         volume: ttsLineVolume / 100,
+        onChunkStart: (_request, index) => notifyRoleplayTTSParagraph(targetChatId, lastMsg.id, ttsRequests, index),
       });
     },
-    [characterMap, characterNames, chat, personaInfo?.name, resolveTTSCharacterId, ttsLineVolume],
+    [
+      characterMap,
+      characterNames,
+      chat,
+      chatMeta.roleplayDisplayStyle,
+      personaInfo?.name,
+      resolveTTSCharacterId,
+      ttsLineVolume,
+    ],
   );
   useEffect(() => {
     const handleMessageReady = (event: Event) => {
@@ -2744,16 +3014,32 @@ export const ChatArea = memo(function ChatArea() {
   }, [pageCount, isFetchingNextPage]);
 
   const handleLoadMore = useCallback(() => {
-    if (!scrollRef.current || !hasNextPage || isFetchingNextPage) return;
-    prevScrollHeightRef.current = scrollRef.current.scrollHeight;
-    isLoadingMoreRef.current = true;
+    if (!hasNextPage || isFetchingNextPage) return;
+    if (scrollRef.current) {
+      prevScrollHeightRef.current = scrollRef.current.scrollHeight;
+      isLoadingMoreRef.current = true;
+    }
     fetchNextPage();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
   // ── /goto command: paginate older pages until target message is loaded, then scroll to it
-  const gotoRequest = useChatStore((s) => s.gotoRequest);
   useEffect(() => {
     if (!gotoRequest || gotoRequest.chatId !== activeChatId) return;
+    // A run that still sees an already handled (cleared) request must not repeat it. React's development
+    // double-run of a fresh mount does this: the chat area remounts after a chat switch with the request pending.
+    if (useChatStore.getState().gotoRequest?.token !== gotoRequest.token) return;
+    // A message jump may switch chats while this surface still has the prior
+    // chat detail cached. Wait until the selected chat's own detail is loaded
+    // before choosing the game-specific behavior.
+    if (!chatDetailFetched || !chat || chat.id !== activeChatId) return;
+    if (chat.mode === "game") {
+      // The Game surface shows one narration beat at a time and has no
+      // per-message anchors, so paging the whole history in would only end in
+      // a silent no-op. Open the game and say where earlier turns live.
+      toast.info(localizeUi("chatInsights.gotoUnavailableInGame"));
+      useChatStore.getState().clearGotoRequest();
+      return;
+    }
     if (!messages) return;
 
     const targetNumber = gotoRequest.messageNumber;
@@ -2779,6 +3065,7 @@ export const ChatArea = memo(function ChatArea() {
       const raf = requestAnimationFrame(() => {
         const el = document.querySelector(`[data-message-id="${CSS.escape(targetId)}"]`);
         if (el instanceof HTMLElement) {
+          openedAtBottomChatIdRef.current = activeChatId;
           el.scrollIntoView({ behavior: "smooth", block: "center" });
           userScrolledAwayRef.current = true; // suppress auto-scroll-to-bottom hijacking the jump
         }
@@ -2811,51 +3098,15 @@ export const ChatArea = memo(function ChatArea() {
     isFetchingNextPage,
     fetchNextPage,
     localizeUi,
+    chat,
+    chatDetailFetched,
   ]);
 
   // ═══════════════════════════════════════════════
   // Restoring persisted active chat
   // ═══════════════════════════════════════════════
   if (activeChatId && !chat) {
-    const errorMessage =
-      chatError instanceof ApiError
-        ? chatError.message
-        : chatError instanceof Error
-          ? chatError.message
-          : "Opening chat...";
-    const hasOpenError = !!chatError;
-
-    return (
-      <div
-        data-component="ChatArea.RestoringChat"
-        className="mari-app-background-paint flex flex-1 items-center justify-center overflow-hidden p-6"
-      >
-        <div className="flex flex-col items-center gap-3 text-center">
-          {!hasOpenError && (
-            <div className="h-7 w-7 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--primary)]" />
-          )}
-          <div className="space-y-1">
-            <p className="text-sm font-medium text-[var(--foreground)]">
-              {hasOpenError
-                ? localizeUi("ui.chat.chatarea.couldNotOpenThisChat")
-                : localizeUi("ui.chat.chatarea.openingChat")}
-            </p>
-            {hasOpenError && (
-              <p className="mari-chrome-accent-text-muted mari-accent-animated max-w-sm text-xs">{errorMessage}</p>
-            )}
-          </div>
-          {hasOpenError && (
-            <button
-              type="button"
-              onClick={() => setActiveChatId(null)}
-              className="mari-chrome-control mari-chrome-control--small text-xs"
-            >
-              {localizeUi("ui.chat.chatarea.backToChats")}
-            </button>
-          )}
-        </div>
-      </div>
-    );
+    return <ChatOpeningState error={chatError} onRetry={refetchChatDetail} onBack={() => setActiveChatId(null)} />;
   }
 
   // ═══════════════════════════════════════════════
@@ -2915,7 +3166,8 @@ export const ChatArea = memo(function ChatArea() {
     : undefined;
   const activeSceneMeta = parseChatMetadata(activeSceneChat?.metadata);
   const hasActiveLinkedScene = activeSceneChat && activeSceneMeta.sceneStatus === "active";
-  const isSceneChat = chatMeta.sceneStatus === "active" || Boolean(chatMeta.sceneOriginChatId);
+  const isSceneChat =
+    chatMeta.sceneStatus === "active" || Boolean(chatMeta.sceneOriginChatId) || Boolean(chatMeta.scenePackageOrigin);
   const conversationSceneInfo =
     chatMeta.activeSceneChatId && hasActiveLinkedScene
       ? {
@@ -2928,6 +3180,7 @@ export const ChatArea = memo(function ChatArea() {
             variant: "scene" as const,
             sceneChatId: activeChatId,
             originChatId: chatMeta.sceneOriginChatId,
+            packageOrigin: chatMeta.scenePackageOrigin,
             description: chatMeta.sceneDescription,
           }
         : undefined;
@@ -2949,6 +3202,28 @@ export const ChatArea = memo(function ChatArea() {
     </Suspense>
   ) : null;
   const resourceDropOverlay = chat ? <ChatResourceDropOverlay chat={chat} /> : null;
+  const chatWindowIntro = (
+    <ChatWindowWelcomeModal
+      presentationAllowed={
+        chatWindowIntroAllowed &&
+        chat?.id === activeChatId &&
+        !isLoading &&
+        !wizardOpen &&
+        !shouldOpenWizard &&
+        !pendingNewChatMode &&
+        !peekPromptData &&
+        !deleteDialogMessageId &&
+        !scheduleModalCharacterId &&
+        !agentInjectionReview &&
+        !illustratorPromptReview &&
+        conversationSelfieReviewItems.length === 0 &&
+        roleplayVideoReviewItems.length === 0 &&
+        (chatMode !== "game" ||
+          (!gameSetupActive && Boolean(chatMeta.gameId) && chatMeta.gameSessionStatus !== "setup"))
+      }
+      onOpenChange={onChatWindowIntroOpenChange}
+    />
+  );
   const chatHelpMode = readChatHelpMode(chatMode);
   const chatHelpOverlay =
     chat && chatHelpMode ? (
@@ -2957,9 +3232,9 @@ export const ChatArea = memo(function ChatArea() {
         activeChatId={chat.id}
         isFirstChat={(allChats ?? []).filter((candidate) => candidate.mode === chatMode).length === 1}
         autoOpenBlocked={
+          !chatWindowIntroDismissed ||
           wizardOpen ||
           settingsOpen ||
-          galleryOpen ||
           !!pendingNewChatMode ||
           !!peekPromptData ||
           !!deleteDialogMessageId
@@ -2991,11 +3266,7 @@ export const ChatArea = memo(function ChatArea() {
             personaInfo={personaInfo}
             chatBackground={chatBackground}
             connectedChatName={connectedChatName}
-            onOpenSettings={handleOpenSettingsPanel}
             onCloseSettings={handleCloseSettingsPanel}
-            externalGalleryOpen={galleryOpen}
-            externalGalleryAnchor={galleryAnchor}
-            onCloseExternalGallery={handleCloseGalleryPanel}
             onSwitchChat={chat.connectedChatId ? () => setActiveChatId(chat.connectedChatId!) : undefined}
             onDeleteMessage={handleDelete}
             onPeekPrompt={handlePeekPrompt}
@@ -3007,8 +3278,6 @@ export const ChatArea = memo(function ChatArea() {
             chat={chat}
             settingsOpen={settingsOpen}
             settingsAnchor={settingsAnchor}
-            galleryOpen={false}
-            galleryAnchor={galleryAnchor}
             wizardOpen={wizardOpen}
             peekPromptData={peekPromptData}
             deleteDialogMessageId={deleteDialogMessageId}
@@ -3027,7 +3296,6 @@ export const ChatArea = memo(function ChatArea() {
               onSpriteVisualSettingsChange: patchLocalSpriteVisualSettings,
             }}
             onCloseSettings={handleCloseSettingsPanel}
-            onCloseGallery={handleCloseGalleryPanel}
             onOpenScheduleEditor={handleOpenScheduleEditor}
             onWizardFinish={() => {
               setWizardOpen(false);
@@ -3046,6 +3314,7 @@ export const ChatArea = memo(function ChatArea() {
             onSelectAllBelowSelection={handleSelectAllBelowSelection}
           />
           {chatHelpOverlay}
+          {chatWindowIntro}
         </>
       </Suspense>
     );
@@ -3081,8 +3350,6 @@ export const ChatArea = memo(function ChatArea() {
             settingsOpen={settingsOpen}
             settingsAnchor={settingsAnchor}
             settingsInitialSection={settingsInitialSection}
-            galleryOpen={galleryOpen}
-            galleryAnchor={galleryAnchor}
             wizardOpen={wizardOpen}
             peekPromptData={peekPromptData}
             deleteDialogMessageId={deleteDialogMessageId}
@@ -3105,18 +3372,10 @@ export const ChatArea = memo(function ChatArea() {
             onConcludeScene={chatMeta.sceneStatus === "active" ? () => concludeScene(activeChatId) : undefined}
             onAbandonScene={chatMeta.sceneStatus === "active" ? () => abandonScene(activeChatId) : undefined}
             onOpenSettings={handleOpenSettingsPanel}
-            onOpenGallery={handleOpenGalleryPanel}
             onOpenScheduleEditor={handleOpenScheduleEditor}
             onCloseSettings={handleCloseSettingsPanel}
-            onCloseGallery={handleCloseGalleryPanel}
-            onIllustrate={() =>
-              retryAgents(activeChatId, ["illustrator"], {
-                illustratorRetryTargets: ["illustration"],
-              })
-            }
-            onIllustrateWithAgent={async (agentType) => {
-              await retryAgents(activeChatId, [agentType], { forceImageGeneration: true });
-            }}
+            onIllustrate={handleIllustrate}
+            onIllustrateWithAgent={handleIllustrateWithAgent}
             onGenerateSelfie={handleGenerateConversationSelfie}
             onWizardFinish={() => {
               setWizardOpen(false);
@@ -3138,7 +3397,9 @@ export const ChatArea = memo(function ChatArea() {
             onSelectAllBelowSelection={handleSelectAllBelowSelection}
             lastAssistantMessageId={lastAssistantMessageId}
           />
+          {chatWindowIntro}
         </Suspense>
+        {illustratorPromptReviewModal}
         <ImagePromptReviewModal
           open={conversationSelfieReviewItems.length > 0}
           items={conversationSelfieReviewItems}
@@ -3186,6 +3447,9 @@ export const ChatArea = memo(function ChatArea() {
           spriteCharacterIds={spriteCharacterIds}
           spriteDisplayModes={visibleSpriteDisplayModes}
           spriteExpressions={spriteExpressions}
+          visibleExpressionSpriteIds={
+            chatMeta.expressionOnlyActiveSprites === true ? visibleExpressionTurn?.characterIds : undefined
+          }
           expressionAvatarResolver={expressionAvatarResolver}
           spritePlacements={spritePlacements}
           spriteScale={spriteScale}
@@ -3217,8 +3481,6 @@ export const ChatArea = memo(function ChatArea() {
           settingsOpen={settingsOpen}
           settingsAnchor={settingsAnchor}
           settingsInitialSection={settingsInitialSection}
-          galleryOpen={galleryOpen}
-          galleryAnchor={galleryAnchor}
           wizardOpen={wizardOpen}
           peekPromptData={peekPromptData}
           deleteDialogMessageId={deleteDialogMessageId}
@@ -3245,25 +3507,15 @@ export const ChatArea = memo(function ChatArea() {
           onToggleSelectMessage={handleToggleSelectMessage}
           onRerunTrackers={handleRerunTrackers}
           onRerunSingleTracker={handleRerunSingleTracker}
-          onRetryFailedAgents={handleRetryAgents}
           onStartEncounter={() => startEncounter()}
           onConcludeScene={() => concludeScene(activeChatId)}
           onAbandonScene={() => abandonScene(activeChatId)}
           onForkScene={forkScene}
           isForkingScene={isForking || isStreaming}
-          onOpenSettings={handleOpenSettingsPanel}
-          onOpenGallery={handleOpenGalleryPanel}
           onCloseSettings={handleCloseSettingsPanel}
-          onCloseGallery={handleCloseGalleryPanel}
           onOpenScheduleEditor={handleOpenScheduleEditor}
-          onIllustrate={() =>
-            retryAgents(activeChatId, ["illustrator"], {
-              illustratorRetryTargets: ["illustration"],
-            })
-          }
-          onIllustrateWithAgent={async (agentType) => {
-            await retryAgents(activeChatId, [agentType], { forceImageGeneration: true });
-          }}
+          onIllustrate={handleIllustrate}
+          onIllustrateWithAgent={handleIllustrateWithAgent}
           onGenerateBackground={handleGenerateRoleplayBackground}
           onGenerateVideo={() => handleGenerateRoleplaySceneVideo()}
           onAnimateImage={(image) => handleGenerateRoleplaySceneVideo({ galleryImageId: image.id })}
@@ -3293,6 +3545,7 @@ export const ChatArea = memo(function ChatArea() {
           onSelectAllBelowSelection={handleSelectAllBelowSelection}
           isGrouped={isGrouped}
         />
+        {chatWindowIntro}
       </Suspense>
       {agentInjectionReview && (
         <AgentInjectionReviewModal
@@ -3303,13 +3556,7 @@ export const ChatArea = memo(function ChatArea() {
           onClose={handleCloseAgentInjectionReview}
         />
       )}
-      <ImagePromptReviewModal
-        open={!!illustratorPromptReview}
-        items={illustratorPromptReview ? [illustratorPromptReview.item] : []}
-        isSubmitting={illustratorPromptReviewSubmitting}
-        onCancel={handleCloseIllustratorPromptReview}
-        onConfirm={(overrides) => void handleContinueIllustratorPromptReview(overrides)}
-      />
+      {illustratorPromptReviewModal}
       <ImagePromptReviewModal
         open={roleplayVideoReviewItems.length > 0}
         items={roleplayVideoReviewItems}

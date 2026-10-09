@@ -4,7 +4,7 @@ import { useConnections } from "../../hooks/use-connections";
 import { useCreateChat } from "../../hooks/use-chats";
 import { useChatPresets, useApplyChatPreset } from "../../hooks/use-chat-presets";
 import { useChatStore } from "../../stores/chat.store";
-import { useUIStore } from "../../stores/ui.store";
+import { isMobileShellViewport, useUIStore } from "../../stores/ui.store";
 import { useSidecarStore } from "../../stores/sidecar.store";
 import { appendLocalSidecarConnectionOption } from "../../lib/connection-filters";
 import { cn } from "../../lib/utils";
@@ -79,7 +79,7 @@ export function NewChatConnectionGate({ mode, onClose }: NewChatConnectionGatePr
           store.setPendingNewChatMode(null);
           if (pendingNewChatOrigin === "home") {
             setSidebarOpen(true);
-          } else if (typeof window !== "undefined" && window.innerWidth < 768) {
+          } else if (isMobileShellViewport()) {
             setSidebarOpen(false);
           }
           store.setActiveChatId(chat.id);
@@ -107,7 +107,7 @@ export function NewChatConnectionGate({ mode, onClose }: NewChatConnectionGatePr
       <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[3px]" onClick={onClose} />
       <div
         data-new-chat-connection-gate={mode}
-        className="mari-chrome-token-scope mari-chrome-text-accent-scope fixed inset-0 z-50 flex items-center justify-center p-3 max-md:pt-[max(0.75rem,env(safe-area-inset-top))] max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4"
+        className="mari-chrome-token-scope mari-chrome-text-accent-scope fixed inset-0 z-50 flex items-center justify-center p-3 max-md:pt-[max(0.75rem,env(safe-area-inset-top))] max-md:pb-[max(0.75rem,var(--mari-safe-area-inset-bottom,env(safe-area-inset-bottom)))] sm:p-4"
       >
         <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-sm flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-2xl sm:max-h-[min(90dvh,38rem)]">
           <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-4 py-3">

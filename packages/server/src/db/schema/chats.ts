@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Schema: Chats, Messages & Folders
 // ──────────────────────────────────────────────
-import { fileTable, text, integer } from "../file-schema.js";
+import { fileTable, text, integer, vectorText } from "../file-schema.js";
 
 export const chatFolders = fileTable("chat_folders", {
   id: text("id").primaryKey(),
@@ -23,6 +23,7 @@ export const chats = fileTable("chats", {
   /** Groups related chats together (like ST "chat files" per character) */
   groupId: text("group_id"),
   personaId: text("persona_id"),
+  personaCharacterId: text("persona_character_id"),
   promptPresetId: text("prompt_preset_id"),
   connectionId: text("connection_id"),
   /** JSON object for metadata */
@@ -125,7 +126,7 @@ export const memoryChunks = fileTable("memory_chunks", {
   /** Formatted conversation text: "Name: message\n\nName: message\n\n..." */
   content: text("content").notNull(),
   /** JSON-serialized float[] embedding (null until vectorized) */
-  embedding: text("embedding"),
+  embedding: vectorText("embedding"),
   /** Stable provider/model/profile identity for the stored embedding */
   embeddingSpaceId: text("embedding_space_id"),
   /** How many messages were grouped into this chunk */
@@ -137,4 +138,19 @@ export const memoryChunks = fileTable("memory_chunks", {
   /** ISO timestamp of the last message in this chunk */
   lastMessageAt: text("last_message_at").notNull(),
   createdAt: text("created_at").notNull(),
+});
+
+// ── Message trash: user-deleted messages kept for restore (purged after 30 days) ──
+export const messageTrash = fileTable("message_trash", {
+  id: text("id").primaryKey(),
+  chatId: text("chat_id")
+    .notNull()
+    .references(() => chats.id, { onDelete: "cascade" }),
+  messageId: text("message_id").notNull(),
+  role: text("role", { enum: ["user", "assistant", "system", "narrator"] }).notNull(),
+  characterId: text("character_id"),
+  content: text("content").notNull().default(""),
+  snapshot: text("snapshot").notNull(),
+  messageCreatedAt: text("message_created_at").notNull(),
+  deletedAt: text("deleted_at").notNull(),
 });

@@ -12,11 +12,12 @@ export interface ImageGenerationSize {
 }
 
 export interface ImageGenerationUserSettings {
+  autoSaveToGalleries: boolean;
   background: ImageGenerationSize;
   illustration: ImageGenerationSize;
-  noodle: ImageGenerationSize;
   game: ImageGenerationSize;
   portrait: ImageGenerationSize;
+  characterSheet: ImageGenerationSize;
   selfie: ImageGenerationSize;
   styleProfiles: ImageStyleProfileSettings;
 }
@@ -25,11 +26,12 @@ const IMAGE_DIMENSION_MIN = 64;
 const IMAGE_DIMENSION_MAX = 4096;
 
 const DEFAULT_IMAGE_GENERATION_SETTINGS: ImageGenerationUserSettings = {
+  autoSaveToGalleries: true,
   background: { width: 1280, height: 720 },
   illustration: { width: 896, height: 1280 },
-  noodle: { width: 1024, height: 1536 },
   game: { width: 1280, height: 720 },
   portrait: { width: 1024, height: 1024 },
+  characterSheet: { width: 1280, height: 720 },
   selfie: { width: 896, height: 1152 },
   styleProfiles: normalizeImageStyleProfileSettings(null),
 };
@@ -76,6 +78,7 @@ export function parseImageGenerationUserSettings(raw: string | null): ImageGener
     if (!isRecord(parsed)) return DEFAULT_IMAGE_GENERATION_SETTINGS;
 
     return {
+      autoSaveToGalleries: parsed.autoSaveGeneratedImagesToGalleries !== false,
       background: readSize(
         parsed,
         "imageBackgroundWidth",
@@ -88,13 +91,18 @@ export function parseImageGenerationUserSettings(raw: string | null): ImageGener
         "imageIllustrationHeight",
         DEFAULT_IMAGE_GENERATION_SETTINGS.illustration,
       ),
-      noodle: readSize(parsed, "imageNoodleWidth", "imageNoodleHeight", DEFAULT_IMAGE_GENERATION_SETTINGS.noodle),
       game: readSize(parsed, "imageGameWidth", "imageGameHeight", DEFAULT_IMAGE_GENERATION_SETTINGS.game),
       portrait: readSize(
         parsed,
         "imagePortraitWidth",
         "imagePortraitHeight",
         DEFAULT_IMAGE_GENERATION_SETTINGS.portrait,
+      ),
+      characterSheet: readSize(
+        parsed,
+        "imageCharacterSheetWidth",
+        "imageCharacterSheetHeight",
+        readSize(parsed, "imageBackgroundWidth", "imageBackgroundHeight", DEFAULT_IMAGE_GENERATION_SETTINGS.background),
       ),
       selfie: readSize(parsed, "imageSelfieWidth", "imageSelfieHeight", DEFAULT_IMAGE_GENERATION_SETTINGS.selfie),
       styleProfiles: normalizeImageStyleProfileSettings(parsed[IMAGE_STYLE_PROFILES_STORAGE_KEY]),

@@ -3,6 +3,7 @@
 // ──────────────────────────────────────────────
 import {
   BaseLLMProvider,
+  ASSISTANT_CONTINUATION_PROMPT,
   llmFetch,
   llmHttpErrorFromResponse,
   sanitizeApiError,
@@ -13,8 +14,17 @@ import {
   type LLMToolDefinition,
   type LLMUsage,
 } from "../base-provider.js";
-import { isClaudeAdaptiveOnlyNoSamplingModel, shouldSuppressUnknownModelParameters } from "@marinara-engine/shared";
-import { logger } from "../../../lib/logger.js";
+import {
+  findKnownModel,
+  isClaudeAdaptiveOnlyNoSamplingModel,
+  isClaudeOpus55Model,
+  isClaudeSonnet55Model,
+  isClaudeStrictRequestModel,
+  shouldSuppressUnknownModelParameters,
+} from "@marinara-engine/shared";
+import { logger, logDebugOverride } from "../../../lib/logger.js";
+import { isDebugAgentsEnabled } from "../../../config/runtime-config.js";
+import { resolveThinkingHeadroom } from "../../generation/output-token-limits.js";
 
 const DEFAULT_CACHING_AT_DEPTH = 5;
 
@@ -50,18 +60,13 @@ function clampAnthropicTemperature(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
+export function resolveAnthropicAdaptiveEffort(options: Pick<ChatOptions, "model" | "reasoningEffort">): string {
+  if (options.reasoningEffort === "none") return "low";
+  return options.reasoningEffort ?? (isClaudeOpus55Model(options.model) ? "medium" : "high");
+}
+
 function resolveAdaptiveThinkingHeadroom(options: ChatOptions, visibleMaxTokens: number): number {
-  const effort = options.reasoningEffort ?? "high";
-  const effortHeadroom: Record<string, number> = {
-    low: 1024,
-    medium: 4096,
-    high: 8192,
-    xhigh: 12288,
-    max: 16384,
-  };
-  const requested = effortHeadroom[effort] ?? 8192;
-  const boundedByVisibleBudget = Math.max(1024, Math.floor(visibleMaxTokens * 2));
-  return Math.min(requested, boundedByVisibleBudget);
+  return resolveThinkingHeadroom(resolveAnthropicAdaptiveEffort(options), visibleMaxTokens);
 }
 
 function applyAdaptiveThinkingConfig(
@@ -70,17 +75,80 @@ function applyAdaptiveThinkingConfig(
   visibleMaxTokens?: number,
 ): void {
   body.thinking = { type: "adaptive", display: "summarized" };
-  body.output_config = { effort: options.reasoningEffort ?? "high" };
+  body.output_config = {
+    ...(isRecord(body.output_config) ? body.output_config : {}),
+    effort: resolveAnthropicAdaptiveEffort(options),
+  };
   if (typeof visibleMaxTokens === "number" && Number.isFinite(visibleMaxTokens) && visibleMaxTokens > 0) {
-    body.max_tokens = Math.floor(visibleMaxTokens) + resolveAdaptiveThinkingHeadroom(options, visibleMaxTokens);
+    const requestedMaxTokens =
+      Math.floor(visibleMaxTokens) + resolveAdaptiveThinkingHeadroom(options, visibleMaxTokens);
+    const modelMaxOutput = findKnownModel("anthropic", options.model)?.maxOutput;
+    body.max_tokens = modelMaxOutput ? Math.min(requestedMaxTokens, modelMaxOutput) : requestedMaxTokens;
   }
 }
 
-export function supportsAnthropicThinkingDisable(model: string): boolean {
-  return /claude-(?:opus|sonnet)-5(?:$|[-.])/u.test(model.toLowerCase());
+/**
+ * Manual extended thinking: budget_tokens counts inside max_tokens, and no model accepts max_tokens above its output
+ * limit. At the limit the thinking budget gives way first, down to Anthropic's 1024 minimum, so the answer keeps its
+ * room (#7131).
+ */
+function applyManualThinkingConfig(body: Record<string, unknown>, model: string, visibleMaxTokens: number): void {
+  const requestedBudget = Math.max(1024, Math.min(visibleMaxTokens, 16000));
+  const modelMaxOutput = findKnownModel("anthropic", model)?.maxOutput;
+  const maxTokens = Math.min(visibleMaxTokens + requestedBudget, modelMaxOutput || Infinity);
+  body.thinking = {
+    type: "enabled",
+    budget_tokens: Math.min(requestedBudget, Math.max(1024, maxTokens - visibleMaxTokens)),
+  };
+  body.max_tokens = maxTokens;
+  // Extended thinking rejects temperature and top_k
+  stripAnthropicSamplingParameters(body);
 }
 
-type AnthropicRole = "user" | "assistant";
+/** Thinking blocks a tool round returned; the next round must send them back before its tool_use blocks. */
+function isAnthropicThinkingBlock(block: AnthropicContentBlock): boolean {
+  return block.type === "thinking" || block.type === "redacted_thinking";
+}
+
+export function supportsAnthropicThinkingDisable(model: string): boolean {
+  return !isClaudeOpus55Model(model) && /claude-(?:opus|sonnet)-5(?:$|[-.])/u.test(model.toLowerCase());
+}
+
+function normalizeStrictClaudeParameters(
+  body: Record<string, unknown>,
+  model: string,
+  maxTokensOverride: number | null,
+): void {
+  if (!isClaudeStrictRequestModel(model)) return;
+  // Saved/custom settings from earlier models must not disable mandatory thinking.
+  stripAnthropicSamplingParameters(body);
+  if (isRecord(body.output_config) && body.output_config.effort === "none") body.output_config.effort = "low";
+  if (isRecord(body.thinking)) {
+    const effort = isRecord(body.output_config) ? body.output_config.effort : undefined;
+    // Sonnet 5.5 rejects "disabled"; "between_tools" skips up-front thinking, takes no other
+    // field, and only runs up to high effort. Opus 5.5 has no off setting at all.
+    const skipsUpFrontThinking =
+      isClaudeSonnet55Model(model) &&
+      (body.thinking.type === "disabled" || body.thinking.type === "between_tools") &&
+      effort !== "xhigh" &&
+      effort !== "max";
+    if (skipsUpFrontThinking) {
+      body.thinking = { type: "between_tools" };
+    } else {
+      body.thinking.type = "adaptive";
+      delete body.thinking.budget_tokens;
+    }
+  }
+  if (isRecord(body.tool_choice) && (body.tool_choice.type === "any" || body.tool_choice.type === "tool")) {
+    body.tool_choice.type = "auto";
+    delete body.tool_choice.name;
+  }
+  if (maxTokensOverride && typeof body.max_tokens === "number") {
+    body.max_tokens = Math.min(body.max_tokens, maxTokensOverride);
+  }
+}
+
+type AnthropicRole = "user" | "assistant" | "system";
 type AnthropicContentBlock = Record<string, unknown> & {
   type: string;
   text?: string;
@@ -93,10 +161,16 @@ interface AnthropicMessagePayload {
   role: AnthropicRole;
   content: AnthropicContentBlock[];
 }
+type AnthropicUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+};
 interface AnthropicMessageResponse {
   content?: AnthropicContentBlock[];
   stop_reason?: string;
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: AnthropicUsage;
 }
 
 function normalizeAnthropicFinishReason(reason: string | null | undefined): string {
@@ -138,10 +212,60 @@ function formatAnthropicTools(tools: LLMToolDefinition[] | undefined): Array<Rec
   }));
 }
 
+function splitAnthropicSystemMessages(messages: ChatMessage[], model: string) {
+  const firstHistoryIndex = messages.findIndex((message) => message.role !== "system");
+  const prefixEnd = firstHistoryIndex < 0 ? messages.length : firstHistoryIndex;
+  const systemMessages = messages.slice(0, prefixEnd).filter((message) => message.content?.trim());
+  const history = messages
+    .slice(prefixEnd)
+    .filter(
+      (message) =>
+        message.role === "tool" ||
+        message.content?.trim() ||
+        message.images?.length ||
+        message.files?.length ||
+        message.tool_calls?.length,
+    );
+  // Only these documented models accept history-level system text. Other models
+  // retain its position as user context instead of moving it into the cache prefix.
+  // https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
+  const supportsHistorySystem =
+    isClaudeStrictRequestModel(model) ||
+    [
+      "claude-opus-4-8",
+      "claude-opus-5",
+      "claude-fable-5",
+      "claude-fable-5-1",
+      "claude-mythos-5",
+      "claude-mythos-5-1",
+    ].includes(model.toLowerCase());
+  const chatMessages = history.map((message, index): ChatMessage => {
+    if (message.role !== "system") return message;
+    let start = index;
+    let end = index;
+    while (start > 0 && history[start - 1]?.role === "system") start--;
+    while (end + 1 < history.length && history[end + 1]?.role === "system") end++;
+    const previous = history[start - 1];
+    const next = history[end + 1];
+    const validSlot = (previous?.role === "user" || previous?.role === "tool") && (!next || next.role === "assistant");
+    return supportsHistorySystem && validSlot ? message : { ...message, role: "user" };
+  });
+  // Opus 5.5 and Sonnet 5.5 reject assistant prefill. Preserve the partial reply as history and
+  // ask for only its continuation, which the caller appends to the same message.
+  const lastMessage = chatMessages.at(-1);
+  if (isClaudeStrictRequestModel(model) && lastMessage?.role === "assistant" && !lastMessage.tool_calls?.length) {
+    chatMessages.push({
+      role: "user",
+      content: ASSISTANT_CONTINUATION_PROMPT,
+    });
+  }
+  return { systemMessages, chatMessages };
+}
+
 export function applyAnthropicToolChoice(
   body: Record<string, unknown>,
   options: Pick<ChatOptions, "model" | "toolChoice" | "tools">,
-): "applied" | "manual-thinking" | "mythos" | "none" {
+): "applied" | "manual-thinking" | "automatic-only" | "none" {
   if (!options.tools?.length) {
     delete body.tool_choice;
     return "none";
@@ -156,9 +280,10 @@ export function applyAnthropicToolChoice(
     return "none";
   }
 
-  if (options.model.toLowerCase().includes("mythos")) {
+  const model = options.model.toLowerCase();
+  if (model.includes("mythos") || model === "claude-fable-5-1" || isClaudeStrictRequestModel(model)) {
     setToolChoiceType("auto");
-    return "mythos";
+    return "automatic-only";
   }
   const thinking = isRecord(body.thinking) ? body.thinking : null;
   if (thinking?.type === "enabled") {
@@ -224,10 +349,12 @@ function formatAnthropicPayloadMessages(messages: ChatMessage[]): AnthropicMessa
   const payload: AnthropicMessagePayload[] = [];
 
   for (const message of messages) {
-    if (message.role === "system") continue;
-
     if (message.role === "assistant" && message.tool_calls?.length) {
-      const content: AnthropicContentBlock[] = [];
+      // With thinking on, the turn must start with the thinking blocks it returned, unchanged.
+      const thinking = message.providerMetadata?.anthropicThinking;
+      const content: AnthropicContentBlock[] = Array.isArray(thinking)
+        ? [...(thinking as AnthropicContentBlock[])]
+        : [];
       if (message.content?.trim()) content.push({ type: "text", text: message.content });
       for (const call of message.tool_calls) {
         content.push({
@@ -259,10 +386,10 @@ function formatAnthropicPayloadMessages(messages: ChatMessage[]): AnthropicMessa
       continue;
     }
 
-    if (message.role === "user" || message.role === "assistant") {
+    if (message.role === "user" || message.role === "assistant" || message.role === "system") {
       const content = [...fileContentBlocks(message.files), ...imageContentBlocks(message.images)];
       if (message.content?.trim()) content.push({ type: "text", text: message.content });
-      payload.push({ role: message.role === "assistant" ? "assistant" : "user", content });
+      payload.push({ role: message.role, content });
     }
   }
 
@@ -345,7 +472,13 @@ export class AnthropicProvider extends BaseLLMProvider {
     const maxTokens = this.applyMaxTokensCap(contextFit.maxTokens ?? configuredMaxTokens);
 
     const url = `${this.baseUrl}/messages`;
-    const systemMessages = messages.filter((m) => m.role === "system" && m.content?.trim());
+
+    // Stream the tools round whenever the caller wired a token sink and did not opt out. The
+    // gate is deliberately narrower than the base `options.stream ?? !!options.onToken`
+    // formula: a caller that sets `stream: true` without a sink (the agent tool loop) keeps
+    // the buffered path it uses today.
+    const useStream = !!options.onToken && options.stream !== false;
+    const { systemMessages, chatMessages } = splitAnthropicSystemMessages(messages, options.model);
     const enableCaching = options.enableCaching ?? false;
     const cacheControl = buildAnthropicCacheControl(options);
     const systemField =
@@ -358,7 +491,7 @@ export class AnthropicProvider extends BaseLLMProvider {
             }))
           : systemMessages.map((m) => m.content).join("\n\n")
         : undefined;
-    const formattedMessages = formatAnthropicPayloadMessages(trimTrailingAssistantWhitespace(messages));
+    const formattedMessages = formatAnthropicPayloadMessages(trimTrailingAssistantWhitespace(chatMessages));
     const cacheControlMessageIndex = enableCaching
       ? resolveCacheControlMessageIndex(formattedMessages, normalizeCachingAtDepth(options.cachingAtDepth))
       : -1;
@@ -369,7 +502,7 @@ export class AnthropicProvider extends BaseLLMProvider {
       ...(systemField !== undefined ? { system: systemField } : {}),
       messages: applyCacheControlToPayloadMessage(formattedMessages, cacheControlMessageIndex, cacheControl),
       tools: formatAnthropicTools(options.tools),
-      stream: false,
+      stream: useStream,
       ...(this.shouldSendParameter(options, "temperature") && options.temperature !== undefined
         ? { temperature: clampAnthropicTemperature(options.temperature) }
         : {}),
@@ -386,10 +519,11 @@ export class AnthropicProvider extends BaseLLMProvider {
     if (isAdaptiveOnly) stripAnthropicSamplingParameters(body);
 
     if (shouldDisableThinking) {
+      // Sonnet 5.5 rejects "disabled"; normalizeStrictClaudeParameters sends it as "between_tools".
       body.thinking = { type: "disabled" };
     } else if (
       this.shouldSendParameter(options, "reasoningEffort") &&
-      (options.enableThinking || (isAdaptiveOnly && options.captureReasoning))
+      (options.enableThinking || (isAdaptiveOnly && options.captureReasoning) || isClaudeOpus55Model(options.model))
     ) {
       if (isAdaptiveOnly) {
         applyAdaptiveThinkingConfig(body, options, maxTokens);
@@ -397,12 +531,9 @@ export class AnthropicProvider extends BaseLLMProvider {
         const supportsAdaptive = /claude-(opus|sonnet)-4-[56]/.test(modelLower);
         if (supportsAdaptive) {
           applyAdaptiveThinkingConfig(body, options, maxTokens);
-          delete body.temperature;
+          stripAnthropicSamplingParameters(body);
         } else {
-          const budgetTokens = Math.max(1024, Math.min(maxTokens, 16000));
-          body.thinking = { type: "enabled", budget_tokens: budgetTokens };
-          body.max_tokens = maxTokens + budgetTokens;
-          delete body.temperature;
+          applyManualThinkingConfig(body, options.model, maxTokens);
         }
       }
     }
@@ -413,30 +544,40 @@ export class AnthropicProvider extends BaseLLMProvider {
       if (
         !shouldDisableThinking &&
         this.shouldSendParameter(options, "reasoningEffort") &&
-        (options.enableThinking || options.captureReasoning)
+        (options.enableThinking || options.captureReasoning || isClaudeOpus55Model(options.model))
       ) {
         applyAdaptiveThinkingConfig(body, options);
       }
     }
 
+    normalizeStrictClaudeParameters(body, options.model, this.maxTokensOverrideValue);
     const toolChoiceResult = applyAnthropicToolChoice(body, options);
     if (toolChoiceResult === "manual-thinking") {
       logger.warn(
         "Anthropic manual extended thinking does not support forced tool use; falling back to automatic tool choice",
       );
-    } else if (toolChoiceResult === "mythos") {
-      logger.warn("Claude Mythos does not support forced tool use; falling back to automatic tool choice");
+    } else if (toolChoiceResult === "automatic-only") {
+      logger.warn(
+        "Claude model %s does not support forced tool use; falling back to automatic tool choice",
+        options.model,
+      );
     }
 
+    logDebugOverride(
+      options.debugMode === true || isDebugAgentsEnabled(),
+      "[debug/anthropic] final tool request:\n%j",
+      body,
+    );
     const response = await llmFetch(url, {
       method: "POST",
       headers: {
+        ...this.customRequestHeaders,
         "Content-Type": "application/json",
         ...(this.apiKey.trim() ? { "x-api-key": this.apiKey.trim() } : {}),
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
-      bufferResponse: true,
+      bufferResponse: !useStream,
       ...(options.signal ? { signal: options.signal } : {}),
     });
 
@@ -448,30 +589,216 @@ export class AnthropicProvider extends BaseLLMProvider {
       );
     }
 
-    const json = (await response.json()) as AnthropicMessageResponse;
-    const blocks = Array.isArray(json.content) ? json.content : [];
-    const text = blocks
-      .filter((block) => block.type === "text" && typeof block.text === "string")
-      .map((block) => block.text)
-      .join("");
-    for (const block of blocks) {
-      if (block.type === "thinking" && typeof block.thinking === "string") options.onThinking?.(block.thinking);
-    }
-    if (text && options.onToken) await options.onToken(text);
+    if (!useStream) {
+      const json = (await response.json()) as AnthropicMessageResponse;
+      const blocks = Array.isArray(json.content) ? json.content : [];
+      const text = blocks
+        .filter((block) => block.type === "text" && typeof block.text === "string")
+        .map((block) => block.text)
+        .join("");
+      for (const block of blocks) {
+        if (block.type === "thinking" && typeof block.thinking === "string") options.onThinking?.(block.thinking);
+      }
+      if (text && options.onToken) await options.onToken(text);
 
-    const toolCalls = blocks
-      .map((block) => anthropicToolCallFromBlock(block))
-      .filter((call): call is LLMToolCall => call !== null);
+      const toolCalls = blocks
+        .map((block) => anthropicToolCallFromBlock(block))
+        .filter((call): call is LLMToolCall => call !== null);
+      const thinkingBlocks = blocks.filter(isAnthropicThinkingBlock);
+      return {
+        content: text || null,
+        toolCalls,
+        ...(thinkingBlocks.length > 0 ? { providerMetadata: { anthropicThinking: thinkingBlocks } } : {}),
+        finishReason: toolCalls.length > 0 ? "tool_calls" : normalizeAnthropicFinishReason(json.stop_reason),
+        usage:
+          typeof json.usage?.input_tokens === "number" && typeof json.usage.output_tokens === "number"
+            ? {
+                promptTokens: json.usage.input_tokens,
+                completionTokens: json.usage.output_tokens,
+                totalTokens: json.usage.input_tokens + json.usage.output_tokens,
+                ...(json.usage.cache_read_input_tokens
+                  ? { cachedPromptTokens: json.usage.cache_read_input_tokens }
+                  : {}),
+                ...(json.usage.cache_creation_input_tokens
+                  ? { cacheWritePromptTokens: json.usage.cache_creation_input_tokens }
+                  : {}),
+              }
+            : undefined,
+      };
+    }
+
+    // ── SSE streaming path (tools attached) ──
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("No response body");
+
+    const onAbort = () => reader.cancel().catch(() => {});
+    if (options.signal) {
+      if (options.signal.aborted) {
+        await reader.cancel().catch(() => {});
+        return { content: null, toolCalls: [], finishReason: "abort", usage: undefined };
+      }
+      options.signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let currentBlockType = "text"; // track whether we're in a thinking or text block
+    let content = "";
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cachedTokens = 0;
+    let cacheWriteTokens = 0;
+    let finishReason = "stop";
+    let sawStopReason = false;
+    let finished = false;
+
+    // tool_use blocks are keyed by their content-block index, not by a single current-block
+    // slot: parallel tool calls are legal (the engine never sets disable_parallel_tool_use),
+    // so two blocks can be open at once and their input_json_delta frames interleave.
+    const toolBlocks = new Map<number, { id: string; name: string; partialJson: string }>();
+    let lastToolBlockIndex = -1;
+    // Thinking blocks are replayed before this round's tool_use blocks on the next round, signature included.
+    const thinkingBlocks = new Map<number, AnthropicContentBlock>();
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = done ? "" : (lines.pop() ?? "");
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const data = trimmed.slice(5).trimStart();
+
+          let event: {
+            type: string;
+            error?: unknown;
+            index?: number;
+            message?: { usage?: AnthropicUsage };
+            content_block?: { type: string; id?: string; name?: string; data?: string };
+            delta?: {
+              type: string;
+              text?: string;
+              thinking?: string;
+              signature?: string;
+              partial_json?: string;
+              stop_reason?: string | null;
+            };
+            usage?: { output_tokens?: number };
+          };
+          try {
+            event = JSON.parse(data) as typeof event;
+          } catch {
+            // Skip malformed lines
+            continue;
+          }
+
+          if (event.type === "error") {
+            throw new Error(`Anthropic stream error: ${formatAnthropicStreamError(event.error)}`);
+          }
+          if (event.type === "message_start" && event.message?.usage) {
+            inputTokens = event.message.usage.input_tokens ?? 0;
+            outputTokens = event.message.usage.output_tokens ?? 0;
+            cachedTokens = event.message.usage.cache_read_input_tokens ?? 0;
+            cacheWriteTokens = event.message.usage.cache_creation_input_tokens ?? 0;
+          }
+          if (event.type === "message_delta" && event.usage?.output_tokens != null) {
+            outputTokens = event.usage.output_tokens;
+          }
+          if (event.type === "message_delta" && typeof event.delta?.stop_reason === "string") {
+            finishReason = normalizeAnthropicFinishReason(event.delta.stop_reason);
+            sawStopReason = true;
+          }
+          if (event.type === "content_block_start" && event.content_block) {
+            currentBlockType = event.content_block.type;
+            if (event.content_block.type === "tool_use") {
+              lastToolBlockIndex = typeof event.index === "number" ? event.index : toolBlocks.size;
+              toolBlocks.set(lastToolBlockIndex, {
+                id: typeof event.content_block.id === "string" ? event.content_block.id : "",
+                name: typeof event.content_block.name === "string" ? event.content_block.name : "",
+                partialJson: "",
+              });
+            } else if (event.content_block.type === "thinking") {
+              thinkingBlocks.set(event.index ?? thinkingBlocks.size, { type: "thinking", thinking: "", signature: "" });
+            } else if (event.content_block.type === "redacted_thinking") {
+              thinkingBlocks.set(event.index ?? thinkingBlocks.size, {
+                type: "redacted_thinking",
+                data: event.content_block.data ?? "",
+              });
+            }
+          }
+          if (event.type === "content_block_delta") {
+            const thinkingBlock = typeof event.index === "number" ? thinkingBlocks.get(event.index) : undefined;
+            if (thinkingBlock && event.delta?.type === "signature_delta") {
+              thinkingBlock.signature = event.delta.signature ?? "";
+            } else if (thinkingBlock && event.delta?.type === "thinking_delta") {
+              thinkingBlock.thinking = `${thinkingBlock.thinking ?? ""}${event.delta.thinking ?? ""}`;
+            }
+            if (event.delta?.type === "input_json_delta") {
+              const index = typeof event.index === "number" ? event.index : lastToolBlockIndex;
+              const block = toolBlocks.get(index);
+              if (block && typeof event.delta.partial_json === "string") block.partialJson += event.delta.partial_json;
+            } else if (currentBlockType === "thinking" && event.delta?.thinking) {
+              options.onThinking?.(event.delta.thinking);
+            } else if (event.delta?.text) {
+              content += event.delta.text;
+              if (options.onToken) await options.onToken(event.delta.text);
+            }
+          }
+          if (event.type === "message_stop") {
+            finished = true;
+            break;
+          }
+        }
+        if (done || finished) break;
+      }
+    } finally {
+      if (options.signal) options.signal.removeEventListener("abort", onAbort);
+      // Release the upstream socket on early completion, provider errors, and
+      // rejected token callbacks, not only when the body reaches its end.
+      await reader.cancel().catch(() => {});
+    }
+
+    const toolCalls: LLMToolCall[] = [];
+    for (const index of [...toolBlocks.keys()].sort((a, b) => a - b)) {
+      const block = toolBlocks.get(index)!;
+      const call = anthropicToolCallFromBlock({
+        type: "tool_use",
+        id: block.id,
+        name: block.name,
+        // An accumulated empty string means the model opened the block and sent no
+        // arguments; parseToolArguments folds that to `{}` the same as invalid JSON.
+        input: parseToolArguments(block.partialJson),
+      });
+      if (call) toolCalls.push(call);
+    }
+
+    // A tools round may carry only tool_use blocks and no prose.
+    if (!content && !sawStopReason && toolCalls.length === 0 && !options.signal?.aborted) {
+      throw new Error(`Anthropic stream completed without text (finish reason: ${finishReason})`);
+    }
+
     return {
-      content: text || null,
+      content: content || null,
       toolCalls,
-      finishReason: toolCalls.length > 0 ? "tool_calls" : normalizeAnthropicFinishReason(json.stop_reason),
+      ...(thinkingBlocks.size > 0
+        ? {
+            providerMetadata: {
+              anthropicThinking: [...thinkingBlocks.keys()].sort((a, b) => a - b).map((key) => thinkingBlocks.get(key)),
+            },
+          }
+        : {}),
+      finishReason: options.signal?.aborted ? "abort" : toolCalls.length > 0 ? "tool_calls" : finishReason,
       usage:
-        typeof json.usage?.input_tokens === "number" && typeof json.usage.output_tokens === "number"
+        inputTokens || outputTokens || cachedTokens || cacheWriteTokens
           ? {
-              promptTokens: json.usage.input_tokens,
-              completionTokens: json.usage.output_tokens,
-              totalTokens: json.usage.input_tokens + json.usage.output_tokens,
+              promptTokens: inputTokens,
+              completionTokens: outputTokens,
+              totalTokens: inputTokens + outputTokens,
+              ...(cachedTokens ? { cachedPromptTokens: cachedTokens } : {}),
+              ...(cacheWriteTokens ? { cacheWritePromptTokens: cacheWriteTokens } : {}),
             }
           : undefined,
     };
@@ -487,11 +814,7 @@ export class AnthropicProvider extends BaseLLMProvider {
 
     const url = `${this.baseUrl}/messages`;
 
-    // Claude requires system prompt separate from messages — filter out empty-content messages
-    const systemMessages = messages.filter((m) => m.role === "system" && m.content?.trim());
-    const chatMessages = messages.filter(
-      (m) => m.role !== "system" && (m.content?.trim() || m.images?.length || m.files?.length),
-    );
+    const { systemMessages, chatMessages } = splitAnthropicSystemMessages(messages, options.model);
 
     // Ensure alternating user/assistant pattern (Claude requirement), then
     // strip any trailing whitespace from the final assistant turn (Claude 400s
@@ -572,11 +895,12 @@ export class AnthropicProvider extends BaseLLMProvider {
 
     // Enable extended thinking for reasoning models
     if (shouldDisableThinking) {
+      // Sonnet 5.5 rejects "disabled"; normalizeStrictClaudeParameters sends it as "between_tools".
       body.thinking = { type: "disabled" };
     } else if (
       !suppressModelParameters &&
       this.shouldSendParameter(options, "reasoningEffort") &&
-      (options.enableThinking || (isAdaptiveOnly && options.captureReasoning))
+      (options.enableThinking || (isAdaptiveOnly && options.captureReasoning) || isClaudeOpus55Model(options.model))
     ) {
       const outputMaxTokens = maxTokens ?? 4096;
       if (isAdaptiveOnly) {
@@ -589,15 +913,10 @@ export class AnthropicProvider extends BaseLLMProvider {
         const supportsAdaptive = /claude-(opus|sonnet)-4-[56]/.test(modelLower);
         if (supportsAdaptive) {
           applyAdaptiveThinkingConfig(body, options, outputMaxTokens);
-          // Cannot use temperature with extended thinking
-          delete body.temperature;
+          // Extended thinking rejects temperature and top_k
+          stripAnthropicSamplingParameters(body);
         } else {
-          const budgetTokens = Math.max(1024, Math.min(outputMaxTokens, 16000));
-          body.thinking = { type: "enabled", budget_tokens: budgetTokens };
-          // Anthropic requires max_tokens to be > budget_tokens
-          body.max_tokens = outputMaxTokens + budgetTokens;
-          // Cannot use temperature with extended thinking
-          delete body.temperature;
+          applyManualThinkingConfig(body, options.model, outputMaxTokens);
         }
       }
     }
@@ -608,15 +927,22 @@ export class AnthropicProvider extends BaseLLMProvider {
       if (
         !shouldDisableThinking &&
         this.shouldSendParameter(options, "reasoningEffort") &&
-        (options.enableThinking || options.captureReasoning)
+        (options.enableThinking || options.captureReasoning || isClaudeOpus55Model(options.model))
       ) {
         applyAdaptiveThinkingConfig(body, options);
       }
     }
 
+    normalizeStrictClaudeParameters(body, options.model, this.maxTokensOverrideValue);
+    logDebugOverride(
+      options.debugMode === true || isDebugAgentsEnabled(),
+      "[debug/anthropic] final request:\n%j",
+      body,
+    );
     const response = await llmFetch(url, {
       method: "POST",
       headers: {
+        ...this.customRequestHeaders,
         "Content-Type": "application/json",
         ...(this.apiKey.trim() ? { "x-api-key": this.apiKey.trim() } : {}),
         "anthropic-version": "2023-06-01",
@@ -638,7 +964,7 @@ export class AnthropicProvider extends BaseLLMProvider {
       const json = (await response.json()) as {
         content: Array<{ type: string; text?: string; thinking?: string }>;
         stop_reason?: string | null;
-        usage?: { input_tokens: number; output_tokens: number };
+        usage?: AnthropicUsage;
       };
       // Extract thinking content if present
       for (const block of json.content) {
@@ -652,9 +978,13 @@ export class AnthropicProvider extends BaseLLMProvider {
         .join("");
       if (json.usage) {
         return {
-          promptTokens: json.usage.input_tokens,
-          completionTokens: json.usage.output_tokens,
-          totalTokens: json.usage.input_tokens + json.usage.output_tokens,
+          promptTokens: json.usage.input_tokens ?? 0,
+          completionTokens: json.usage.output_tokens ?? 0,
+          totalTokens: (json.usage.input_tokens ?? 0) + (json.usage.output_tokens ?? 0),
+          ...(json.usage.cache_read_input_tokens ? { cachedPromptTokens: json.usage.cache_read_input_tokens } : {}),
+          ...(json.usage.cache_creation_input_tokens
+            ? { cacheWritePromptTokens: json.usage.cache_creation_input_tokens }
+            : {}),
           finishReason: normalizeAnthropicFinishReason(json.stop_reason),
         };
       }
@@ -679,6 +1009,8 @@ export class AnthropicProvider extends BaseLLMProvider {
     let currentBlockType = "text"; // track whether we're in a thinking or text block
     let inputTokens = 0;
     let outputTokens = 0;
+    let cachedTokens = 0;
+    let cacheWriteTokens = 0;
     let finishReason = "stop";
     let sawStopReason = false;
     let emittedText = false;
@@ -698,10 +1030,10 @@ export class AnthropicProvider extends BaseLLMProvider {
           let event: {
             type: string;
             error?: unknown;
-            message?: { usage?: { input_tokens: number; output_tokens: number } };
+            message?: { usage?: AnthropicUsage };
             content_block?: { type: string };
             delta?: { type: string; text?: string; thinking?: string; stop_reason?: string | null };
-            usage?: { output_tokens: number };
+            usage?: { output_tokens?: number };
           };
           try {
             event = JSON.parse(data) as typeof event;
@@ -715,11 +1047,13 @@ export class AnthropicProvider extends BaseLLMProvider {
           }
           // Capture input token count from message_start
           if (event.type === "message_start" && event.message?.usage) {
-            inputTokens = event.message.usage.input_tokens;
-            outputTokens = event.message.usage.output_tokens;
+            inputTokens = event.message.usage.input_tokens ?? 0;
+            outputTokens = event.message.usage.output_tokens ?? 0;
+            cachedTokens = event.message.usage.cache_read_input_tokens ?? 0;
+            cacheWriteTokens = event.message.usage.cache_creation_input_tokens ?? 0;
           }
           // Capture final output token count from message_delta
-          if (event.type === "message_delta" && event.usage) {
+          if (event.type === "message_delta" && event.usage?.output_tokens != null) {
             outputTokens = event.usage.output_tokens;
           }
           if (event.type === "message_delta" && typeof event.delta?.stop_reason === "string") {
@@ -742,11 +1076,13 @@ export class AnthropicProvider extends BaseLLMProvider {
             if (!emittedText && !sawStopReason && !options.signal?.aborted) {
               throw new Error(`Anthropic stream completed without text (finish reason: ${finishReason})`);
             }
-            if (inputTokens || outputTokens) {
+            if (inputTokens || outputTokens || cachedTokens || cacheWriteTokens) {
               return {
                 promptTokens: inputTokens,
                 completionTokens: outputTokens,
                 totalTokens: inputTokens + outputTokens,
+                ...(cachedTokens ? { cachedPromptTokens: cachedTokens } : {}),
+                ...(cacheWriteTokens ? { cacheWritePromptTokens: cacheWriteTokens } : {}),
                 finishReason,
               };
             }
@@ -761,11 +1097,13 @@ export class AnthropicProvider extends BaseLLMProvider {
     if (!emittedText && !sawStopReason && !options.signal?.aborted) {
       throw new Error(`Anthropic stream completed without text (finish reason: ${finishReason})`);
     }
-    if (inputTokens || outputTokens) {
+    if (inputTokens || outputTokens || cachedTokens || cacheWriteTokens) {
       return {
         promptTokens: inputTokens,
         completionTokens: outputTokens,
         totalTokens: inputTokens + outputTokens,
+        ...(cachedTokens ? { cachedPromptTokens: cachedTokens } : {}),
+        ...(cacheWriteTokens ? { cacheWritePromptTokens: cacheWriteTokens } : {}),
         finishReason,
       };
     }

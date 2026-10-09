@@ -5,8 +5,8 @@ import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { api, isJsonRepairApiError } from "../lib/api-client";
-import { chatKeys } from "./use-chats";
+import { ApiError, api, isJsonRepairApiError } from "../lib/api-client";
+import { captureChatMetadataVersion, chatKeys, guardServerChatSnapshot } from "./use-chats";
 import { lorebookKeys } from "./use-lorebooks";
 import {
   clearPendingHudWidgetPersist,
@@ -28,16 +28,19 @@ import type {
   DiceRollResult,
   SessionSummary,
   Combatant,
+  CombatWeather,
   CombatRoundResult,
   CombatPlayerAction,
   HudWidget,
   GameBlueprint,
   TacticalCombatState,
+  TacticalBattlefieldBrief,
   TacticalAction,
   TacticalEvent,
   RPGStatPool,
 } from "@marinara-engine/shared";
 import type { Chat } from "@marinara-engine/shared";
+import { isJsonRecord } from "@marinara-engine/shared";
 
 // ── Query Keys ──
 
@@ -182,11 +185,35 @@ export function patchChatMetadata(chat: Chat | null | undefined, patch: Record<s
   };
 }
 
+// Mirror a guarded snapshot into the active-chat store when it targets the
+// active chat: several game surfaces read useChatStore.activeChat directly,
+// and ChatArea only re-syncs it from the detail cache in a later effect —
+// without this, that gap serves stale metadata (#5641 review).
+function syncActiveChatIfCurrent(chat: Chat) {
+  const chatStore = useChatStore.getState();
+  // The activeChat fallback only counts when no chat is selected: during a
+  // chat switch activeChatId is already the NEW chat while activeChat still
+  // holds the old one, and a delayed response for the old chat must not
+  // resurrect it into the store.
+  if (chatStore.activeChatId === chat.id || (!chatStore.activeChatId && chatStore.activeChat?.id === chat.id)) {
+    chatStore.setActiveChat(chat);
+  }
+}
+
 // ── Mutations ──
+
+/** The layer choices `/game/create` turns a new game down over, in words that say what to do about
+ *  it. The server's own message names the layers, but it is written for a log; a player who picked
+ *  toggles in the wizard needs to be sent back to them. Any other refusal keeps the server's text. */
+const RULESET_LAYER_REFUSAL_KEYS: Readonly<Record<string, string>> = Object.freeze({
+  ruleset_layer_unknown: "game.ruleset.setup.layerUnknownRefusal",
+  ruleset_layer_conflict: "game.ruleset.setup.layerConflictRefusal",
+});
 
 export function useCreateGame() {
   const qc = useQueryClient();
   const store = useGameModeStore;
+  const { t } = useTranslation();
 
   return useMutation({
     mutationFn: (data: {
@@ -207,9 +234,17 @@ export function useCreateGame() {
     },
     onError: (err) => {
       console.error("[createGame] Error:", err);
-      toast.error(err.message || "Failed to create game. Check the selected connection and try again.", {
-        duration: 10000,
-      });
+      const code =
+        err instanceof ApiError && isJsonRecord(err.payload) && typeof err.payload.code === "string"
+          ? err.payload.code
+          : null;
+      const layerRefusal = code ? RULESET_LAYER_REFUSAL_KEYS[code] : undefined;
+      toast.error(
+        layerRefusal
+          ? t(layerRefusal)
+          : err.message || "Failed to create game. Check the selected connection and try again.",
+        { duration: 10000 },
+      );
     },
   });
 }
@@ -298,6 +333,9 @@ export function useStartSession() {
       useGameAssetStore.getState().resetPlaybackState();
       store.getState().setActiveGame(variables.gameId, res.sessionChat.id, null);
       store.getState().setSessionNumber(res.sessionNumber);
+      // Deliberately unguarded (#5641): the session chat id is unknown until
+      // the response arrives, and a chat being started/switched to has no
+      // concurrent local metadata edits to protect.
       qc.setQueryData(chatKeys.detail(res.sessionChat.id), res.sessionChat);
       const chatStore = useChatStore.getState();
       chatStore.setActiveChatId(res.sessionChat.id);
@@ -449,9 +487,12 @@ export function useUpdateCampaignProgression() {
       toast.loading(`Updating plot arcs from session ${variables.sessionNumber}...`, {
         id: `game-campaign-progression:${variables.chatId}:${variables.sessionNumber}`,
       });
+      return { metadataVersion: captureChatMetadataVersion(variables.chatId) };
     },
-    onSuccess: (res, variables) => {
-      qc.setQueryData(chatKeys.detail(res.sessionChat.id), res.sessionChat);
+    onSuccess: (res, variables, context) => {
+      const guardedChat = guardServerChatSnapshot(qc, res.sessionChat, context?.metadataVersion ?? 0);
+      qc.setQueryData(chatKeys.detail(res.sessionChat.id), guardedChat);
+      syncActiveChatIfCurrent(guardedChat);
       toast.success(`Plot arcs updated from session ${variables.sessionNumber}.`, {
         id: `game-campaign-progression:${variables.chatId}:${variables.sessionNumber}`,
       });
@@ -481,8 +522,11 @@ export function useRecruitPartyMember() {
   return useMutation({
     mutationFn: (data: { chatId: string; characterName: string; connectionId?: string }) =>
       api.post<RecruitPartyMemberResponse>("/game/party/recruit", data),
-    onSuccess: (res, variables) => {
-      qc.setQueryData(chatKeys.detail(variables.chatId), res.sessionChat);
+    onMutate: (variables) => ({ metadataVersion: captureChatMetadataVersion(variables.chatId) }),
+    onSuccess: (res, variables, context) => {
+      const guardedChat = guardServerChatSnapshot(qc, res.sessionChat, context?.metadataVersion ?? 0);
+      qc.setQueryData(chatKeys.detail(variables.chatId), guardedChat);
+      syncActiveChatIfCurrent(guardedChat);
       qc.invalidateQueries({ queryKey: chatKeys.detail(variables.chatId) });
       qc.invalidateQueries({ queryKey: chatKeys.list() });
       if (res.added) {
@@ -525,8 +569,11 @@ export function useRemovePartyMember() {
   return useMutation({
     mutationFn: (data: { chatId: string; characterName: string }) =>
       api.post<RemovePartyMemberResponse>("/game/party/remove", data),
-    onSuccess: (res, variables) => {
-      qc.setQueryData(chatKeys.detail(variables.chatId), res.sessionChat);
+    onMutate: (variables) => ({ metadataVersion: captureChatMetadataVersion(variables.chatId) }),
+    onSuccess: (res, variables, context) => {
+      const guardedChat = guardServerChatSnapshot(qc, res.sessionChat, context?.metadataVersion ?? 0);
+      qc.setQueryData(chatKeys.detail(variables.chatId), guardedChat);
+      syncActiveChatIfCurrent(guardedChat);
       qc.invalidateQueries({ queryKey: chatKeys.detail(variables.chatId) });
       qc.invalidateQueries({ queryKey: chatKeys.list() });
       if (res.removed) {
@@ -559,10 +606,19 @@ export function useSkillCheck() {
     mutationFn: (data: {
       chatId: string;
       skill: string;
-      dc: number;
+      /** Absent only beside `difficulty`, which a ruleset game reads off its own ladder. */
+      dc?: number;
       advantage?: boolean;
       disadvantage?: boolean;
       preRolledD20?: number;
+      who?: string;
+      withAbility?: string;
+      threshold?: number;
+      bonusDice?: number;
+      difficulty?: string;
+      explode?: number;
+      double?: number;
+      reroll?: string;
       messageId?: string;
     }) =>
       api.post<{ result: import("@marinara-engine/shared").SkillCheckResult; updatedContent?: string }>(
@@ -809,6 +865,8 @@ export function useCombatRound() {
       combatants: Array<Omit<Combatant, "sprite">>;
       round: number;
       playerAction?: CombatPlayerAction;
+      partyActions?: Record<string, CombatPlayerAction>;
+      controlledId?: string;
       mechanics?: import("@marinara-engine/shared").CombatMechanic[];
     }) => api.post<{ result: CombatRoundResult; combatants: Combatant[] }>("/game/combat/round", data),
   });
@@ -827,7 +885,9 @@ export function useTacticalCombatStart() {
       chatId: string;
       party: Combatant[];
       enemies: Combatant[];
+      weather?: CombatWeather | null;
       seed?: number;
+      battlefield?: TacticalBattlefieldBrief;
       /** Blueprint scene context — themes the terrain (styleNotes.environmentType). */
       environment?: string;
       /** Blueprint battlefield.formation — drives spawn placement. */

@@ -15,7 +15,7 @@ import type {
   CreateChoiceBlockInput,
   UpdateChoiceBlockInput,
 } from "@marinara-engine/shared";
-import { DEFAULT_GENERATION_PARAMS } from "@marinara-engine/shared";
+import { DEFAULT_GENERATION_PARAMS, resolveScopedRegexMode } from "@marinara-engine/shared";
 import { normalizeTimestampOverrides, type TimestampOverrides } from "../import/import-timestamps.js";
 
 function resolveTimestamps(overrides?: TimestampOverrides | null) {
@@ -93,6 +93,7 @@ export function createPromptsStorage(db: DB) {
         variableValues: JSON.stringify(input.variableValues ?? {}),
         parameters: JSON.stringify(input.parameters ?? DEFAULT_GENERATION_PARAMS),
         wrapFormat: input.wrapFormat ?? "xml",
+        scopedRegexMode: input.scopedRegexMode ?? "disabled",
         isDefault: String(input.isDefault ?? false),
         author: input.author ?? "",
         systemKey: "",
@@ -127,6 +128,7 @@ export function createPromptsStorage(db: DB) {
         });
       }
       if (data.wrapFormat !== undefined) updateFields.wrapFormat = data.wrapFormat;
+      if (data.scopedRegexMode !== undefined) updateFields.scopedRegexMode = data.scopedRegexMode;
       if (data.author !== undefined) updateFields.author = data.author;
       if ((data as any).defaultChoices !== undefined)
         updateFields.defaultChoices = JSON.stringify((data as any).defaultChoices);
@@ -163,6 +165,7 @@ export function createPromptsStorage(db: DB) {
         variableValues: JSON.parse(preset.variableValues as string),
         parameters: JSON.parse(preset.parameters as string),
         wrapFormat: preset.wrapFormat as "xml" | "markdown",
+        scopedRegexMode: resolveScopedRegexMode(preset.scopedRegexMode),
         author: preset.author,
       });
       if (!newPreset) return null;
@@ -206,6 +209,7 @@ export function createPromptsStorage(db: DB) {
           injectionDepth: s.injectionDepth,
           injectionOrder: s.injectionOrder,
           forbidOverrides: s.forbidOverrides === "true",
+          skipWrap: s.skipWrap === "true",
         });
         if (newSection) sectionMap.set(s.id, newSection.id);
       }
@@ -356,6 +360,7 @@ export function createPromptsStorage(db: DB) {
         injectionDepth: input.injectionDepth ?? 0,
         injectionOrder: input.injectionOrder ?? 100,
         forbidOverrides: String(input.forbidOverrides ?? false),
+        skipWrap: String(input.skipWrap ?? false),
       });
       // Add to preset's section order
       const preset = await this.getById(input.presetId);
@@ -380,6 +385,7 @@ export function createPromptsStorage(db: DB) {
       if (data.injectionDepth !== undefined) updateFields.injectionDepth = data.injectionDepth;
       if (data.injectionOrder !== undefined) updateFields.injectionOrder = data.injectionOrder;
       if (data.forbidOverrides !== undefined) updateFields.forbidOverrides = String(data.forbidOverrides);
+      if (data.skipWrap !== undefined) updateFields.skipWrap = String(data.skipWrap);
       await db.update(promptSections).set(updateFields).where(eq(promptSections.id, id));
       return this.getSection(id);
     },

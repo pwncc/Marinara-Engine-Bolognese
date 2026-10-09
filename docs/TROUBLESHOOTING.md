@@ -11,7 +11,54 @@ Many problems clear up with two quick steps.
 
 If you are asking the team for help, turn on **Debug mode** first so the server logs the prompt and response. See Getting more help at the end of this guide.
 
+## Multiplayer connection or turn problems
+
+- **Controls unavailable:** confirm `MULTIPLAYER_ENABLED=true` is in the correct Engine's `.env`, restart that Engine, then enable Settings separately. A saved toggle cannot override a missing/invalid environment flag. The Android native wrapper deliberately cannot join.
+- **Host unavailable:** use a separate reachable HTTPS room port, a valid certificate chain/hostname and the matching invitation fingerprint. Do not disable TLS validation, add `null` to trusted origins, expose the normal Engine API or open a host-supplied client to work around an error.
+- **Awaiting approval:** the host must approve the request in Players. No transcript is available before approval. Ask for a fresh invitation if it expired or was revoked.
+- **Disconnected:** keep the guest's own Engine running. The client reconnects to the same pinned host while the explicit session is alive; unsent drafts stay in the current view. Restart ends credentials and needs a fresh join. Stop/Leave remain available when the network fails.
+- **Game waiting:** inspect Players. Disconnected participants are not automatically passed. The host can explicitly Pass/Kick or Pause. Submitting one of two required actions must not run the GM.
+- **Interrupted generation:** do not repeatedly resubmit the round. The host should inspect committed narration/state and explicitly resume forward, or stop the room. Multiplayer does not silently replay an ambiguous model request or apply its world effects twice.
+- **Restricted command or missing media:** the initial room protocol intentionally carries only text. Use the [compatibility matrix](development/multiplayer.md#command-and-feature-compatibility); do not install a peer-provided file or extension as a workaround.
+
+When reporting a connection error, include mode, platform, the visible error and whether approval succeeded. Do not post invitations, room passwords, session tokens, private transcripts or provider credentials.
+
 ## Install and launch problems
+
+### Termux: JavaScript heap out of memory while building the client
+
+If Vite stops with `Reached heap limit` or `JavaScript heap out of memory`, the client build ran out of Node.js heap. This is different from a missing native Rollup binary. Update and rerun `start-termux.sh`: client builds, including in-app updates, now run with their own 1536 MiB heap, capped at half of known device RAM but never below the 1280 MiB the build needs. The RAM cap is rounded down in 128 MiB steps. The running server keeps its smaller profile-based limit. An explicit heap limit in `NODE_OPTIONS` takes precedence for both processes, so check for a previously configured 1024 MiB override: the client no longer builds in 1024 MiB.
+
+Close other apps before retrying. Phones with less than about 3 GB of RAM can still run out of memory or be stopped by Android; keep the complete launcher output when reporting that case. Do not delete your chats or profile to repair a build failure.
+
+### Termux: missing multiplayer guest asset
+
+If startup still reports a missing `packages/client/dist/multiplayer/guest.js` after rebuilding, update Engine and rerun `./start-termux.sh`. The launcher now runs the complete low-memory client build, including the guest assets checked at startup. You do not need to enable multiplayer to repair this build error.
+
+### Termux: server stops when you open Engine, or Sharp cannot load
+
+Sharp is the image library Engine uses for thumbnails and sprites. On Android it runs through a WebAssembly fallback. Updating in place from 2.4.6 could leave part of that fallback uninstalled, and the server then stopped the first time a browser opened Engine.
+
+Update Engine and let the launcher reinstall dependencies. The update installs the missing part, and Engine keeps it through later updates. If the server keeps stopping when you open Engine before you can update, repair the install by hand in Termux:
+
+```bash
+cd ~/Marinara-Engine
+rm -f node_modules/.modules.yaml
+SHARP_IGNORE_GLOBAL_LIBVIPS=1 pnpm --config.trustPolicy=off --config.confirmModulesPurge=false install --frozen-lockfile --prefer-offline
+./start-termux.sh
+```
+
+This clears pnpm's outdated install record and reinstalls the dependencies. Your chats and settings are not touched.
+
+If Sharp still cannot load, Engine now keeps running with image processing off: thumbnails it has already made still show, new ones show the full-size image instead, and sprite generation and the built-in background removal are unavailable. Do not replace Sharp with an unrelated version. Keep the complete error output when you report the problem.
+
+### Blank page or JavaScript served as HTML after an update
+
+An error such as "Failed to load module script" with a `text/html` MIME type can mean the browser requested a JavaScript file that is missing from the installed build. The previous-session shutdown warning does not identify this problem, and deleting a writer lease or your data will not repair the assets.
+
+Stop the running server, then run `start.bat`, `start.sh` or `start-termux.sh` again. The launcher checks Vite's build inventory, including lazy JavaScript chunks, and rebuilds incomplete client assets before starting. A build made before this check was added is rebuilt once to create its inventory. If rebuilding fails, keep the terminal error for support. For a manual install, run `pnpm build` from the repository root before starting again.
+
+If the launcher check passes but the page is still blank, hard-refresh or try a private browser window. Report the failing asset's full URL, HTTP status, Content-Type and first response line, together with the launcher output. Missing assets now return HTTP 404 instead of the app's HTML page.
 
 ### Windows: EPERM or corepack signature error when installing pnpm
 
@@ -169,7 +216,7 @@ A memory needs at least 5 new messages before it is created. Recall also only sh
 
 Chat summaries need a working text connection to write them.
 
-- In Roleplay mode, open the **Chat Summary** popover and confirm a connection is set. Use **Backfill Summary** to catch up an older chat.
+- In Roleplay mode, open **Chat Settings** > **Chat Summary** and confirm a connection is set. Use **Backfill Summary** to catch up an older chat.
 - In Conversation mode, open **Automatic Summarization** and use **Backfill** to retry days that failed.
 - If your chat requires agent write approval, an AI summary waits for your review before it takes effect.
 - A summary that keeps failing (for example, a bad API key) is retried on a delay. Fix the connection, then use **Backfill**.
@@ -179,7 +226,8 @@ Chat summaries need a working text connection to write them.
 The **Card Browser** lets you search public character sites and import characters. Open it from the **Card Browser** icon in the top bar, then click **Download Cards**.
 
 - If JannyAI search or a character page fails with a Cloudflare block, Marinara shows a message. It asks you to visit the JannyAI site once in the same browser to clear the challenge, then retry.
-- If your CharacterTavern or Pygmalion login stops working after you restart the server, that is expected. Those logins live only in server memory and clear on restart. Open the login window and paste your cookie or token again.
+- If your Pygmalion login stops working after you restart the server, that is expected. That login lives only in server memory and clears on restart. Open the login window and paste your token again.
+- If CharacterTavern shows a notice instead of search results, that is expected. Its rebuilt website no longer offers the connection Marinara used. Download the card from character-tavern.com and import the file instead.
 
 ## Media generation problems
 
@@ -202,9 +250,9 @@ Then restart Marinara and click **Reapply Cleanup** in the sprite generation win
 Game Mode Storyboards turn a completed GM narration into keyframe images and optional clips. Roleplay Storyboards combine completed exchanges and display the result inline after the assistant response.
 
 - Confirm **Storyboard** is installed from **Agents** > **Download Agents**, then turn on **Enable Agents** and **Enable Storyboards** for the chat.
-- For a manual scene video, generate or upload a **Gallery** image first, then use its **Video** or **Animate** action. The **Gallery** splits **Images** and **Videos** into tabs, so check the **Videos** tab.
+- For a manual scene video, open **Chat Settings** > **Gallery**, generate or upload an image, then use its **Video** or **Animate** action. The **Gallery** splits **Images** and **Videos** into tabs, so check the **Videos** tab.
 - For automatic Game Mode Storyboards, open **Chat Settings** > **Agents** > **Storyboards** and confirm **Automatic Storyboard Illustrations** is on. Turn on **Automatic Storyboard Animations** too if you also want clips.
-- In Roleplay, add the **Storyboard** Agent to the chat. Choose **Still images** or **Animations**, set **Messages per episode**, and select the Storyboard image connection. **Manual only** runs from **Create storyboard** in the Gallery instead.
+- In Roleplay, add the **Storyboard** Agent to the chat. Choose **Still images** or **Animations**, set **Messages per episode**, and select the Storyboard image connection. **Manual only** runs from **Create storyboard** in the **Gallery** section of **Chat Settings** instead.
 - Keyframe images need an image connection. Clips also need a video connection.
 - If a custom prompt works better with all characters combined, turn off **Use NovelAI Character Prompts**.
 - Slow providers can hit a timeout. Raise `IMAGE_GEN_TIMEOUT_MS` or `VIDEO_GEN_TIMEOUT_MS` in `.env`, then restart Marinara. The server only reads these values at startup.
@@ -238,11 +286,17 @@ The cleanest long-term fix is to put the server behind HTTPS. Last checked again
 
 ## Storage and data
 
+### Restart Server does not return
+
+Start Marinara using `start.bat`, `start-local.bat`, `start.sh`, `start-termux.sh`, or `pnpm start`. These keep the server attached to its launcher and wait for the old process to exit before starting its replacement. In-app restart closes lingering connections after four seconds and forces exit after eight seconds if shutdown is still stuck; a forced shutdown can interrupt pending writes and is recorded as forced in diagnostics. Direct `node` runs and development watchers are not automatically replaced: stop and restart them from their terminal. Docker continues to use its container restart policy. On Windows, press Ctrl+C in the launcher console and wait for **Shutdown complete** before closing it. Closing or force-killing the terminal can interrupt pending saves.
+
+Do not launch another server against the same data directory while the old one is still running. If an older build left a process behind, stop that process first; do not remove a live server's writer lease.
+
 ### Startup says another process may be using the data directory
 
 Marinara allows only one running server to write to a local data directory. If startup reports **Another Marinara Engine process ... may be using** the directory, close the other Marinara process and start again.
 
-After a crash or a moved Docker data volume, startup can instead report **The storage writer lease ... is incomplete or invalid** or identify a process that no longer exists on this host. First verify that every Marinara process and container using that data directory is stopped. Then remove only the `.writer-lease` directory named in the error and restart Marinara. Do not remove the surrounding `storage` directory or any table files.
+After a crash or a moved Docker data volume, startup can instead report **The storage writer lease ... is incomplete or invalid** or identify a process that no longer exists on this host. First verify that every Marinara process and container using that data directory is stopped. Then remove only the `.writer-lease` directory named in the error and restart Marinara. Do not remove the surrounding `storage` directory or any table files. On Linux, Android, and container hosts whose data directory lives on a local disk, Marinara reclaims a lease left by a crashed or force-killed process on its own, including after a reboot; the manual step remains the fallback for network or shared storage.
 
 ### Data seems missing after an update
 
@@ -301,11 +355,9 @@ APK-managed Termux installs protect localhost with a private per-install secret.
 
 An error naming origin `null` means an older APK/server pair let Android's opaque WebView origin reach the general CSRF gate before the private handshake. Editing `.env` cannot fix that: literal `null` is deliberately ignored, and trusting an opaque origin globally would weaken every unsafe API route. Update the APK and Engine instead; current Android login routes verify their own one-time proof or per-install secret while `null` remains rejected everywhere else.
 
-Only a separate browser on the same phone needs manual local-browser authentication. In that browser, open `/android-login` and paste the value shown by this Termux command:
+To open a browser on the same phone, select **Open in browser** on the Android launcher and tap **Retry connection**. A current APK and Engine authenticate it automatically; no secret entry is needed. Reopen through this action after a server restart or an expired session. From inside the app, return to the launcher through **Settings > General > App Behavior > Open Android launcher (app or browser)**.
 
-```bash
-cat ~/.marinara-engine/android-secret
-```
+Older APKs can still use `/android-login` with the value from `cat ~/.marinara-engine/android-secret`. A browser link expires after one minute and works once; an expired link should be opened again through the launcher, not reused from history.
 
 The local `mari` CLI reads the same file automatically. A 401 means the pasted secret or an authentication challenge was rejected; reload `/android-login` and paste the current value. A 503 means the server received a malformed configured secret. Restart through `./start-termux.sh`; if the launcher reports that its secret file is invalid or empty, return to the Android app and tap **Install / Start Marinara** so the APK provisions it again. Do not put this secret in screenshots or issue reports.
 
@@ -323,7 +375,13 @@ If it still stops, close other Android apps, reopen Termux, and run the command 
 
 The launcher requests an Android wake lock while the server runs and saves each server session under `~/.marinara-engine/logs/`. After an unexpected restart, include the newest `server-*.log` file in the report. If the file ends without a Marinara or Node error, Android or the phone vendor most likely terminated Termux outside the server process.
 
-Allow Termux to run in the background and remove battery optimization for it in Android settings. On devices that support the Termux:API add-on, install that add-on and the `termux-api` package so `termux-wake-lock` is available. These settings cannot prevent every vendor-specific process kill, but they remove the common idle-suspension cause while the persistent log preserves evidence from application-level failures.
+Allow Termux to run in the background and remove battery optimization for it in Android settings. The `termux-wake-lock` and `termux-wake-unlock` commands ship with every standard Termux install (the core `termux-tools` package) — no add-on is required. These settings cannot prevent every vendor-specific process kill, but they remove the common idle-suspension cause while the persistent log preserves evidence from application-level failures.
+
+### Marinara stops responding until Termux is brought to the foreground
+
+If chats hang at "Opening chat..." and the app then reports **Server unreachable**, the Support Diagnostics copy shows **Unreachable (request timed out)** for the server fields, and everything recovers the instant you open Termux — the host process is **frozen**, not crashed. Android's cached-app freezer (and vendor equivalents, which are especially aggressive on some phones) suspends the whole Termux process: the phone still accepts the connection, but the frozen server never answers it. A wake lock alone does not exempt a process from freezing, and the session log shows a timestamp gap over the frozen window rather than an error.
+
+To reduce it: exempt Termux from battery optimization and allow background activity in Android settings, lock Termux in the recents screen if your phone supports it, and keep the Termux notification visible. If the freezes continue, the reliable workaround is keeping Termux foregrounded (or the screen on) while Marinara is in active use.
 
 ### Android update runs out of storage while installing dependencies
 
@@ -437,3 +495,7 @@ Then reach the community:
 - [Local Model Setup](connections/local-model.md)
 - [Game Mode: Getting Started](game/getting-started.md)
 - [Settings Overview](settings/settings-overview.md)
+
+### Android Chrome does not offer PWA installation behind Basic Auth
+
+Use an HTTPS address, sign in, and reload after updating Marinara. The app requests its manifest with credentials so Basic Auth can remain enabled. If installation is still unavailable, check that your proxy serves `/manifest.json` as JSON rather than a login page or an error.
