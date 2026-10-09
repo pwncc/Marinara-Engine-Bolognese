@@ -10,6 +10,8 @@ const __dirname = dirname(__filename);
 const SERVER_ROOT = resolve(__dirname, "../..");
 const MONOREPO_ROOT = resolve(SERVER_ROOT, "../..");
 const BUILD_META_PATH = resolve(__dirname, "build-meta.json");
+// Written by the client build; see clientBuildMeta() in packages/client/vite.config.ts.
+const CLIENT_BUILD_META_PATH = resolve(SERVER_ROOT, "../client/dist/build-meta.json");
 const COMMIT_LENGTH = 12;
 
 type BuildMeta = {
@@ -66,6 +68,21 @@ function readBuiltCommit() {
   return normalizeCommit(readBuildMeta()?.commit);
 }
 
+/**
+ * The commit the served client bundle was built from. When the server runs from
+ * source there is no server build-meta, and git HEAD keeps moving with every
+ * commit; the client bundle is what the browser compares itself against, so
+ * reporting its commit is what keeps the "update is ready" prompt honest.
+ */
+function readServedClientCommit() {
+  if (!existsSync(CLIENT_BUILD_META_PATH)) return null;
+  try {
+    return normalizeCommit(parseBuildMeta(readFileSync(CLIENT_BUILD_META_PATH, "utf8"))?.commit);
+  } catch {
+    return null;
+  }
+}
+
 export function getBuildCommit() {
   if (cachedCommit !== undefined) return cachedCommit;
 
@@ -78,6 +95,12 @@ export function getBuildCommit() {
   const envCommit = normalizeCommit(process.env.MARINARA_GIT_COMMIT ?? process.env.GITHUB_SHA);
   if (envCommit) {
     cachedCommit = envCommit;
+    return cachedCommit;
+  }
+
+  const servedClientCommit = readServedClientCommit();
+  if (servedClientCommit) {
+    cachedCommit = servedClientCommit;
     return cachedCommit;
   }
 

@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import path from "path";
 import { delegateDirectAndroidBuild } from "./scripts/build-heap.mjs";
 
@@ -121,6 +122,25 @@ function androidBuildHeap(): Plugin {
 }
 
 /** Stub for virtual:pwa-register when the real PWA plugin is skipped (e.g. Termux). */
+/**
+ * Records which commit the served bundle was built from. A server running from
+ * source reads this so its reported build matches the client it serves, instead
+ * of the live git HEAD that moves with every commit.
+ */
+function clientBuildMeta(): Plugin {
+  return {
+    name: "marinara-client-build-meta",
+    apply: "build",
+    closeBundle() {
+      writeFileSync(
+        path.resolve(__dirname, "dist", "build-meta.json"),
+        `${JSON.stringify({ commit: BUILD_COMMIT }, null, 2)}
+`,
+      );
+    },
+  };
+}
+
 function pwaStub(): Plugin {
   const id = "virtual:pwa-register";
   const resolved = "\0" + id;
@@ -150,6 +170,7 @@ export default defineConfig({
     }),
     tailwindcss(),
     bundleBudget(),
+    clientBuildMeta(),
     !PWA_DISABLED
       ? VitePWA({
           injectRegister: false,
