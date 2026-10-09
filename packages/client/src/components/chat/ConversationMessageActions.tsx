@@ -13,6 +13,7 @@ import {
   ScrollText,
   Search,
   Trash2,
+  Wrench,
 } from "lucide-react";
 import { ReplyToMessageButton } from "./MessageReplyPreview";
 import type { Message, MessageExtra } from "@marinara-engine/shared";
@@ -20,6 +21,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { useTranslation, useTranslation as useUiTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { MsgAction } from "./ConversationMessageShared";
+import { ReagentTraceModal, readReagentActivity } from "./ReagentTraceModal";
 import { MESSAGE_ACTION_ICON_SIZE } from "./MessageActionButton";
 import { ReactionAddButton } from "./ReactionAddButton";
 import { MessageMarksAction } from "./MessageMarks";
@@ -96,6 +98,8 @@ export function ConversationMessageActions({
   // Keep the bar shown while focus moves from its message into it. WebKit blurs the message first and
   // then rechecks the target, which :focus-within alone has already hidden, so the click or Tab is lost.
   const [messageFocused, setMessageFocused] = useState(false);
+  const [showReagentTrace, setShowReagentTrace] = useState(false);
+  const reagentEntries = readReagentActivity(message.extra);
   useEffect(() => {
     const row = barRef.current?.closest<HTMLElement>(".group");
     if (!row) return;
@@ -213,6 +217,16 @@ export function ConversationMessageActions({
           className="mari-message-thinking-action"
           buttonRef={thinkingButtonRef}
         />
+      )}
+      {reagentEntries.length > 0 && !isUser && (
+        <MsgAction
+          icon={<Wrench size={MESSAGE_ACTION_ICON_SIZE} />}
+          onClick={() => setShowReagentTrace(true)}
+          title={localizeUi("ui.chat.reagent.trace.view", { count: reagentEntries.length })}
+        />
+      )}
+      {showReagentTrace && reagentEntries.length > 0 && (
+        <ReagentTraceModal entries={reagentEntries} onClose={() => setShowReagentTrace(false)} />
       )}
       {onDelete && (
         <MsgAction

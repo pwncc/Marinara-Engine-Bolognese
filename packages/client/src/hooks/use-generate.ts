@@ -2040,6 +2040,16 @@ export function useGenerate() {
               break;
             }
 
+            case "reagent_approval": {
+              window.dispatchEvent(new CustomEvent("marinara:reagent-approval", { detail: event.data }));
+              break;
+            }
+
+            case "reagent_tool": {
+              // The trace lives on the saved message; nothing to do while streaming.
+              break;
+            }
+
             case "agent_injection_review": {
               window.dispatchEvent(
                 new CustomEvent("marinara:agent-injection-review", {

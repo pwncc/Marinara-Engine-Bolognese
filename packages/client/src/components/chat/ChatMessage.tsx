@@ -53,6 +53,7 @@ import {
   Search,
   ScrollText,
   Brain,
+  Wrench,
   Languages,
   Volume2,
   VolumeX,
@@ -130,6 +131,7 @@ import { ChatImageLightbox } from "./ChatImageLightbox";
 import { SwipeJumpControl } from "./SwipeJumpControl";
 import { toast } from "sonner";
 import { MessageThinkingModal } from "./MessageThinkingModal";
+import { ReagentTraceModal, readReagentActivity } from "./ReagentTraceModal";
 import { MESSAGE_ACTION_ICON_SIZE, MessageActionButton } from "./MessageActionButton";
 import { MessageMarkIndicators, MessageMarksAction, type MessageNoteSharing } from "./MessageMarks";
 import { RoleplayStoryboardMessageMedia } from "./RoleplayStoryboardMessageMedia";
@@ -2320,6 +2322,8 @@ export const ChatMessage = memo(function ChatMessage({
     if (!message.extra) return {};
     return typeof message.extra === "string" ? JSON.parse(message.extra) : message.extra;
   }, [message.extra]);
+  const reagentEntries = useMemo(() => readReagentActivity(extra), [extra]);
+  const [showReagentTrace, setShowReagentTrace] = useState(false);
   const isConversationStart = !!extra.isConversationStart || memoryStartCharacterIds?.length === 0;
   const conversationStartForCharacterIds: string[] = extra.conversationStartForCharacterIds ?? [];
   const isHiddenFromAllAI = extra.hiddenFromAI === true;
@@ -4190,6 +4194,13 @@ export const ChatMessage = memo(function ChatMessage({
                   buttonRef={thinkingButtonRef}
                 />
               )}
+              {reagentEntries.length > 0 && (
+                <ActionBtn
+                  icon={<Wrench size={MESSAGE_ACTION_ICON_SIZE} />}
+                  onClick={() => setShowReagentTrace(true)}
+                  title={localizeUi("ui.chat.reagent.trace.view", { count: reagentEntries.length })}
+                />
+              )}
               {onBranch && (
                 <ActionBtn
                   icon={<GitBranch size={MESSAGE_ACTION_ICON_SIZE} />}
@@ -4215,6 +4226,9 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         </div>
 
+        {showReagentTrace && reagentEntries.length > 0 && (
+          <ReagentTraceModal entries={reagentEntries} onClose={() => setShowReagentTrace(false)} />
+        )}
         {/* Thinking modal */}
         {showThinking && showThinkingAction && (
           <MessageThinkingModal

@@ -83,6 +83,8 @@ import { type ChatToolbarFloatingPanelAnchor } from "./ChatToolbarControls";
 import { PickerDropdown } from "../../features/chat-settings/PickerDropdown";
 import { PersonaHistoryReassignDropdown } from "../../features/chat-settings/sections/PersonaHistoryReassignDropdown";
 import { ChatSettingsSection as Section } from "../../features/chat-settings/ChatSettingsSection";
+import { ReagentSection } from "../../features/chat-settings/sections/ReagentSection";
+import { readReagentSettings } from "@marinara-engine/shared";
 import { ActiveChatBackgroundPicker } from "../panels/settings/BackgroundPicker";
 import { AdvancedParametersSection } from "../../features/chat-settings/sections/AdvancedParametersSection";
 import { ChatNameSection } from "../../features/chat-settings/sections/ChatNameSection";
@@ -704,6 +706,7 @@ const CHAT_SETTINGS_ORDER = {
   impersonate: -400,
   memoryRecall: -300,
   functionCalling: -200,
+  reagent: -150,
   translation: -100,
   gamePrompt: 0,
 } as const;
@@ -9906,6 +9909,26 @@ export function ChatSettingsDrawer({
               onCreateCustomTool={handleCreateCustomTool}
             />
           </div>
+
+          {!isGame && (
+            <ReagentSection
+              chatId={chat.id}
+              settings={readReagentSettings(metadata)}
+              provider={
+                (
+                  chatGenerationConnectionsList as Array<{
+                    id: string;
+                    provider?: string;
+                    isDefault?: boolean | string;
+                  }>
+                ).find((connection) =>
+                  chat.connectionId ? connection.id === chat.connectionId : isConnectionFlagTrue(connection.isDefault),
+                )?.provider
+              }
+              style={{ order: CHAT_SETTINGS_ORDER.reagent }}
+              onChange={(reagent) => updateMeta.mutate({ id: chat.id, reagent })}
+            />
+          )}
 
           {/* Memory Recall — roleplay/game modes: placed before Function Calling by section order */}
           {!isConversation && import.meta.env.VITE_MARINARA_LITE !== "true" && (

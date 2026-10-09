@@ -508,6 +508,10 @@ export interface ChatMetadata {
   roleplayDmCommandsEnabled?: boolean;
   /** Hidden character commands are opt-in, independently of automatic agents. */
   roleplayCommandsEnabled?: boolean;
+  /** REagent (roleplay-enhancing agent) settings; see readReagentSettings. */
+  reagent?: Partial<import("./reagent.js").ReagentSettings>;
+  /** The user's own REagent workspace edits, anchored to the transcript. */
+  reagentUserFileEdits?: import("./reagent.js").ReagentUserFileEdit[];
   roleplayCommandToggles?: RoleplayCommandToggles;
   /** An actual group participant, used only for individual Roleplay generations. */
   roleplayCommandNarratorId?: string | null;
@@ -910,6 +914,10 @@ export interface MessageExtra {
   roleplayDocuments?: RoleplayDocument[] | null;
   /** User-only command disclosures. Their labels and raw text never enter prompt history. */
   roleplayCommandActivity?: RoleplayCommandActivity[] | null;
+  /** REagent: tool calls this swipe made while writing, shown behind the trace button. */
+  reagentActivity?: import("./reagent.js").ReagentActivityEntry[] | null;
+  /** REagent: workspace files as this swipe left them (null = deleted). */
+  reagentFiles?: import("./reagent.js").ReagentFileVersions | null;
   /** Professor Mari workspace trace shown on the home assistant transcript. */
   mariWorkspaceTimeline?: MariWorkspaceTraceItem[] | null;
   /** True when this Mari turn deferred mutating commands behind an Accept action (#5725 Manual mode). */

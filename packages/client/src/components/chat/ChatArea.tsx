@@ -160,6 +160,7 @@ import {
   type ImagePromptOverride,
   type ImagePromptReviewItem,
 } from "../ui/ImagePromptReviewModal";
+import { ReagentApprovalModal } from "./ReagentApprovalModal";
 import { useTranslation as useUiTranslation } from "react-i18next";
 import { ChatResourceDropOverlay } from "./ChatResourceDropOverlay";
 import { ChatHelpOverlay } from "./ChatHelpOverlay";
@@ -992,13 +993,16 @@ const LocalChatArea = memo(function LocalChatArea({
   );
 
   const illustratorPromptReviewModal = (
-    <ImagePromptReviewModal
-      open={!!illustratorPromptReview}
-      items={illustratorPromptReview ? [illustratorPromptReview.item] : []}
-      isSubmitting={illustratorPromptReviewSubmitting}
-      onCancel={handleCloseIllustratorPromptReview}
-      onConfirm={(overrides) => void handleContinueIllustratorPromptReview(overrides)}
-    />
+    <>
+      <ReagentApprovalModal />
+      <ImagePromptReviewModal
+        open={!!illustratorPromptReview}
+        items={illustratorPromptReview ? [illustratorPromptReview.item] : []}
+        isSubmitting={illustratorPromptReviewSubmitting}
+        onCancel={handleCloseIllustratorPromptReview}
+        onConfirm={(overrides) => void handleContinueIllustratorPromptReview(overrides)}
+      />
+    </>
   );
 
   // Character IDs in the active chat. Keyed on the raw characterIds field

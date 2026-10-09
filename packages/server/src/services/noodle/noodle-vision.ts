@@ -77,7 +77,7 @@ function decodeImageDataUrl(imageUrl: string): { buffer: Buffer; expectedExt: st
   return { buffer, expectedExt: `.${subtype === "jpeg" ? "jpg" : subtype}` };
 }
 
-async function optimizeNoodleVisionImage(buffer: Buffer, expectedExt?: string): Promise<string | null> {
+export async function optimizeNoodleVisionImage(buffer: Buffer, expectedExt?: string): Promise<string | null> {
   const imageInfo = isAllowedImageBuffer(buffer, expectedExt);
   if (!imageInfo) return null;
   try {

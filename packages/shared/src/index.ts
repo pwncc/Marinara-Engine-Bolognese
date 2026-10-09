@@ -46,6 +46,7 @@ export * from "./types/spatial-context.js";
 export * from "./types/capability-runtime.js";
 export * from "./types/convo-character-status.js";
 export * from "./types/world.js";
+export * from "./types/reagent.js";
 export * from "./types/generation-integration.js";
 export * from "./types/localization.js";
 export * from "./types/personal-extension.js";

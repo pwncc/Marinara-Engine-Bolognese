@@ -62,6 +62,7 @@ import { csrfDiagnosticsRoutes } from "./csrf-diagnostics.routes.js";
 import { professorMariWorkspaceRoutes } from "./professor-mari-workspace.routes.js";
 import { noodleRoutes } from "./noodle.routes.js";
 import { worldRoutes } from "./world.routes.js";
+import { reagentRoutes } from "./reagent.routes.js";
 import { capabilityPackagesRoutes } from "./capability-packages.routes.js";
 import { customAgentRepositoriesRoutes } from "./custom-agent-repositories.routes.js";
 import { personalExtensionsRoutes } from "./personal-extensions.routes.js";
@@ -160,6 +161,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(professorMariWorkspaceRoutes, { prefix: "/api/professor-mari/workspace" });
   await app.register(noodleRoutes, { prefix: "/api/noodle" });
   await app.register(worldRoutes, { prefix: "/api/world" });
+  await app.register(reagentRoutes, { prefix: "/api/reagent" });
   await app.register(capabilityPackagesRoutes, { prefix: "/api/capability-packages" });
   await app.register(customAgentRepositoriesRoutes, { prefix: "/api/custom-agent-repositories" });
   await app.register(personalExtensionsRoutes, { prefix: "/api/personal-extensions" });

@@ -213,6 +213,12 @@ export class OpenAIProvider extends BaseLLMProvider {
     if (!media?.length) return [];
     const parts: Array<Record<string, unknown>> = [];
     for (const item of media) {
+      if (item.kind === "video") {
+        // OpenRouter's video_url part (data URL or https). Models without video input report it;
+        // that error is what the caller retries text-only on.
+        if (/^(?:data:|https?:)/i.test(item.data)) parts.push({ type: "video_url", video_url: { url: item.data } });
+        continue;
+      }
       if (item.kind !== "audio") continue;
       const payload = OpenAIProvider.dataUrlPayload(item.data);
       if (!payload) continue;

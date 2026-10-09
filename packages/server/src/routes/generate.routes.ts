@@ -590,6 +590,20 @@ import {
 import { runTurnGameBotTurns } from "../services/turn-games/turn-game-bot-runner.service.js";
 import { getTurnGameContextBuilder } from "../services/turn-games/turn-game-runner.service.js";
 import { buildRecentSocialMediaActivityBlock } from "../services/noodle/noodle-context.js";
+import {
+  readReagentSettings,
+  type ReagentActivityEntry,
+  type ReagentFileVersions,
+  type ConvoCharacterStatus,
+} from "@marinara-engine/shared";
+import {
+  buildReagentPromptBlock,
+  createReagentExecutor,
+  isReagentToolName,
+  reagentToolDefinitions,
+  type ReagentMedia,
+} from "../services/reagent/reagent-tools.js";
+import { materializeWorkspace, readWorkspaceMemory } from "../services/reagent/reagent-workspace.js";
 import { normalizeContextInjections } from "./generate/agent-normalizers.js";
 import {
   buildGenerationPromptPresetCandidates,
@@ -2719,7 +2733,13 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
         // the relationship, not handed over up front.
         if (worldSpaceKind && !input.impersonate) {
           personaDescription = "";
-          personaFields = { phoneticName: personaPhoneticName, personality: "", scenario: "", backstory: "", appearance: "" };
+          personaFields = {
+            phoneticName: personaPhoneticName,
+            personality: "",
+            scenario: "",
+            backstory: "",
+            appearance: "",
+          };
         }
         let temperature: number | undefined = 1;
         let maxTokens = 4096;
@@ -8076,7 +8096,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
               : chatResolvedToolNames.has("roll_dice"));
           const roleplayActivity: RoleplayCommandActivity[] = [];
           const roleplayInlinePrefixes = new Map<RoleplayCommandActivity, string>();
-          const responderToolDefs =
+          let responderToolDefs =
             chatMode === "roleplay"
               ? toolDefs
                   ?.filter((tool) => tool.function.name !== "roll_dice" || roleplayRollEnabled)
@@ -8108,7 +8128,70 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                         },
                   )
               : toolDefs;
-          const responderToolsAttached = toolsAttached && Boolean(responderToolDefs?.length);
+          let responderToolsAttached = toolsAttached && Boolean(responderToolDefs?.length);
+
+          // ── REagent: the writer's own tools (workspace, memory, recall, status, lorebook, web, shell) ──
+          const reagentSettings = readReagentSettings(chatMeta);
+          const reagentActivity: ReagentActivityEntry[] = [];
+          const reagentFileVersions: ReagentFileVersions = {};
+          const reagentStatusPatches: Array<{ characterId: string; patch: ConvoCharacterStatus }> = [];
+          let reagentExecutor: ReturnType<typeof createReagentExecutor> | null = null;
+          if (
+            reagentSettings.enabled &&
+            !input.impersonate &&
+            !gameToolConnection &&
+            supportsNativeToolCalls(conn.provider)
+          ) {
+            const effectiveReagentSettings = {
+              ...reagentSettings,
+              tools: { ...reagentSettings.tools, status: reagentSettings.tools.status && characterStatusEnabled },
+            };
+            const reagentToolDefs = reagentToolDefinitions(effectiveReagentSettings);
+            if (reagentToolDefs.length > 0) {
+              // A regenerate starts from the workspace as it was before the reply being replaced.
+              const { workspaceDir } = await materializeWorkspace(app.db, input.chatId, {
+                beforeMessageId: input.regenerateMessageId ?? null,
+                chatMetadata: chatMeta,
+              });
+              reagentExecutor = createReagentExecutor({
+                db: app.db,
+                chatId: input.chatId,
+                chatName: String(chat.name ?? ""),
+                settings: effectiveReagentSettings,
+                workspaceDir,
+                characters: charInfo.map((character) => ({ id: character.id, name: character.name })),
+                callingCharacterId:
+                  speaksOnlyTargetCharacter && !input.impersonate
+                    ? (targetCharId ?? input.forCharacterId ?? null)
+                    : null,
+                searchLorebook: baseToolExecutionContext.searchLorebook,
+                signal: generationSignal,
+                sendEvent: (payload) => sendSseEvent(reply, payload),
+                onStatusPatch: (characterId, patch) => reagentStatusPatches.push({ characterId, patch }),
+                onFileVersion: (path, content) => {
+                  reagentFileVersions[path] = content;
+                },
+              });
+              const reagentNames = new Set(reagentToolDefs.map((tool) => tool.function.name));
+              for (const name of reagentNames) chatResolvedToolNames.add(name);
+              responderToolDefs = [
+                ...(responderToolDefs ?? []).filter((tool) => !reagentNames.has(tool.function.name)),
+                ...reagentToolDefs,
+              ];
+              responderToolsAttached = true;
+              const reagentBlock = buildReagentPromptBlock({
+                settings: effectiveReagentSettings,
+                workspaceDir,
+                memory: await readWorkspaceMemory(workspaceDir),
+                toolNames: [...reagentNames],
+              });
+              const firstTurnIdx = preparedMessagesForGen.findIndex((m) => m.role === "user" || m.role === "assistant");
+              preparedMessagesForGen.splice(firstTurnIdx >= 0 ? firstTurnIdx : preparedMessagesForGen.length, 0, {
+                role: "system",
+                content: reagentBlock,
+              });
+            }
+          }
           if (chatMode === "roleplay") appendLocalEndpointTools(preparedMessagesForGen, responderToolDefs);
           let roleplayPersonalContext = "";
           if (chatMode === "roleplay" && !input.impersonate) {
@@ -8607,7 +8690,11 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                   success: false,
                 }));
 
-              const executedToolResults = await executeToolCalls(permittedToolCalls, {
+              const reagentToolCalls = reagentExecutor
+                ? permittedToolCalls.filter((call) => isReagentToolName(call.function.name))
+                : [];
+              const engineToolCalls = permittedToolCalls.filter((call) => !reagentToolCalls.includes(call));
+              const executedToolResults = await executeToolCalls(engineToolCalls, {
                 ...baseToolExecutionContext,
                 ...(chatMode === "roleplay"
                   ? {
@@ -8635,6 +8722,15 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                     ? (targetCharId ?? input.forCharacterId ?? null)
                     : null,
               });
+              const reagentMedia: ReagentMedia[] = [];
+              for (const call of reagentToolCalls) {
+                if (generationSignal.aborted) break;
+                const outcome = await reagentExecutor!.execute(call);
+                executedToolResults.push(outcome.result);
+                reagentActivity.push(outcome.activity);
+                reagentMedia.push(...outcome.media);
+                sendSseEvent(reply, { type: "reagent_tool", data: outcome.activity });
+              }
               const toolResultsById = new Map(
                 [...executedToolResults, ...deniedToolResults].map((result) => [result.toolCallId, result]),
               );
@@ -8786,6 +8882,24 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                         tool_call_id: tr.toolCallId,
                       },
                 );
+              }
+
+              if (reagentMedia.length > 0) {
+                // Files the model asked to look at ride along as real inputs on a user turn,
+                // which is where every provider accepts images and video.
+                loopMessages.push({
+                  role: "user",
+                  content: `[Attached from your read_file calls: ${reagentMedia.map((item) => item.name).join(", ")}. Look at them and continue; the reply still goes to the same person.]`,
+                  images: reagentMedia.filter((item) => item.kind === "image").map((item) => item.dataUrl),
+                  media: reagentMedia
+                    .filter((item) => item.kind === "video")
+                    .map((item) => ({
+                      kind: "video" as const,
+                      data: item.dataUrl,
+                      mimeType: item.mimeType,
+                      filename: item.name,
+                    })),
+                });
               }
 
               if (roleplayRollEnabled)
@@ -9279,6 +9393,11 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 input.chatId,
               );
             }
+          }
+
+          // REagent's set_character_status calls land in the same ledger as the hidden tags.
+          if (characterStatusEnabled && reagentStatusPatches.length > 0) {
+            characterStatusPatches = [...characterStatusPatches, ...reagentStatusPatches];
           }
 
           // ── Extract <ooc> tags from roleplay responses and post to connected conversation ──
@@ -10710,6 +10829,8 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 extraUpdate.convoCharacterStatus = updatedConvoStatusMap;
               }
             }
+            if (reagentActivity.length > 0) extraUpdate.reagentActivity = reagentActivity;
+            if (Object.keys(reagentFileVersions).length > 0) extraUpdate.reagentFiles = reagentFileVersions;
             let refreshedMsg;
             if (roleplayActivity.some((item) => item.command.type === "interrupt")) {
               const committed = await chats.commitRoleplayInterruption({
