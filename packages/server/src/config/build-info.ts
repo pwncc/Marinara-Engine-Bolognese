@@ -98,11 +98,10 @@ export function getBuildCommit() {
     return cachedCommit;
   }
 
+  // Not cached: the client can be rebuilt while a source-run server keeps going,
+  // and the answer has to follow the bundle that is served right now.
   const servedClientCommit = readServedClientCommit();
-  if (servedClientCommit) {
-    cachedCommit = servedClientCommit;
-    return cachedCommit;
-  }
+  if (servedClientCommit) return servedClientCommit;
 
   if (!existsSync(resolve(MONOREPO_ROOT, ".git"))) {
     cachedCommit = null;

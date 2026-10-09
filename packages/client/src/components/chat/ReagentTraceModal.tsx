@@ -5,8 +5,17 @@ import type { ReagentActivityEntry } from "@marinara-engine/shared";
 import { Modal } from "../ui/Modal";
 
 export function readReagentActivity(extra: unknown): ReagentActivityEntry[] {
-  if (!extra || typeof extra !== "object") return [];
-  const raw = (extra as { reagentActivity?: unknown }).reagentActivity;
+  // Message rows carry extra as a JSON string until a surface parses it.
+  let parsed: unknown = extra;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return [];
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return [];
+  const raw = (parsed as { reagentActivity?: unknown }).reagentActivity;
   return Array.isArray(raw) ? (raw as ReagentActivityEntry[]) : [];
 }
 
