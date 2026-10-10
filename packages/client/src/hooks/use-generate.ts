@@ -1144,27 +1144,6 @@ function applyGameMapUpdate(qc: QueryClient, chatId: string, map: GameMap) {
   }
 }
 
-function applyConvoCharacterStatusUpdate(qc: QueryClient, chatId: string, statusMap: Record<string, unknown>) {
-  const withStatus = (metadata: Chat["metadata"] | string) =>
-    ({
-      ...parseChatMetadata(metadata),
-      convoCharacterStatus: statusMap,
-    }) as unknown as Chat["metadata"];
-
-  qc.setQueryData<Chat | undefined>(chatKeys.detail(chatId), (current) => {
-    if (!current) return current;
-    return { ...current, metadata: withStatus(current.metadata as Chat["metadata"] | string) };
-  });
-
-  const chatStore = useChatStore.getState();
-  if (chatStore.activeChat?.id === chatId) {
-    chatStore.setActiveChat({
-      ...chatStore.activeChat,
-      metadata: withStatus(chatStore.activeChat.metadata as Chat["metadata"] | string),
-    });
-  }
-}
-
 function applyGameStatePatchToStore(
   chatId: string,
   patch: Record<string, unknown>,
@@ -2498,14 +2477,6 @@ export function useGenerate() {
             case "game_map_update": {
               const map = event.data as GameMap | null;
               if (map) applyGameMapUpdate(qc, params.chatId, map);
-              break;
-            }
-
-            case "character_status_update": {
-              const statusMap = event.data as Record<string, unknown> | null;
-              if (statusMap && typeof statusMap === "object") {
-                applyConvoCharacterStatusUpdate(qc, params.chatId, statusMap);
-              }
               break;
             }
 
@@ -3977,13 +3948,6 @@ export function useGenerate() {
             case "game_map_update": {
               const map = event.data as GameMap | null;
               if (map) applyGameMapUpdate(qc, chatId, map);
-              break;
-            }
-            case "character_status_update": {
-              const statusMap = event.data as Record<string, unknown> | null;
-              if (statusMap && typeof statusMap === "object") {
-                applyConvoCharacterStatusUpdate(qc, chatId, statusMap);
-              }
               break;
             }
             case "agent_write_proposal": {

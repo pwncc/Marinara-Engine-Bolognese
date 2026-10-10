@@ -83,6 +83,14 @@ export interface PresentCharacter {
   stats: CharacterStat[];
   /** What the character is thinking */
   thoughts: string | null;
+  /** One short clause behind the mood, so it is actionable rather than decorative. */
+  emotionCause?: string | null;
+  /** Body temperature as felt or seen ("flushed", "shivering"). */
+  temperature?: string | null;
+  /** Freeform bodily notes (tipsy, sore, on their period…). */
+  notes?: string | null;
+  /** Per-body-part state: sensation, position, what it holds. */
+  limbs?: Record<string, string>;
 }
 
 /** A numeric stat for a character. */

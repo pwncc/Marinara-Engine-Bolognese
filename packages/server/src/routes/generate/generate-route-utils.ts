@@ -1924,6 +1924,22 @@ export function preserveTrackerCharacterUiFields(
       character.customFields = { ...previousCustomFields, ...(nextCustomFields ?? {}) };
     }
     character.stats = mergeTrackerStats(previous?.stats, character.stats);
+    // Status fields the tracker agent does not know about survive its updates. A changed
+    // mood with the old reason still attached drops that reason rather than keeping it stale.
+    for (const field of ["temperature", "notes", "limbs"] as const) {
+      if (character[field] === undefined && previous?.[field] !== undefined) character[field] = previous[field];
+    }
+    if (character.emotionCause === undefined && previous?.emotionCause !== undefined) {
+      character.emotionCause = previous.emotionCause;
+    }
+    if (
+      previous &&
+      typeof character.mood === "string" &&
+      character.mood !== previous.mood &&
+      character.emotionCause === previous.emotionCause
+    ) {
+      character.emotionCause = null;
+    }
     if (
       (typeof character.avatarPath !== "string" || !character.avatarPath.trim()) &&
       isNpcTrackerAvatarPath(previousAvatarPath)

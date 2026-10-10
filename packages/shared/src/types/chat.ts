@@ -60,7 +60,6 @@ export const CONVERSATION_COMMAND_KEYS = [
   "influence",
   "note",
   "react",
-  "character_status",
 ] as const;
 
 export type ConversationCommandKey = (typeof CONVERSATION_COMMAND_KEYS)[number];

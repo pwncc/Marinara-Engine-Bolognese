@@ -8,7 +8,6 @@ import {
   type APIProvider,
   type LorebookCategory,
   type LorebookScope,
-  type Message,
   type ScenePromptPreferences,
 } from "@marinara-engine/shared";
 
@@ -61,9 +60,6 @@ const ScenePromptPreferencesModal = lazy(() =>
   import("../modals/ScenePromptPreferencesModal").then((module) => ({
     default: module.ScenePromptPreferencesModal,
   })),
-);
-const CharacterStatusModal = lazy(() =>
-  import("../modals/CharacterStatusModal").then((module) => ({ default: module.CharacterStatusModal })),
 );
 const ChoiceSelectionModal = lazy(() =>
   import("../presets/ChoiceSelectionModal").then((module) => ({ default: module.ChoiceSelectionModal })),
@@ -145,17 +141,6 @@ export function ModalRenderer() {
       break;
     case "agent-write-approval":
       content = <AgentWriteApprovalModal open onClose={closeModal} />;
-      break;
-    case "character-status":
-      content = (
-        <CharacterStatusModal
-          open
-          onClose={closeModal}
-          chatId={(modal?.props?.chatId as string) ?? ""}
-          initialCharacterId={(modal?.props?.initialCharacterId as string | null | undefined) ?? null}
-          messages={(modal?.props?.messages as Message[] | undefined) ?? undefined}
-        />
-      );
       break;
     case "docs-viewer":
       content = (

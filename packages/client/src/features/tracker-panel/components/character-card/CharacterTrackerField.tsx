@@ -43,7 +43,8 @@ export function CompactCharacterField({
   lockKey?: string;
   hidden?: boolean;
   hideMode?: boolean;
-  onToggleHidden: () => void;
+  /** Fields without a hide toggle (status rows) simply stay visible in hide mode. */
+  onToggleHidden?: () => void;
 }) {
   const { t: localizeUi } = useUiTranslation();
   const lock = useTrackerFieldLock(lockKey);
@@ -68,7 +69,7 @@ export function CompactCharacterField({
       >
         {icon}
       </span>
-      {hideMode ? (
+      {hideMode && onToggleHidden ? (
         <button
           type="button"
           onClick={onToggleHidden}

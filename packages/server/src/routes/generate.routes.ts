@@ -369,17 +369,6 @@ import {
 } from "../services/conversation/character-commands.js";
 import { readNoodleVisionImage } from "../services/noodle/noodle-vision.js";
 import {
-  applyConvoCharacterStatusPatches,
-  buildRoleplayCharacterStatusCommandsReminder,
-  formatConvoCharacterStatusContextBlock,
-  isCharacterStatusEnabled,
-  parseCharacterStatusTags,
-  parseCharacterStatusTagsBySpeaker,
-  readConvoCharacterStatusMap,
-  resolveConvoCharacterStatusFromTranscript,
-  syncChatConvoCharacterStatusFromTranscript,
-} from "../services/conversation/character-status.service.js";
-import {
   suppressesReferencePromptLine,
   mergeIllustratorNegativePrompt,
   illustratorPromptTemplateOwnsComposition,
@@ -594,7 +583,8 @@ import {
   readReagentSettings,
   type ReagentActivityEntry,
   type ReagentFileVersions,
-  type ConvoCharacterStatus,
+  type PresentCharacterUpdate,
+  withDefaultStatusFields,
 } from "@marinara-engine/shared";
 import {
   buildReagentPromptBlock,
@@ -2621,6 +2611,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
       let firstSavedMsg: any = null;
       let lastSavedMsg: any = null;
       let lastSavedSwipeIndex: number | null = null;
+      const reagentPendingStatusUpdates: PresentCharacterUpdate[] = [];
       let pendingIllustration: Promise<void> | null = null;
       let pendingAdvancedMemory: Promise<void> | null = null;
       const pendingRoleplayMedia: Promise<void>[] = [];
@@ -2710,8 +2701,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
         });
         const identityFallbackPromptTemplateSources: string[] = [];
         const conversationCommandsEnabled = chatMode === "conversation" && chatMeta.characterCommands !== false;
-        // Body/mood ledger: prompt injection + <character_status> tag parsing.
-        const characterStatusEnabled = !input.impersonate && isCharacterStatusEnabled(chatMode, chatMeta);
         // Living World spaces (life chats, DM/group threads) are real ongoing
         // lives, not scenario-driven roleplay sessions.
         const worldSpaceKind =
@@ -5163,38 +5152,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
           } else {
             finalMessages.push({ role: "user" as const, content: lifeSpaceBlock });
           }
-        }
-
-        // ── Body/mood ledger context (before <commands> so the directive precedes the tag spec) ──
-        if (characterStatusEnabled) {
-          const statusPromptMap = input.regenerateMessageId
-            ? resolveConvoCharacterStatusFromTranscript(await chats.listMessages(input.chatId), {
-                beforeMessageId: input.regenerateMessageId,
-              })
-            : readConvoCharacterStatusMap(chatMeta);
-          const statusCharacterIds = charInfo.map((character) => character.id);
-          const statusIdToName = new Map(charInfo.map((character) => [character.id, character.name]));
-          const statusBlock = formatConvoCharacterStatusContextBlock(
-            statusPromptMap,
-            statusCharacterIds,
-            statusIdToName,
-            { isGroupChat: statusCharacterIds.length > 1 },
-          );
-          if (chatMode === "conversation") {
-            finalMessages.push({ role: "user" as const, content: statusBlock });
-          } else {
-            // Roleplay/VN has no shared commands reminder — append the ledger plus
-            // its own <commands> block to the last user message (DM-reminder pattern).
-            const statusReminder = `${statusBlock}\n\n${buildRoleplayCharacterStatusCommandsReminder()}`;
-            const lastUserIdx = findLastIndex(finalMessages, "user");
-            if (lastUserIdx >= 0) {
-              const target = finalMessages[lastUserIdx]!;
-              finalMessages[lastUserIdx] = { ...target, content: `${target.content}\n\n${statusReminder}` };
-            } else {
-              finalMessages.push({ role: "user" as const, content: statusReminder });
-            }
-          }
-          logger.debug("[generate] Injected character status ledger (%d chars)", statusBlock.length);
         }
 
         if (
@@ -7729,6 +7686,8 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
           commandCharacterIds: (string | null)[] | null;
           oocMessages: string[];
           characterId: string | null;
+          /** set_character_status rows, applied through the tracker path once the reply is saved. */
+          reagentStatusPatches: PresentCharacterUpdate[];
         } | null> => {
           if (
             chatMode === "conversation" &&
@@ -8134,7 +8093,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
           const reagentSettings = readReagentSettings(chatMeta);
           const reagentActivity: ReagentActivityEntry[] = [];
           const reagentFileVersions: ReagentFileVersions = {};
-          const reagentStatusPatches: Array<{ characterId: string; patch: ConvoCharacterStatus }> = [];
+          const reagentStatusPatches: PresentCharacterUpdate[] = [];
           let reagentExecutor: ReturnType<typeof createReagentExecutor> | null = null;
           if (
             reagentSettings.enabled &&
@@ -8144,7 +8103,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
           ) {
             const effectiveReagentSettings = {
               ...reagentSettings,
-              tools: { ...reagentSettings.tools, status: reagentSettings.tools.status && characterStatusEnabled },
+              tools: { ...reagentSettings.tools, status: reagentSettings.tools.status },
             };
             const reagentToolDefs = reagentToolDefinitions(effectiveReagentSettings);
             if (reagentToolDefs.length > 0) {
@@ -8167,7 +8126,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 searchLorebook: baseToolExecutionContext.searchLorebook,
                 signal: generationSignal,
                 sendEvent: (payload) => sendSseEvent(reply, payload),
-                onStatusPatch: (characterId, patch) => reagentStatusPatches.push({ characterId, patch }),
+                onStatusPatch: (update) => reagentStatusPatches.push(update),
                 onFileVersion: (path, content) => {
                   reagentFileVersions[path] = content;
                 },
@@ -9199,7 +9158,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
           let assistantSpatialDirective: ReturnType<typeof extractAssistantSpatialDirective>["directive"] = null;
           let assistantSpatialDirectiveDetected = false;
           let conversationCommandContent: string | null = null;
-          let characterStatusPatches: ReturnType<typeof parseCharacterStatusTagsBySpeaker>["patches"] = [];
           if (tailMessages.assistantPrefillInjected && assistantPrefill && fullResponse.startsWith(assistantPrefill)) {
             const responseAfterPrefill = fullResponse.slice(assistantPrefill.length);
             if (responseAfterPrefill.startsWith(assistantPrefill)) {
@@ -9365,39 +9323,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 logger.warn('[generate] Skipped roleplay DM command for cardless target "%s"', target);
               }
             }
-          }
-
-          // ── Parse and strip hidden <character_status> ledger patches ──
-          if (characterStatusEnabled) {
-            const useStatusSpeakerAttribution =
-              isGroupChat && groupChatMode === "merged" && chatMode === "conversation";
-            if (useStatusSpeakerAttribution) {
-              const statusParse = parseCharacterStatusTagsBySpeaker(fullResponse, charInfo, targetCharId);
-              characterStatusPatches = statusParse.patches;
-              if (statusParse.cleanContent !== fullResponse) {
-                fullResponse = statusParse.cleanContent;
-                contentReplaced = true;
-              }
-            } else {
-              const statusParse = parseCharacterStatusTags(fullResponse);
-              characterStatusPatches = statusParse.patches.map((patch) => ({ characterId: targetCharId, patch }));
-              if (statusParse.cleanContent !== fullResponse) {
-                fullResponse = statusParse.cleanContent;
-                contentReplaced = true;
-              }
-            }
-            if (characterStatusPatches.length > 0) {
-              logger.info(
-                "[generate] Parsed %d character status patch(es) for chat %s",
-                characterStatusPatches.length,
-                input.chatId,
-              );
-            }
-          }
-
-          // REagent's set_character_status calls land in the same ledger as the hidden tags.
-          if (characterStatusEnabled && reagentStatusPatches.length > 0) {
-            characterStatusPatches = [...characterStatusPatches, ...reagentStatusPatches];
           }
 
           // ── Extract <ooc> tags from roleplay responses and post to connected conversation ──
@@ -10200,6 +10125,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 commands: parsedCommands,
                 commandCharacterIds: parsedCommandCharacterIds,
                 oocMessages,
+                reagentStatusPatches: [],
                 characterId: targetCharId,
               };
             }
@@ -10809,26 +10735,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
               extraUpdate.advancedMemorySnapshot = advancedMemorySnapshot;
             const persistentAttachments = resolveUserRegenerationPersistentAttachments(regenMsg ?? {});
             if (persistentAttachments) extraUpdate.attachments = persistentAttachments;
-            // ── Body/mood ledger: merge patches and snapshot the full map onto this swipe ──
-            let updatedConvoStatusMap: ReturnType<typeof readConvoCharacterStatusMap> | null = null;
-            if (characterStatusEnabled && characterStatusPatches.length > 0) {
-              const attributedStatusPatches = characterStatusPatches
-                .map(({ characterId, patch }) => ({ characterId: characterId ?? targetCharId ?? "", patch }))
-                .filter((entry) => entry.characterId);
-              if (attributedStatusPatches.length > 0) {
-                const freshStatusChat = await chats.getById(input.chatId);
-                const freshStatusMeta = freshStatusChat
-                  ? (parseExtra(freshStatusChat.metadata) as Record<string, unknown>)
-                  : chatMeta;
-                const statusBaseMap = input.regenerateMessageId
-                  ? resolveConvoCharacterStatusFromTranscript(await chats.listMessages(input.chatId), {
-                      beforeMessageId: input.regenerateMessageId,
-                    })
-                  : readConvoCharacterStatusMap(freshStatusMeta);
-                updatedConvoStatusMap = applyConvoCharacterStatusPatches(statusBaseMap, attributedStatusPatches);
-                extraUpdate.convoCharacterStatus = updatedConvoStatusMap;
-              }
-            }
             if (reagentActivity.length > 0) extraUpdate.reagentActivity = reagentActivity;
             if (Object.keys(reagentFileVersions).length > 0) extraUpdate.reagentFiles = reagentFileVersions;
             let refreshedMsg;
@@ -10909,20 +10815,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
               type: "message_saved",
               data: savedMessagePayload,
             });
-
-            // ── Body/mood ledger: persist the live map + notify the client ──
-            if (characterStatusEnabled) {
-              if (updatedConvoStatusMap) {
-                await chats.patchMetadata(input.chatId, { convoCharacterStatus: updatedConvoStatusMap });
-              } else if (input.regenerateMessageId) {
-                // Regenerated swipe carried no patch: the previous swipe's effects
-                // no longer apply, so rebuild the live map from the transcript.
-                updatedConvoStatusMap = await syncChatConvoCharacterStatusFromTranscript(chats, input.chatId);
-              }
-              if (updatedConvoStatusMap) {
-                sendSseEvent(reply, { type: "character_status_update", data: updatedConvoStatusMap });
-              }
-            }
 
             if (chatMode === "game" && !input.impersonate) {
               const mapUpdates = parseMapUpdateCommands(fullResponse);
@@ -11026,6 +10918,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
             commandCharacterIds: recoveredAlreadyAppliedSpatialTurn ? [] : parsedCommandCharacterIds,
             oocMessages: recoveredAlreadyAppliedSpatialTurn ? [] : oocMessages,
             characterId: targetCharId,
+            reagentStatusPatches,
           };
         };
 
@@ -11163,6 +11056,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
             firstSavedMsg ??= genResult.savedMsg;
             lastSavedMsg = genResult.savedMsg;
             lastSavedSwipeIndex = genResult.savedSwipeIndex;
+            reagentPendingStatusUpdates.push(...(genResult.reagentStatusPatches ?? []));
             currentIterationSavedMsg = genResult.savedMsg;
             if (typeof genResult.savedMsg?.id === "string") {
               knownConversationMessageIds.add(genResult.savedMsg.id);
@@ -11318,6 +11212,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
             firstSavedMsg ??= genResult.savedMsg;
             lastSavedMsg = genResult.savedMsg;
             lastSavedSwipeIndex = genResult.savedSwipeIndex;
+            reagentPendingStatusUpdates.push(...(genResult.reagentStatusPatches ?? []));
             currentIterationSavedMsg = genResult.savedMsg;
             recordExpressionTarget(genResult.savedMsg, genResult.characterId);
             for (let cmdIndex = 0; cmdIndex < genResult.commands.length; cmdIndex++) {
@@ -11502,7 +11397,9 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
           (hasPostProcessingAgents ||
             parallelResults.length > 0 ||
             holdForTextRewrite ||
-            roleplayMediaRequests.length > 0);
+            roleplayMediaRequests.length > 0 ||
+            // Tracker rows from set_character_status are applied in the post-processing pass.
+            reagentPendingStatusUpdates.length > 0);
         const latestAssistantMessageId =
           (lastSavedMsg as any)?.role === "assistant" ? ((lastSavedMsg as any)?.id ?? "") : "";
         let pendingSceneCheck: AdvancedMemorySceneCheck | null = null;
@@ -12198,6 +12095,39 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 data: { error: error instanceof Error ? error.message : "Media request failed" },
               });
             }
+          }
+
+          // REagent's set_character_status calls ride the same path as the character-tracker
+          // agent, so identity matching, locks, avatars and the HUD patch all apply to them.
+          if (reagentPendingStatusUpdates.length > 0 && lastSavedMsg) {
+            const knownIds = new Set(
+              parseJsonField<any[]>(baseGameStateSnapshot?.presentCharacters, []).map((row) => row?.characterId),
+            );
+            const updates = reagentPendingStatusUpdates.splice(0).map((update) =>
+              knownIds.has(update.characterId)
+                ? update
+                : withDefaultStatusFields({
+                    emoji: "",
+                    appearance: null,
+                    outfit: null,
+                    thoughts: null,
+                    customFields: {},
+                    stats: [],
+                    mood: "",
+                    ...update,
+                  }),
+            );
+            builtInAgentTypes.add("character-tracker");
+            postResults.push({
+              agentId: "reagent-status",
+              agentType: "character-tracker",
+              type: "character_tracker_update",
+              data: { presentCharacters: { updates } },
+              tokensUsed: 0,
+              durationMs: 0,
+              success: true,
+              error: null,
+            });
           }
 
           // Sort so game_state_update (world-state) is processed before dependent types

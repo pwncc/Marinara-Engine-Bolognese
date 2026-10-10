@@ -67,13 +67,7 @@ import {
   EyeOff,
   Shield,
 } from "lucide-react";
-import {
-  decodeEncodedSpeakerTags,
-  formatTextQuotes,
-  stripCharacterStatusTagsForDisplay,
-  type Message,
-  type QuoteFormat,
-} from "@marinara-engine/shared";
+import { decodeEncodedSpeakerTags, formatTextQuotes, type Message, type QuoteFormat } from "@marinara-engine/shared";
 import type { GameTurnStoryboard, GameTurnStoryboardKeyframe } from "@marinara-engine/shared";
 import {
   memo,
@@ -2696,9 +2690,7 @@ export const ChatMessage = memo(function ChatMessage({
       const text =
         isUser || isSystem
           ? content
-          : // Hidden <character_status> ledger tags are stripped server-side at save
-            // time; strip again here so stray tags (older saves, streaming) never render.
-            applyToAIOutput(stripCharacterStatusTagsForDisplay(content), {
+          : applyToAIOutput(content, {
               depth: messageDepth,
               resolveMacros: resolveDisplayMacros,
               scopedMode: scopedRegexMode,

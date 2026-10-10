@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Eye, HeartPulse, Maximize2, Shirt, X } from "lucide-react";
+import { Eye, Hand, HeartPulse, Maximize2, MessageSquareQuote, NotebookPen, Shirt, Thermometer, X } from "lucide-react";
 import {
   characterCustomFieldTrackerLockKey,
   characterStatTrackerLockKey,
@@ -223,7 +223,17 @@ export function CharacterTrackerCard({
   const showOutfit = !outfitHidden || hideMode;
   const showMood = !moodHidden || hideMode;
   const showThoughts = !thoughtsHidden || hideMode;
-  const hasDetailRows = showMood || showAppearance || showOutfit;
+  const limbEntries = Object.entries(character.limbs ?? {}).filter(
+    (entry): entry is [string, string] => typeof entry[1] === "string",
+  );
+  const hasStatusRows = Boolean(character.temperature || character.notes || limbEntries.length || addMode);
+  const hasDetailRows = showMood || showAppearance || showOutfit || hasStatusRows;
+  const saveLimb = (limb: string, value: string) => {
+    const next = { ...(character.limbs ?? {}) };
+    if (value.trim()) next[limb] = value.trim();
+    else delete next[limb];
+    onUpdate({ ...character, limbs: next });
+  };
   const hasDenseContent = characterStats.length > 0 || customFields.length > 0 || addMode;
   const readableDetailRows = hasDenseContent;
   const readableCustomFields = trackerPanelSizeProfile === "expanded";
@@ -379,6 +389,17 @@ export function CharacterTrackerCard({
               onToggleHidden={() => toggleCharacterFieldHidden("mood")}
             />
           )}
+          {showMood && (character.emotionCause || addMode) && (
+            <CompactCharacterField
+              icon={<MessageSquareQuote size="0.6875rem" />}
+              accessibleLabel="Why"
+              value={character.emotionCause ?? null}
+              placeholder={localizeUi("ui.trackerPanel.charactertrackercard.emotionCause")}
+              onSave={(emotionCause) => onUpdate({ ...character, emotionCause: emotionCause || null })}
+              tone="mood"
+              readable={readableDetailRows}
+            />
+          )}
           {showAppearance && (
             <CompactCharacterField
               icon={<Eye size="0.6875rem" />}
@@ -409,6 +430,49 @@ export function CharacterTrackerCard({
               onToggleHidden={() => toggleCharacterFieldHidden("outfit")}
             />
           )}
+          {(character.temperature || addMode) && (
+            <CompactCharacterField
+              icon={<Thermometer size="0.6875rem" />}
+              accessibleLabel="Temperature"
+              value={character.temperature ?? null}
+              placeholder={localizeUi("ui.trackerPanel.charactertrackercard.temperature")}
+              onSave={(temperature) => onUpdate({ ...character, temperature: temperature || null })}
+              tone="appearance"
+              readable={readableDetailRows}
+            />
+          )}
+          {(character.notes || addMode) && (
+            <CompactCharacterField
+              icon={<NotebookPen size="0.6875rem" />}
+              accessibleLabel="Body notes"
+              value={character.notes ?? null}
+              placeholder={localizeUi("ui.trackerPanel.charactertrackercard.bodyNotes")}
+              onSave={(notes) => onUpdate({ ...character, notes: notes || null })}
+              tone="appearance"
+              readable={readableDetailRows}
+            />
+          )}
+          {limbEntries.map(([limb, value]) => (
+            <CompactCharacterField
+              key={`limb-${limb}`}
+              icon={<Hand size="0.6875rem" />}
+              accessibleLabel={limb}
+              value={value ? `${limb}: ${value}` : ""}
+              placeholder={limb}
+              onSave={(next) => {
+                const trimmed = next.trim();
+                const prefix = `${limb}:`;
+                saveLimb(
+                  limb,
+                  trimmed.toLowerCase().startsWith(prefix.toLowerCase())
+                    ? trimmed.slice(prefix.length).trim()
+                    : trimmed,
+                );
+              }}
+              tone="appearance"
+              readable={readableDetailRows}
+            />
+          ))}
         </div>
       )}
 

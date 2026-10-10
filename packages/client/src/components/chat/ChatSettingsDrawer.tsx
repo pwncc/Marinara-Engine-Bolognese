@@ -566,11 +566,6 @@ const CONVERSATION_COMMAND_TOGGLE_OPTIONS: Array<{
   description: string;
 }> = [
   {
-    id: "character_status",
-    label: "Body & Mood Status",
-    description: "Track a hidden per-character body/mood ledger the AI reads and updates every turn.",
-  },
-  {
     id: "schedule_update",
     label: "Schedule Updates",
     description: "Let characters change their current status and activity.",
@@ -5005,6 +5000,143 @@ export function ChatSettingsDrawer({
       )}
     </>
   );
+  const renderAgentCategoryPicker = (keys: ReadonlyArray<"writer" | "tracker" | "misc">) =>
+    (
+      [
+        {
+          key: "writer",
+          label: "Writer Agents",
+          icon: <Feather size="0.75rem" />,
+          description:
+            "Improve prose quality, maintain continuity, and shape the narrative direction of your roleplay.",
+        },
+        {
+          key: "tracker",
+          label: "Tracker Agents",
+          icon: <Activity size="0.75rem" />,
+          description:
+            "Automatically track world state, character stats, quests, expressions, and other data that changes over time.",
+        },
+        {
+          key: "misc",
+          label: "Misc Agents",
+          icon: <Puzzle size="0.75rem" />,
+          description: "Specialized utilities — image generation, combat systems, music, summaries, and other extras.",
+        },
+      ] as const
+    )
+      .filter((cat) => keys.includes(cat.key))
+      .map((cat) => {
+        const catAgents = availableAgents.filter((a) => a.category === cat.key);
+        const activeInCat = catAgents
+          .filter((agent) => activeAgentIds.includes(agent.id) && !standaloneRoleplayAgentIds.has(agent.id))
+          .sort((a, b) => getRoleplayAgentSettingsOrder(a.id) - getRoleplayAgentSettingsOrder(b.id));
+        const inactiveInCat = catAgents.filter((a) => !activeAgentIds.includes(a.id));
+        if (catAgents.length === 0) return null;
+        return (
+          <AgentCategorySection
+            key={cat.key}
+            label={cat.label}
+            icon={cat.icon}
+            description={cat.description}
+            count={activeInCat.length}
+            openRequest={catAgents.some(
+              (agent) =>
+                !standaloneRoleplayAgentIds.has(agent.id) &&
+                getAgentSettingsMenuId(chat.id, agent.id) === pendingAgentMenuTargetId,
+            )}
+          >
+            {/* Active agents in this category */}
+            {activeInCat.length > 0 && (
+              <div className="flex flex-col gap-1 mb-1.5">
+                {activeInCat.map((agent) => {
+                  const tokenEst = agentLoadCost.tokensByType.get(agent.id);
+                  const hasSettingsTarget = chatSettingsPackageByAgentId.has(agent.id);
+                  return (
+                    <div
+                      key={agent.id}
+                      id={hasSettingsTarget ? getAgentSettingsMenuId(chat.id, agent.id) : undefined}
+                      tabIndex={hasSettingsTarget ? -1 : undefined}
+                      data-chat-agent-entry={agent.id}
+                      className="scroll-mt-3 rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30 focus:outline-none focus:ring-1 focus:ring-[var(--primary)]/60"
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <Sparkles size="0.875rem" className="mt-0.5 shrink-0 text-[var(--primary)]" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <span className="block min-w-0 truncate text-xs">{agent.name}</span>
+                            {tokenEst != null ? (
+                              <span
+                                className="shrink-0 tabular-nums text-[0.625rem] text-[var(--muted-foreground)]"
+                                title={localizeUi(
+                                  "ui.chat.chatsettingsdrawer.value1TokensOfAgentInstructionsEstimated",
+                                  { value1: tokenEst.toLocaleString() },
+                                )}
+                              >
+                                ~{tokenEst.toLocaleString()}
+                              </span>
+                            ) : null}
+                          </div>
+                          <span className="mt-0.5 block text-[0.625rem] leading-tight text-[var(--muted-foreground)] line-clamp-2">
+                            {agent.id === "hierarchical-maps" ? worldMapsSettingsDescription : agent.description}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => {
+                            void toggleAgent(agent.id);
+                          }}
+                          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)]"
+                          title={localizeUi("ui.chat.chatsettingsdrawer.removeFromChat")}
+                        >
+                          <Trash2 size="0.6875rem" />
+                        </button>
+                      </div>
+                      {cat.key === "tracker" && (
+                        <AgentPromptTemplateSelect
+                          options={getPromptOptionsForAgent(agent.id)}
+                          selectedId={
+                            agentPromptTemplateSelections[agent.id] ?? getDefaultPromptTemplateIdForAgent(agent.id)
+                          }
+                          overridden={typeof agentPromptTemplateSelections[agent.id] === "string"}
+                          onChange={(promptTemplateId) =>
+                            updateAgentPromptTemplateSelection(agent.id, promptTemplateId)
+                          }
+                        />
+                      )}
+                      {renderDownloadedAgentChatSettings(agent)}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {/* Available agents to add */}
+            {inactiveInCat.length > 0 ? (
+              <div className="flex flex-col gap-1">
+                {inactiveInCat.map((agent) => (
+                  <button
+                    key={agent.id}
+                    onClick={() => openAgentAddModal(agent)}
+                    className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)] bg-[var(--secondary)]"
+                  >
+                    <Plus size="0.75rem" className="shrink-0 text-[var(--muted-foreground)]" />
+                    <div className="flex-1 min-w-0">
+                      <span className="block truncate text-xs">{agent.name}</span>
+                      <span className="mt-0.5 block text-[0.625rem] leading-tight text-[var(--muted-foreground)] line-clamp-2">
+                        {agent.description}
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[0.625rem] text-[var(--muted-foreground)] px-1">
+                {localizeUi("ui.chat.chatsettingsdrawer.allAgentsInThisCategoryAreActive")}
+              </p>
+            )}
+          </AgentCategorySection>
+        );
+      });
+
   return (
     <>
       <FloatingWindow
@@ -7189,6 +7321,7 @@ export function ChatSettingsDrawer({
                     )}
                   </div>
                 )}
+                {renderAgentCategoryPicker(["tracker"])}
                 {renderCustomAgentPicker()}
                 {renderActiveCustomAgentSettingsCard()}
                 {renderHapticSettingsCard()}
@@ -7785,36 +7918,6 @@ export function ChatSettingsDrawer({
                           })
                         }
                       />
-                    </>
-                  )}
-                  {isRoleplayMode && (
-                    <>
-                      <AgentSettingsToggle
-                        label={localizeUi("ui.chat.chatsettingsdrawer.bodyMoodStatus")}
-                        description={
-                          metadata.characterStatus === true
-                            ? localizeUi("ui.chat.chatsettingsdrawer.charactersKeepAHiddenBodyMoodLedgerEditIt")
-                            : localizeUi("ui.chat.chatsettingsdrawer.trackAHiddenPerCharacterBodyMoodLedgerThe")
-                        }
-                        enabled={metadata.characterStatus === true}
-                        surface="secondary"
-                        onToggle={() =>
-                          updateMeta.mutate({ id: chat.id, characterStatus: metadata.characterStatus !== true })
-                        }
-                      />
-                      {metadata.characterStatus === true && (
-                        <button
-                          type="button"
-                          className="mari-chrome-control mari-chrome-control--small w-full px-3 text-[0.6875rem]"
-                          onClick={() =>
-                            useUIStore
-                              .getState()
-                              .openModal("character-status", { chatId: chat.id, initialCharacterId: null })
-                          }
-                        >
-                          {localizeUi("ui.chat.chatsettingsdrawer.viewEditCharacterStatus")}
-                        </button>
-                      )}
                     </>
                   )}
                   {metadata.enableAgents && isRoleplayMode && activeTrackerAgents.length > 0 && (
@@ -9420,151 +9523,7 @@ export function ChatSettingsDrawer({
                           )}
 
                           {/* Agent category sub-sections */}
-                          {(
-                            [
-                              {
-                                key: "writer",
-                                label: "Writer Agents",
-                                icon: <Feather size="0.75rem" />,
-                                description:
-                                  "Improve prose quality, maintain continuity, and shape the narrative direction of your roleplay.",
-                              },
-                              {
-                                key: "tracker",
-                                label: "Tracker Agents",
-                                icon: <Activity size="0.75rem" />,
-                                description:
-                                  "Automatically track world state, character stats, quests, expressions, and other data that changes over time.",
-                              },
-                              {
-                                key: "misc",
-                                label: "Misc Agents",
-                                icon: <Puzzle size="0.75rem" />,
-                                description:
-                                  "Specialized utilities — image generation, combat systems, music, summaries, and other extras.",
-                              },
-                            ] as const
-                          ).map((cat) => {
-                            const catAgents = availableAgents.filter((a) => a.category === cat.key);
-                            const activeInCat = catAgents
-                              .filter(
-                                (agent) =>
-                                  activeAgentIds.includes(agent.id) && !standaloneRoleplayAgentIds.has(agent.id),
-                              )
-                              .sort(
-                                (a, b) => getRoleplayAgentSettingsOrder(a.id) - getRoleplayAgentSettingsOrder(b.id),
-                              );
-                            const inactiveInCat = catAgents.filter((a) => !activeAgentIds.includes(a.id));
-                            if (catAgents.length === 0) return null;
-                            return (
-                              <AgentCategorySection
-                                key={cat.key}
-                                label={cat.label}
-                                icon={cat.icon}
-                                description={cat.description}
-                                count={activeInCat.length}
-                                openRequest={catAgents.some(
-                                  (agent) =>
-                                    !standaloneRoleplayAgentIds.has(agent.id) &&
-                                    getAgentSettingsMenuId(chat.id, agent.id) === pendingAgentMenuTargetId,
-                                )}
-                              >
-                                {/* Active agents in this category */}
-                                {activeInCat.length > 0 && (
-                                  <div className="flex flex-col gap-1 mb-1.5">
-                                    {activeInCat.map((agent) => {
-                                      const tokenEst = agentLoadCost.tokensByType.get(agent.id);
-                                      const hasSettingsTarget = chatSettingsPackageByAgentId.has(agent.id);
-                                      return (
-                                        <div
-                                          key={agent.id}
-                                          id={hasSettingsTarget ? getAgentSettingsMenuId(chat.id, agent.id) : undefined}
-                                          tabIndex={hasSettingsTarget ? -1 : undefined}
-                                          data-chat-agent-entry={agent.id}
-                                          className="scroll-mt-3 rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30 focus:outline-none focus:ring-1 focus:ring-[var(--primary)]/60"
-                                        >
-                                          <div className="flex items-start gap-2.5">
-                                            <Sparkles
-                                              size="0.875rem"
-                                              className="mt-0.5 shrink-0 text-[var(--primary)]"
-                                            />
-                                            <div className="min-w-0 flex-1">
-                                              <div className="flex min-w-0 items-center gap-1.5">
-                                                <span className="block min-w-0 truncate text-xs">{agent.name}</span>
-                                                {tokenEst != null ? (
-                                                  <span
-                                                    className="shrink-0 tabular-nums text-[0.625rem] text-[var(--muted-foreground)]"
-                                                    title={localizeUi(
-                                                      "ui.chat.chatsettingsdrawer.value1TokensOfAgentInstructionsEstimated",
-                                                      { value1: tokenEst.toLocaleString() },
-                                                    )}
-                                                  >
-                                                    ~{tokenEst.toLocaleString()}
-                                                  </span>
-                                                ) : null}
-                                              </div>
-                                              <span className="mt-0.5 block text-[0.625rem] leading-tight text-[var(--muted-foreground)] line-clamp-2">
-                                                {agent.id === "hierarchical-maps"
-                                                  ? worldMapsSettingsDescription
-                                                  : agent.description}
-                                              </span>
-                                            </div>
-                                            <button
-                                              onClick={() => {
-                                                void toggleAgent(agent.id);
-                                              }}
-                                              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)]"
-                                              title={localizeUi("ui.chat.chatsettingsdrawer.removeFromChat")}
-                                            >
-                                              <Trash2 size="0.6875rem" />
-                                            </button>
-                                          </div>
-                                          {cat.key === "tracker" && (
-                                            <AgentPromptTemplateSelect
-                                              options={getPromptOptionsForAgent(agent.id)}
-                                              selectedId={
-                                                agentPromptTemplateSelections[agent.id] ??
-                                                getDefaultPromptTemplateIdForAgent(agent.id)
-                                              }
-                                              overridden={typeof agentPromptTemplateSelections[agent.id] === "string"}
-                                              onChange={(promptTemplateId) =>
-                                                updateAgentPromptTemplateSelection(agent.id, promptTemplateId)
-                                              }
-                                            />
-                                          )}
-                                          {renderDownloadedAgentChatSettings(agent)}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                                {/* Available agents to add */}
-                                {inactiveInCat.length > 0 ? (
-                                  <div className="flex flex-col gap-1">
-                                    {inactiveInCat.map((agent) => (
-                                      <button
-                                        key={agent.id}
-                                        onClick={() => openAgentAddModal(agent)}
-                                        className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)] bg-[var(--secondary)]"
-                                      >
-                                        <Plus size="0.75rem" className="shrink-0 text-[var(--muted-foreground)]" />
-                                        <div className="flex-1 min-w-0">
-                                          <span className="block truncate text-xs">{agent.name}</span>
-                                          <span className="mt-0.5 block text-[0.625rem] leading-tight text-[var(--muted-foreground)] line-clamp-2">
-                                            {agent.description}
-                                          </span>
-                                        </div>
-                                      </button>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <p className="text-[0.625rem] text-[var(--muted-foreground)] px-1">
-                                    {localizeUi("ui.chat.chatsettingsdrawer.allAgentsInThisCategoryAreActive")}
-                                  </p>
-                                )}
-                              </AgentCategorySection>
-                            );
-                          })}
+                          {renderAgentCategoryPicker(["writer", "tracker", "misc"])}
 
                           {/* Custom agents */}
                           {renderCustomAgentPicker()}

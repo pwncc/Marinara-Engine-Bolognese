@@ -86,10 +86,10 @@ import {
   withChatMetadataPatchQueue,
   withChatSwipeSelectionQueue,
 } from "../services/storage/chats.storage.js";
-import { maybeSyncChatConvoCharacterStatusFromTranscript } from "../services/conversation/character-status.service.js";
 import { createMessageTrashStorage, MessageTrashPinnedLimitError } from "../services/storage/message-trash.storage.js";
 import { createAppSettingsStorage } from "../services/storage/app-settings.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
+import { buildPresentCharacterUpdate, withDefaultStatusFields } from "@marinara-engine/shared";
 import { resolveChatUserIdentity } from "../services/chat-user-identity.js";
 import { isFeatureEnabled } from "../services/features/feature-settings.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
@@ -724,21 +724,131 @@ export async function chatsRoutes(app: FastifyInstance) {
   const messageTrashStore = createMessageTrashStorage(app.db);
   const appSettings = createAppSettingsStorage(app.db);
 
-  // Deletes and swipe changes alter which per-message status snapshot is the
-  // latest, so rebuild the live body/mood ledger from the transcript afterwards.
-  const resyncConvoCharacterStatus = async (chatId: string) => {
-    try {
-      const chat = await storage.getById(chatId);
-      if (!chat) return;
-      await maybeSyncChatConvoCharacterStatusFromTranscript(
-        storage,
-        chatId,
-        chat.mode ?? "",
-        parseChatMetadata(chat.metadata),
+  // Chats from before the tracker merge kept a body/mood map in metadata. The first
+  // tracker read turns it into a committed snapshot at the visible anchor and clears it.
+  const migrateLegacyCharacterStatus = async (
+    chatId: string,
+    visibleAnchor: { messageId: string; swipeIndex: number } | null,
+  ) => {
+    const chat = await storage.getById(chatId);
+    if (!chat || !visibleAnchor) return null;
+    const metadata = parseChatMetadata(chat.metadata) as Record<string, unknown>;
+    const legacy = metadata.convoCharacterStatus;
+    const gameStateStore = createGameStateStorage(app.db);
+    if (!legacy || typeof legacy !== "object" || Array.isArray(legacy)) return null;
+    const characters = createCharactersStorage(app.db);
+    const rows: Record<string, unknown>[] = [];
+    for (const [characterId, status] of Object.entries(legacy as Record<string, unknown>)) {
+      if (!status || typeof status !== "object") continue;
+      const row = await characters.getById(characterId);
+      const data = row ? (parseExportMetadata(row.data) as { name?: unknown }) : null;
+      const name = typeof data?.name === "string" ? data.name : "";
+      if (!name) continue;
+      const update = buildPresentCharacterUpdate(characterId, name, status as Record<string, unknown>);
+      rows.push(
+        withDefaultStatusFields({
+          emoji: "",
+          appearance: null,
+          outfit: null,
+          thoughts: null,
+          customFields: {},
+          stats: [],
+          mood: "",
+          avatarPath: row?.avatarPath ?? null,
+          ...(update ?? { characterId, name }),
+        }),
       );
-    } catch (err) {
-      logger.warn(err, "[chats] Convo character status resync failed");
     }
+    await storage.patchMetadata(chatId, { convoCharacterStatus: null });
+    if (rows.length === 0) return null;
+    await gameStateStore.create({
+      chatId,
+      messageId: visibleAnchor.messageId,
+      swipeIndex: visibleAnchor.swipeIndex,
+      date: null,
+      time: null,
+      location: null,
+      weather: null,
+      temperature: null,
+      presentCharacters: rows as never,
+      recentEvents: [],
+      playerStats: null,
+      personaStats: null,
+      committed: true,
+    });
+    logger.info("[chats] Migrated legacy character status for chat %s (%d rows)", chatId, rows.length);
+    return gameStateStore.getByChatAndMessage(chatId, visibleAnchor.messageId, visibleAnchor.swipeIndex);
+  };
+
+  // Conversation chats show every chat character on the status strip from the start, with
+  // the standard meters, the way the old body/mood ledger did. Rows the tracker agent, the
+  // status tool or the user already wrote are left alone.
+  const ensureConversationStatusRows = async (
+    chatId: string,
+    visibleAnchor: { messageId: string; swipeIndex: number } | null,
+    rawRow: Awaited<ReturnType<ReturnType<typeof createGameStateStorage>["getLatest"]>>,
+  ) => {
+    const chat = await storage.getById(chatId);
+    if (!chat || chat.mode !== "conversation" || !visibleAnchor) return rawRow;
+    const characterIds = parseSnapshotJson<unknown>(chat.characterIds, []);
+    if (!Array.isArray(characterIds)) return rawRow;
+    if (characterIds.length === 0) return rawRow;
+    const existing: Record<string, unknown>[] = rawRow ? parseSnapshotJson(rawRow.presentCharacters, []) : [];
+    const have = new Set(existing.map((row) => (typeof row.characterId === "string" ? row.characterId : "")));
+    const characters = createCharactersStorage(app.db);
+    const added: Record<string, unknown>[] = [];
+    for (const characterId of characterIds) {
+      if (have.has(characterId)) continue;
+      const row = await characters.getById(characterId);
+      const data = row ? (parseExportMetadata(row.data) as { name?: unknown }) : null;
+      const name = typeof data?.name === "string" ? data.name : "";
+      if (!name) continue;
+      added.push(
+        withDefaultStatusFields({
+          characterId,
+          name,
+          emoji: "",
+          mood: "",
+          appearance: null,
+          outfit: null,
+          thoughts: null,
+          customFields: {},
+          stats: [],
+          avatarPath: row?.avatarPath ?? null,
+        }),
+      );
+    }
+    // Rows that predate the standard meters (or came from the tracker agent) get them too.
+    const cardIds = new Set(characterIds.filter((id): id is string => typeof id === "string"));
+    const backfilled = existing.map((row) =>
+      typeof row.characterId === "string" && cardIds.has(row.characterId)
+        ? (withDefaultStatusFields(row as never) as Record<string, unknown>)
+        : row,
+    );
+    const changed = added.length > 0 || JSON.stringify(backfilled) !== JSON.stringify(existing);
+    if (!changed) return rawRow;
+    const gameStateStore = createGameStateStorage(app.db);
+    const presentCharacters = [...backfilled, ...added] as never;
+    if (rawRow) {
+      await gameStateStore.updateByMessage(rawRow.messageId, rawRow.swipeIndex, chatId, { presentCharacters });
+      return gameStateStore.getByChatAndMessage(chatId, rawRow.messageId, rawRow.swipeIndex);
+    }
+    await gameStateStore.create({
+      chatId,
+      messageId: visibleAnchor.messageId,
+      swipeIndex: visibleAnchor.swipeIndex,
+      date: null,
+      time: null,
+      location: null,
+      weather: null,
+      temperature: null,
+      presentCharacters,
+      recentEvents: [],
+      playerStats: null,
+      personaStats: null,
+      committed: true,
+    });
+    return gameStateStore.getByChatAndMessage(chatId, visibleAnchor.messageId, visibleAnchor.swipeIndex);
   };
 
   const cleanupEmptyRoleplayDmChats = async () => {
@@ -2454,7 +2564,6 @@ export async function chatsRoutes(app: FastifyInstance) {
         ? []
         : await messageTrashStore.trashMessages(req.params.chatId, [req.params.messageId]);
     if (trashed.length === 0) await storage.removeMessage(req.params.messageId);
-    await resyncConvoCharacterStatus(req.params.chatId);
     return reply.send({ trashed: trashed.length > 0, trashedCount: trashed.length });
   });
 
@@ -2469,7 +2578,6 @@ export async function chatsRoutes(app: FastifyInstance) {
       ? await messageTrashStore.trashMessages(req.params.chatId, ids)
       : [];
     if (trashed.length === 0) await storage.removeMessages(ids, req.params.chatId);
-    await resyncConvoCharacterStatus(req.params.chatId);
     return reply.send({ trashed: trashed.length > 0, trashedCount: trashed.length });
   });
 
@@ -2785,10 +2893,14 @@ export async function chatsRoutes(app: FastifyInstance) {
     const gameStateStore = createGameStateStorage(app.db);
     const msgs = await storage.listMessages(req.params.id);
     const visibleAnchor = resolveVisibleGameStateAnchor(msgs);
-    const rawRow = await gameStateStore.getForGeneration(req.params.id, {
-      preferLatestVisible: true,
+    const rawRow = await ensureConversationStatusRows(
+      req.params.id,
       visibleAnchor,
-    });
+      (await gameStateStore.getForGeneration(req.params.id, {
+        preferLatestVisible: true,
+        visibleAnchor,
+      })) ?? (await migrateLegacyCharacterStatus(req.params.id, visibleAnchor)),
+    );
     if (!rawRow) return reply.send(null);
     const chat = await storage.getById(req.params.id);
     if (!chat) return reply.status(404).send({ error: "Chat not found" });
@@ -4053,7 +4165,6 @@ export async function chatsRoutes(app: FastifyInstance) {
           (previous?.activeSwipeIndex ?? 0) === index,
           updated.activeSwipeIndex ?? 0,
         );
-        await resyncConvoCharacterStatus(req.params.chatId);
         return updated;
       });
     },
@@ -4137,7 +4248,6 @@ export async function chatsRoutes(app: FastifyInstance) {
             throw err;
           }
         }
-        await resyncConvoCharacterStatus(req.params.chatId);
         return updated;
       });
     },

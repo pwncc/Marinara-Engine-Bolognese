@@ -10,7 +10,6 @@ import {
 
 import { logger } from "../../lib/logger.js";
 import type { CharacterCommand } from "../conversation/character-commands.js";
-import { buildCharacterStatusCommandInstructionLines } from "../conversation/character-status.service.js";
 import { wrapContent } from "../prompt/format-engine.js";
 import { resolveSpotifyCredentials, spotifyHasScope } from "../spotify/spotify.service.js";
 import { getActiveTurnGame } from "../turn-games/turn-game-runner.service.js";
@@ -249,11 +248,6 @@ export async function buildConversationCommandsReminder(args: {
     addCommandLines(
       `- [schedule_update: status="online|idle|dnd|offline", activity="activity name", duration="number of hours (e.g., 1h)"] - only if you change your own status/activity, for example, if the user asks you to stop what you're doing or if you decide to change them yourself.`,
     );
-  }
-
-  if (isConversationCommandEnabled(chatMeta, "character_status")) {
-    const statusLines = buildCharacterStatusCommandInstructionLines("conversation");
-    addCommandLines(...(statusLines[statusLines.length - 1] === "" ? statusLines.slice(0, -1) : statusLines));
   }
 
   if (reactCommandEnabled) {

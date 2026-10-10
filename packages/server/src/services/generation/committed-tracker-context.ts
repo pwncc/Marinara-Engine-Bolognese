@@ -109,7 +109,21 @@ function formatCharacterLine(character: any): string | null {
   if (!name) return null;
 
   const details: string[] = [];
-  if (character.mood) details.push(`mood: ${character.mood}`);
+  if (character.mood) {
+    details.push(
+      character.emotionCause
+        ? `mood: ${character.mood} (because ${character.emotionCause})`
+        : `mood: ${character.mood}`,
+    );
+  }
+  if (character.temperature) details.push(`temperature: ${character.temperature}`);
+  if (character.notes) details.push(`body: ${character.notes}`);
+  if (character.limbs && typeof character.limbs === "object" && !Array.isArray(character.limbs)) {
+    const limbs = Object.entries(character.limbs as Record<string, unknown>)
+      .filter(([, value]) => typeof value === "string" && value.trim())
+      .map(([limb, value]) => `${limb}: ${String(value).trim()}`);
+    if (limbs.length) details.push(limbs.join(", "));
+  }
   if (character.appearance) details.push(`appearance: ${character.appearance}`);
   if (character.outfit) details.push(`outfit: ${character.outfit}`);
   if (character.thoughts) details.push(`thoughts: ${character.thoughts}`);
@@ -164,13 +178,17 @@ export function buildCommittedTrackerContextBlock(args: {
   wrapFormat: WrapFormat;
   excludeAgentIds?: ReadonlySet<string>;
 }): string | null {
-  if (!args.chatEnableAgents || args.activeAgentIds.length === 0) return null;
+  // Present characters are the status ledger: once rows exist (written by the tracker
+  // agent, the REagent status tool or the user) they are shown even with agents off.
+  const presentRows = parseMaybeJson(args.latestGameState?.presentCharacters);
+  const hasPresentRows = Array.isArray(presentRows) && presentRows.length > 0;
+  if ((!args.chatEnableAgents || args.activeAgentIds.length === 0) && !hasPresentRows) return null;
 
   const active = new Set(args.activeAgentIds);
-  if (!args.activeAgentIds.some((id) => COMMITTED_TRACKER_AGENT_TYPES.has(id))) return null;
+  if (!args.activeAgentIds.some((id) => COMMITTED_TRACKER_AGENT_TYPES.has(id)) && !hasPresentRows) return null;
   for (const id of args.excludeAgentIds ?? []) active.delete(id);
   const hasWorldState = active.has("world-state");
-  const hasCharTracker = active.has("character-tracker");
+  const hasCharTracker = active.has("character-tracker") || hasPresentRows;
   const hasPersonaStats = active.has("persona-stats");
   const hasQuest = active.has("quest");
   const hasCustomTracker = active.has("custom-tracker");

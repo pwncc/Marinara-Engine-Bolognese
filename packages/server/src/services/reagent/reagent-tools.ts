@@ -10,7 +10,10 @@ import { readFile, stat, writeFile, mkdir, rm } from "node:fs/promises";
 import { dirname, basename, resolve } from "node:path";
 import {
   REAGENT_MEMORY_FILE,
-  type ConvoCharacterStatus,
+  CHARACTER_STATUS_BAR_SPECS,
+  DEFAULT_STATUS_LIMBS,
+  buildPresentCharacterUpdate,
+  type PresentCharacterUpdate,
   type LLMToolCall,
   type LLMToolDefinition,
   type ReagentActivityEntry,
@@ -22,7 +25,6 @@ import { logger } from "../../lib/logger.js";
 import { newId } from "../../utils/id-generator.js";
 import { createChatsStorage } from "../storage/chats.storage.js";
 import { createLorebooksStorage } from "../storage/lorebooks.storage.js";
-import { normalizeConvoCharacterStatusPatch } from "../conversation/character-status.service.js";
 import { optimizeNoodleVisionImage } from "../noodle/noodle-vision.js";
 import { stripHtml, decodeHtmlEntities } from "../professor-mari/fandom-mediawiki/html-text.js";
 import type { LorebookSearchFn, ToolExecutionResult } from "../tools/tool-executor.js";
@@ -69,7 +71,7 @@ export interface ReagentExecutorDeps {
   searchLorebook?: LorebookSearchFn;
   signal?: AbortSignal;
   sendEvent?: (payload: Record<string, unknown>) => void;
-  onStatusPatch: (characterId: string, patch: ConvoCharacterStatus) => void;
+  onStatusPatch: (update: PresentCharacterUpdate) => void;
   onFileVersion: (workspaceRelativePath: string, content: string | null) => void;
 }
 
@@ -164,10 +166,14 @@ const RECALL_TOOLS: LLMToolDefinition[] = [
   }),
 ];
 
+const STATUS_BAR_GUIDE = CHARACTER_STATUS_BAR_SPECS.map(
+  (spec) => `${spec.name}: ${spec.description} ${spec.dynamics}`,
+).join("\n");
+
 const STATUS_TOOLS: LLMToolDefinition[] = [
   def(
     "set_character_status",
-    "Update a character's body/mood ledger directly. Only include fields that changed. Bars are 0-100.",
+    `Update a character's body/mood ledger directly. Only include fields that changed. Bars are 0-100 and every character has these standard meters (keep the names, add others only when the story needs them):\n${STATUS_BAR_GUIDE}\nLimb keys: ${DEFAULT_STATUS_LIMBS.join(", ")} (sensation, position, what it holds; empty means nothing notable).`,
     {
       character: { type: "string", description: "Character name. Optional when you are the only character speaking." },
       emotion: { type: "string" },
@@ -521,7 +527,7 @@ export function createReagentExecutor(deps: ReagentExecutorDeps) {
         `Which character? Known: ${deps.characters.map((entry) => entry.name).join(", ") || "none in this chat"}.`,
       );
     }
-    const patch = normalizeConvoCharacterStatusPatch({
+    const update = buildPresentCharacterUpdate(character.id, character.name, {
       emotion: args.emotion,
       emotionCause: args.emotion_cause,
       temperature: args.temperature,
@@ -530,10 +536,11 @@ export function createReagentExecutor(deps: ReagentExecutorDeps) {
       limbs: args.limbs,
       extras: args.extras,
     });
-    if (!patch || Object.keys(patch).length === 0) throw new Error("Nothing to update; include at least one field.");
-    deps.onStatusPatch(character.id, patch);
+    if (!update) throw new Error("Nothing to update; include at least one field.");
+    deps.onStatusPatch(update);
+    const { characterId: _id, name: _name, ...fields } = update;
     return {
-      result: ok(`${character.name}'s status will be updated with this reply: ${JSON.stringify(patch)}`),
+      result: ok(`${character.name}'s tracker will be updated with this reply: ${JSON.stringify(fields)}`),
       media: [],
     };
   }
