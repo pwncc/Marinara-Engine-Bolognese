@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { Eye, HeartPulse, Shirt } from "lucide-react";
+import { Eye, Hand, HeartPulse, MessageSquareQuote, NotebookPen, Shirt, Thermometer } from "lucide-react";
 import {
   characterTrackerLockKey,
   isTrackerFieldHidden,
@@ -19,6 +19,8 @@ const FEATURED_FIELD_LIST_CLASS = "relative z-[1] grid h-full min-h-0 grid-cols-
 const FEATURED_FIELD_ICON_CLASS =
   "relative flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[var(--tracker-profile-label-icon)] opacity-[0.82] ring-1 ring-inset ring-[color-mix(in_srgb,var(--tracker-profile-dialogue-border)_18%,transparent)] transition-colors before:absolute before:inset-[3px] before:rounded-full before:bg-[color-mix(in_srgb,var(--tracker-profile-accent-solid)_3%,transparent)] before:content-[''] group-hover/field:text-[var(--tracker-profile-label-icon)] group-hover/field:ring-[color-mix(in_srgb,var(--tracker-profile-dialogue-border)_34%,transparent)] group-hover/field:before:bg-[color-mix(in_srgb,var(--tracker-profile-accent-solid)_6%,transparent)] [&>svg]:relative [&>svg]:z-[1] [&>svg]:stroke-[1.85]";
 type FeaturedCharacterFieldKey = "mood" | "appearance" | "outfit";
+/** Rows the featured list can show; status rows share the mood/appearance tones. */
+type FeaturedFieldTone = "mood" | "appearance" | "outfit";
 const FEATURED_FIELD_ICON_TONE_CLASS = {
   mood: "text-[var(--tracker-profile-label-icon)] before:bg-[color-mix(in_srgb,var(--tracker-profile-accent-solid)_4%,transparent)] group-hover/field:text-[var(--tracker-profile-label-icon)]",
   appearance:
@@ -60,11 +62,12 @@ function FeaturedFieldTile({
   placeholder: string;
   onSave: (value: string) => void;
   sizeProfile: TrackerPanelSizeProfile;
-  fieldKey: FeaturedCharacterFieldKey;
+  fieldKey: FeaturedFieldTone;
   lockKey?: string;
   hidden?: boolean;
   hideMode?: boolean;
-  onToggleHidden: () => void;
+  /** Status rows have no hide toggle and stay visible in hide mode. */
+  onToggleHidden?: () => void;
 }) {
   const { t: localizeUi } = useUiTranslation();
   const lock = useTrackerFieldLock(lockKey);
@@ -88,7 +91,7 @@ function FeaturedFieldTile({
       >
         {icon}
       </span>
-      {hideMode ? (
+      {hideMode && onToggleHidden ? (
         <button
           type="button"
           onClick={onToggleHidden}
@@ -202,9 +205,78 @@ export function FeaturedFieldList({
       value: character.outfit,
     },
   ].filter((field) => !field.hidden || hideMode);
-  if (fields.length === 0) return null;
+  // Status rows (the body/mood ledger) have no hide toggle; they show when they carry a value.
+  const limbs = Object.entries(character.limbs ?? {}).filter(
+    (entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].trim().length > 0,
+  );
+  const saveLimb = (limb: string, next: string) => {
+    const trimmed = next.trim();
+    const prefix = `${limb}:`;
+    const value = trimmed.toLowerCase().startsWith(prefix.toLowerCase())
+      ? trimmed.slice(prefix.length).trim()
+      : trimmed;
+    const nextLimbs = { ...(character.limbs ?? {}) };
+    if (value) nextLimbs[limb] = value;
+    else delete nextLimbs[limb];
+    onUpdate({ ...character, limbs: nextLimbs });
+  };
+  const statusRows: Array<{
+    id: string;
+    accessibleLabel: string;
+    icon: ReactNode;
+    tone: FeaturedFieldTone;
+    value: string | null | undefined;
+    placeholder: string;
+    onSave: (value: string) => void;
+  }> = [];
+  if (!fieldHidden("mood") && character.emotionCause) {
+    statusRows.push({
+      id: "emotionCause",
+      accessibleLabel: "Why",
+      icon: <MessageSquareQuote size="0.75rem" />,
+      tone: "mood",
+      value: character.emotionCause,
+      placeholder: "Why they feel that way",
+      onSave: (emotionCause) => onUpdate({ ...character, emotionCause: emotionCause || null }),
+    });
+  }
+  if (character.temperature) {
+    statusRows.push({
+      id: "temperature",
+      accessibleLabel: "Temperature",
+      icon: <Thermometer size="0.75rem" />,
+      tone: "appearance",
+      value: character.temperature,
+      placeholder: "Body temperature",
+      onSave: (temperature) => onUpdate({ ...character, temperature: temperature || null }),
+    });
+  }
+  if (character.notes) {
+    statusRows.push({
+      id: "notes",
+      accessibleLabel: "Body notes",
+      icon: <NotebookPen size="0.75rem" />,
+      tone: "appearance",
+      value: character.notes,
+      placeholder: "Body notes",
+      onSave: (notes) => onUpdate({ ...character, notes: notes || null }),
+    });
+  }
+  for (const [limb, value] of limbs) {
+    statusRows.push({
+      id: `limb:${limb}`,
+      accessibleLabel: limb,
+      icon: <Hand size="0.75rem" />,
+      tone: "appearance",
+      value: `${limb}: ${value}`,
+      placeholder: limb,
+      onSave: (next) => saveLimb(limb, next),
+    });
+  }
+  const rowCount = fields.length + statusRows.length;
+  if (rowCount === 0) return null;
   return (
-    <div className={FEATURED_FIELD_LIST_CLASS} style={{ gridTemplateRows: `repeat(${fields.length}, minmax(0, 1fr))` }}>
+    <div className={FEATURED_FIELD_LIST_CLASS} style={{ gridTemplateRows: `repeat(${rowCount}, minmax(0, 1fr))` }}>
       {fields.map((field) => (
         <FeaturedFieldTile
           key={field.key}
@@ -219,6 +291,18 @@ export function FeaturedFieldList({
           hidden={field.hidden}
           hideMode={hideMode}
           onToggleHidden={() => toggleFieldHidden(field.key)}
+        />
+      ))}
+      {statusRows.map((row) => (
+        <FeaturedFieldTile
+          key={row.id}
+          icon={row.icon}
+          accessibleLabel={row.accessibleLabel}
+          value={row.value}
+          placeholder={row.placeholder}
+          onSave={row.onSave}
+          sizeProfile={sizeProfile}
+          fieldKey={row.tone}
         />
       ))}
     </div>

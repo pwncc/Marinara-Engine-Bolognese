@@ -724,27 +724,28 @@ export async function chatsRoutes(app: FastifyInstance) {
   const messageTrashStore = createMessageTrashStorage(app.db);
   const appSettings = createAppSettingsStorage(app.db);
 
-  // Chats from before the tracker merge kept a body/mood map in metadata. The first
-  // tracker read turns it into a committed snapshot at the visible anchor and clears it.
-  const migrateLegacyCharacterStatus = async (
-    chatId: string,
-    visibleAnchor: { messageId: string; swipeIndex: number } | null,
+  // Chats from before the tracker merge kept a body/mood map in metadata, plus a full
+  // copy of that map on every swipe that changed it. The first tracker read turns each of
+  // those per-swipe copies into a committed snapshot (so swiping back through old replies
+  // still shows the state as it was), seeds the live map at the visible anchor, and clears
+  // the legacy key. Chats that already have tracker snapshots get the legacy fields merged in.
+  const legacyStatusRows = async (
+    legacy: Record<string, unknown>,
+    characters: ReturnType<typeof createCharactersStorage>,
+    nameCache: Map<string, { name: string; avatarPath: string | null } | null>,
   ) => {
-    const chat = await storage.getById(chatId);
-    if (!chat || !visibleAnchor) return null;
-    const metadata = parseChatMetadata(chat.metadata) as Record<string, unknown>;
-    const legacy = metadata.convoCharacterStatus;
-    const gameStateStore = createGameStateStorage(app.db);
-    if (!legacy || typeof legacy !== "object" || Array.isArray(legacy)) return null;
-    const characters = createCharactersStorage(app.db);
     const rows: Record<string, unknown>[] = [];
-    for (const [characterId, status] of Object.entries(legacy as Record<string, unknown>)) {
+    for (const [characterId, status] of Object.entries(legacy)) {
       if (!status || typeof status !== "object") continue;
-      const row = await characters.getById(characterId);
-      const data = row ? (parseExportMetadata(row.data) as { name?: unknown }) : null;
-      const name = typeof data?.name === "string" ? data.name : "";
-      if (!name) continue;
-      const update = buildPresentCharacterUpdate(characterId, name, status as Record<string, unknown>);
+      let card = nameCache.get(characterId);
+      if (card === undefined) {
+        const row = await characters.getById(characterId);
+        const data = row ? (parseExportMetadata(row.data) as { name?: unknown }) : null;
+        card = typeof data?.name === "string" ? { name: data.name, avatarPath: row?.avatarPath ?? null } : null;
+        nameCache.set(characterId, card);
+      }
+      if (!card) continue;
+      const update = buildPresentCharacterUpdate(characterId, card.name, status as Record<string, unknown>);
       rows.push(
         withDefaultStatusFields({
           emoji: "",
@@ -754,30 +755,148 @@ export async function chatsRoutes(app: FastifyInstance) {
           customFields: {},
           stats: [],
           mood: "",
-          avatarPath: row?.avatarPath ?? null,
-          ...(update ?? { characterId, name }),
+          avatarPath: card.avatarPath,
+          ...(update ?? { characterId, name: card.name }),
         }),
       );
     }
-    await storage.patchMetadata(chatId, { convoCharacterStatus: null });
-    if (rows.length === 0) return null;
-    await gameStateStore.create({
+    return rows;
+  };
+
+  const readLegacyStatusMap = (value: unknown): Record<string, unknown> | null => {
+    const parsed = parseExportMetadata(value) as Record<string, unknown>;
+    const legacy = parsed.convoCharacterStatus;
+    return legacy && typeof legacy === "object" && !Array.isArray(legacy) && Object.keys(legacy).length > 0
+      ? (legacy as Record<string, unknown>)
+      : null;
+  };
+
+  // Every swipe that carried a status copy becomes that swipe's committed snapshot, and the
+  // copy is removed from the swipe so this runs once per message. Older saves kept the copy on
+  // the message row only, so the active swipe also reads it from there.
+  const migrateLegacyMessageSnapshots = async (
+    chatId: string,
+    messages: Awaited<ReturnType<typeof storage.listMessages>>,
+  ) => {
+    const gameStateStore = createGameStateStorage(app.db);
+    const characters = createCharactersStorage(app.db);
+    const nameCache = new Map<string, { name: string; avatarPath: string | null } | null>();
+    let snapshots = 0;
+    for (const message of messages) {
+      if (message.role !== "assistant") continue;
+      const messageCopy = readLegacyStatusMap(message.extra);
+      const swipes = await storage.getSwipes(message.id);
+      const active = message.activeSwipeIndex ?? 0;
+      const sources = swipes.length
+        ? swipes.map((swipe) => ({
+            index: swipe.index,
+            legacy: readLegacyStatusMap(swipe.extra) ?? (swipe.index === active ? messageCopy : null),
+          }))
+        : [{ index: active, legacy: messageCopy }];
+      if (!messageCopy && sources.every((source) => !source.legacy)) continue;
+      for (const source of sources) {
+        if (!source.legacy) continue;
+        const existing = await gameStateStore.getByChatAndMessage(chatId, message.id, source.index);
+        if (!existing) {
+          const rows = await legacyStatusRows(source.legacy, characters, nameCache);
+          if (rows.length > 0) {
+            await gameStateStore.create({
+              chatId,
+              messageId: message.id,
+              swipeIndex: source.index,
+              date: null,
+              time: null,
+              location: null,
+              weather: null,
+              temperature: null,
+              presentCharacters: rows as never,
+              recentEvents: [],
+              playerStats: null,
+              personaStats: null,
+              committed: true,
+            });
+            snapshots += 1;
+          }
+        }
+        await storage.updateMessageExtraForSwipe(message.id, source.index, { convoCharacterStatus: null });
+      }
+      if (messageCopy && !sources.some((source) => source.index === active)) {
+        await storage.updateMessageExtra(message.id, { convoCharacterStatus: null });
+      }
+    }
+    return snapshots;
+  };
+
+  const migrateLegacyCharacterStatus = async (
+    chatId: string,
+    visibleAnchor: { messageId: string; swipeIndex: number } | null,
+  ) => {
+    const chat = await storage.getById(chatId);
+    if (!chat || !visibleAnchor) return null;
+    const metadata = parseChatMetadata(chat.metadata) as Record<string, unknown>;
+    const liveLegacy = readLegacyStatusMap(metadata);
+    if (!liveLegacy) return null;
+    const gameStateStore = createGameStateStorage(app.db);
+    const characters = createCharactersStorage(app.db);
+    const nameCache = new Map<string, { name: string; avatarPath: string | null } | null>();
+    const emptyScene = { date: null, time: null, location: null, weather: null, temperature: null };
+    let snapshots = await migrateLegacyMessageSnapshots(chatId, await storage.listMessages(chatId));
+    // The live map is what the chat shows now; make sure the visible anchor carries it.
+    const existingAnchor = await gameStateStore.getByChatAndMessage(
       chatId,
-      messageId: visibleAnchor.messageId,
-      swipeIndex: visibleAnchor.swipeIndex,
-      date: null,
-      time: null,
-      location: null,
-      weather: null,
-      temperature: null,
-      presentCharacters: rows as never,
-      recentEvents: [],
-      playerStats: null,
-      personaStats: null,
-      committed: true,
-    });
-    logger.info("[chats] Migrated legacy character status for chat %s (%d rows)", chatId, rows.length);
+      visibleAnchor.messageId,
+      visibleAnchor.swipeIndex,
+    );
+    if (!existingAnchor) {
+      const rows = await legacyStatusRows(liveLegacy, characters, nameCache);
+      if (rows.length > 0) {
+        await gameStateStore.create({
+          chatId,
+          messageId: visibleAnchor.messageId,
+          swipeIndex: visibleAnchor.swipeIndex,
+          ...emptyScene,
+          presentCharacters: rows as never,
+          recentEvents: [],
+          playerStats: null,
+          personaStats: null,
+          committed: true,
+        });
+        snapshots += 1;
+      }
+    }
+    await storage.patchMetadata(chatId, { convoCharacterStatus: null });
+    logger.info("[chats] Migrated legacy character status for chat %s (%d snapshots)", chatId, snapshots);
     return gameStateStore.getByChatAndMessage(chatId, visibleAnchor.messageId, visibleAnchor.swipeIndex);
+  };
+
+  // A chat that already had tracker snapshots (roleplay with trackers on) keeps them and
+  // gains the legacy fields on matching rows; the legacy key is cleared either way.
+  const mergeLegacyStatusIntoSnapshot = async (
+    chatId: string,
+    rawRow: Awaited<ReturnType<ReturnType<typeof createGameStateStorage>["getLatest"]>>,
+  ) => {
+    if (!rawRow) return rawRow;
+    const chat = await storage.getById(chatId);
+    if (!chat) return rawRow;
+    const liveLegacy = readLegacyStatusMap(parseChatMetadata(chat.metadata));
+    if (!liveLegacy) return rawRow;
+    const gameStateStore = createGameStateStorage(app.db);
+    const characters = createCharactersStorage(app.db);
+    const legacyRows = await legacyStatusRows(liveLegacy, characters, new Map());
+    const existing: Record<string, unknown>[] = parseSnapshotJson(rawRow.presentCharacters, []);
+    const byId = new Map(legacyRows.map((row) => [row.characterId as string, row]));
+    const merged = existing.map((row) => {
+      const legacy = typeof row.characterId === "string" ? byId.get(row.characterId) : undefined;
+      if (!legacy) return row;
+      byId.delete(row.characterId as string);
+      const { characterId: _id, name: _name, emoji: _emoji, avatarPath: _avatar, ...fields } = legacy;
+      return { ...row, ...fields, mood: (legacy.mood as string) || (row.mood as string) || "" };
+    });
+    const presentCharacters = [...merged, ...byId.values()] as never;
+    await gameStateStore.updateByMessage(rawRow.messageId, rawRow.swipeIndex, chatId, { presentCharacters });
+    await storage.patchMetadata(chatId, { convoCharacterStatus: null });
+    logger.info("[chats] Merged legacy character status into tracker rows for chat %s", chatId);
+    return gameStateStore.getByChatAndMessage(chatId, rawRow.messageId, rawRow.swipeIndex);
   };
 
   // Conversation chats show every chat character on the status strip from the start, with
@@ -2893,13 +3012,17 @@ export async function chatsRoutes(app: FastifyInstance) {
     const gameStateStore = createGameStateStorage(app.db);
     const msgs = await storage.listMessages(req.params.id);
     const visibleAnchor = resolveVisibleGameStateAnchor(msgs);
+    await migrateLegacyMessageSnapshots(req.params.id, msgs);
+    const currentRow = await gameStateStore.getForGeneration(req.params.id, {
+      preferLatestVisible: true,
+      visibleAnchor,
+    });
     const rawRow = await ensureConversationStatusRows(
       req.params.id,
       visibleAnchor,
-      (await gameStateStore.getForGeneration(req.params.id, {
-        preferLatestVisible: true,
-        visibleAnchor,
-      })) ?? (await migrateLegacyCharacterStatus(req.params.id, visibleAnchor)),
+      currentRow
+        ? await mergeLegacyStatusIntoSnapshot(req.params.id, currentRow)
+        : await migrateLegacyCharacterStatus(req.params.id, visibleAnchor),
     );
     if (!rawRow) return reply.send(null);
     const chat = await storage.getById(req.params.id);
