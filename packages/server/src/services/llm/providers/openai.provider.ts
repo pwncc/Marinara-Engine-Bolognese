@@ -553,7 +553,11 @@ export class OpenAIProvider extends BaseLLMProvider {
     if (!providerMetadata) return {};
     if (model && !this.shouldReplayChatCompletionsReasoning(model)) return {};
     const metadata = OpenAIProvider.extractReasoningMetadata(providerMetadata);
-    if (providerMetadata.partial === true) metadata.partial = true;
+    if (providerMetadata.partial === true) {
+      // Moonshot/Kimi read `partial`; DeepSeek (and hosts that mirror its beta API, e.g. DeepInfra) read `prefix`.
+      metadata.partial = true;
+      metadata.prefix = true;
+    }
     if (Array.isArray(metadata.reasoning_details) && metadata.reasoning_details.length) {
       return { reasoning_details: metadata.reasoning_details };
     }

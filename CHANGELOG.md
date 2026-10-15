@@ -4,6 +4,10 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+### Fixed
+
+- A reasoning prefill sent to DeepSeek-style endpoints now also carries DeepSeek's `prefix` flag, so hosts that only read that flag (such as DeepInfra on OpenRouter) continue the planted thinking instead of ignoring it.
+
 ## [2.5.0]
 
 - Release notes too long for a GitHub release are trimmed at a whole entry and end with a link to the full changelog, so publishing a large release such as this one no longer fails (#7146).
