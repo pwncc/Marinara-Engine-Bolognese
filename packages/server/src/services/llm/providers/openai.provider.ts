@@ -1241,8 +1241,34 @@ export class OpenAIProvider extends BaseLLMProvider {
         }
         // Map system → developer for newer OpenAI models
         const role = m.role === "system" && devRole ? "developer" : m.role;
+        if (m.role === "assistant" && this.usesInlineThinkPrefill(model, reasoningPayload)) {
+          return this.inlineThinkPrefillMessage(m.content, reasoningPayload);
+        }
         return { role, content: m.content, ...reasoningPayload };
       });
+  }
+
+  /**
+   * GLM hosts on OpenRouter render a trailing `reasoning_content` as a *closed* think block, so the
+   * model keeps thinking in the answer channel. Leaving the tag open inside the content prefill
+   * (with the prefix flags) keeps the host's parser in reasoning mode, and the continuation lands
+   * in the reasoning channel. Probed on BaseTen; DeepSeek hosts prefer the field shape, so this
+   * is GLM-only.
+   */
+  private usesInlineThinkPrefill(model: string | undefined, reasoningPayload: Record<string, unknown>): boolean {
+    if (!model || !this.isOpenRouterEndpoint()) return false;
+    if (reasoningPayload.partial !== true) return false;
+    if (typeof reasoningPayload.reasoning_content !== "string" || !reasoningPayload.reasoning_content.trim()) {
+      return false;
+    }
+    return /(^|\/)glm-/.test(model.toLowerCase());
+  }
+
+  private inlineThinkPrefillMessage(content: string | undefined, reasoningPayload: Record<string, unknown>) {
+    const { reasoning_content, reasoning: _reasoning, reasoning_details: _details, ...flags } = reasoningPayload;
+    const answerPrefill = content?.trim() ? `</think>
+${content}` : "";
+    return { role: "assistant" as const, content: `<think>${String(reasoning_content)}${answerPrefill}`, ...flags };
   }
 
   async *chat(messages: ChatMessage[], options: ChatOptions): AsyncGenerator<string, LLMUsage | void, unknown> {

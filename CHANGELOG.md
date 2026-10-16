@@ -7,6 +7,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 ### Fixed
 
 - A reasoning prefill sent to DeepSeek-style endpoints now also carries DeepSeek's `prefix` flag, so hosts that only read that flag (such as DeepInfra on OpenRouter) continue the planted thinking instead of ignoring it.
+- GLM models on OpenRouter now receive the reasoning prefill as an open `<think>` block inside the assistant prefill, so hosts such as BaseTen continue the planted thought in the thinking channel instead of spilling it into the visible reply.
 
 ## [2.5.0]
 
