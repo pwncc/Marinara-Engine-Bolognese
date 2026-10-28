@@ -29,6 +29,7 @@ import {
   resolveProviderReasoningEffort,
   shouldSuppressUnknownModelParameters,
   supportsXhighReasoningEffort,
+  supportsClaudeMaxReasoningEffort,
 } from "@marinara-engine/shared";
 import { logger } from "../../../lib/logger.js";
 import { isLocalInferenceBaseUrl } from "../../../middleware/ip-allowlist.js";
@@ -887,7 +888,10 @@ export class OpenAIProvider extends BaseLLMProvider {
   }
 
   private shouldSendReasoningEffort(model: string, reasoningEffort?: string | null): boolean {
-    return this.isReasoningModel(model) && this.hasActiveReasoningEffort(reasoningEffort);
+    return (
+      (this.isReasoningModel(model) || (this.isGenericCustomProvider() && supportsClaudeMaxReasoningEffort(model))) &&
+      this.hasActiveReasoningEffort(reasoningEffort)
+    );
   }
 
   private applyChatCompletionsReasoning(body: Record<string, unknown>, options: ChatOptions): void {
@@ -1266,8 +1270,10 @@ export class OpenAIProvider extends BaseLLMProvider {
 
   private inlineThinkPrefillMessage(content: string | undefined, reasoningPayload: Record<string, unknown>) {
     const { reasoning_content, reasoning: _reasoning, reasoning_details: _details, ...flags } = reasoningPayload;
-    const answerPrefill = content?.trim() ? `</think>
-${content}` : "";
+    const answerPrefill = content?.trim()
+      ? `</think>
+${content}`
+      : "";
     return { role: "assistant" as const, content: `<think>${String(reasoning_content)}${answerPrefill}`, ...flags };
   }
 

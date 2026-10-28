@@ -6,6 +6,10 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Fixed
 
+- Claude models on custom OpenAI-compatible connections now receive their selected reasoning effort, including `max`, instead of dropping it or lowering Maximum to `xhigh`. Fable background requests that ask for no reasoning use its lowest supported effort.
+
+- Professor Mari workspace can optionally accept trusted-network access with `MARI_ALLOW_TRUSTED_NETWORK=true`, so explicitly allowlisted home devices can use the normal app port without the development proxy or an admin secret.
+
 - A reasoning prefill sent to DeepSeek-style endpoints now also carries DeepSeek's `prefix` flag, so hosts that only read that flag (such as DeepInfra on OpenRouter) continue the planted thinking instead of ignoring it.
 - GLM models on OpenRouter now receive the reasoning prefill as an open `<think>` block inside the assistant prefill, so hosts such as BaseTen continue the planted thought in the thinking channel instead of spilling it into the visible reply.
 

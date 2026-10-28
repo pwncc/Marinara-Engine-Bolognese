@@ -154,6 +154,7 @@ export function reviewActionFailure(err: unknown, action: "keep" | "restore"): s
 function privileged(request: FastifyRequest, reply: FastifyReply, loopbackOnly = false) {
   return requirePrivilegedAccess(request, reply, {
     loopbackOnly,
+    trustedNetwork: process.env.MARI_ALLOW_TRUSTED_NETWORK === "true",
     feature: "Professor Mari workspace",
   });
 }

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { isDockerProxyAuthRequired } from "../../packages/server/src/config/runtime-config.js";
 import { isBasicAuthSatisfied } from "../../packages/server/src/middleware/basic-auth.js";
@@ -366,6 +367,37 @@ try {
     "non-loopback workspace access must require ADMIN_SECRET even from an allowlisted client",
   );
   assert.equal(professorStyleReply.statusCode(), 403);
+
+  const workspaceSource = readFileSync(
+    new URL("../../packages/server/src/routes/professor-mari-workspace.routes.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(workspaceSource, /trustedNetwork: process\.env\.MARI_ALLOW_TRUSTED_NETWORK === "true"/u);
+  assert.equal(
+    requirePrivilegedAccess(request(), replyRecorder().reply, {
+      trustedNetwork: true,
+      feature: "Professor Mari workspace",
+    }),
+    true,
+    "explicitly enabled trusted-network access accepts an allowlisted client",
+  );
+  assert.equal(
+    requirePrivilegedAccess(request({}, "198.51.100.10"), replyRecorder().reply, {
+      trustedNetwork: true,
+      feature: "Professor Mari workspace",
+    }),
+    false,
+    "the Professor Mari opt-in must not admit arbitrary remote addresses",
+  );
+  assert.equal(
+    requirePrivilegedAccess(request(), replyRecorder().reply, {
+      trustedNetwork: true,
+      loopbackOnly: true,
+      feature: "Professor Mari workspace",
+    }),
+    false,
+    "the raw database command endpoint stays loopback-only",
+  );
 
   console.info("Docker proxy authentication regressions passed.");
 } finally {

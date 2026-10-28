@@ -32,7 +32,11 @@ export function isClaudeSonnet55Model(model: string): boolean {
  * https://platform.claude.com/docs/en/models/sonnet-5-5/whats-new-sonnet-5-5
  */
 export function isClaudeStrictRequestModel(model: string): boolean {
-  return isClaudeOpus55Model(model) || isClaudeSonnet55Model(model);
+  return (
+    isClaudeOpus55Model(model) ||
+    isClaudeSonnet55Model(model) ||
+    /(?:^|\/)claude-(?:fable|mythos)-5(?:$|[-.:])/iu.test(model.trim())
+  );
 }
 
 export function isClaudeAdaptiveOnlyNoSamplingModel(model: string): boolean {
@@ -40,9 +44,15 @@ export function isClaudeAdaptiveOnlyNoSamplingModel(model: string): boolean {
   return (
     CLAUDE_ADAPTIVE_ONLY_OPUS_RE.test(normalized) ||
     /claude-(?:opus|sonnet)-5(?:$|[-.])/u.test(normalized) ||
+    /claude-haiku-5[.-]5(?:$|[-:])/u.test(normalized) ||
     normalized.includes("claude-fable-5") ||
     normalized.includes("claude-mythos-5")
   );
+}
+
+/** Claude effort is a model capability, including through custom/OpenRouter gateways. */
+export function supportsClaudeMaxReasoningEffort(model: string): boolean {
+  return isClaudeAdaptiveOnlyNoSamplingModel(model) || /claude-(?:opus|sonnet)-4[.-]6(?:$|[-:])/iu.test(model);
 }
 
 export function supportsXhighReasoningEffort(model: string): boolean {
@@ -112,14 +122,12 @@ export function resolveProviderReasoningEffort(args: {
     (providerLower === "openrouter" && modelLower.startsWith("x-ai/grok-"));
   if (xaiUsesAutoReasoning) return null;
 
-  const isNativeAnthropicAdaptiveOnly =
-    (providerLower === "anthropic" || providerLower === "claude_subscription") &&
-    isClaudeAdaptiveOnlyNoSamplingModel(modelLower);
+  const isClaudeMaxEffortModel = supportsClaudeMaxReasoningEffort(modelLower);
   const supportsXhigh = supportsXhighReasoningEffort(modelLower);
   const supportsMax =
     isOpenAIGpt6Model(modelLower) ||
     isOpenAIGpt56Model(modelLower) ||
-    isNativeAnthropicAdaptiveOnly ||
+    isClaudeMaxEffortModel ||
     (providerLower === "zai" && isZaiMaxReasoningEffortModel(modelLower));
 
   if (args.reasoningEffort === "maximum") {

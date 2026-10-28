@@ -123,7 +123,7 @@ try {
     topK: number;
     frequencyPenalty: number;
     presencePenalty: number;
-    reasoningEffort: "low" | "high" | null;
+    reasoningEffort: "low" | "high" | "maximum" | null;
     verbosity: string;
     serviceTier: string;
   };
@@ -276,7 +276,15 @@ try {
     {
       provider: "custom",
       baseUrl: `${base}/v1`,
-      models: ["llama-3.3-70b", "gpt-5.5", "glm-4.6", "claude-opus-5"],
+      models: [
+        "llama-3.3-70b",
+        "gpt-5.5",
+        "glm-4.6",
+        "claude-opus-5",
+        "claude-fable-5-1",
+        "claude-opus-5-5",
+        "claude-haiku-5-5",
+      ],
       make: registry("custom", `${base}/v1`),
     },
     {
@@ -413,6 +421,73 @@ try {
   const future = relevantGenerationParameters({ provider: "brand_new_provider", model: "", reasoningEffort: "high" });
   for (const key of ["temperature", "maxTokens", "topP", "topK", "reasoningEffort", "verbosity"] as const) {
     assert.ok(future.has(key), `unknown providers keep ${key}`);
+  }
+
+  for (const model of ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]) {
+    assert.equal(resolveProviderReasoningEffort({ provider: "custom", model, reasoningEffort: "maximum" }), "max");
+    assert.ok(reasoningEffortChoices({ provider: "custom", model }).some((choice) => choice.label === "max"));
+    const body = JSON.parse(
+      await capture(
+        registry("custom", `${base}/v1`),
+        "custom",
+        model,
+        {
+          temperature: 0.7,
+          maxTokens: 777,
+          topP: 0.9,
+          topK: 40,
+          frequencyPenalty: 0,
+          presencePenalty: 0,
+          reasoningEffort: "high",
+          verbosity: "low",
+          serviceTier: "flex",
+        },
+        false,
+      ),
+    );
+    assert.equal(body.reasoning_effort, "high", `${model} must send the selected custom-endpoint effort`);
+    const maximumBody = JSON.parse(
+      await capture(
+        registry("custom", `${base}/v1`),
+        "custom",
+        model,
+        {
+          temperature: 1,
+          maxTokens: 777,
+          topP: 1,
+          topK: 0,
+          frequencyPenalty: 0,
+          presencePenalty: 0,
+          reasoningEffort: "maximum",
+          verbosity: "low",
+          serviceTier: "flex",
+        },
+        false,
+      ),
+    );
+    assert.equal(maximumBody.reasoning_effort, "max", `${model} must send Maximum as max, not xhigh`);
+    if (model === "claude-fable-5-1") {
+      const offBody = JSON.parse(
+        await capture(
+          registry("custom", `${base}/v1`),
+          "custom",
+          model,
+          {
+            temperature: 1,
+            maxTokens: 777,
+            topP: 1,
+            topK: 0,
+            frequencyPenalty: 0,
+            presencePenalty: 0,
+            reasoningEffort: null,
+            verbosity: "low",
+            serviceTier: "flex",
+          },
+          false,
+        ),
+      );
+      assert.equal(offBody.reasoning_effort, "low", "Fable background requests must not disable required reasoning");
+    }
   }
 
   // Effort buttons use the provider's names. Live names come first; otherwise the value actually sent, once each.
