@@ -257,9 +257,12 @@ export function getCharacterAmbienceStyle(
   profileColors?: TrackerProfileColors | null,
 ): CSSProperties {
   const stats = Array.isArray(character.stats) ? character.stats : [];
+  const statAccent = getTrackerCardSolidColor(stats.find((stat) => stat.color)?.color);
+  // A theme-relative stat colour is written in terms of var(--primary); taking it as the card
+  // accent would set the card's own --primary to a value that refers to itself.
   const palette = getTrackerProfilePalette(
     profileColors,
-    getTrackerCardSolidColor(stats.find((stat) => stat.color)?.color) ?? DEFAULT_TRACKER_CARD_ACCENT,
+    statAccent && !statAccent.includes("var(") ? statAccent : DEFAULT_TRACKER_CARD_ACCENT,
   );
   return withTrackerProfileStyle(palette);
 }

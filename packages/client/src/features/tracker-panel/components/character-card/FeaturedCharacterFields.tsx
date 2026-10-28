@@ -205,75 +205,7 @@ export function FeaturedFieldList({
       value: character.outfit,
     },
   ].filter((field) => !field.hidden || hideMode);
-  // Status rows (the body/mood ledger) have no hide toggle; they show when they carry a value.
-  const limbs = Object.entries(character.limbs ?? {}).filter(
-    (entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].trim().length > 0,
-  );
-  const saveLimb = (limb: string, next: string) => {
-    const trimmed = next.trim();
-    const prefix = `${limb}:`;
-    const value = trimmed.toLowerCase().startsWith(prefix.toLowerCase())
-      ? trimmed.slice(prefix.length).trim()
-      : trimmed;
-    const nextLimbs = { ...(character.limbs ?? {}) };
-    if (value) nextLimbs[limb] = value;
-    else delete nextLimbs[limb];
-    onUpdate({ ...character, limbs: nextLimbs });
-  };
-  const statusRows: Array<{
-    id: string;
-    accessibleLabel: string;
-    icon: ReactNode;
-    tone: FeaturedFieldTone;
-    value: string | null | undefined;
-    placeholder: string;
-    onSave: (value: string) => void;
-  }> = [];
-  if (!fieldHidden("mood") && character.emotionCause) {
-    statusRows.push({
-      id: "emotionCause",
-      accessibleLabel: "Why",
-      icon: <MessageSquareQuote size="0.75rem" />,
-      tone: "mood",
-      value: character.emotionCause,
-      placeholder: "Why they feel that way",
-      onSave: (emotionCause) => onUpdate({ ...character, emotionCause: emotionCause || null }),
-    });
-  }
-  if (character.temperature) {
-    statusRows.push({
-      id: "temperature",
-      accessibleLabel: "Temperature",
-      icon: <Thermometer size="0.75rem" />,
-      tone: "appearance",
-      value: character.temperature,
-      placeholder: "Body temperature",
-      onSave: (temperature) => onUpdate({ ...character, temperature: temperature || null }),
-    });
-  }
-  if (character.notes) {
-    statusRows.push({
-      id: "notes",
-      accessibleLabel: "Body notes",
-      icon: <NotebookPen size="0.75rem" />,
-      tone: "appearance",
-      value: character.notes,
-      placeholder: "Body notes",
-      onSave: (notes) => onUpdate({ ...character, notes: notes || null }),
-    });
-  }
-  for (const [limb, value] of limbs) {
-    statusRows.push({
-      id: `limb:${limb}`,
-      accessibleLabel: limb,
-      icon: <Hand size="0.75rem" />,
-      tone: "appearance",
-      value: `${limb}: ${value}`,
-      placeholder: limb,
-      onSave: (next) => saveLimb(limb, next),
-    });
-  }
-  const rowCount = fields.length + statusRows.length;
+  const rowCount = fields.length;
   if (rowCount === 0) return null;
   return (
     <div className={FEATURED_FIELD_LIST_CLASS} style={{ gridTemplateRows: `repeat(${rowCount}, minmax(0, 1fr))` }}>
@@ -293,7 +225,97 @@ export function FeaturedFieldList({
           onToggleHidden={() => toggleFieldHidden(field.key)}
         />
       ))}
-      {statusRows.map((row) => (
+    </div>
+  );
+}
+
+const FEATURED_STATUS_BLOCK_CLASS =
+  "relative z-[1] grid gap-0.5 border-t border-[var(--tracker-profile-rule)] px-1 pb-0.5 pt-1";
+const FEATURED_LIMB_GRID_CLASS = "grid grid-cols-1 gap-0.5 @min-[380px]:grid-cols-2";
+
+/**
+ * The body/mood ledger (why, temperature, body notes, limbs) in its own band under the portrait
+ * row, so any number of rows gets its natural height instead of being squeezed into the
+ * portrait-height column beside the picture. Status rows have no hide toggle.
+ */
+export function FeaturedStatusRows({
+  character,
+  onUpdate,
+  sizeProfile,
+  characterIndex,
+  className,
+}: {
+  character: PresentCharacter;
+  onUpdate: (character: PresentCharacter) => void;
+  sizeProfile: TrackerPanelSizeProfile;
+  characterIndex: number;
+  className?: string;
+}) {
+  const { hiddenTrackerFields } = useTrackerLockContext();
+  const moodHidden = isTrackerFieldHidden(
+    hiddenTrackerFields,
+    characterTrackerLockKey(character, characterIndex, "mood"),
+  );
+  const limbs = Object.entries(character.limbs ?? {}).filter(
+    (entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].trim().length > 0,
+  );
+  const saveLimb = (limb: string, next: string) => {
+    const trimmed = next.trim();
+    const prefix = `${limb}:`;
+    const value = trimmed.toLowerCase().startsWith(prefix.toLowerCase())
+      ? trimmed.slice(prefix.length).trim()
+      : trimmed;
+    const nextLimbs = { ...(character.limbs ?? {}) };
+    if (value) nextLimbs[limb] = value;
+    else delete nextLimbs[limb];
+    onUpdate({ ...character, limbs: nextLimbs });
+  };
+  const rows: Array<{
+    id: string;
+    accessibleLabel: string;
+    icon: ReactNode;
+    tone: FeaturedFieldTone;
+    value: string | null | undefined;
+    placeholder: string;
+    onSave: (value: string) => void;
+  }> = [];
+  if (!moodHidden && character.emotionCause) {
+    rows.push({
+      id: "emotionCause",
+      accessibleLabel: "Why",
+      icon: <MessageSquareQuote size="0.75rem" />,
+      tone: "mood",
+      value: character.emotionCause,
+      placeholder: "Why they feel that way",
+      onSave: (emotionCause) => onUpdate({ ...character, emotionCause: emotionCause || null }),
+    });
+  }
+  if (character.temperature) {
+    rows.push({
+      id: "temperature",
+      accessibleLabel: "Temperature",
+      icon: <Thermometer size="0.75rem" />,
+      tone: "appearance",
+      value: character.temperature,
+      placeholder: "Body temperature",
+      onSave: (temperature) => onUpdate({ ...character, temperature: temperature || null }),
+    });
+  }
+  if (character.notes) {
+    rows.push({
+      id: "notes",
+      accessibleLabel: "Body notes",
+      icon: <NotebookPen size="0.75rem" />,
+      tone: "appearance",
+      value: character.notes,
+      placeholder: "Body notes",
+      onSave: (notes) => onUpdate({ ...character, notes: notes || null }),
+    });
+  }
+  if (rows.length === 0 && limbs.length === 0) return null;
+  return (
+    <div className={cn(FEATURED_STATUS_BLOCK_CLASS, className)}>
+      {rows.map((row) => (
         <FeaturedFieldTile
           key={row.id}
           icon={row.icon}
@@ -305,6 +327,22 @@ export function FeaturedFieldList({
           fieldKey={row.tone}
         />
       ))}
+      {limbs.length > 0 && (
+        <div className={FEATURED_LIMB_GRID_CLASS}>
+          {limbs.map(([limb, value]) => (
+            <FeaturedFieldTile
+              key={`limb:${limb}`}
+              icon={<Hand size="0.75rem" />}
+              accessibleLabel={limb}
+              value={`${limb}: ${value}`}
+              placeholder={limb}
+              onSave={(next) => saveLimb(limb, next)}
+              sizeProfile={sizeProfile}
+              fieldKey="appearance"
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

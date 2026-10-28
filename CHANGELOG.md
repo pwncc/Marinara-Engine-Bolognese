@@ -12,6 +12,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 - A reasoning prefill sent to DeepSeek-style endpoints now also carries DeepSeek's `prefix` flag, so hosts that only read that flag (such as DeepInfra on OpenRouter) continue the planted thinking instead of ignoring it.
 - GLM models on OpenRouter now receive the reasoning prefill as an open `<think>` block inside the assistant prefill, so hosts such as BaseTen continue the planted thought in the thinking channel instead of spilling it into the visible reply.
+- Character tracker cards no longer squeeze the body status rows (why, temperature, body notes, limbs) into the portrait-height column, where many rows overlapped; they get their own band under the portrait with limbs in a two-column grid.
+- The standard status meters take their colours from the app accent, so the bars and the card accent follow the active theme; rows saved with the old fixed palette pick up the theme colours when their chat is opened.
 ## [2.5.1] - 2026-10-20
 
 ### Before you update

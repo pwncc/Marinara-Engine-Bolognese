@@ -55,7 +55,7 @@ import {
   TrackerProfileEdgeHighlight,
   TrackerReadabilityVeil,
 } from "../controls/TrackerProfileChrome";
-import { FeaturedFieldList } from "./FeaturedCharacterFields";
+import { FeaturedFieldList, FeaturedStatusRows } from "./FeaturedCharacterFields";
 import { FeaturedCharacterNameplate } from "./FeaturedCharacterNameplate";
 import { FeaturedCharacterPortrait } from "./FeaturedCharacterPortrait";
 import { ExternalThoughtBubble, InlineThoughtBubble } from "./CharacterThoughtBubbles";
@@ -367,6 +367,14 @@ export function FeaturedCharacterTrackerCard({
             />
           </div>
         </div>
+
+        <FeaturedStatusRows
+          character={character}
+          onUpdate={onUpdate}
+          sizeProfile={trackerPanelSizeProfile}
+          characterIndex={characterIndex}
+          className="order-3 col-span-full mx-1"
+        />
 
         {showDockedThoughts && (
           <InlineThoughtBubble

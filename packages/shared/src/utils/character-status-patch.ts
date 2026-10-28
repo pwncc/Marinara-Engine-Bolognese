@@ -82,13 +82,39 @@ export const DEFAULT_STATUS_LIMBS = [
   "groin",
 ] as const;
 
-const STAT_COLORS = ["#f87171", "#fb923c", "#facc15", "#4ade80", "#38bdf8", "#a78bfa", "#f472b6", "#2dd4bf"];
+/**
+ * Meter colours are hue turns away from the app accent, so every bar (and the card accent the
+ * tracker takes from the first bar) follows the active theme instead of a fixed palette.
+ */
+const STAT_HUE_OFFSETS = [0, 40, -40, 80, -80, 130, 170, -130];
+const STAT_COLORS = STAT_HUE_OFFSETS.map((offset) => `oklch(from var(--primary) l c calc(h + ${offset}))`);
+/** The fixed palette rows were coloured with before the meters followed the theme. */
+const LEGACY_STAT_COLORS = new Set([
+  "#f87171",
+  "#fb923c",
+  "#facc15",
+  "#4ade80",
+  "#38bdf8",
+  "#a78bfa",
+  "#f472b6",
+  "#2dd4bf",
+]);
 
 /** A stable colour per stat name so the same bar looks the same across characters. */
 export function statColorForName(name: string): string {
+  const key = name.trim().toLowerCase();
+  const standard = CHARACTER_STATUS_BAR_SPECS.findIndex((spec) => spec.name === key);
+  if (standard >= 0) return STAT_COLORS[standard % STAT_COLORS.length]!;
   let hash = 0;
-  for (const char of name.toLowerCase()) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
   return STAT_COLORS[hash % STAT_COLORS.length]!;
+}
+
+/** Rows saved with the old fixed palette pick up the theme colour for that meter. */
+function withThemeStatColor(stat: CharacterStat): CharacterStat {
+  return stat.color && LEGACY_STAT_COLORS.has(stat.color.trim().toLowerCase())
+    ? { ...stat, color: statColorForName(stat.name) }
+    : stat;
 }
 
 function text(value: unknown, max: number): string | undefined {
@@ -201,7 +227,7 @@ export function buildPresentCharacterUpdate(
  * conversation strip) so every character shows the same ledger.
  */
 export function withDefaultStatusFields<T extends Partial<PresentCharacter>>(row: T): T {
-  const stats: CharacterStat[] = Array.isArray(row.stats) ? [...row.stats] : [];
+  const stats: CharacterStat[] = Array.isArray(row.stats) ? row.stats.map(withThemeStatColor) : [];
   const have = new Set(stats.map((stat) => stat.name.trim().toLowerCase()));
   for (const spec of CHARACTER_STATUS_BAR_SPECS) {
     if (have.has(spec.name)) continue;
