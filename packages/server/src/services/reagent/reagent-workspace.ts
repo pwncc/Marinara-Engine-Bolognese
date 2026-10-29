@@ -16,7 +16,10 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
+  REAGENT_CHARACTER_NOTES_DIR,
   REAGENT_MEMORY_FILE,
+  REAGENT_SIMULATION_FILE,
+  parseReagentSimulation,
   readReagentUserFileEdits,
   type ReagentFileVersions,
   type ReagentSettings,
@@ -237,13 +240,34 @@ export async function materializeWorkspace(
   return { workspaceDir, state };
 }
 
-export async function readWorkspaceMemory(workspaceDir: string): Promise<string> {
+/** A workspace text file, clipped to the text limit; missing files read as empty. */
+export async function readWorkspaceText(workspaceDir: string, relPath: string): Promise<string> {
   try {
-    const content = await readFile(join(workspaceDir, REAGENT_MEMORY_FILE), "utf8");
+    const content = await readFile(join(workspaceDir, relPath), "utf8");
     return content.length > REAGENT_MAX_TEXT_FILE_BYTES ? content.slice(0, REAGENT_MAX_TEXT_FILE_BYTES) : content;
   } catch {
     return "";
   }
+}
+
+export function readWorkspaceMemory(workspaceDir: string): Promise<string> {
+  return readWorkspaceText(workspaceDir, REAGENT_MEMORY_FILE);
+}
+
+/** Everything the prompt block shows from the workspace: notes, the simulation ledger and which dossiers exist. */
+export async function readReagentPromptState(workspaceDir: string) {
+  const [memory, simulation, dossiers] = await Promise.all([
+    readWorkspaceMemory(workspaceDir),
+    readWorkspaceText(workspaceDir, REAGENT_SIMULATION_FILE),
+    listDirectory(join(workspaceDir, REAGENT_CHARACTER_NOTES_DIR), 100).catch(() => [] as WorkspaceListing[]),
+  ]);
+  return {
+    memory,
+    simulation: parseReagentSimulation(simulation),
+    characterNotes: dossiers
+      .filter((entry) => entry.kind === "file" && entry.path.endsWith(".md"))
+      .map((entry) => entry.path),
+  };
 }
 
 export interface WorkspaceListing {

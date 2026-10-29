@@ -32,6 +32,21 @@ const FAMILIES: Array<{ id: ReagentToolFamily; labelKey: string; descriptionKey:
     descriptionKey: "ui.chat.reagent.family.statusDescription",
   },
   {
+    id: "roster",
+    labelKey: "ui.chat.reagent.family.roster",
+    descriptionKey: "ui.chat.reagent.family.rosterDescription",
+  },
+  {
+    id: "notes",
+    labelKey: "ui.chat.reagent.family.notes",
+    descriptionKey: "ui.chat.reagent.family.notesDescription",
+  },
+  {
+    id: "simulation",
+    labelKey: "ui.chat.reagent.family.simulation",
+    descriptionKey: "ui.chat.reagent.family.simulationDescription",
+  },
+  {
     id: "lorebook",
     labelKey: "ui.chat.reagent.family.lorebook",
     descriptionKey: "ui.chat.reagent.family.lorebookDescription",

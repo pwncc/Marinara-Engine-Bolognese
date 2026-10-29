@@ -13,6 +13,9 @@ export const REAGENT_TOOL_FAMILIES = [
   "memory",
   "recall",
   "status",
+  "roster",
+  "notes",
+  "simulation",
   "lorebook",
   "web",
   "shell",
@@ -50,6 +53,9 @@ export const DEFAULT_REAGENT_SETTINGS: ReagentSettings = {
     memory: true,
     recall: true,
     status: true,
+    roster: true,
+    notes: true,
+    simulation: true,
     lorebook: true,
     web: true,
     shell: false,
@@ -64,6 +70,81 @@ export const DEFAULT_REAGENT_SETTINGS: ReagentSettings = {
 };
 
 export const REAGENT_MEMORY_FILE = "memory.md";
+/** Workspace file holding the simulation ledger: loose threads and off-screen whereabouts. */
+export const REAGENT_SIMULATION_FILE = "simulation.json";
+/** Workspace folder holding one development dossier per character (`<slug>.md`). */
+export const REAGENT_CHARACTER_NOTES_DIR = "characters";
+
+export interface ReagentThread {
+  id: string;
+  what: string;
+  /** When or on what condition it comes due, in the model's words. */
+  when?: string;
+  who?: string;
+  /** What it costs if nobody acts on it. */
+  stakes?: string;
+  /** Scene time when it was opened, when known. */
+  openedAt?: string;
+}
+
+export interface ReagentResolvedThread {
+  id: string;
+  what: string;
+  outcome: string;
+  at?: string;
+}
+
+export interface ReagentWhereabouts {
+  where: string;
+  doing?: string;
+  /** Until when, or what ends it. */
+  until?: string;
+  updatedAt?: string;
+}
+
+/** The simulation ledger as stored in the workspace; every field is optional on disk. */
+export interface ReagentSimulationState {
+  threads: ReagentThread[];
+  resolved: ReagentResolvedThread[];
+  offscreen: Record<string, ReagentWhereabouts>;
+}
+
+export const EMPTY_REAGENT_SIMULATION: ReagentSimulationState = { threads: [], resolved: [], offscreen: {} };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Parse the simulation file leniently; anything malformed becomes the empty ledger. */
+export function parseReagentSimulation(raw: string | null | undefined): ReagentSimulationState {
+  if (!raw?.trim()) return { threads: [], resolved: [], offscreen: {} };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { threads: [], resolved: [], offscreen: {} };
+  }
+  if (!isRecord(parsed)) return { threads: [], resolved: [], offscreen: {} };
+  const threads = Array.isArray(parsed.threads)
+    ? parsed.threads.filter(
+        (entry): entry is ReagentThread =>
+          isRecord(entry) && typeof entry.id === "string" && typeof entry.what === "string",
+      )
+    : [];
+  const resolved = Array.isArray(parsed.resolved)
+    ? parsed.resolved.filter(
+        (entry): entry is ReagentResolvedThread =>
+          isRecord(entry) && typeof entry.id === "string" && typeof entry.what === "string",
+      )
+    : [];
+  const offscreen: Record<string, ReagentWhereabouts> = {};
+  if (isRecord(parsed.offscreen)) {
+    for (const [name, entry] of Object.entries(parsed.offscreen)) {
+      if (isRecord(entry) && typeof entry.where === "string") offscreen[name] = entry as unknown as ReagentWhereabouts;
+    }
+  }
+  return { threads, resolved, offscreen };
+}
 
 /** Chat metadata key holding the partial settings object. */
 export const REAGENT_SETTINGS_METADATA_KEY = "reagent";

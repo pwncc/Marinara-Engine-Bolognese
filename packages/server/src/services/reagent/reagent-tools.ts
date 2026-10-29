@@ -6,18 +6,24 @@
 // workspace, the transcript, the status ledger and the SSE stream.
 // ──────────────────────────────────────────────
 
+import { randomInt } from "node:crypto";
 import { readFile, stat, writeFile, mkdir, rm } from "node:fs/promises";
-import { dirname, basename, resolve } from "node:path";
+import { dirname, basename, join, resolve } from "node:path";
 import {
+  REAGENT_CHARACTER_NOTES_DIR,
   REAGENT_MEMORY_FILE,
+  REAGENT_SIMULATION_FILE,
   CHARACTER_STATUS_BAR_SPECS,
   DEFAULT_STATUS_LIMBS,
   buildPresentCharacterUpdate,
+  parseReagentSimulation,
+  type PresentCharacter,
   type PresentCharacterUpdate,
   type LLMToolCall,
   type LLMToolDefinition,
   type ReagentActivityEntry,
   type ReagentSettings,
+  type ReagentSimulationState,
   type ReagentToolFamily,
 } from "@marinara-engine/shared";
 import type { DB } from "../../db/connection.js";
@@ -59,6 +65,19 @@ export interface ReagentCharacter {
   name: string;
 }
 
+/** The world tracker's scene fields as the reply starts. */
+export interface ReagentScene {
+  date: string | null;
+  time: string | null;
+  location: string | null;
+  weather: string | null;
+  temperature: string | null;
+  recentEvents: string[];
+}
+
+/** Scene fields the writer changed; `recentEvents` is the complete new list when present. */
+export type ReagentScenePatch = Partial<Omit<ReagentScene, "recentEvents">> & { recentEvents?: string[] };
+
 export interface ReagentExecutorDeps {
   db: DB;
   chatId: string;
@@ -66,14 +85,23 @@ export interface ReagentExecutorDeps {
   settings: ReagentSettings;
   workspaceDir: string;
   characters: ReagentCharacter[];
+  /** Tracker rows as the reply starts: cards and NPCs alike. */
+  trackerCharacters: PresentCharacter[];
+  scene: ReagentScene;
   /** The character speaking this turn, when exactly one is. */
   callingCharacterId: string | null;
   searchLorebook?: LorebookSearchFn;
   signal?: AbortSignal;
   sendEvent?: (payload: Record<string, unknown>) => void;
   onStatusPatch: (update: PresentCharacterUpdate) => void;
+  /** A tracker row (by characterId or name) the writer says left the scene. */
+  onRosterRemove: (reference: string) => void;
+  onScenePatch: (patch: ReagentScenePatch) => void;
   onFileVersion: (workspaceRelativePath: string, content: string | null) => void;
 }
+
+const MAX_RECENT_EVENTS = 12;
+const MAX_RESOLVED_THREADS = 10;
 
 const RESULT_TEXT_LIMIT = 12_000;
 const MESSAGE_SNIPPET = 220;
@@ -183,7 +211,123 @@ const STATUS_TOOLS: LLMToolDefinition[] = [
       bars: { type: "object", additionalProperties: { type: "number" }, description: 'e.g. {"hunger": 70}' },
       limbs: { type: "object", additionalProperties: { type: "string" }, description: "Per body part state." },
       extras: { type: "object", additionalProperties: { type: "string" } },
+      appearance: { type: "string", description: "Short physical description, when it changed." },
+      outfit: { type: "string", description: "What they are wearing now." },
+      thoughts: { type: "string", description: "What they are privately thinking right now." },
+      emoji: { type: "string" },
     },
+  ),
+];
+
+const ROSTER_TOOLS: LLMToolDefinition[] = [
+  def(
+    "list_characters",
+    "List everyone the tracker knows: the chat's character cards and every tracked person (NPCs included) with their current state. Use it before adding someone, to get exact names, and to see who is around.",
+    {},
+  ),
+  def(
+    "add_character",
+    "Add a person to the tracker: an NPC, a passer-by who matters, anyone not already listed. They get the standard meters and a card in the tracker. Use set_character_status for later changes.",
+    {
+      name: { type: "string" },
+      emoji: { type: "string", description: "One emoji that fits them." },
+      appearance: { type: "string", description: "Short physical description." },
+      outfit: { type: "string" },
+      mood: { type: "string" },
+      emotion_cause: { type: "string" },
+      thoughts: { type: "string" },
+      notes: { type: "string", description: "Bodily notes." },
+      extras: {
+        type: "object",
+        additionalProperties: { type: "string" },
+        description: "Role, relation, anything else.",
+      },
+    },
+    ["name"],
+  ),
+  def(
+    "remove_character",
+    "Remove a person from the tracker because they left the scene or stopped mattering. Their dossier stays.",
+    { character: { type: "string" } },
+    ["character"],
+  ),
+];
+
+const NOTES_TOOLS: LLMToolDefinition[] = [
+  def(
+    "note_character",
+    `Record how a person is changing: a shift in how they see someone, a new habit, a goal, a secret learned, a wound, a promise, a lesson. One dated line goes into their dossier in ${REAGENT_CHARACTER_NOTES_DIR}/. Works for anyone, tracked or not. Read the dossier before writing someone who has one.`,
+    {
+      character: { type: "string" },
+      kind: {
+        type: "string",
+        enum: ["development", "relationship", "goal", "secret", "habit", "history", "change"],
+      },
+      entry: { type: "string", description: "One or two sentences, concrete." },
+    },
+    ["character", "entry"],
+  ),
+  def("read_character_notes", "Read a person's dossier, or list all dossiers when no character is given.", {
+    character: { type: "string" },
+  }),
+];
+
+const SIMULATION_TOOLS: LLMToolDefinition[] = [
+  def(
+    "set_scene",
+    "Update the world tracker: date, time, location, weather, felt temperature. Call it whenever time passes or the scene moves, even by minutes. `event` adds one line to the recent-events list.",
+    {
+      date: { type: "string" },
+      time: { type: "string" },
+      location: { type: "string" },
+      weather: { type: "string" },
+      temperature: { type: "string" },
+      event: { type: "string", description: "One concrete thing that just happened, worth remembering." },
+    },
+  ),
+  def(
+    "resolve_chance",
+    "Let chance decide whether something uncertain works out, instead of deciding it yourself. Give your honest odds of success (0-100) for the attempt as the world would see it; play the result straight. Use it for attempts, luck, timing, whether someone is home, whether the bus is late.",
+    {
+      action: { type: "string", description: "What is being attempted or what might happen." },
+      odds: { type: "integer", description: "Chance of success, 0-100." },
+    },
+    ["action", "odds"],
+  ),
+  def(
+    "pick_random",
+    "Pick one option at random when several things could plausibly happen and none should be chosen for drama.",
+    { options: { type: "array", items: { type: "string" }, description: "Two or more options." } },
+    ["options"],
+  ),
+  def(
+    "add_thread",
+    "Open a loose thread: something that will come due later whether or not anyone is paying attention (a shift that ends, a bill, a promise, an unanswered message, someone on their way). Open threads are shown to you every reply until resolved.",
+    {
+      what: { type: "string" },
+      when: { type: "string", description: "When or on what condition it comes due." },
+      who: { type: "string", description: "Who it belongs to." },
+      stakes: { type: "string", description: "What happens if it is ignored." },
+    },
+    ["what"],
+  ),
+  def(
+    "resolve_thread",
+    "Close a loose thread once it came due, with what actually happened. Resolve it even when the outcome is mundane or someone dropped the ball.",
+    { id: { type: "string" }, outcome: { type: "string" } },
+    ["id", "outcome"],
+  ),
+  def(
+    "set_whereabouts",
+    "Record where someone who is not in the scene is and what they are doing, so people keep living off-screen and can turn up, call, or be busy. Set clear to true when they are back in the scene or no longer worth tracking.",
+    {
+      character: { type: "string" },
+      where: { type: "string" },
+      doing: { type: "string" },
+      until: { type: "string", description: "Until when, or what ends it." },
+      clear: { type: "boolean" },
+    },
+    ["character"],
   ),
 ];
 
@@ -234,6 +378,9 @@ const FAMILY_TOOLS: Record<ReagentToolFamily, LLMToolDefinition[]> = {
   memory: MEMORY_TOOLS,
   recall: RECALL_TOOLS,
   status: STATUS_TOOLS,
+  roster: ROSTER_TOOLS,
+  notes: NOTES_TOOLS,
+  simulation: SIMULATION_TOOLS,
   lorebook: LOREBOOK_TOOLS,
   web: WEB_TOOLS,
   shell: SHELL_TOOLS,
@@ -261,6 +408,11 @@ export function buildReagentPromptBlock(input: {
   workspaceDir: string;
   memory: string;
   toolNames: string[];
+  simulation?: ReagentSimulationState;
+  /** Dossier file names under the notes folder. */
+  characterNotes?: string[];
+  trackerCharacters?: PresentCharacter[];
+  scene?: ReagentScene;
 }): string {
   const lines: string[] = [];
   lines.push("## Your tools (REagent)");
@@ -276,6 +428,23 @@ export function buildReagentPromptBlock(input: {
   if (input.settings.tools.status) {
     lines.push("Use set_character_status when a character's feelings, body or state meaningfully change.");
   }
+  if (input.settings.tools.roster) {
+    const roster = (input.trackerCharacters ?? []).map((row) => (row.mood ? `${row.name} (${row.mood})` : row.name));
+    lines.push(
+      `Tracked people: ${roster.length ? roster.join(", ") : "nobody yet"}. Add anyone who matters with add_character; remove them with remove_character when they leave. list_characters shows details.`,
+    );
+  }
+  if (input.settings.tools.notes) {
+    const dossiers = (input.characterNotes ?? []).map((file) => file.replace(/\.md$/, ""));
+    lines.push(
+      `Dossiers (${REAGENT_CHARACTER_NOTES_DIR}/): ${dossiers.length ? dossiers.join(", ") : "none yet"}. Read one with read_character_notes before writing that person in a scene that matters; record growth, shifts and promises with note_character.`,
+    );
+  }
+  if (input.settings.tools.simulation) {
+    lines.push(
+      "Simulation stance: this is a lived-in world, not a story being told. Things happen because of causes, schedules, needs and chance, never because they would be dramatic or tidy. Keep time moving with set_scene. Let resolve_chance decide uncertain outcomes and accept what it says, including dull failures. People off-screen keep living (set_whereabouts) and may turn up, call or be busy. Open loose threads for anything that will come due and let them come due; promises, bills and unanswered messages do not evaporate. Most moments are ordinary and end without a point; do not resolve tension conveniently or tie things up.",
+    );
+  }
   if (input.settings.tools.shell) {
     lines.push(
       `Shell policy: ${input.settings.shellPolicy}${
@@ -284,6 +453,48 @@ export function buildReagentPromptBlock(input: {
     );
   }
   lines.push(`Available tools: ${input.toolNames.join(", ")}.`);
+  if (input.settings.tools.simulation) {
+    const scene = input.scene;
+    const sceneParts = scene
+      ? [
+          scene.date && `date: ${scene.date}`,
+          scene.time && `time: ${scene.time}`,
+          scene.location && `location: ${scene.location}`,
+          scene.weather && `weather: ${scene.weather}`,
+          scene.temperature && `temperature: ${scene.temperature}`,
+        ].filter(Boolean)
+      : [];
+    lines.push("");
+    lines.push("### Scene");
+    lines.push(sceneParts.length ? sceneParts.join("; ") : "(nothing set yet; use set_scene)");
+    if (scene?.recentEvents.length) lines.push(`Recent: ${scene.recentEvents.slice(-6).join(" | ")}`);
+    const simulation = input.simulation ?? parseReagentSimulation("");
+    lines.push("");
+    lines.push("### Loose threads");
+    lines.push(
+      simulation.threads.length
+        ? simulation.threads
+            .map(
+              (thread) =>
+                `- [${thread.id}] ${thread.what}${thread.who ? ` (${thread.who})` : ""}${thread.when ? ` — due: ${thread.when}` : ""}${thread.stakes ? ` — stakes: ${thread.stakes}` : ""}`,
+            )
+            .join("\n")
+        : "(none open)",
+    );
+    const offscreen = Object.entries(simulation.offscreen);
+    lines.push("");
+    lines.push("### Off-screen");
+    lines.push(
+      offscreen.length
+        ? offscreen
+            .map(
+              ([name, entry]) =>
+                `- ${name}: ${entry.where}${entry.doing ? `, ${entry.doing}` : ""}${entry.until ? ` (until ${entry.until})` : ""}`,
+            )
+            .join("\n")
+        : "(nobody tracked off-screen)",
+    );
+  }
   if (input.settings.tools.memory) {
     lines.push("");
     lines.push(`### ${REAGENT_MEMORY_FILE}`);
@@ -299,15 +510,40 @@ export function createReagentExecutor(deps: ReagentExecutorDeps) {
   const lorebooks = createLorebooksStorage(deps.db);
   const pathOptions = (forWrite: boolean) => ({ workspaceDir: deps.workspaceDir, settings: deps.settings, forWrite });
 
+  // Tracker rows as this reply sees them: the snapshot plus whoever this reply added or removed.
+  const tracker: PresentCharacter[] = deps.trackerCharacters.map((row) => ({ ...row }));
+  const scene: ReagentScene = { ...deps.scene, recentEvents: [...deps.scene.recentEvents] };
+  const sceneStamp = () => [scene.date, scene.time].filter(Boolean).join(" ");
+  const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+  const knownNames = () =>
+    Array.from(new Set([...deps.characters.map((entry) => entry.name), ...tracker.map((row) => row.name)])).join(
+      ", ",
+    ) || "none in this chat";
+
+  const findTrackerRow = (name: string): PresentCharacter | null => {
+    const wanted = name.trim().toLowerCase();
+    if (!wanted) return null;
+    return (
+      tracker.find((row) => row.name.toLowerCase() === wanted) ??
+      tracker.find((row) => row.characterId === name.trim()) ??
+      tracker.find((row) => row.name.toLowerCase().includes(wanted) || wanted.includes(row.name.toLowerCase())) ??
+      null
+    );
+  };
+
   const findCharacter = (name: string | undefined): ReagentCharacter | null => {
     if (name?.trim()) {
       const wanted = name.trim().toLowerCase();
       const exact = deps.characters.find((character) => character.name.toLowerCase() === wanted);
       if (exact) return exact;
+      const tracked = tracker.find((row) => row.name.toLowerCase() === wanted);
+      if (tracked) return { id: tracked.characterId, name: tracked.name };
       const partial = deps.characters.find(
         (character) => character.name.toLowerCase().includes(wanted) || wanted.includes(character.name.toLowerCase()),
       );
       if (partial) return partial;
+      const partialRow = findTrackerRow(name);
+      if (partialRow) return { id: partialRow.characterId, name: partialRow.name };
       return null;
     }
     if (deps.callingCharacterId) {
@@ -315,6 +551,31 @@ export function createReagentExecutor(deps: ReagentExecutorDeps) {
     }
     return deps.characters.length === 1 ? deps.characters[0]! : null;
   };
+
+  /** Profile fields the status patch helper does not cover. */
+  const withProfileFields = (
+    update: PresentCharacterUpdate | null,
+    character: ReagentCharacter,
+    args: Record<string, unknown>,
+  ): PresentCharacterUpdate | null => {
+    let next = update;
+    for (const key of ["appearance", "outfit", "thoughts", "emoji"] as const) {
+      const value = str(args[key]).trim();
+      if (!value) continue;
+      next ??= { characterId: character.id, name: character.name };
+      next[key] = value.slice(0, key === "emoji" ? 8 : 500);
+    }
+    return next;
+  };
+
+  const dossierSlug = (name: string) =>
+    name
+      .trim()
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60);
+  const dossierRelPath = (name: string) => `${REAGENT_CHARACTER_NOTES_DIR}/${dossierSlug(name)}.md`;
 
   async function readFileTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
     const { absolute, workspaceRelative } = resolveReagentPath(str(args.path), pathOptions(false));
@@ -522,22 +783,24 @@ export function createReagentExecutor(deps: ReagentExecutorDeps) {
 
   async function setStatusTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
     const character = findCharacter(str(args.character) || undefined);
-    if (!character) {
-      throw new Error(
-        `Which character? Known: ${deps.characters.map((entry) => entry.name).join(", ") || "none in this chat"}.`,
-      );
-    }
-    const update = buildPresentCharacterUpdate(character.id, character.name, {
-      emotion: args.emotion,
-      emotionCause: args.emotion_cause,
-      temperature: args.temperature,
-      notes: args.notes,
-      bars: args.bars,
-      limbs: args.limbs,
-      extras: args.extras,
-    });
+    if (!character) throw new Error(`Which character? Known: ${knownNames()}.`);
+    const update = withProfileFields(
+      buildPresentCharacterUpdate(character.id, character.name, {
+        emotion: args.emotion,
+        emotionCause: args.emotion_cause,
+        temperature: args.temperature,
+        notes: args.notes,
+        bars: args.bars,
+        limbs: args.limbs,
+        extras: args.extras,
+      }),
+      character,
+      args,
+    );
     if (!update) throw new Error("Nothing to update; include at least one field.");
     deps.onStatusPatch(update);
+    const row = tracker.find((entry) => entry.characterId === character.id);
+    if (row) Object.assign(row, update);
     const { characterId: _id, name: _name, ...fields } = update;
     return {
       result: ok(`${character.name}'s tracker will be updated with this reply: ${JSON.stringify(fields)}`),
@@ -702,7 +965,276 @@ export function createReagentExecutor(deps: ReagentExecutorDeps) {
     };
   }
 
+  // ── Roster ──
+
+  async function listCharactersTool(): Promise<ReagentToolOutcome> {
+    const trackedIds = new Set(tracker.map((row) => row.characterId));
+    const trackedNames = new Set(tracker.map((row) => row.name.toLowerCase()));
+    const tracked = await Promise.all(
+      tracker.map(async (row) => {
+        const bars: Record<string, number> = {};
+        for (const stat of row.stats ?? []) bars[stat.name] = stat.value;
+        const limbs = Object.fromEntries(Object.entries(row.limbs ?? {}).filter(([, value]) => value.trim()));
+        const hasDossier = await stat(join(deps.workspaceDir, dossierRelPath(row.name)))
+          .then(() => true)
+          .catch(() => false);
+        return {
+          characterId: row.characterId,
+          name: row.name,
+          card: deps.characters.some((card) => card.id === row.characterId),
+          emoji: row.emoji || undefined,
+          mood: row.mood || undefined,
+          emotionCause: row.emotionCause ?? undefined,
+          appearance: row.appearance ?? undefined,
+          outfit: row.outfit ?? undefined,
+          temperature: row.temperature ?? undefined,
+          notes: row.notes ?? undefined,
+          thoughts: row.thoughts ?? undefined,
+          bars,
+          ...(Object.keys(limbs).length ? { limbs } : {}),
+          ...(Object.keys(row.customFields ?? {}).length ? { extras: row.customFields } : {}),
+          hasDossier,
+        };
+      }),
+    );
+    const cards = deps.characters.map((card) => ({
+      id: card.id,
+      name: card.name,
+      tracked: trackedIds.has(card.id) || trackedNames.has(card.name.toLowerCase()),
+    }));
+    return { result: ok(clip(JSON.stringify({ cards, tracked }))), media: [] };
+  }
+
+  async function addCharacterTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const name = str(args.name).trim().slice(0, 80);
+    if (!name) throw new Error("name is required.");
+    const existing = tracker.find((row) => sameName(row.name, name));
+    if (existing) throw new Error(`${existing.name} is already tracked; use set_character_status.`);
+    const card = deps.characters.find((entry) => sameName(entry.name, name));
+    const character: ReagentCharacter = card ?? { id: `npc-${dossierSlug(name) || "x"}-${newId().slice(0, 6)}`, name };
+    const update = withProfileFields(
+      buildPresentCharacterUpdate(character.id, character.name, {
+        emotion: args.mood,
+        emotionCause: args.emotion_cause,
+        notes: args.notes,
+        extras: args.extras,
+      }),
+      character,
+      args,
+    ) ?? { characterId: character.id, name: character.name };
+    deps.onStatusPatch(update);
+    tracker.push({
+      emoji: "",
+      mood: "",
+      appearance: null,
+      outfit: null,
+      thoughts: null,
+      customFields: {},
+      stats: [],
+      ...update,
+    });
+    return {
+      result: ok(`${character.name} joins the tracker with this reply${card ? " (matched the character card)" : ""}.`),
+      media: [],
+    };
+  }
+
+  async function removeCharacterTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const row = findTrackerRow(str(args.character));
+    if (!row)
+      throw new Error(
+        `Nobody tracked by that name. Tracked: ${tracker.map((entry) => entry.name).join(", ") || "none"}.`,
+      );
+    deps.onRosterRemove(row.characterId || row.name);
+    tracker.splice(tracker.indexOf(row), 1);
+    return { result: ok(`${row.name} leaves the tracker with this reply.`), media: [] };
+  }
+
+  // ── Dossiers ──
+
+  async function noteCharacterTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const raw = str(args.character).trim();
+    const entry = str(args.entry).trim();
+    if (!raw || !entry) throw new Error("character and entry are required.");
+    const name = findCharacter(raw)?.name ?? raw.slice(0, 80);
+    const relPath = dossierRelPath(name);
+    if (!dossierSlug(name)) throw new Error("That name cannot be used as a file name.");
+    const absolute = join(deps.workspaceDir, relPath);
+    const current = await readFile(absolute, "utf8").catch(() => "");
+    const kind = str(args.kind).trim();
+    const stamp = sceneStamp();
+    const line = `- ${stamp ? `${stamp} ` : ""}${kind ? `[${kind}] ` : ""}${entry.replace(/\s*\n\s*/g, " ")}`;
+    const next = `${current.trim() ? current.trimEnd() : `# ${name}`}\n${line}\n`;
+    if (Buffer.byteLength(next, "utf8") > REAGENT_MAX_TEXT_FILE_BYTES) throw new Error("The dossier is full (256 KB).");
+    await mkdir(dirname(absolute), { recursive: true });
+    await writeFile(absolute, next, "utf8");
+    deps.onFileVersion(relPath, next);
+    return { result: ok(`Noted in ${relPath}: ${line}`), media: [] };
+  }
+
+  async function readCharacterNotesTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const raw = str(args.character).trim();
+    if (!raw) {
+      const entries = await listDirectory(join(deps.workspaceDir, REAGENT_CHARACTER_NOTES_DIR));
+      return {
+        result: ok(
+          JSON.stringify({
+            dossiers: entries
+              .filter((entry) => entry.kind === "file")
+              .map((entry) => ({ file: entry.path, bytes: entry.bytes })),
+          }),
+        ),
+        media: [],
+      };
+    }
+    const name = findCharacter(raw)?.name ?? raw;
+    const content = await readFile(join(deps.workspaceDir, dossierRelPath(name)), "utf8").catch(() => null);
+    if (content === null) throw new Error(`No dossier for ${name} yet; note_character starts one.`);
+    return { result: ok(clip(content)), media: [] };
+  }
+
+  // ── Simulation ──
+
+  async function loadSimulation(): Promise<ReagentSimulationState> {
+    const raw = await readFile(join(deps.workspaceDir, REAGENT_SIMULATION_FILE), "utf8").catch(() => "");
+    return parseReagentSimulation(raw);
+  }
+
+  async function saveSimulation(state: ReagentSimulationState) {
+    const json = `${JSON.stringify(state, null, 2)}\n`;
+    await writeFile(join(deps.workspaceDir, REAGENT_SIMULATION_FILE), json, "utf8");
+    deps.onFileVersion(REAGENT_SIMULATION_FILE, json);
+  }
+
+  async function setSceneTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const patch: ReagentScenePatch = {};
+    for (const key of ["date", "time", "location", "weather", "temperature"] as const) {
+      const value = str(args[key]).trim();
+      if (value) patch[key] = value.slice(0, 200);
+    }
+    const event = str(args.event).trim();
+    if (event) patch.recentEvents = [...scene.recentEvents, event.slice(0, 300)].slice(-MAX_RECENT_EVENTS);
+    if (Object.keys(patch).length === 0) throw new Error("Nothing to change; give at least one field.");
+    Object.assign(scene, patch);
+    deps.onScenePatch(patch);
+    return { result: ok(`Scene will be updated with this reply: ${JSON.stringify(patch)}`), media: [] };
+  }
+
+  async function resolveChanceTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const action = str(args.action).trim();
+    if (!action) throw new Error("action is required.");
+    const odds = Math.max(0, Math.min(100, Math.round(num(args.odds, Number.NaN))));
+    if (!Number.isFinite(odds)) throw new Error("odds must be a number from 0 to 100.");
+    const roll = randomInt(1, 101);
+    const success = roll <= odds;
+    const outcome = success
+      ? roll <= Math.max(1, Math.floor(odds / 5))
+        ? "critical success"
+        : "success"
+      : roll > 100 - Math.floor((100 - odds) / 5)
+        ? "critical failure"
+        : "failure";
+    return {
+      result: ok(
+        JSON.stringify({
+          action,
+          odds,
+          roll,
+          outcome,
+          margin: odds - roll,
+          note: "This is the world's answer. Write it as it fell, including the boring version.",
+        }),
+      ),
+      media: [],
+    };
+  }
+
+  async function pickRandomTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const options = Array.isArray(args.options) ? args.options.map(String).filter((entry) => entry.trim()) : [];
+    if (options.length < 2) throw new Error("Give at least two options.");
+    const index = randomInt(0, options.length);
+    return { result: ok(JSON.stringify({ picked: options[index], index, of: options.length })), media: [] };
+  }
+
+  async function addThreadTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const what = str(args.what).trim().slice(0, 300);
+    if (!what) throw new Error("what is required.");
+    const state = await loadSimulation();
+    let id = "";
+    do
+      id = `t${randomInt(0, 36 ** 3)
+        .toString(36)
+        .padStart(3, "0")}`;
+    while (state.threads.some((thread) => thread.id === id) || state.resolved.some((thread) => thread.id === id));
+    const thread = {
+      id,
+      what,
+      ...(str(args.when).trim() ? { when: str(args.when).trim().slice(0, 120) } : {}),
+      ...(str(args.who).trim() ? { who: str(args.who).trim().slice(0, 80) } : {}),
+      ...(str(args.stakes).trim() ? { stakes: str(args.stakes).trim().slice(0, 200) } : {}),
+      ...(sceneStamp() ? { openedAt: sceneStamp() } : {}),
+    };
+    state.threads.push(thread);
+    await saveSimulation(state);
+    return { result: ok(`Thread ${id} opened: ${what}`), media: [] };
+  }
+
+  async function resolveThreadTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const id = str(args.id).trim();
+    const outcome = str(args.outcome).trim().slice(0, 300);
+    if (!id || !outcome) throw new Error("id and outcome are required.");
+    const state = await loadSimulation();
+    const index = state.threads.findIndex(
+      (thread) => thread.id === id || thread.what.toLowerCase() === id.toLowerCase(),
+    );
+    if (index < 0) {
+      throw new Error(`No open thread ${id}. Open: ${state.threads.map((thread) => thread.id).join(", ") || "none"}.`);
+    }
+    const [thread] = state.threads.splice(index, 1);
+    state.resolved = [
+      ...state.resolved,
+      { id: thread!.id, what: thread!.what, outcome, ...(sceneStamp() ? { at: sceneStamp() } : {}) },
+    ].slice(-MAX_RESOLVED_THREADS);
+    await saveSimulation(state);
+    return { result: ok(`Thread ${thread!.id} resolved: ${outcome}`), media: [] };
+  }
+
+  async function setWhereaboutsTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const raw = str(args.character).trim();
+    if (!raw) throw new Error("character is required.");
+    const name = findCharacter(raw)?.name ?? raw.slice(0, 80);
+    const state = await loadSimulation();
+    const existingKey = Object.keys(state.offscreen).find((key) => sameName(key, name));
+    if (args.clear === true) {
+      if (existingKey) delete state.offscreen[existingKey];
+      await saveSimulation(state);
+      return { result: ok(`${name} is no longer tracked off-screen.`), media: [] };
+    }
+    const where = str(args.where).trim().slice(0, 200);
+    if (!where) throw new Error("where is required unless clear is true.");
+    if (existingKey && existingKey !== name) delete state.offscreen[existingKey];
+    state.offscreen[name] = {
+      where,
+      ...(str(args.doing).trim() ? { doing: str(args.doing).trim().slice(0, 200) } : {}),
+      ...(str(args.until).trim() ? { until: str(args.until).trim().slice(0, 120) } : {}),
+      ...(sceneStamp() ? { updatedAt: sceneStamp() } : {}),
+    };
+    await saveSimulation(state);
+    return { result: ok(`Off-screen: ${name} is at ${where}.`), media: [] };
+  }
+
   const handlers: Record<string, (args: Record<string, unknown>) => Promise<ReagentToolOutcome>> = {
+    list_characters: listCharactersTool,
+    add_character: addCharacterTool,
+    remove_character: removeCharacterTool,
+    note_character: noteCharacterTool,
+    read_character_notes: readCharacterNotesTool,
+    set_scene: setSceneTool,
+    resolve_chance: resolveChanceTool,
+    pick_random: pickRandomTool,
+    add_thread: addThreadTool,
+    resolve_thread: resolveThreadTool,
+    set_whereabouts: setWhereaboutsTool,
     read_file: readFileTool,
     list_dir: listDirTool,
     write_file: writeFileTool,

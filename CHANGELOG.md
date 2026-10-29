@@ -4,6 +4,10 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ## [Unreleased]
 
+### Added
+
+- REagent gets three more tool families, on by default. Characters: list the tracker, add NPCs and passers-by to it, remove people who left, and update looks, outfits and private thoughts. Character notes: a dossier per person in the workspace where the writer records growth, relationship shifts, goals, secrets and promises and reads them back before scenes that matter. Simulation: move the scene clock and location, let chance decide uncertain outcomes, pick between plausible options at random, keep loose threads that come due, and track where off-screen people are; the open threads, whereabouts and scene are shown to the writer every reply, with a stance that favours a lived-in world over a told story. Dossiers and the simulation ledger are journaled like the memory file, so swipes revert them.
+
 ### Fixed
 
 - Claude models on custom OpenAI-compatible connections now receive their selected reasoning effort, including `max`, instead of dropping it or lowering Maximum to `xhigh`. Fable background requests that ask for no reasoning use its lowest supported effort.
