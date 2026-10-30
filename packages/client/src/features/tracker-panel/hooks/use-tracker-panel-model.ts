@@ -9,6 +9,8 @@ import {
 } from "../../../lib/tracker-card-colors";
 import { useChat, useChatMessagePeek } from "../../../hooks/use-chats";
 import type { TrackerDataPanelSection } from "../../../stores/ui.store";
+import { useGameStateStore } from "../../../stores/game-state.store";
+import { trackerAgentTypeHasData } from "../../../lib/tracker-section-data";
 import { TRACKER_FEATURED_CHARACTER_META_KEY, TRACKER_SECTION_AGENT_TYPES } from "../lib/tracker-panel.constants";
 import { normalizeMaybeJsonStringArray, normalizeStringArray, parseRecord } from "../lib/tracker-metadata";
 import { resolveSpriteExpressionState } from "../../../lib/sprite-expression-state";
@@ -47,12 +49,15 @@ export function useTrackerPanelModel({
     return set;
   }, [chatMeta]);
   const expressionAgentEnabled = enabledAgentTypes.has("expression");
+  // A section shows when its agent is on or when it already holds data, whoever wrote it
+  // (the REagent tools, the user). Reruns stay limited to agents that are on.
+  const gameState = useGameStateStore((s) => s.current);
   const isSectionEnabled = useCallback(
     (section: TrackerDataPanelSection) => {
       const agentType = TRACKER_SECTION_AGENT_TYPES[section];
-      return !!agentType && enabledAgentTypes.has(agentType);
+      return !!agentType && (enabledAgentTypes.has(agentType) || trackerAgentTypeHasData(agentType, gameState));
     },
-    [enabledAgentTypes],
+    [enabledAgentTypes, gameState],
   );
   const personaTrackerEnabled = isSectionEnabled("persona");
   const characterTrackerEnabled = isSectionEnabled("characters");

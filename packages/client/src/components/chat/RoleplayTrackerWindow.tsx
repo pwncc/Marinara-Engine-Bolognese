@@ -42,6 +42,7 @@ import {
 import { useMatchMedia } from "../../hooks/use-match-media";
 import { useAgentStore } from "../../stores/agent.store";
 import { useGameStateStore } from "../../stores/game-state.store";
+import { visibleTrackerAgentTypes } from "../../lib/tracker-section-data";
 import { TRACKER_WINDOW_ID, useFloatingWindowStore } from "../../stores/floating-window.store";
 import { useUIStore } from "../../stores/ui.store";
 import type { WindowBounds, WindowLayout } from "../../lib/floating-window-layout";
@@ -144,13 +145,15 @@ export function RoleplayTrackerWindow({
   const { data: installedCapabilities = [] } = useInstalledCapabilityPackages();
   const isAgentProcessing = useAgentStore((s) => s.processingChatIds.includes(props.chatId));
   const gameStateRefreshing = useGameStateStore((s) => s.isRefreshing);
+  const gameStateCurrent = useGameStateStore((s) => s.current);
   const busy = isAgentProcessing || props.isStreaming || gameStateRefreshing;
+  const shownTrackerTypes = visibleTrackerAgentTypes(props.enabledAgentTypes, gameStateCurrent);
   // Beholder has its own window, so it alone does not need this one.
   const packages = partitionTrackerCapabilityPackages(
     selectRoleplayTrackerPackages(installedCapabilities, props.enabledAgentTypes),
   );
   const hasTrackers =
-    BUILT_IN_TRACKER_TYPES.some((type) => props.enabledAgentTypes.has(type)) ||
+    BUILT_IN_TRACKER_TYPES.some((type) => shownTrackerTypes.has(type)) ||
     packages.memoryNag.length + packages.other.length > 0;
 
   const showWindow = !phoneLayout && !trackerPanelSelected && hasTrackers;
@@ -296,6 +299,8 @@ function TrackerWindow({
 }: RoleplayTrackerWindowProps) {
   const { t } = useTranslation();
   const tracker = useRoleplayTrackerState(chatId, enabledAgentTypes, "tracker-window");
+  const gameStateCurrent = useGameStateStore((s) => s.current);
+  const shownTrackerTypes = visibleTrackerAgentTypes(enabledAgentTypes, gameStateCurrent);
   const trackerTemperatureUnit = useUIStore((s) => s.trackerTemperatureUnit);
   // Moving the chat changes the free gutter the default layout looks for.
   const chatPosition = useUIStore((s) => s.roleplayChatPosition);
@@ -367,7 +372,7 @@ function TrackerWindow({
     >
       <TrackerLockProvider {...tracker.lockProviderProps}>
         <div className={cn(NEUTRAL_PANEL_SCROLL_AREA, "@container min-h-0 flex-1 overflow-y-auto overscroll-contain")}>
-          {enabledAgentTypes.has("world-state") && (
+          {shownTrackerTypes.has("world-state") && (
             <TrackerDrawer
               id="tracker-world"
               chatId={chatId}
@@ -404,7 +409,7 @@ function TrackerWindow({
             </TrackerDrawer>
           )}
 
-          {enabledAgentTypes.has("persona-stats") && (
+          {shownTrackerTypes.has("persona-stats") && (
             <TrackerDrawer
               id="tracker-persona"
               chatId={chatId}
@@ -430,7 +435,7 @@ function TrackerWindow({
             </TrackerDrawer>
           )}
 
-          {enabledAgentTypes.has("character-tracker") && (
+          {shownTrackerTypes.has("character-tracker") && (
             <TrackerDrawer
               id="tracker-characters"
               chatId={chatId}
@@ -456,7 +461,7 @@ function TrackerWindow({
             </TrackerDrawer>
           )}
 
-          {enabledAgentTypes.has("quest") && (
+          {shownTrackerTypes.has("quest") && (
             <TrackerDrawer
               id="tracker-quests"
               chatId={chatId}
@@ -480,7 +485,7 @@ function TrackerWindow({
             </TrackerDrawer>
           )}
 
-          {enabledAgentTypes.has("inventory-tracker") && (
+          {shownTrackerTypes.has("inventory-tracker") && (
             <TrackerDrawer
               id="tracker-inventory"
               chatId={chatId}
@@ -512,7 +517,7 @@ function TrackerWindow({
             <PackageTrackerDrawer key={item.id} {...packageProps(item)} />
           ))}
 
-          {enabledAgentTypes.has("custom-tracker") && (
+          {shownTrackerTypes.has("custom-tracker") && (
             <TrackerDrawer
               id="tracker-custom"
               chatId={chatId}

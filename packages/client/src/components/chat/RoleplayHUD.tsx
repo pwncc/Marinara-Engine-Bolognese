@@ -3,7 +3,7 @@
 // Phones keep World and Player trackers in separate movable buttons and themed sheets.
 // Package controls and the manual tracker trigger remain in the compact strip.
 // ──────────────────────────────────────────────
-import { Suspense, lazy, useState, useEffect, useCallback, type ReactNode } from "react";
+import { Suspense, lazy, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { MapPin, Users, Backpack, Scroll, Swords, RefreshCw, BarChart3, SlidersHorizontal } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -11,6 +11,7 @@ import { api } from "../../lib/api-client";
 import { WorldCalendarIcon } from "../ui/WorldCalendarIcon";
 import { WorldClockIcon, WorldThermometerIcon } from "../ui/WorldStateInstruments";
 import { useGameStateStore } from "../../stores/game-state.store";
+import { visibleTrackerAgentTypes } from "../../lib/tracker-section-data";
 import { useAgentStore } from "../../stores/agent.store";
 import { useGameStatePatcher } from "../../hooks/use-game-state-patcher";
 import { useUIStore } from "../../stores/ui.store";
@@ -190,6 +191,13 @@ export function RoleplayHUD({
   const setGameState = useGameStateStore((s) => s.setGameState);
 
   const enabledAgentTypes = enabledAgentTypesProp ?? EMPTY_AGENT_TYPE_SET;
+  // Sections show for the agents that are on and for data already there, whoever wrote it (an agent,
+  // the REagent tools or the user). Reruns still go only to agents that are on.
+  const gameStateCurrent = useGameStateStore((s) => s.current);
+  const shownTrackerTypes = useMemo(
+    () => visibleTrackerAgentTypes(enabledAgentTypes, gameStateCurrent),
+    [enabledAgentTypes, gameStateCurrent],
+  );
   const {
     packages: { memoryNag: memoryNagTrackerPackages, other: otherRoleplayTrackerPackages },
     patchField,
@@ -241,13 +249,13 @@ export function RoleplayHUD({
     };
   }, [chatId, setGameState]);
 
-  const hasPersonaStatsTracker = enabledAgentTypes.has("persona-stats");
+  const hasPersonaStatsTracker = shownTrackerTypes.has("persona-stats");
   const hasPlayerTrackerSections =
     hasPersonaStatsTracker ||
-    enabledAgentTypes.has("character-tracker") ||
-    enabledAgentTypes.has("quest") ||
-    enabledAgentTypes.has("custom-tracker");
-  const hasInventoryTracker = enabledAgentTypes.has("inventory-tracker");
+    shownTrackerTypes.has("character-tracker") ||
+    shownTrackerTypes.has("quest") ||
+    shownTrackerTypes.has("custom-tracker");
+  const hasInventoryTracker = shownTrackerTypes.has("inventory-tracker");
   const hasMobilePlayerTrackerSections =
     hasPlayerTrackerSections || hasInventoryTracker || memoryNagTrackerPackages.length > 0;
 
@@ -260,7 +268,7 @@ export function RoleplayHUD({
         trackerPortalHost &&
         createPortal(
           <>
-            {enabledAgentTypes.has("world-state") && (
+            {shownTrackerTypes.has("world-state") && (
               <CombinedWorldWidget
                 chatId={chatId}
                 location={location ?? ""}
@@ -284,12 +292,12 @@ export function RoleplayHUD({
             {hasMobilePlayerTrackerSections && (
               <CombinedPlayerWidget
                 showPersona={hasPersonaStatsTracker}
-                showCharacters={enabledAgentTypes.has("character-tracker")}
-                showQuests={enabledAgentTypes.has("quest")}
+                showCharacters={shownTrackerTypes.has("character-tracker")}
+                showQuests={shownTrackerTypes.has("quest")}
                 showInventory={hasInventoryTracker}
                 memoryNagPackageIds={memoryNagTrackerPackages.map((item) => item.id)}
                 chatId={chatId}
-                showCustomTracker={enabledAgentTypes.has("custom-tracker")}
+                showCustomTracker={shownTrackerTypes.has("custom-tracker")}
                 personaStats={personaStatBars}
                 onUpdatePersonaStats={(bars) => patchField("personaStats", bars)}
                 personaStatus={personaStatus}

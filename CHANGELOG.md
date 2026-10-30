@@ -11,6 +11,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 ### Fixed
 
 - REagent memory follows a branched chat: hand-made memory edits are re-anchored to the copied messages (left on the source chat's ids they counted as orphans and were re-applied after every reply, undoing what the branch wrote), edits whose message is gone are placed by their time instead of last, and the workspace folder is copied with the branch.
+- Tracker sections (world state, characters, persona, quests, inventory, custom) now show in the HUD, the Tracker window and the Tracker Panel whenever they hold data, even when their agent is off, so a scene the REagent moves with set_scene or a field edited by hand is visible. Re-run buttons still appear only for agents that are on.
 - REagent dossiers can be edited and removed by hand from Chat Settings, next to memory.md, and the writer finds a dossier from a short or partial name ("K" reaches kay-mercer.md) instead of answering that none exists.
 - Regenerating or swiping a reply no longer keeps what that reply wrote: workspace files it created (memory, dossiers, the simulation ledger) are removed when the transcript folds without it, and the writer's message search and read tools stop before the reply being replaced.
 - Claude models on custom OpenAI-compatible connections now receive their selected reasoning effort, including `max`, instead of dropping it or lowering Maximum to `xhigh`. Fable background requests that ask for no reasoning use its lowest supported effort.
