@@ -714,7 +714,6 @@ import {
   isReagentToolName,
   reagentToolDefinitions,
   type ReagentMedia,
-  type ReagentScenePatch,
 } from "../services/reagent/reagent-tools.js";
 import { materializeWorkspace, readReagentPromptState } from "../services/reagent/reagent-workspace.js";
 import { normalizeContextInjections } from "./generate/agent-normalizers.js";
@@ -2949,7 +2948,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
       let lastSavedSwipeIndex: number | null = null;
       const reagentPendingStatusUpdates: PresentCharacterUpdate[] = [];
       const reagentPendingRemovals: string[] = [];
-      const reagentPendingScene: ReagentScenePatch = {};
       let pendingIllustration: Promise<void> | null = null;
       let pendingAdvancedMemory: Promise<void> | null = null;
       const pendingRoleplayMedia: Promise<void>[] = [];
@@ -8334,8 +8332,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
           reagentStatusPatches: PresentCharacterUpdate[];
           /** Tracker rows remove_character asked to drop, by characterId or name. */
           reagentRemovedCharacters: string[];
-          /** set_scene fields, applied through the world-state path once the reply is saved. */
-          reagentScenePatch: ReagentScenePatch;
         } | null> => {
           if (
             chatMode === "conversation" &&
@@ -8747,7 +8743,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
           const reagentFileVersions: ReagentFileVersions = {};
           const reagentStatusPatches: PresentCharacterUpdate[] = [];
           const reagentRemovedCharacters: string[] = [];
-          const reagentScenePatch: ReagentScenePatch = {};
           let reagentExecutor: ReturnType<typeof createReagentExecutor> | null = null;
           const reagentMedia: ReagentMedia[] = [];
           if (
@@ -8768,16 +8763,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 chatMetadata: chatMeta,
               });
               const reagentTracker = parseJsonField<PresentCharacter[]>(baseGameStateSnapshot?.presentCharacters, []);
-              const reagentScene = {
-                date: coerceGameStateTextValue(baseGameStateSnapshot?.date),
-                time: coerceGameStateTextValue(baseGameStateSnapshot?.time),
-                location: coerceGameStateTextValue(baseGameStateSnapshot?.location),
-                weather: coerceGameStateTextValue(baseGameStateSnapshot?.weather),
-                temperature: coerceGameStateTextValue(baseGameStateSnapshot?.temperature),
-                recentEvents: parseJsonField<string[]>(baseGameStateSnapshot?.recentEvents, []).filter(
-                  (event): event is string => typeof event === "string",
-                ),
-              };
               reagentExecutor = createReagentExecutor({
                 db: app.db,
                 chatId: input.chatId,
@@ -8786,7 +8771,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 workspaceDir,
                 characters: charInfo.map((character) => ({ id: character.id, name: character.name })),
                 trackerCharacters: reagentTracker,
-                scene: reagentScene,
                 beforeMessageId: input.regenerateMessageId ?? null,
                 callingCharacterId:
                   speaksOnlyTargetCharacter && !input.impersonate
@@ -8797,7 +8781,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 sendEvent: (payload) => sendSseEvent(reply, payload),
                 onStatusPatch: (update) => reagentStatusPatches.push(update),
                 onRosterRemove: (reference) => reagentRemovedCharacters.push(reference),
-                onScenePatch: (patch) => Object.assign(reagentScenePatch, patch),
                 onFileVersion: (path, content) => {
                   reagentFileVersions[path] = content;
                 },
@@ -8815,7 +8798,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 ...(await readReagentPromptState(workspaceDir)),
                 toolNames: [...reagentNames],
                 trackerCharacters: reagentTracker,
-                scene: reagentScene,
               });
               const firstTurnIdx = preparedMessagesForGen.findIndex((m) => m.role === "user" || m.role === "assistant");
               preparedMessagesForGen.splice(firstTurnIdx >= 0 ? firstTurnIdx : preparedMessagesForGen.length, 0, {
@@ -10515,7 +10497,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 oocMessages,
                 reagentStatusPatches: [],
                 reagentRemovedCharacters: [],
-                reagentScenePatch: {},
                 characterId: targetCharId,
               };
             }
@@ -11490,7 +11471,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
             characterId: targetCharId,
             reagentStatusPatches,
             reagentRemovedCharacters,
-            reagentScenePatch,
           };
         };
 
@@ -11657,7 +11637,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
             lastSavedSwipeIndex = genResult.savedSwipeIndex;
             reagentPendingStatusUpdates.push(...(genResult.reagentStatusPatches ?? []));
             reagentPendingRemovals.push(...(genResult.reagentRemovedCharacters ?? []));
-            Object.assign(reagentPendingScene, genResult.reagentScenePatch ?? {});
             // Rewrite agents rewrite only the last reply, so an earlier responder's held parts show their text again.
             if (holdForTextRewrite)
               for (const part of lastReplyEarlierParts)
@@ -11852,7 +11831,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
             lastSavedSwipeIndex = genResult.savedSwipeIndex;
             reagentPendingStatusUpdates.push(...(genResult.reagentStatusPatches ?? []));
             reagentPendingRemovals.push(...(genResult.reagentRemovedCharacters ?? []));
-            Object.assign(reagentPendingScene, genResult.reagentScenePatch ?? {});
             currentIterationSavedMsg = genResult.savedMsg;
             recordExpressionTarget(genResult.savedMsg, genResult.characterId);
             for (let cmdIndex = 0; cmdIndex < genResult.commands.length; cmdIndex++) {
@@ -12070,10 +12048,9 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
             parallelResults.length > 0 ||
             holdForTextRewrite ||
             roleplayMediaRequests.length > 0 ||
-            // REagent tracker rows, roster changes and scene updates are applied in the post-processing pass.
+            // REagent tracker rows and roster changes are applied in the post-processing pass.
             reagentPendingStatusUpdates.length > 0 ||
-            reagentPendingRemovals.length > 0 ||
-            Object.keys(reagentPendingScene).length > 0);
+            reagentPendingRemovals.length > 0);
         const latestAssistantMessageId =
           (lastSavedMsg as any)?.role === "assistant" ? ((lastSavedMsg as any)?.id ?? "") : "";
         let pendingSceneCheck: AdvancedMemorySceneCheck | null = null;
@@ -12823,24 +12800,6 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
             });
           }
 
-          // set_scene rides the world-state path so field locks, maps and the journal apply to it.
-          if (Object.keys(reagentPendingScene).length > 0 && lastSavedMsg) {
-            const scenePatch: ReagentScenePatch = { ...reagentPendingScene };
-            for (const key of Object.keys(reagentPendingScene))
-              delete reagentPendingScene[key as keyof ReagentScenePatch];
-            builtInAgentTypes.add("world-state");
-            postResults.push({
-              agentId: "reagent-scene",
-              agentType: "world-state",
-              type: "game_state_update",
-              data: scenePatch,
-              tokensUsed: 0,
-              durationMs: 0,
-              success: true,
-              error: null,
-            });
-          }
-
           // Sort so game_state_update (world-state) is processed before dependent types
           // (character_tracker_update, persona_stats_update) that merge into the snapshot.
           const RESULT_ORDER: Record<string, number> = { game_state_update: 0 };
@@ -13070,11 +13029,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 // (see getForGeneration), so the agent reads them as the prevSnap values.
                 // They are NOT copied into the new snapshot's edit record: the agent's
                 // output replaces them.
-                // The writer's own set_scene patch lands on top of whatever this reply's agents already wrote.
                 const prevSnap =
-                  (result.agentId === "reagent-scene"
-                    ? await gameStateStore.getByChatAndMessage(input.chatId, messageId, targetSwipeIndex)
-                    : null) ??
                   trackerBaseGameStateSnapshot ??
                   (allowLatestGameStateFallback ? await gameStateStore.getLatest(input.chatId) : null);
 
@@ -13190,9 +13145,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                     temperature: newTemperature,
                     worldCustomFields: newWorldCustomFields,
                     presentCharacters: snapshotChars,
-                    recentEvents:
-                      (gs.recentEvents as string[] | undefined) ??
-                      (result.agentId === "reagent-scene" ? parseJsonField<string[]>(prevSnap?.recentEvents, []) : []),
+                    recentEvents: (gs.recentEvents as string[]) ?? [],
                     playerStats: snapshotPlayerStats,
                     personaStats: snapshotPersonaStats,
                     fieldLocks: normalizeTrackerFieldLocksForState(

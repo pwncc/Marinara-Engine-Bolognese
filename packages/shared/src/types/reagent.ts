@@ -70,7 +70,7 @@ export const DEFAULT_REAGENT_SETTINGS: ReagentSettings = {
 };
 
 export const REAGENT_MEMORY_FILE = "memory.md";
-/** Workspace file holding the simulation ledger: loose threads and off-screen whereabouts. */
+/** Workspace file holding the simulation ledger: the writer's own scene clock, recent events, loose threads and off-screen whereabouts. */
 export const REAGENT_SIMULATION_FILE = "simulation.json";
 /** Workspace folder holding one development dossier per character (`<slug>.md`). */
 export const REAGENT_CHARACTER_NOTES_DIR = "characters";
@@ -102,14 +102,34 @@ export interface ReagentWhereabouts {
   updatedAt?: string;
 }
 
+/** The writer's own scene clock. It is not the World State tracker and never written there. */
+export interface ReagentSceneState {
+  date?: string;
+  time?: string;
+  location?: string;
+  weather?: string;
+  temperature?: string;
+}
+
+export const REAGENT_SCENE_FIELDS = ["date", "time", "location", "weather", "temperature"] as const;
+
 /** The simulation ledger as stored in the workspace; every field is optional on disk. */
 export interface ReagentSimulationState {
+  scene: ReagentSceneState;
+  /** Recent concrete happenings, oldest first. */
+  events: string[];
   threads: ReagentThread[];
   resolved: ReagentResolvedThread[];
   offscreen: Record<string, ReagentWhereabouts>;
 }
 
-export const EMPTY_REAGENT_SIMULATION: ReagentSimulationState = { threads: [], resolved: [], offscreen: {} };
+export const EMPTY_REAGENT_SIMULATION: ReagentSimulationState = {
+  scene: {},
+  events: [],
+  threads: [],
+  resolved: [],
+  offscreen: {},
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -117,14 +137,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Parse the simulation file leniently; anything malformed becomes the empty ledger. */
 export function parseReagentSimulation(raw: string | null | undefined): ReagentSimulationState {
-  if (!raw?.trim()) return { threads: [], resolved: [], offscreen: {} };
+  const empty = (): ReagentSimulationState => ({ scene: {}, events: [], threads: [], resolved: [], offscreen: {} });
+  if (!raw?.trim()) return empty();
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return { threads: [], resolved: [], offscreen: {} };
+    return empty();
   }
-  if (!isRecord(parsed)) return { threads: [], resolved: [], offscreen: {} };
+  if (!isRecord(parsed)) return empty();
+  const scene: ReagentSceneState = {};
+  if (isRecord(parsed.scene)) {
+    for (const key of REAGENT_SCENE_FIELDS) {
+      const value = parsed.scene[key];
+      if (typeof value === "string" && value.trim()) scene[key] = value;
+    }
+  }
+  const events = Array.isArray(parsed.events)
+    ? parsed.events.filter((entry): entry is string => typeof entry === "string")
+    : [];
   const threads = Array.isArray(parsed.threads)
     ? parsed.threads.filter(
         (entry): entry is ReagentThread =>
@@ -143,7 +174,7 @@ export function parseReagentSimulation(raw: string | null | undefined): ReagentS
       if (isRecord(entry) && typeof entry.where === "string") offscreen[name] = entry as unknown as ReagentWhereabouts;
     }
   }
-  return { threads, resolved, offscreen };
+  return { scene, events, threads, resolved, offscreen };
 }
 
 /** Chat metadata key holding the partial settings object. */

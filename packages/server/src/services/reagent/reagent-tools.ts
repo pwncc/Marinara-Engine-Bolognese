@@ -12,6 +12,7 @@ import { dirname, basename, join, resolve } from "node:path";
 import {
   REAGENT_CHARACTER_NOTES_DIR,
   REAGENT_MEMORY_FILE,
+  REAGENT_SCENE_FIELDS,
   REAGENT_SIMULATION_FILE,
   CHARACTER_STATUS_BAR_SPECS,
   DEFAULT_STATUS_LIMBS,
@@ -65,19 +66,6 @@ export interface ReagentCharacter {
   name: string;
 }
 
-/** The world tracker's scene fields as the reply starts. */
-export interface ReagentScene {
-  date: string | null;
-  time: string | null;
-  location: string | null;
-  weather: string | null;
-  temperature: string | null;
-  recentEvents: string[];
-}
-
-/** Scene fields the writer changed; `recentEvents` is the complete new list when present. */
-export type ReagentScenePatch = Partial<Omit<ReagentScene, "recentEvents">> & { recentEvents?: string[] };
-
 export interface ReagentExecutorDeps {
   db: DB;
   chatId: string;
@@ -87,7 +75,6 @@ export interface ReagentExecutorDeps {
   characters: ReagentCharacter[];
   /** Tracker rows as the reply starts: cards and NPCs alike. */
   trackerCharacters: PresentCharacter[];
-  scene: ReagentScene;
   /** The character speaking this turn, when exactly one is. */
   callingCharacterId: string | null;
   /** A regenerate replaces this message: it and everything after it are not part of the past. */
@@ -98,7 +85,6 @@ export interface ReagentExecutorDeps {
   onStatusPatch: (update: PresentCharacterUpdate) => void;
   /** A tracker row (by characterId or name) the writer says left the scene. */
   onRosterRemove: (reference: string) => void;
-  onScenePatch: (patch: ReagentScenePatch) => void;
   onFileVersion: (workspaceRelativePath: string, content: string | null) => void;
 }
 
@@ -277,7 +263,7 @@ const NOTES_TOOLS: LLMToolDefinition[] = [
 const SIMULATION_TOOLS: LLMToolDefinition[] = [
   def(
     "set_scene",
-    "Update the world tracker: date, time, location, weather, felt temperature. Call it whenever time passes or the scene moves, even by minutes. `event` adds one line to the recent-events list.",
+    "Move your own scene clock: date, time, location, weather, felt temperature. Call it whenever time passes or the scene moves, even by minutes. `event` adds one line to your recent-events list. This is your ledger in simulation.json, separate from any tracker agent.",
     {
       date: { type: "string" },
       time: { type: "string" },
@@ -414,7 +400,6 @@ export function buildReagentPromptBlock(input: {
   /** Dossier file names under the notes folder. */
   characterNotes?: string[];
   trackerCharacters?: PresentCharacter[];
-  scene?: ReagentScene;
 }): string {
   const lines: string[] = [];
   lines.push("## Your tools (REagent)");
@@ -456,21 +441,13 @@ export function buildReagentPromptBlock(input: {
   }
   lines.push(`Available tools: ${input.toolNames.join(", ")}.`);
   if (input.settings.tools.simulation) {
-    const scene = input.scene;
-    const sceneParts = scene
-      ? [
-          scene.date && `date: ${scene.date}`,
-          scene.time && `time: ${scene.time}`,
-          scene.location && `location: ${scene.location}`,
-          scene.weather && `weather: ${scene.weather}`,
-          scene.temperature && `temperature: ${scene.temperature}`,
-        ].filter(Boolean)
-      : [];
+    const simulation = input.simulation ?? parseReagentSimulation("");
+    const scene = simulation.scene;
+    const sceneParts = REAGENT_SCENE_FIELDS.filter((key) => scene[key]).map((key) => `${key}: ${scene[key]}`);
     lines.push("");
     lines.push("### Scene");
     lines.push(sceneParts.length ? sceneParts.join("; ") : "(nothing set yet; use set_scene)");
-    if (scene?.recentEvents.length) lines.push(`Recent: ${scene.recentEvents.slice(-6).join(" | ")}`);
-    const simulation = input.simulation ?? parseReagentSimulation("");
+    if (simulation.events.length) lines.push(`Recent: ${simulation.events.slice(-6).join(" | ")}`);
     lines.push("");
     lines.push("### Loose threads");
     lines.push(
@@ -514,8 +491,11 @@ export function createReagentExecutor(deps: ReagentExecutorDeps) {
 
   // Tracker rows as this reply sees them: the snapshot plus whoever this reply added or removed.
   const tracker: PresentCharacter[] = deps.trackerCharacters.map((row) => ({ ...row }));
-  const scene: ReagentScene = { ...deps.scene, recentEvents: [...deps.scene.recentEvents] };
-  const sceneStamp = () => [scene.date, scene.time].filter(Boolean).join(" ");
+  /** Date and time from the writer's own scene ledger, for dating notes and threads. */
+  const sceneStamp = async () => {
+    const { scene } = await loadSimulation();
+    return [scene.date, scene.time].filter(Boolean).join(" ");
+  };
   const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
   const knownNames = () =>
     Array.from(new Set([...deps.characters.map((entry) => entry.name), ...tracker.map((row) => row.name)])).join(
@@ -1082,7 +1062,7 @@ export function createReagentExecutor(deps: ReagentExecutorDeps) {
     const absolute = join(deps.workspaceDir, relPath);
     const current = await readFile(absolute, "utf8").catch(() => "");
     const kind = str(args.kind).trim();
-    const stamp = sceneStamp();
+    const stamp = await sceneStamp();
     const line = `- ${stamp ? `${stamp} ` : ""}${kind ? `[${kind}] ` : ""}${entry.replace(/\s*\n\s*/g, " ")}`;
     const next = `${current.trim() ? current.trimEnd() : `# ${name}`}\n${line}\n`;
     if (Buffer.byteLength(next, "utf8") > REAGENT_MAX_TEXT_FILE_BYTES) throw new Error("The dossier is full (256 KB).");
@@ -1136,17 +1116,20 @@ ${clip(content)}`),
   }
 
   async function setSceneTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
-    const patch: ReagentScenePatch = {};
-    for (const key of ["date", "time", "location", "weather", "temperature"] as const) {
+    const state = await loadSimulation();
+    const patch: Record<string, string> = {};
+    for (const key of REAGENT_SCENE_FIELDS) {
       const value = str(args[key]).trim();
-      if (value) patch[key] = value.slice(0, 200);
+      if (value) patch[key] = state.scene[key] = value.slice(0, 200);
     }
     const event = str(args.event).trim();
-    if (event) patch.recentEvents = [...scene.recentEvents, event.slice(0, 300)].slice(-MAX_RECENT_EVENTS);
+    if (event) {
+      patch.event = event.slice(0, 300);
+      state.events = [...state.events, patch.event].slice(-MAX_RECENT_EVENTS);
+    }
     if (Object.keys(patch).length === 0) throw new Error("Nothing to change; give at least one field.");
-    Object.assign(scene, patch);
-    deps.onScenePatch(patch);
-    return { result: ok(`Scene will be updated with this reply: ${JSON.stringify(patch)}`), media: [] };
+    await saveSimulation(state);
+    return { result: ok(`Scene updated: ${JSON.stringify(patch)}`), media: [] };
   }
 
   async function resolveChanceTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
@@ -1201,7 +1184,7 @@ ${clip(content)}`),
       ...(str(args.when).trim() ? { when: str(args.when).trim().slice(0, 120) } : {}),
       ...(str(args.who).trim() ? { who: str(args.who).trim().slice(0, 80) } : {}),
       ...(str(args.stakes).trim() ? { stakes: str(args.stakes).trim().slice(0, 200) } : {}),
-      ...(sceneStamp() ? { openedAt: sceneStamp() } : {}),
+      ...((await sceneStamp()) ? { openedAt: await sceneStamp() } : {}),
     };
     state.threads.push(thread);
     await saveSimulation(state);
@@ -1222,7 +1205,7 @@ ${clip(content)}`),
     const [thread] = state.threads.splice(index, 1);
     state.resolved = [
       ...state.resolved,
-      { id: thread!.id, what: thread!.what, outcome, ...(sceneStamp() ? { at: sceneStamp() } : {}) },
+      { id: thread!.id, what: thread!.what, outcome, ...((await sceneStamp()) ? { at: await sceneStamp() } : {}) },
     ].slice(-MAX_RESOLVED_THREADS);
     await saveSimulation(state);
     return { result: ok(`Thread ${thread!.id} resolved: ${outcome}`), media: [] };
@@ -1246,7 +1229,7 @@ ${clip(content)}`),
       where,
       ...(str(args.doing).trim() ? { doing: str(args.doing).trim().slice(0, 200) } : {}),
       ...(str(args.until).trim() ? { until: str(args.until).trim().slice(0, 120) } : {}),
-      ...(sceneStamp() ? { updatedAt: sceneStamp() } : {}),
+      ...((await sceneStamp()) ? { updatedAt: await sceneStamp() } : {}),
     };
     await saveSimulation(state);
     return { result: ok(`Off-screen: ${name} is at ${where}.`), media: [] };
