@@ -5,6 +5,7 @@ export interface ReagentWorkspaceInfo {
   workspaceDir: string;
   memory: string;
   files: Array<{ path: string; kind: "file" | "dir"; bytes: number; modifiedAt: string }>;
+  dossiers: Array<{ path: string; name: string; content: string }>;
 }
 
 export const reagentKeys = {
@@ -20,10 +21,12 @@ export function useReagentWorkspace(chatId: string | null, enabled = true) {
   });
 }
 
-export function useUpdateReagentMemory(chatId: string | null) {
+/** Save (or, with null content, remove) a hand-editable workspace file: memory.md or a dossier. */
+export function useUpdateReagentFile(chatId: string | null) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (content: string) => api.put<{ memory: string }>(`/reagent/${chatId}/memory`, { content }),
+    mutationFn: (input: { path: string; content: string | null }) =>
+      api.put<{ path: string; content: string | null }>(`/reagent/${chatId}/file`, input),
     onSuccess: () => {
       if (chatId) qc.invalidateQueries({ queryKey: reagentKeys.workspace(chatId) });
     },

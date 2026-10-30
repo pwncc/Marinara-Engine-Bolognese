@@ -270,7 +270,11 @@ export async function materializeWorkspace(
   // A file the journal wrote earlier but the fold no longer has (first created by a swipe that is
   // not shown, or by the reply being regenerated) must go, or the old swipe's notes outlive it.
   // Files the journal never wrote (shell output) are left alone.
-  const known = await readManifest(chatId);
+  // The paths the full transcript journals count as known too, so the reply being regenerated
+  // loses its files even before the manifest has seen them.
+  const known = [
+    ...new Set([...(await readManifest(chatId)), ...Object.keys(foldWorkspaceState(messages, userEdits))]),
+  ];
   for (const relPath of known) if (!(relPath in state)) state[relPath] = null;
   for (const [relPath, content] of Object.entries(state)) {
     try {

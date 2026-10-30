@@ -579,6 +579,24 @@ export function createReagentExecutor(deps: ReagentExecutorDeps) {
       .slice(0, 60);
   const dossierRelPath = (name: string) => `${REAGENT_CHARACTER_NOTES_DIR}/${dossierSlug(name)}.md`;
 
+  /**
+   * The dossier for a name as the model gives it: the exact file, else the file whose slug and the
+   * name's slug (or the resolved character's) begin with each other or share a word, so "K", "Kay"
+   * and "Kay Mercer" all find kay-mercer.md.
+   */
+  async function findDossier(raw: string): Promise<string | null> {
+    const files = (await listDirectory(join(deps.workspaceDir, REAGENT_CHARACTER_NOTES_DIR)))
+      .filter((entry) => entry.kind === "file" && entry.path.endsWith(".md"))
+      .map((entry) => entry.path.slice(0, -3));
+    const wanted = [...new Set([raw, findCharacter(raw)?.name ?? ""].map(dossierSlug).filter(Boolean))];
+    const found =
+      wanted.find((slug) => files.includes(slug)) ??
+      files.find((file) =>
+        wanted.some((slug) => file.startsWith(slug) || slug.startsWith(file) || file.split("-").includes(slug)),
+      );
+    return found ? `${REAGENT_CHARACTER_NOTES_DIR}/${found}.md` : null;
+  }
+
   async function readFileTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
     const { absolute, workspaceRelative } = resolveReagentPath(str(args.path), pathOptions(false));
     const info = await stat(absolute).catch(() => null);
@@ -979,9 +997,7 @@ export function createReagentExecutor(deps: ReagentExecutorDeps) {
         const bars: Record<string, number> = {};
         for (const stat of row.stats ?? []) bars[stat.name] = stat.value;
         const limbs = Object.fromEntries(Object.entries(row.limbs ?? {}).filter(([, value]) => value.trim()));
-        const hasDossier = await stat(join(deps.workspaceDir, dossierRelPath(row.name)))
-          .then(() => true)
-          .catch(() => false);
+        const hasDossier = (await findDossier(row.name)) !== null;
         return {
           characterId: row.characterId,
           name: row.name,
@@ -1061,7 +1077,7 @@ export function createReagentExecutor(deps: ReagentExecutorDeps) {
     const entry = str(args.entry).trim();
     if (!raw || !entry) throw new Error("character and entry are required.");
     const name = findCharacter(raw)?.name ?? raw.slice(0, 80);
-    const relPath = dossierRelPath(name);
+    const relPath = (await findDossier(raw)) ?? dossierRelPath(name);
     if (!dossierSlug(name)) throw new Error("That name cannot be used as a file name.");
     const absolute = join(deps.workspaceDir, relPath);
     const current = await readFile(absolute, "utf8").catch(() => "");
@@ -1091,10 +1107,19 @@ export function createReagentExecutor(deps: ReagentExecutorDeps) {
         media: [],
       };
     }
-    const name = findCharacter(raw)?.name ?? raw;
-    const content = await readFile(join(deps.workspaceDir, dossierRelPath(name)), "utf8").catch(() => null);
-    if (content === null) throw new Error(`No dossier for ${name} yet; note_character starts one.`);
-    return { result: ok(clip(content)), media: [] };
+    const relPath = await findDossier(raw);
+    const content = relPath ? await readFile(join(deps.workspaceDir, relPath), "utf8").catch(() => null) : null;
+    if (content === null) {
+      const have = (await listDirectory(join(deps.workspaceDir, REAGENT_CHARACTER_NOTES_DIR)))
+        .filter((entry) => entry.kind === "file")
+        .map((entry) => entry.path.replace(/\.md$/, ""));
+      throw new Error(`No dossier for ${raw} yet (dossiers: ${have.join(", ") || "none"}); note_character starts one.`);
+    }
+    return {
+      result: ok(`${relPath}
+${clip(content)}`),
+      media: [],
+    };
   }
 
   // ── Simulation ──

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Bot, FolderOpen, NotebookPen } from "lucide-react";
+import { Bot, FolderOpen, NotebookPen, Users } from "lucide-react";
 import { useTranslation as useUiTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -11,7 +11,7 @@ import {
 } from "@marinara-engine/shared";
 import { SettingsSwitch } from "../../../components/panels/settings/SettingControls";
 import { Modal } from "../../../components/ui/Modal";
-import { useReagentWorkspace, useUpdateReagentMemory } from "../../../hooks/use-reagent";
+import { useReagentWorkspace, useUpdateReagentFile } from "../../../hooks/use-reagent";
 import { ChatSettingsSection } from "../ChatSettingsSection";
 
 const FAMILIES: Array<{ id: ReagentToolFamily; labelKey: string; descriptionKey: string }> = [
@@ -81,7 +81,7 @@ function linesToList(value: string) {
 
 export function ReagentSection({ chatId, settings, provider, style, onChange }: ReagentSectionProps) {
   const { t: localizeUi } = useUiTranslation();
-  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [editing, setEditing] = useState<EditableFile | null>(null);
   const [allowDraft, setAllowDraft] = useState(settings.shellAllow.join("\n"));
   const [denyDraft, setDenyDraft] = useState(settings.shellDeny.join("\n"));
   const [rootsDraft, setRootsDraft] = useState(settings.writableRoots.join("\n"));
@@ -130,7 +130,19 @@ export function ReagentSection({ chatId, settings, provider, style, onChange }: 
 
             <div className="space-y-1.5">
               <div className="flex flex-wrap items-center gap-2">
-                <button type="button" className={BUTTON_CLASS} onClick={() => setMemoryOpen(true)}>
+                <button
+                  type="button"
+                  className={BUTTON_CLASS}
+                  onClick={() =>
+                    setEditing({
+                      path: REAGENT_MEMORY_FILE,
+                      title: REAGENT_MEMORY_FILE,
+                      hint: localizeUi("ui.chat.reagent.memoryHint"),
+                      initial: workspace.data?.memory ?? "",
+                      deletable: false,
+                    })
+                  }
+                >
                   <NotebookPen size="0.75rem" />
                   {localizeUi("ui.chat.reagent.editMemory")}
                 </button>
@@ -144,6 +156,41 @@ export function ReagentSection({ chatId, settings, provider, style, onChange }: 
                   </span>
                 )}
               </div>
+              {settings.tools.notes && (
+                <div className="space-y-1">
+                  <span className="inline-flex items-center gap-1 text-[0.625rem] text-[var(--muted-foreground)]">
+                    <Users size="0.7rem" />
+                    {localizeUi("ui.chat.reagent.dossiers")}
+                  </span>
+                  {workspace.data?.dossiers.length ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {workspace.data.dossiers.map((dossier) => (
+                        <button
+                          key={dossier.path}
+                          type="button"
+                          className={BUTTON_CLASS}
+                          title={dossier.path}
+                          onClick={() =>
+                            setEditing({
+                              path: dossier.path,
+                              title: dossier.name,
+                              hint: localizeUi("ui.chat.reagent.dossierHint"),
+                              initial: dossier.content,
+                              deletable: true,
+                            })
+                          }
+                        >
+                          {dossier.name}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                      {localizeUi("ui.chat.reagent.dossiersNone")}
+                    </p>
+                  )}
+                </div>
+              )}
               <SettingsSwitch
                 label={localizeUi("ui.chat.reagent.restrictReads")}
                 description={localizeUi("ui.chat.reagent.restrictReadsDescription")}
@@ -214,27 +261,47 @@ export function ReagentSection({ chatId, settings, provider, style, onChange }: 
           </>
         )}
       </div>
-      {memoryOpen && (
-        <ReagentMemoryModal
-          chatId={chatId}
-          initial={workspace.data?.memory ?? ""}
-          onClose={() => setMemoryOpen(false)}
-        />
-      )}
+      {editing && <ReagentFileModal chatId={chatId} file={editing} onClose={() => setEditing(null)} />}
     </ChatSettingsSection>
   );
 }
 
-function ReagentMemoryModal({ chatId, initial, onClose }: { chatId: string; initial: string; onClose: () => void }) {
+interface EditableFile {
+  path: string;
+  title: string;
+  hint: string;
+  initial: string;
+  deletable: boolean;
+}
+
+function ReagentFileModal({ chatId, file, onClose }: { chatId: string; file: EditableFile; onClose: () => void }) {
   const { t: localizeUi } = useUiTranslation();
-  const [draft, setDraft] = useState(initial);
-  const update = useUpdateReagentMemory(chatId);
-  useEffect(() => setDraft(initial), [initial]);
+  const [draft, setDraft] = useState(file.initial);
+  const update = useUpdateReagentFile(chatId);
+  useEffect(() => setDraft(file.initial), [file.initial]);
+  const save = (content: string | null) =>
+    update.mutate(
+      { path: file.path, content },
+      {
+        onSuccess: () => {
+          toast.success(
+            localizeUi(content === null ? "ui.chat.reagent.fileDeleted" : "ui.chat.reagent.fileSaved", {
+              file: file.path,
+            }),
+          );
+          onClose();
+        },
+        onError: (error) =>
+          toast.error(
+            error instanceof Error ? error.message : localizeUi("ui.chat.reagent.fileSaveFailed", { file: file.path }),
+          ),
+      },
+    );
 
   return (
-    <Modal open onClose={onClose} title={REAGENT_MEMORY_FILE} width="max-w-2xl" chatFloatingPanel>
+    <Modal open onClose={onClose} title={file.title} width="max-w-2xl" chatFloatingPanel>
       <div className="space-y-2">
-        <p className="text-[0.6875rem] text-[var(--muted-foreground)]">{localizeUi("ui.chat.reagent.memoryHint")}</p>
+        <p className="text-[0.6875rem] text-[var(--muted-foreground)]">{file.hint}</p>
         <textarea
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
@@ -242,23 +309,24 @@ function ReagentMemoryModal({ chatId, initial, onClose }: { chatId: string; init
           spellCheck={false}
         />
         <div className="flex justify-end gap-2">
+          {file.deletable && (
+            <button
+              type="button"
+              className={`${BUTTON_CLASS} mr-auto text-[var(--destructive)]`}
+              disabled={update.isPending}
+              onClick={() => save(null)}
+            >
+              {localizeUi("ui.chat.reagent.delete")}
+            </button>
+          )}
           <button type="button" className={BUTTON_CLASS} onClick={onClose}>
             {localizeUi("ui.chat.reagent.cancel")}
           </button>
           <button
             type="button"
             className={BUTTON_CLASS}
-            disabled={update.isPending || draft === initial}
-            onClick={() =>
-              update.mutate(draft, {
-                onSuccess: () => {
-                  toast.success(localizeUi("ui.chat.reagent.memorySaved"));
-                  onClose();
-                },
-                onError: (error) =>
-                  toast.error(error instanceof Error ? error.message : localizeUi("ui.chat.reagent.memorySaveFailed")),
-              })
-            }
+            disabled={update.isPending || draft === file.initial}
+            onClick={() => save(draft)}
           >
             {update.isPending ? localizeUi("ui.chat.reagent.saving") : localizeUi("ui.chat.reagent.save")}
           </button>
