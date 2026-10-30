@@ -13,7 +13,7 @@
 // ──────────────────────────────────────────────
 
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   REAGENT_CHARACTER_NOTES_DIR,
@@ -57,6 +57,29 @@ export function reagentRootDir() {
 export function reagentWorkspaceDir(chatId: string) {
   // Chat ids are nanoids; keep the path safe even if one ever is not.
   return resolve(reagentRootDir(), chatId.replace(/[^A-Za-z0-9_-]/g, "_"));
+}
+
+/** Every path the journal has ever materialized for a chat, kept beside its workspace. */
+function reagentManifestPath(chatId: string) {
+  return `${reagentWorkspaceDir(chatId)}.materialized.json`;
+}
+
+async function readManifest(chatId: string): Promise<string[]> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(reagentManifestPath(chatId), "utf8"));
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A branch takes its source's workspace with it; the next materialize folds it to the copied transcript. */
+export async function copyReagentWorkspace(sourceChatId: string, targetChatId: string) {
+  const sourceDir = reagentWorkspaceDir(sourceChatId);
+  if (!existsSync(sourceDir)) return;
+  await cp(sourceDir, reagentWorkspaceDir(targetChatId), { recursive: true, force: true });
+  const manifest = await readManifest(sourceChatId);
+  if (manifest.length) await writeFile(reagentManifestPath(targetChatId), JSON.stringify(manifest), "utf8");
 }
 
 export async function ensureWorkspaceDir(chatId: string) {
@@ -133,7 +156,7 @@ export function looksBinary(buffer: Buffer) {
 
 // ── Journal folding ──
 
-type TranscriptRow = { id: string; extra: unknown };
+type TranscriptRow = { id: string; extra: unknown; createdAt?: string | null };
 
 function parseExtra(value: unknown): Record<string, unknown> {
   if (!value) return {};
@@ -161,7 +184,9 @@ export function readReagentFiles(extra: unknown): ReagentFileVersions {
 /**
  * The workspace as the visible transcript leaves it: each message's after-images
  * in order, with the user's own edits applied right after the message they are
- * anchored to (edits anchored to a message that is no longer there apply last).
+ * anchored to. An edit whose message is gone (deleted, or a branch made before
+ * this fix kept the source chat's id) is placed by its time among the messages
+ * that remain; one without a time applies last.
  */
 export function foldWorkspaceState(
   messages: TranscriptRow[],
@@ -172,14 +197,26 @@ export function foldWorkspaceState(
   const visibleIds = new Set(messages.map((message) => message.id));
   const editsByAnchor = new Map<string | null, ReagentUserFileEdit[]>();
   const orphaned: ReagentUserFileEdit[] = [];
-  for (const edit of userEdits) {
-    if (edit.afterMessageId === null || visibleIds.has(edit.afterMessageId)) {
-      const list = editsByAnchor.get(edit.afterMessageId) ?? [];
-      list.push(edit);
-      editsByAnchor.set(edit.afterMessageId, list);
-    } else {
-      orphaned.push(edit);
+  const anchorByTime = (edit: ReagentUserFileEdit): string | null | undefined => {
+    const at = Date.parse(edit.at ?? "");
+    if (Number.isNaN(at)) return undefined;
+    let anchor: string | null = null;
+    for (const message of messages) {
+      const createdAt = Date.parse(message.createdAt ?? "");
+      if (!Number.isNaN(createdAt) && createdAt <= at) anchor = message.id;
     }
+    return anchor;
+  };
+  for (const edit of userEdits) {
+    const anchor =
+      edit.afterMessageId === null || visibleIds.has(edit.afterMessageId) ? edit.afterMessageId : anchorByTime(edit);
+    if (anchor === undefined) {
+      orphaned.push(edit);
+      continue;
+    }
+    const list = editsByAnchor.get(anchor) ?? [];
+    list.push(edit);
+    editsByAnchor.set(anchor, list);
   }
   const apply = (versions: ReagentFileVersions | ReagentUserFileEdit[]) => {
     if (Array.isArray(versions)) {
@@ -230,12 +267,23 @@ export async function materializeWorkspace(
   const metadata = options.chatMetadata ?? parseExtra((await chats.getById(chatId))?.metadata);
   const userEdits: ReagentUserFileEdit[] = readReagentUserFileEdits(metadata);
   const state = foldWorkspaceState(messages, userEdits, { beforeMessageId: options.beforeMessageId });
+  // A file the journal wrote earlier but the fold no longer has (first created by a swipe that is
+  // not shown, or by the reply being regenerated) must go, or the old swipe's notes outlive it.
+  // Files the journal never wrote (shell output) are left alone.
+  const known = await readManifest(chatId);
+  for (const relPath of known) if (!(relPath in state)) state[relPath] = null;
   for (const [relPath, content] of Object.entries(state)) {
     try {
       await writeWorkspaceFile(workspaceDir, relPath, content);
     } catch (error) {
       logger.warn(error, "[reagent] Could not materialize %s for chat %s", relPath, chatId);
     }
+  }
+  const manifest = [...new Set([...known, ...Object.keys(state)])].sort();
+  if (manifest.length !== known.length) {
+    await writeFile(reagentManifestPath(chatId), JSON.stringify(manifest), "utf8").catch((error) =>
+      logger.warn(error, "[reagent] Could not record materialized files for chat %s", chatId),
+    );
   }
   return { workspaceDir, state };
 }

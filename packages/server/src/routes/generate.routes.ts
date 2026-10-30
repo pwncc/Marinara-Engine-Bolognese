@@ -8787,6 +8787,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 characters: charInfo.map((character) => ({ id: character.id, name: character.name })),
                 trackerCharacters: reagentTracker,
                 scene: reagentScene,
+                beforeMessageId: input.regenerateMessageId ?? null,
                 callingCharacterId:
                   speaksOnlyTargetCharacter && !input.impersonate
                     ? (targetCharId ?? input.forCharacterId ?? null)

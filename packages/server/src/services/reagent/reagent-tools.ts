@@ -90,6 +90,8 @@ export interface ReagentExecutorDeps {
   scene: ReagentScene;
   /** The character speaking this turn, when exactly one is. */
   callingCharacterId: string | null;
+  /** A regenerate replaces this message: it and everything after it are not part of the past. */
+  beforeMessageId?: string | null;
   searchLorebook?: LorebookSearchFn;
   signal?: AbortSignal;
   sendEvent?: (payload: Record<string, unknown>) => void;
@@ -704,7 +706,9 @@ export function createReagentExecutor(deps: ReagentExecutorDeps) {
   };
 
   async function loadTranscript(): Promise<TranscriptEntry[]> {
-    const rows = await chats.listMessages(deps.chatId);
+    const all = await chats.listMessages(deps.chatId);
+    const end = deps.beforeMessageId ? all.findIndex((row) => row.id === deps.beforeMessageId) : -1;
+    const rows = end >= 0 ? all.slice(0, end) : all;
     const nameById = new Map(deps.characters.map((character) => [character.id, character.name]));
     return rows.map((row, index) => ({
       id: row.id,

@@ -64,6 +64,7 @@ import {
   semanticSummaryRetrievalSettingsSchema,
   DEFAULT_GENERATION_PARAMS,
   omitChatMetadataLocalDestinations,
+  readReagentUserFileEdits,
 } from "@marinara-engine/shared";
 import type {
   CharacterData,
@@ -137,6 +138,7 @@ import {
 } from "../services/spatial-context/projection.js";
 import { createSpatialContextStorage } from "../services/storage/spatial-context.storage.js";
 import { restoreBranchHudLists, trimJournalForBranch } from "../services/game/branch-state.js";
+import { copyReagentWorkspace } from "../services/reagent/reagent-workspace.js";
 import { removeGameInventoryTelling, switchGameInventoryTelling } from "../services/game/game-inventory.service.js";
 import { applyAllSegmentEdits, applyMessageSegmentEdits } from "../services/game/segment-edits.js";
 import type { Journal } from "../services/game/journal.service.js";
@@ -5577,6 +5579,10 @@ export async function chatsRoutes(app: FastifyInstance) {
       if (branchedId) sourceToBranchedMessageId.set(msg.id, branchedId);
     });
     await storage.remapRoleplayInterruptionTargets(newChat.id, sourceToBranchedMessageId, sourceToCopiedSwipeIndexes);
+    // The writer's workspace comes along; its journal is refolded to the copied messages on first use.
+    await copyReagentWorkspace(sourceChat.id, newChat.id).catch((err) =>
+      logger.warn(err, "Could not copy the REagent workspace while branching chat %s", sourceChat.id),
+    );
     const forkSourceMessage = copiedSourceMessages.at(-1);
 
     if (sourceChat.mode === "game" && settingsToKeep.gameJournal) {
@@ -5608,6 +5614,16 @@ export async function chatsRoutes(app: FastifyInstance) {
         : undefined;
     const branchCharacterIds = resolveChatCharacterIds(newChat.characterIds);
     settingsToKeep = remapAdvancedMemoryMetadata(settingsToKeep, sourceToBranchedMessageId, branchCharacterIds, true);
+    // Hand-made memory edits stay anchored to the copied message they followed. Left on the source id they
+    // would count as orphans and be applied last on every fold, undoing whatever the branch's replies write.
+    // Edits made after the branch point stay behind; ones already orphaned in the source carry over as they are.
+    const sourceMessageIds = new Set(msgs.map((msg) => msg.id));
+    settingsToKeep.reagentUserFileEdits = readReagentUserFileEdits(settingsToKeep).flatMap((edit) => {
+      if (edit.afterMessageId === null) return [edit];
+      const branchedId = sourceToBranchedMessageId.get(edit.afterMessageId);
+      if (branchedId) return [{ ...edit, afterMessageId: branchedId }];
+      return sourceMessageIds.has(edit.afterMessageId) ? [] : [edit];
+    });
     // A game's record of one turn's tellings (#6774) follows the copied turn and its swipe indexes.
     const inventoryTurn = readGameInventoryTurn(settingsToKeep.gameInventoryTurn);
     const branchedInventoryTurnId = inventoryTurn && sourceToBranchedMessageId.get(inventoryTurn.messageId);

@@ -10,6 +10,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Fixed
 
+- REagent memory follows a branched chat: hand-made memory edits are re-anchored to the copied messages (left on the source chat's ids they counted as orphans and were re-applied after every reply, undoing what the branch wrote), edits whose message is gone are placed by their time instead of last, and the workspace folder is copied with the branch.
+- Regenerating or swiping a reply no longer keeps what that reply wrote: workspace files it created (memory, dossiers, the simulation ledger) are removed when the transcript folds without it, and the writer's message search and read tools stop before the reply being replaced.
 - Claude models on custom OpenAI-compatible connections now receive their selected reasoning effort, including `max`, instead of dropping it or lowering Maximum to `xhigh`. Fable background requests that ask for no reasoning use its lowest supported effort.
 
 - Professor Mari workspace can optionally accept trusted-network access with `MARI_ALLOW_TRUSTED_NETWORK=true`, so explicitly allowlisted home devices can use the normal app port without the development proxy or an admin secret.
