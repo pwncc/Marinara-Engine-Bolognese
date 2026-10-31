@@ -380,7 +380,7 @@ const MINDS_TOOLS: LLMToolDefinition[] = [
   ),
   def(
     "knows",
-    "What a person knows about something, from their ledger only. Check before letting someone react to, mention or act on a fact. Without `about`, their whole ledger.",
+    "What a person knows about something: their ledger first, then the chat itself, since everything they were present for they know. Check before letting someone react to, mention or act on a fact. Without `about`, their whole ledger.",
     { character: { type: "string" }, about: { type: "string", description: "Words to look for." } },
     ["character"],
   ),
@@ -798,7 +798,7 @@ export function buildReagentPromptBlock(input: {
   }
   if (input.settings.tools.minds) {
     lines.push(
-      "Knowledge: nobody reacts to, mentions or acts on anything not in their ledger. learn() what each person saw or was told, with wrong=true for a false conclusion and secret=true for what they keep; knows() before letting someone use a fact. Wants: every line is a tactic in pursuit of a want (set_objective); a tactic runs until tactic_result() says it worked or failed, and a failed one is not tried again the same way. Status: set_status() for how someone is playing high or low to the person in front of them; it shifts line by line.",
+      "Knowledge: a person knows what they were present for in the chat and what their ledger records; nothing else. The ledger starts empty and is for what the chat does not settle: news from off-screen, secrets, false conclusions, who told whom. learn() those as they happen, with wrong=true for a false conclusion and secret=true for what they keep; knows() before letting someone use a fact that came from elsewhere. An empty ledger is not ignorance; knows() looks in the chat too. Wants: every line is a tactic in pursuit of a want (set_objective); a tactic runs until tactic_result() says it worked or failed, and a failed one is not tried again the same way. Status: set_status() for how someone is playing high or low to the person in front of them; it shifts line by line.",
     );
   }
   if (input.settings.tools.affect) {
@@ -1705,10 +1705,48 @@ ${clip(content)}`),
           return hay.includes(about) || terms.some((term) => hay.includes(term));
         })
       : list;
+    // The ledger only holds what was recorded since it started. Everything in the chat that the
+    // person was present for, they know too, so an empty ledger is not ignorance: look in the chat.
+    let fromChat: Array<{ index: number; speaker: string; snippet: string }> = [];
+    if (about && !matches.length) {
+      try {
+        const transcript = await loadTranscript();
+        fromChat = transcript
+          .map((entry) => {
+            const hay = entry.content.toLowerCase();
+            const score = (hay.includes(about) ? 3 : 0) + terms.filter((term) => hay.includes(term)).length;
+            return { entry, score };
+          })
+          .filter((item) => item.score > 0)
+          .sort((a, b) => b.score - a.score || b.entry.index - a.entry.index)
+          .slice(0, 5)
+          .map(({ entry }) => {
+            const at = Math.max(0, entry.content.toLowerCase().indexOf(terms[0] ?? about));
+            const start = Math.max(0, at - MESSAGE_SNIPPET / 3);
+            return {
+              index: entry.index,
+              speaker: entry.speaker,
+              snippet: `${start > 0 ? "…" : ""}${entry.content.slice(start, start + MESSAGE_SNIPPET)}${
+                start + MESSAGE_SNIPPET < entry.content.length ? "…" : ""
+              }`,
+            };
+          });
+      } catch {
+        /* no transcript here */
+      }
+    }
+    const who = key ?? name;
+    const note = !about
+      ? undefined
+      : matches.length
+        ? undefined
+        : fromChat.length
+          ? `Nothing recorded for ${who}, but it came up in the chat and they know what they were there for. Treat it as known unless they were absent for it, and learn() it to record it.`
+          : `Nothing recorded for ${who} and nothing about it in the chat: they do not know it. They cannot react to it, mention it or act on it until they learn it.`;
     return {
       result: ok(
         JSON.stringify({
-          character: key ?? name,
+          character: who,
           knows: matches.map((entry) => ({
             id: entry.id,
             fact: entry.fact,
@@ -1716,10 +1754,8 @@ ${clip(content)}`),
             ...(entry.wrong ? { wrong: true } : {}),
             ...(entry.secret ? { secret: true } : {}),
           })),
-          note:
-            about && !matches.length
-              ? `${key ?? name} knows nothing about that. They cannot react to it, mention it or act on it until they learn it.`
-              : undefined,
+          ...(fromChat.length ? { fromChat } : {}),
+          ...(note ? { note } : {}),
         }),
       ),
       media: [],
