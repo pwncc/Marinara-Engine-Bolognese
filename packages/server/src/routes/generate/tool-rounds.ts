@@ -100,6 +100,35 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
 
   let loopMessages: ChatMessage[] = [...ctx.initialMessages];
   let rollRequestAbort: AbortController | null = null;
+  // Where each round's text begins in `text`, for spotting a round that writes an earlier one again.
+  const roundStarts: number[] = [];
+  /**
+   * A model that wrote reply text before calling a tool often writes that text again after the
+   * results, once per round, so the reply holds its opening two or three times over. When this
+   * round's text begins by repeating everything from an earlier round on, drop the repeat: from
+   * the reply, from what the model sees of itself next round, and from the client's view.
+   * Returns the round's text without the repeat, or null when nothing repeated.
+   */
+  const dropRepeatedRounds = (roundStart: number): string | null => {
+    const roundText = text.slice(roundStart);
+    const roundKey = roundText.trimStart();
+    for (const start of roundStarts) {
+      if (start >= roundStart) break;
+      const earlier = text.slice(start, roundStart).trimEnd();
+      if (earlier.length < 40 || !roundKey.startsWith(earlier)) continue;
+      const remainder = roundKey.slice(earlier.length);
+      text = text.slice(0, roundStart) + remainder;
+      if (roleplayFiltered) stream.roleplayCommandFilter = new RoleplayCommandStreamFilter(roleplayRollEnabled);
+      if (!stream.holdForTextRewrite)
+        sendSseEvent(ctx.output, {
+          type: "content_replace",
+          data: roleplayFiltered ? parseRoleplayCommands(text).content : text,
+        });
+      logger.debug("[generate] Dropped %d repeated characters from tool round text", earlier.length);
+      return remainder;
+    }
+    return null;
+  };
   // Length of the outgoing prompt when cutting its stream at a roll lost its usage. It stays
   // set while each later round is also cut at a roll without usage, since those rounds add
   // only their text and roll results; the first request that finishes or reports usage ends it.
@@ -123,6 +152,7 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
 
   for (let round = 0; round < maxToolRounds; round++) {
     const roundResponseStart = text.length;
+    roundStarts.push(roundResponseStart);
     rollRequestAbort = roleplayRollEnabled ? new AbortController() : null;
     if (roleplayFiltered) stream.roleplayCommandFilter = new RoleplayCommandStreamFilter(roleplayRollEnabled);
     // Treat abort as a silent cancellation: stop the pipeline immediately.
@@ -199,6 +229,8 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
     if (result.content && !text.endsWith(result.content)) {
       await write(result.content);
     }
+    const unrepeated = dropRepeatedRounds(roundResponseStart);
+    if (unrepeated !== null) result = { ...result, content: unrepeated };
 
     // Gemini thought signatures reach this branch as providerMetadata rather than
     // through onResponseParts, which is only wired on the no-tools path. Without
@@ -368,6 +400,8 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
       if (finalResult.content && text.length === prevLen) {
         await write(finalResult.content);
       }
+      roundStarts.push(prevLen);
+      dropRepeatedRounds(prevLen);
       geminiResponseParts = appendRoundGeminiParts(geminiResponseParts, finalResult.providerMetadata);
       ctx.recordUsage(finalResult.usage, addedToLostPrompt());
       finishReason = finalResult.finishReason;

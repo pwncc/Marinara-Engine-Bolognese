@@ -404,7 +404,7 @@ export function buildReagentPromptBlock(input: {
   const lines: string[] = [];
   lines.push("## Your tools (REagent)");
   lines.push(
-    "You can call tools while thinking about your reply. Tool calls are invisible to the other person; the reply text you write afterwards is all they see. Use tools to check facts, look at files, remember things and keep your notes, then answer in character as usual. Never narrate or mention tool use in the reply itself.",
+    "You can call tools while thinking about your reply. Tool calls are invisible to the other person; the reply text you write afterwards is all they see. Use tools to check facts, look at files, remember things and keep your notes, then answer in character as usual. Call them before you write, or carry on from where you stopped after the results: the text you already wrote stays, so never write it again. Never narrate or mention tool use in the reply itself.",
   );
   lines.push(`Workspace folder (your own; relative paths resolve here): ${input.workspaceDir}`);
   if (input.settings.tools.memory) {
