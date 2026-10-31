@@ -4,6 +4,7 @@ import { useTranslation as useUiTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
   REAGENT_MEMORY_FILE,
+  REAGENT_SIMULATION_FILE,
   supportsNativeToolCalls,
   type ReagentSettings,
   type ReagentShellPolicy,
@@ -45,6 +46,22 @@ const FAMILIES: Array<{ id: ReagentToolFamily; labelKey: string; descriptionKey:
     id: "simulation",
     labelKey: "ui.chat.reagent.family.simulation",
     descriptionKey: "ui.chat.reagent.family.simulationDescription",
+  },
+  { id: "minds", labelKey: "ui.chat.reagent.family.minds", descriptionKey: "ui.chat.reagent.family.mindsDescription" },
+  {
+    id: "affect",
+    labelKey: "ui.chat.reagent.family.affect",
+    descriptionKey: "ui.chat.reagent.family.affectDescription",
+  },
+  {
+    id: "speech",
+    labelKey: "ui.chat.reagent.family.speech",
+    descriptionKey: "ui.chat.reagent.family.speechDescription",
+  },
+  {
+    id: "ambient",
+    labelKey: "ui.chat.reagent.family.ambient",
+    descriptionKey: "ui.chat.reagent.family.ambientDescription",
   },
   {
     id: "lorebook",
@@ -145,6 +162,22 @@ export function ReagentSection({ chatId, settings, provider, style, onChange }: 
                 >
                   <NotebookPen size="0.75rem" />
                   {localizeUi("ui.chat.reagent.editMemory")}
+                </button>
+                <button
+                  type="button"
+                  className={BUTTON_CLASS}
+                  onClick={() =>
+                    setEditing({
+                      path: REAGENT_SIMULATION_FILE,
+                      title: REAGENT_SIMULATION_FILE,
+                      hint: localizeUi("ui.chat.reagent.simulationHint"),
+                      initial: workspace.data?.simulation ?? "",
+                      deletable: true,
+                    })
+                  }
+                >
+                  <NotebookPen size="0.75rem" />
+                  {localizeUi("ui.chat.reagent.editSimulation")}
                 </button>
                 {workspace.data?.workspaceDir && (
                   <span

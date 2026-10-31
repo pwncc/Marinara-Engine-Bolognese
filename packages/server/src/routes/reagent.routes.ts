@@ -9,6 +9,7 @@ import { join } from "node:path";
 import {
   REAGENT_CHARACTER_NOTES_DIR,
   REAGENT_MEMORY_FILE,
+  REAGENT_SIMULATION_FILE,
   readReagentUserFileEdits,
   type ReagentUserFileEdit,
 } from "@marinara-engine/shared";
@@ -19,11 +20,12 @@ import {
   listDirectory,
   materializeWorkspace,
   readWorkspaceMemory,
+  readWorkspaceText,
 } from "../services/reagent/reagent-workspace.js";
 
 const memoryBodySchema = z.object({ content: z.string().max(REAGENT_MAX_TEXT_FILE_BYTES) });
 /** The files the user may edit by hand: the memory file and the dossiers. Null content removes the file. */
-const USER_EDITABLE_PATH = /^(memory\.md|characters\/[\p{L}\p{N}-]{1,60}\.md)$/u;
+const USER_EDITABLE_PATH = /^(memory\.md|simulation\.json|characters\/[\p{L}\p{N}-]{1,60}\.md)$/u;
 const fileBodySchema = z.object({
   path: z.string().regex(USER_EDITABLE_PATH),
   content: z.string().max(REAGENT_MAX_TEXT_FILE_BYTES).nullable(),
@@ -69,6 +71,7 @@ export async function reagentRoutes(app: FastifyInstance) {
     return {
       workspaceDir,
       memory: await readWorkspaceMemory(workspaceDir),
+      simulation: await readWorkspaceText(workspaceDir, REAGENT_SIMULATION_FILE),
       files: await listDirectory(workspaceDir),
       dossiers,
     };

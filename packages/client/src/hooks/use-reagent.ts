@@ -4,6 +4,8 @@ import { api } from "../lib/api-client";
 export interface ReagentWorkspaceInfo {
   workspaceDir: string;
   memory: string;
+  /** The simulation ledger file as text. */
+  simulation: string;
   files: Array<{ path: string; kind: "file" | "dir"; bytes: number; modifiedAt: string }>;
   dossiers: Array<{ path: string; name: string; content: string }>;
 }

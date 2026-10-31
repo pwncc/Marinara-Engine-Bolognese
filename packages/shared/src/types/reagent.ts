@@ -16,6 +16,10 @@ export const REAGENT_TOOL_FAMILIES = [
   "roster",
   "notes",
   "simulation",
+  "minds",
+  "affect",
+  "speech",
+  "ambient",
   "lorebook",
   "web",
   "shell",
@@ -56,6 +60,10 @@ export const DEFAULT_REAGENT_SETTINGS: ReagentSettings = {
     roster: true,
     notes: true,
     simulation: true,
+    minds: true,
+    affect: true,
+    speech: true,
+    ambient: true,
     lorebook: true,
     web: true,
     shell: false,
@@ -113,22 +121,100 @@ export interface ReagentSceneState {
 
 export const REAGENT_SCENE_FIELDS = ["date", "time", "location", "weather", "temperature"] as const;
 
+/** One thing a person knows, was told or wrongly concluded. Nobody acts on what is not in their ledger. */
+export interface ReagentBelief {
+  id: string;
+  fact: string;
+  /** How they came to know it: saw it, was told by X, guessed. */
+  source?: string;
+  /** They believe it, and it is not true. */
+  wrong?: boolean;
+  /** They keep it from others. */
+  secret?: boolean;
+  at?: string;
+}
+
+/** What a person wants right now, what is in the way, and how they are going about it. */
+export interface ReagentObjective {
+  want: string;
+  obstacle?: string;
+  tactic?: string;
+  /** Tactics that visibly failed, oldest first. */
+  tried?: string[];
+  since?: string;
+}
+
+/** How a person is playing their standing toward someone else in this exchange. */
+export interface ReagentStatusRelation {
+  toward: string;
+  level: "high" | "low" | "equal";
+  note?: string;
+}
+
+/** The result of an appraisal; intensity decays with the scene clock, the valence lingers as mood. */
+export interface ReagentMood {
+  emotion: string;
+  /** 0-100 when set; decays by scene ticks. */
+  intensity: number;
+  /** -1..1 */
+  valence: number;
+  /** What the emotion pushes them to do. */
+  tendency: string;
+  cause?: string;
+  /** Scene tick (set_scene calls) when set. */
+  atTick: number;
+  atTime?: string;
+}
+
+/** How a person talks: a budget the writer follows, not a style to perform. */
+export interface ReagentVoice {
+  register?: string;
+  sentences?: string;
+  fillers?: string;
+  avoids?: string;
+  /** 0-1: how often they hesitate, restart or trail off. */
+  disfluency?: number;
+  quirks?: string;
+}
+
+/** The gap between what a person means and what they say; only the said part is written. */
+export interface ReagentSubtext {
+  means: string;
+  says: string;
+  at?: string;
+}
+
 /** The simulation ledger as stored in the workspace; every field is optional on disk. */
 export interface ReagentSimulationState {
   scene: ReagentSceneState;
+  /** Counts set_scene calls: the scene clock moods decay against. */
+  tick: number;
   /** Recent concrete happenings, oldest first. */
   events: string[];
   threads: ReagentThread[];
   resolved: ReagentResolvedThread[];
   offscreen: Record<string, ReagentWhereabouts>;
+  beliefs: Record<string, ReagentBelief[]>;
+  objectives: Record<string, ReagentObjective>;
+  status: Record<string, ReagentStatusRelation[]>;
+  moods: Record<string, ReagentMood>;
+  voices: Record<string, ReagentVoice>;
+  subtext: Record<string, ReagentSubtext>;
 }
 
 export const EMPTY_REAGENT_SIMULATION: ReagentSimulationState = {
   scene: {},
+  tick: 0,
   events: [],
   threads: [],
   resolved: [],
   offscreen: {},
+  beliefs: {},
+  objectives: {},
+  status: {},
+  moods: {},
+  voices: {},
+  subtext: {},
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -137,7 +223,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Parse the simulation file leniently; anything malformed becomes the empty ledger. */
 export function parseReagentSimulation(raw: string | null | undefined): ReagentSimulationState {
-  const empty = (): ReagentSimulationState => ({ scene: {}, events: [], threads: [], resolved: [], offscreen: {} });
+  const empty = (): ReagentSimulationState => ({
+    scene: {},
+    tick: 0,
+    events: [],
+    threads: [],
+    resolved: [],
+    offscreen: {},
+    beliefs: {},
+    objectives: {},
+    status: {},
+    moods: {},
+    voices: {},
+    subtext: {},
+  });
   if (!raw?.trim()) return empty();
   let parsed: unknown;
   try {
@@ -174,7 +273,67 @@ export function parseReagentSimulation(raw: string | null | undefined): ReagentS
       if (isRecord(entry) && typeof entry.where === "string") offscreen[name] = entry as unknown as ReagentWhereabouts;
     }
   }
-  return { scene, events, threads, resolved, offscreen };
+  const tick =
+    typeof parsed.tick === "number" && Number.isFinite(parsed.tick) ? Math.max(0, Math.floor(parsed.tick)) : 0;
+  /** A record of per-person entries, keeping the ones that pass `keep`. */
+  const byPerson = <T>(value: unknown, keep: (entry: unknown) => entry is T): Record<string, T> => {
+    const out: Record<string, T> = {};
+    if (!isRecord(value)) return out;
+    for (const [name, entry] of Object.entries(value)) if (name.trim() && keep(entry)) out[name] = entry;
+    return out;
+  };
+  const beliefs: Record<string, ReagentBelief[]> = {};
+  if (isRecord(parsed.beliefs)) {
+    for (const [name, list] of Object.entries(parsed.beliefs)) {
+      if (!name.trim() || !Array.isArray(list)) continue;
+      const kept = list.filter(
+        (entry): entry is ReagentBelief =>
+          isRecord(entry) && typeof entry.id === "string" && typeof entry.fact === "string",
+      );
+      if (kept.length) beliefs[name] = kept;
+    }
+  }
+  const objectives = byPerson(
+    parsed.objectives,
+    (entry): entry is ReagentObjective => isRecord(entry) && typeof entry.want === "string" && !!entry.want.trim(),
+  );
+  const status: Record<string, ReagentStatusRelation[]> = {};
+  if (isRecord(parsed.status)) {
+    for (const [name, list] of Object.entries(parsed.status)) {
+      if (!name.trim() || !Array.isArray(list)) continue;
+      const kept = list.filter(
+        (entry): entry is ReagentStatusRelation =>
+          isRecord(entry) &&
+          typeof entry.toward === "string" &&
+          (entry.level === "high" || entry.level === "low" || entry.level === "equal"),
+      );
+      if (kept.length) status[name] = kept;
+    }
+  }
+  const moods = byPerson(
+    parsed.moods,
+    (entry): entry is ReagentMood =>
+      isRecord(entry) &&
+      typeof entry.emotion === "string" &&
+      typeof entry.intensity === "number" &&
+      typeof entry.valence === "number" &&
+      typeof entry.tendency === "string" &&
+      typeof entry.atTick === "number",
+  );
+  const voices = byPerson(parsed.voices, (entry): entry is ReagentVoice => isRecord(entry));
+  const subtext = byPerson(
+    parsed.subtext,
+    (entry): entry is ReagentSubtext =>
+      isRecord(entry) && typeof entry.means === "string" && typeof entry.says === "string",
+  );
+  return { scene, tick, events, threads, resolved, offscreen, beliefs, objectives, status, moods, voices, subtext };
+}
+
+/** Half the intensity goes every two scene ticks; under 10 the feeling has settled into mood. */
+export function decayedReagentMood(mood: ReagentMood, tick: number): ReagentMood {
+  const elapsed = Math.max(0, tick - mood.atTick);
+  const intensity = Math.round(mood.intensity * Math.pow(0.5, elapsed / 2));
+  return { ...mood, intensity };
 }
 
 /** Chat metadata key holding the partial settings object. */

@@ -17,15 +17,19 @@ import {
   CHARACTER_STATUS_BAR_SPECS,
   DEFAULT_STATUS_LIMBS,
   buildPresentCharacterUpdate,
+  decayedReagentMood,
   parseReagentSimulation,
   type PresentCharacter,
   type PresentCharacterUpdate,
   type LLMToolCall,
   type LLMToolDefinition,
   type ReagentActivityEntry,
+  type ReagentBelief,
+  type ReagentMood,
   type ReagentSettings,
   type ReagentSimulationState,
   type ReagentToolFamily,
+  type ReagentVoice,
 } from "@marinara-engine/shared";
 import type { DB } from "../../db/connection.js";
 import { logger } from "../../lib/logger.js";
@@ -361,6 +365,136 @@ const SHELL_TOOLS: LLMToolDefinition[] = [
   ),
 ];
 
+const MINDS_TOOLS: LLMToolDefinition[] = [
+  def(
+    "learn",
+    "Record one thing a person now knows, was told, or has concluded. Nobody reacts to anything that is not in their ledger, so record what each person actually witnessed or heard, and mark guesses that happen to be false with wrong=true.",
+    {
+      character: { type: "string" },
+      fact: { type: "string" },
+      source: { type: "string", description: "saw it / told by X / overheard / guessed." },
+      secret: { type: "boolean", description: "They keep it from others." },
+      wrong: { type: "boolean", description: "They believe it and it is not true." },
+    },
+    ["character", "fact"],
+  ),
+  def(
+    "knows",
+    "What a person knows about something, from their ledger only. Check before letting someone react to, mention or act on a fact. Without `about`, their whole ledger.",
+    { character: { type: "string" }, about: { type: "string", description: "Words to look for." } },
+    ["character"],
+  ),
+  def(
+    "forget",
+    "Remove a ledger entry by id (they never knew it, or you recorded it wrongly).",
+    {
+      character: { type: "string" },
+      id: { type: "string" },
+    },
+    ["character", "id"],
+  ),
+  def(
+    "set_objective",
+    "Set what a person wants right now, what is in the way, and the tactic they are using. Replaces their current objective outright; a want can change any time. Every line a person speaks is a tactic in pursuit of a want.",
+    {
+      character: { type: "string" },
+      want: { type: "string" },
+      obstacle: { type: "string" },
+      tactic: { type: "string", description: "How they are going about it right now." },
+    },
+    ["character", "want"],
+  ),
+  def(
+    "tactic_result",
+    "The current tactic visibly worked or failed. A failed tactic is dropped (kept in `tried`); give the next one or leave the person without a plan for a while. A tactic runs until this says it ended.",
+    {
+      character: { type: "string" },
+      result: { type: "string", enum: ["worked", "failed"] },
+      next_tactic: { type: "string" },
+    },
+    ["character", "result"],
+  ),
+  def(
+    "drop_objective",
+    "The person no longer wants this (got it, gave up, or something bigger came up).",
+    {
+      character: { type: "string" },
+      why: { type: "string" },
+    },
+    ["character"],
+  ),
+  def(
+    "set_status",
+    "How a person is playing their standing toward someone in this exchange: high (takes space, holds eye contact, interrupts, decides), low (yields, apologises, fills silence, asks), or equal. Status shifts line by line and is not the same as rank.",
+    {
+      character: { type: "string" },
+      toward: { type: "string", description: "The other person." },
+      level: { type: "string", enum: ["high", "low", "equal"] },
+      note: { type: "string", description: "What it looks like right now." },
+    },
+    ["character", "toward", "level"],
+  ),
+];
+
+const AFFECT_TOOLS: LLMToolDefinition[] = [
+  def(
+    "appraise",
+    "Let an event decide a person's emotion instead of choosing one. Give how the event bears on what they want, who caused it, whether they saw it coming and how much they can do about it; the tool returns the emotion, its strength and what it pushes them to do, and sets their mood. The emotion then fades with the scene clock.",
+    {
+      character: { type: "string" },
+      event: { type: "string", description: "What just happened, concretely." },
+      impact: {
+        type: "integer",
+        description: "-5 (ruins what they want) to 5 (gives them what they want). 0 = beside the point.",
+      },
+      agency: { type: "string", enum: ["self", "other", "nobody"], description: "Who brought it about." },
+      expected: { type: "boolean", description: "They saw it coming." },
+      control: { type: "integer", description: "0-100: how much they can still do about it." },
+    },
+    ["character", "event", "impact", "agency"],
+  ),
+  def("mood_check", "A person's current emotion as it has faded by now, or everyone's when no character is given.", {
+    character: { type: "string" },
+  }),
+];
+
+const SPEECH_TOOLS: LLMToolDefinition[] = [
+  def(
+    "set_voice",
+    "Record how a person talks, as a budget you follow: register, sentence length, fillers, what they never say out loud, how often they hesitate or trail off. Only include fields that changed.",
+    {
+      character: { type: "string" },
+      register: { type: "string", description: "e.g. flat, clipped, formal, warm, sarcastic." },
+      sentences: { type: "string", description: "e.g. short, run-on, trails off." },
+      fillers: { type: "string", description: "The actual words: uh, like, I mean, right." },
+      avoids: { type: "string", description: "What they will not say out loud." },
+      disfluency: { type: "number", description: "0-1: share of lines with a hesitation, restart or trailing off." },
+      quirks: { type: "string" },
+    },
+    ["character"],
+  ),
+  def(
+    "turn_shape",
+    "Before a line, draw the shape of this person's next turn: answer, minimal, counter-question, deflect, silence, backchannel, interrupt, change subject, or pursue their tactic. Weighted by their mood, their status toward the listener and whether they have a plan. Take the shape as drawn; people often do not answer.",
+    { character: { type: "string" }, addressing: { type: "string", description: "Who they are talking to." } },
+    ["character"],
+  ),
+  def(
+    "mean_vs_say",
+    "Record the gap between what a person means and what they will say. Only the said part goes into the reply; the meaning stays in the ledger and in how they say it.",
+    { character: { type: "string" }, means: { type: "string" }, says: { type: "string" } },
+    ["character", "means", "says"],
+  ),
+];
+
+const AMBIENT_TOOLS: LLMToolDefinition[] = [
+  def(
+    "scene_pressure",
+    "Draw whether anything happens in the next stretch at all. Most of the time nothing does and the answer is maintenance (a habit, a chore, a wait). Sometimes a small friction, rarely an interruption from a thread coming due, someone off-screen, or the weather. Take the draw as it falls.",
+    {},
+  ),
+];
+
 const FAMILY_TOOLS: Record<ReagentToolFamily, LLMToolDefinition[]> = {
   files: FILE_TOOLS,
   memory: MEMORY_TOOLS,
@@ -369,6 +503,10 @@ const FAMILY_TOOLS: Record<ReagentToolFamily, LLMToolDefinition[]> = {
   roster: ROSTER_TOOLS,
   notes: NOTES_TOOLS,
   simulation: SIMULATION_TOOLS,
+  minds: MINDS_TOOLS,
+  affect: AFFECT_TOOLS,
+  speech: SPEECH_TOOLS,
+  ambient: AMBIENT_TOOLS,
   lorebook: LOREBOOK_TOOLS,
   web: WEB_TOOLS,
   shell: SHELL_TOOLS,
@@ -389,6 +527,235 @@ export function isReagentToolName(name: string) {
   return Object.values(FAMILY_TOOLS).some((tools) => tools.some((tool) => tool.function.name === name));
 }
 
+// ── Appraisal ──
+
+export interface AppraisalInput {
+  impact: number;
+  agency: "self" | "other" | "nobody";
+  expected: boolean;
+  control: number;
+}
+
+const TENDENCIES: Record<string, string> = {
+  anger: "confront, or withhold and go cold",
+  resentment: "comply on the surface, keep score",
+  guilt: "repair, over-explain, offer things",
+  shame: "hide, deflect, get small",
+  fear: "avoid, freeze, check the exits",
+  frustration: "push harder, snap at the nearest person",
+  sadness: "withdraw, go quiet, do less",
+  resignation: "go through the motions",
+  gratitude: "soften, move closer, owe something",
+  pride: "take up room, say more than needed",
+  relief: "loosen, laugh too easily, let things slide",
+  contentment: "settle in, stop checking the time",
+  surprise: "stall, ask again, re-read the room",
+  interest: "approach, ask, watch",
+  indifference: "carry on with what they were doing",
+};
+
+/** OCC-style rules: goal impact, who caused it, expectedness and coping decide the emotion, not the plot. */
+export function appraiseEvent(input: AppraisalInput): {
+  emotion: string;
+  intensity: number;
+  valence: number;
+  tendency: string;
+} {
+  const impact = Math.max(-5, Math.min(5, Math.round(input.impact)));
+  const control = Math.max(0, Math.min(100, Math.round(input.control)));
+  const unexpected = !input.expected;
+  let emotion: string;
+  if (impact === 0) emotion = unexpected ? "surprise" : "indifference";
+  else if (impact > 0) {
+    if (input.agency === "other") emotion = "gratitude";
+    else if (input.agency === "self") emotion = "pride";
+    else emotion = unexpected ? "relief" : "contentment";
+  } else if (input.agency === "other") emotion = control >= 50 ? "anger" : "resentment";
+  else if (input.agency === "self") emotion = control >= 50 ? "guilt" : "shame";
+  else if (unexpected) emotion = control >= 50 ? "frustration" : "fear";
+  else emotion = control >= 50 ? "frustration" : "resignation";
+  if (emotion === "indifference") return { emotion, intensity: 0, valence: 0, tendency: TENDENCIES[emotion]! };
+  const base = impact === 0 ? 25 : Math.abs(impact) * 18;
+  const intensity = Math.min(100, Math.round(base * (unexpected ? 1.25 : 1)));
+  const valence = impact === 0 ? 0 : Math.max(-1, Math.min(1, impact / 5));
+  return { emotion, intensity, valence, tendency: TENDENCIES[emotion] ?? "" };
+}
+
+function moodWord(mood: ReagentMood): string {
+  if (mood.intensity >= 60) return mood.emotion;
+  if (mood.intensity >= 25) return `${mood.emotion}, fading`;
+  if (mood.intensity >= 10) return `trace of ${mood.emotion}`;
+  return mood.valence < -0.2 ? "flat, sour undertone" : mood.valence > 0.2 ? "settled, warm undertone" : "settled";
+}
+
+const TURN_SHAPES = [
+  "answer",
+  "minimal answer",
+  "counter-question",
+  "deflect",
+  "silence",
+  "backchannel",
+  "interrupt",
+  "change subject",
+  "pursue tactic",
+] as const;
+
+/** Weighted draw of a turn's shape from mood, status toward the listener and whether there is a plan. */
+export function drawTurnShape(
+  input: { mood?: ReagentMood | null; status?: "high" | "low" | "equal" | null; hasTactic: boolean },
+  roll: (max: number) => number,
+): (typeof TURN_SHAPES)[number] {
+  const w: Record<(typeof TURN_SHAPES)[number], number> = {
+    answer: 28,
+    "minimal answer": 18,
+    "counter-question": 12,
+    deflect: 8,
+    silence: 7,
+    backchannel: 7,
+    interrupt: 4,
+    "change subject": 4,
+    "pursue tactic": input.hasTactic ? 22 : 0,
+  };
+  const emotion = input.mood && input.mood.intensity >= 25 ? input.mood.emotion : null;
+  if (emotion === "anger" || emotion === "frustration") ((w.interrupt += 10), (w.deflect += 4), (w.answer -= 8));
+  if (emotion === "fear" || emotion === "shame") ((w["minimal answer"] += 10), (w.silence += 8), (w.answer -= 8));
+  if (emotion === "sadness" || emotion === "resignation")
+    ((w.silence += 8), (w["minimal answer"] += 6), (w.answer -= 6));
+  if (emotion === "gratitude" || emotion === "relief" || emotion === "contentment")
+    ((w.answer += 6), (w.backchannel += 4));
+  if (emotion === "interest" || emotion === "surprise") w["counter-question"] += 10;
+  if (input.status === "low")
+    ((w.backchannel += 6), (w["minimal answer"] += 6), (w.interrupt = Math.max(0, w.interrupt - 3)));
+  if (input.status === "high") ((w.interrupt += 6), (w.deflect += 4), (w["change subject"] += 4), (w.backchannel -= 4));
+  const entries = TURN_SHAPES.map((shape) => [shape, Math.max(0, w[shape])] as const);
+  const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
+  let pick = roll(Math.max(1, total));
+  for (const [shape, weight] of entries) {
+    if (pick < weight) return shape;
+    pick -= weight;
+  }
+  return "answer";
+}
+
+const TURN_SHAPE_NOTES: Record<(typeof TURN_SHAPES)[number], string> = {
+  answer: "They answer what was asked, in their own words and length.",
+  "minimal answer": "A word or two, or a nod. Nothing more unless pressed.",
+  "counter-question": "They answer with a question of their own.",
+  deflect: "They respond to something else in what was said, or to the room.",
+  silence: "They do not answer. Something physical instead, or nothing.",
+  backchannel: "An acknowledgement only: mm, yeah, right. The floor stays with the other person.",
+  interrupt: "They start before the other person finishes.",
+  "change subject": "They move to what they wanted to talk about.",
+  "pursue tactic": "This line is their current tactic in action, whatever was asked.",
+};
+
+function voiceSummary(voice: ReagentVoice): string {
+  const parts = [
+    voice.register,
+    voice.sentences,
+    voice.fillers ? `fillers: ${voice.fillers}` : "",
+    voice.avoids ? `never says: ${voice.avoids}` : "",
+    typeof voice.disfluency === "number" ? `hesitates ${Math.round(voice.disfluency * 100)}% of lines` : "",
+    voice.quirks,
+  ].filter((part): part is string => !!part && part.trim().length > 0);
+  return parts.join(", ");
+}
+
+/** The status bars as pressures on behaviour, never as numbers to state. */
+function barPressures(row: PresentCharacter): string[] {
+  const out: string[] = [];
+  for (const stat of row.stats ?? []) {
+    const name = stat.name.toLowerCase();
+    const value = stat.value;
+    if (name === "hunger" && value >= 65)
+      out.push(value >= 85 ? "starving, cannot think past food" : "hungry, short with people");
+    else if (name === "energy" && value <= 35)
+      out.push(value <= 15 ? "running on empty, slow and blunt" : "tired, cutting corners");
+    else if (name === "stress" && value >= 60)
+      out.push(value >= 80 ? "wound tight, snaps or shuts down" : "on edge, little patience");
+    else if (name === "happiness" && value <= 30) out.push("low, finds little funny");
+    else if (name === "happiness" && value >= 80) out.push("buoyant, generous with time");
+    else if (name === "horny" && value >= 65) out.push("wants closeness, reads things into touches");
+    else if (name === "arousal" && value >= 60) out.push("body ahead of the conversation");
+    else if (!["hunger", "energy", "stress", "happiness", "horny", "arousal"].includes(name)) {
+      if (value >= 75) out.push(`high ${stat.name}`);
+      else if (value <= 25) out.push(`low ${stat.name}`);
+    }
+  }
+  return out;
+}
+
+const findKey = (record: Record<string, unknown>, name: string) =>
+  Object.keys(record).find((key) => key.trim().toLowerCase() === name.trim().toLowerCase());
+
+/** One line per person: everything that presses on their next line, and nothing phrased as a line. */
+export function buildPeoplePressures(input: {
+  settings: ReagentSettings;
+  simulation: ReagentSimulationState;
+  trackerCharacters: PresentCharacter[];
+}): string[] {
+  const sim = input.simulation;
+  const names = new Set<string>(input.trackerCharacters.map((row) => row.name));
+  for (const record of [sim.objectives, sim.moods, sim.status, sim.voices, sim.beliefs] as Record<string, unknown>[]) {
+    for (const name of Object.keys(record))
+      if (!findKey(Object.fromEntries([...names].map((n) => [n, 1])), name)) names.add(name);
+  }
+  const lines: string[] = [];
+  for (const name of names) {
+    const row = input.trackerCharacters.find((entry) => entry.name.trim().toLowerCase() === name.trim().toLowerCase());
+    const parts: string[] = [];
+    const objectiveKey = input.settings.tools.minds ? findKey(sim.objectives, name) : undefined;
+    if (objectiveKey) {
+      const objective = sim.objectives[objectiveKey]!;
+      parts.push(
+        `wants ${objective.want}${objective.obstacle ? ` (in the way: ${objective.obstacle})` : ""}${
+          objective.tactic ? `; tactic: ${objective.tactic}` : "; no tactic right now"
+        }${objective.tried?.length ? `; failed: ${objective.tried.slice(-2).join(", ")}` : ""}`,
+      );
+    }
+    const statusKey = input.settings.tools.minds ? findKey(sim.status, name) : undefined;
+    if (statusKey) {
+      parts.push(
+        sim.status[statusKey]!.map(
+          (entry) => `plays ${entry.level} to ${entry.toward}${entry.note ? ` (${entry.note})` : ""}`,
+        ).join(", "),
+      );
+    }
+    const moodKey = input.settings.tools.affect ? findKey(sim.moods, name) : undefined;
+    if (moodKey) {
+      const mood = decayedReagentMood(sim.moods[moodKey]!, sim.tick);
+      parts.push(
+        `${moodWord(mood)}${mood.intensity >= 25 && mood.cause ? ` (over: ${mood.cause})` : ""}${mood.intensity >= 25 ? `; pulls to ${mood.tendency}` : ""}`,
+      );
+    } else if (row?.mood) parts.push(row.mood);
+    if (row) {
+      const pressures = barPressures(row);
+      if (pressures.length) parts.push(pressures.join(", "));
+      const limbs = Object.entries(row.limbs ?? {}).filter(([, value]) => value.trim());
+      if (limbs.length) parts.push(limbs.map(([limb, value]) => `${limb}: ${value}`).join(", "));
+    }
+    const voiceKey = input.settings.tools.speech ? findKey(sim.voices, name) : undefined;
+    if (voiceKey) {
+      const summary = voiceSummary(sim.voices[voiceKey]!);
+      if (summary) parts.push(`voice: ${summary}`);
+    }
+    const subtextKey = input.settings.tools.speech ? findKey(sim.subtext, name) : undefined;
+    if (subtextKey)
+      parts.push(`last meant "${sim.subtext[subtextKey]!.means}" but said "${sim.subtext[subtextKey]!.says}"`);
+    const beliefKey = input.settings.tools.minds ? findKey(sim.beliefs, name) : undefined;
+    if (beliefKey) {
+      const list = sim.beliefs[beliefKey]!;
+      const secrets = list.filter((entry) => entry.secret).length;
+      const wrong = list.filter((entry) => entry.wrong).length;
+      parts.push(
+        `knows ${list.length} thing${list.length === 1 ? "" : "s"}${secrets ? `, ${secrets} secret` : ""}${wrong ? `, ${wrong} wrong` : ""}`,
+      );
+    }
+    if (parts.length) lines.push(`- ${name}: ${parts.join(" · ")}`);
+  }
+  return lines;
+}
+
 // ── Prompt block ──
 
 export function buildReagentPromptBlock(input: {
@@ -404,8 +771,16 @@ export function buildReagentPromptBlock(input: {
   const lines: string[] = [];
   lines.push("## Your tools (REagent)");
   lines.push(
-    "You can call tools while thinking about your reply. Tool calls are invisible to the other person; the reply text you write afterwards is all they see. Use tools to check facts, look at files, remember things and keep your notes, then answer in character as usual. Call them before you write, or carry on from where you stopped after the results: the text you already wrote stays, so never write it again. Never narrate or mention tool use in the reply itself.",
+    "You can call tools while thinking about your reply. Tool calls are invisible to the other person; the reply text you write afterwards is all they see. Use tools to check facts, look at files, remember things and keep your notes, then answer as usual. Call them before you write, or carry on from where you stopped after the results: the text you already wrote stays, so never write it again. Never narrate or mention tool use in the reply itself.",
   );
+  const ledgers = ["minds", "affect", "speech", "simulation"].some(
+    (family) => input.settings.tools[family as ReagentToolFamily],
+  );
+  if (ledgers) {
+    lines.push(
+      "The ledgers below are the people and the world as they are. You are not performing anyone and not composing a story: you report what these people do next, given what their ledgers say. A want, a feeling, a piece of knowledge or a way of talking is set by tool, not invented in prose; when one matters for a line, set it first, then write what follows from it. The user can edit any ledger directly and can change anything by saying so; what the ledger says is true even when it is not what you expected, and the user's word replaces it without argument.",
+    );
+  }
   lines.push(`Workspace folder (your own; relative paths resolve here): ${input.workspaceDir}`);
   if (input.settings.tools.memory) {
     lines.push(
@@ -416,9 +791,29 @@ export function buildReagentPromptBlock(input: {
     lines.push("Use set_character_status when a character's feelings, body or state meaningfully change.");
   }
   if (input.settings.tools.roster) {
-    const roster = (input.trackerCharacters ?? []).map((row) => (row.mood ? `${row.name} (${row.mood})` : row.name));
+    const roster = (input.trackerCharacters ?? []).map((row) => row.name);
     lines.push(
       `Tracked people: ${roster.length ? roster.join(", ") : "nobody yet"}. Add anyone who matters with add_character; remove them with remove_character when they leave. list_characters shows details.`,
+    );
+  }
+  if (input.settings.tools.minds) {
+    lines.push(
+      "Knowledge: nobody reacts to, mentions or acts on anything not in their ledger. learn() what each person saw or was told, with wrong=true for a false conclusion and secret=true for what they keep; knows() before letting someone use a fact. Wants: every line is a tactic in pursuit of a want (set_objective); a tactic runs until tactic_result() says it worked or failed, and a failed one is not tried again the same way. Status: set_status() for how someone is playing high or low to the person in front of them; it shifts line by line.",
+    );
+  }
+  if (input.settings.tools.affect) {
+    lines.push(
+      "Feelings: when something happens to a person, appraise() it and take the emotion the tool returns, including a dull or disproportionate one. Feelings fade with the scene clock and leave a mood; mood_check() reads them. Do not choose an emotion because the moment calls for it.",
+    );
+  }
+  if (input.settings.tools.speech) {
+    lines.push(
+      "Speech: before a line that matters, turn_shape() draws whether the person answers, deflects, stays silent or interrupts; take the draw. set_voice() is a budget per person; hold to it. mean_vs_say() when what they mean and what they say differ; only the said part is written.",
+    );
+  }
+  if (input.settings.tools.ambient) {
+    lines.push(
+      "Pressure: scene_pressure() draws whether anything happens in the next stretch; usually nothing does, and the answer is a chore, a habit or a wait. Take it as it falls.",
     );
   }
   if (input.settings.tools.notes) {
@@ -429,7 +824,7 @@ export function buildReagentPromptBlock(input: {
   }
   if (input.settings.tools.simulation) {
     lines.push(
-      "Simulation stance: this is a lived-in world, not a story being told. Things happen because of causes, schedules, needs and chance, never because they would be dramatic or tidy. Keep time moving with set_scene. Let resolve_chance decide uncertain outcomes and accept what it says, including dull failures. People off-screen keep living (set_whereabouts) and may turn up, call or be busy. Open loose threads for anything that will come due and let them come due; promises, bills and unanswered messages do not evaporate. Most moments are ordinary and end without a point; do not resolve tension conveniently or tie things up.",
+      "Simulation stance: this is a lived-in world, not a story being told. Things happen because of causes, schedules, needs and chance, never because they would be dramatic or tidy. Keep time moving with set_scene. Let resolve_chance decide uncertain outcomes and accept what it says, including dull failures. People off-screen keep living (set_whereabouts) and may turn up, call or be busy. Open loose threads for anything that will come due and let them come due; promises, bills and unanswered messages do not evaporate. Most moments are ordinary and end without a point; do not resolve tension conveniently or tie things up. A reply stops mid-activity with wants unresolved unless a thread actually came due; it does not end on a beat change, a realisation or a line that sums things up.",
     );
   }
   if (input.settings.tools.shell) {
@@ -440,6 +835,22 @@ export function buildReagentPromptBlock(input: {
     );
   }
   lines.push(`Available tools: ${input.toolNames.join(", ")}.`);
+  if (ledgers) {
+    const people = buildPeoplePressures({
+      settings: input.settings,
+      simulation: input.simulation ?? parseReagentSimulation(""),
+      trackerCharacters: input.trackerCharacters ?? [],
+    });
+    lines.push("");
+    lines.push("### People (pressures on the next line; never a line)");
+    lines.push(
+      "Nothing here is said or narrated. Never state a value, a mood word, a want, a status or its cause; it shows in what the person does and does not say, or not at all.",
+    );
+    lines.push(
+      'Before the reply leaves you, read it once as a record, not as a draft, and cut: any stated feeling, need, want or status with its cause ("she felt a wave of relief", "hunger gnawed"); anyone reacting to a thing not in their ledger; everyone answering everything they were asked; the narrator explaining a motive, a lesson, a realisation or what a silence meant; an ending that sums up, resolves, lands a point or closes on a beat change; speech too finished for the person. What is left is the reply.',
+    );
+    lines.push(people.length ? people.join("\n") : "(nobody has a ledger yet)");
+  }
   if (input.settings.tools.simulation) {
     const simulation = input.simulation ?? parseReagentSimulation("");
     const scene = simulation.scene;
@@ -1117,6 +1528,7 @@ ${clip(content)}`),
 
   async function setSceneTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
     const state = await loadSimulation();
+    state.tick += 1;
     const patch: Record<string, string> = {};
     for (const key of REAGENT_SCENE_FIELDS) {
       const value = str(args[key]).trim();
@@ -1235,7 +1647,379 @@ ${clip(content)}`),
     return { result: ok(`Off-screen: ${name} is at ${where}.`), media: [] };
   }
 
+  // ── Minds: knowledge, wants, status ──
+
+  /** The ledger name for a character as the model gave it: the card or tracker name when it matches, else as given. */
+  const personName = (raw: string) => findCharacter(raw)?.name ?? raw.trim().slice(0, 80);
+  const requirePerson = (args: Record<string, unknown>) => {
+    const raw = str(args.character).trim();
+    if (!raw) throw new Error("character is required.");
+    return personName(raw);
+  };
+  /** The key already used for this person in a per-person record, so case and spelling do not fork a ledger. */
+  const keyFor = <T>(record: Record<string, T>, name: string) => findKey(record, name) ?? name;
+
+  async function learnTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const name = requirePerson(args);
+    const fact = str(args.fact).trim().slice(0, 300);
+    if (!fact) throw new Error("fact is required.");
+    const state = await loadSimulation();
+    const key = keyFor(state.beliefs, name);
+    const list = state.beliefs[key] ?? [];
+    if (list.some((entry) => entry.fact.toLowerCase() === fact.toLowerCase()))
+      return { result: ok(`${key} already knows that.`), media: [] };
+    let id = "";
+    do
+      id = `k${randomInt(0, 36 ** 3)
+        .toString(36)
+        .padStart(3, "0")}`;
+    while (list.some((entry) => entry.id === id));
+    const entry: ReagentBelief = {
+      id,
+      fact,
+      ...(str(args.source).trim() ? { source: str(args.source).trim().slice(0, 120) } : {}),
+      ...(args.secret === true ? { secret: true } : {}),
+      ...(args.wrong === true ? { wrong: true } : {}),
+      ...((await sceneStamp()) ? { at: await sceneStamp() } : {}),
+    };
+    state.beliefs[key] = [...list, entry].slice(-80);
+    await saveSimulation(state);
+    return {
+      result: ok(
+        `${key} now ${entry.wrong ? "believes (wrongly)" : "knows"}${entry.secret ? ", and keeps to themselves" : ""}: ${fact} [${id}]`,
+      ),
+      media: [],
+    };
+  }
+
+  async function knowsTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const name = requirePerson(args);
+    const about = str(args.about).trim().toLowerCase();
+    const state = await loadSimulation();
+    const key = findKey(state.beliefs, name);
+    const list = key ? state.beliefs[key]! : [];
+    const terms = about.split(/\s+/).filter((term) => term.length > 1);
+    const matches = about
+      ? list.filter((entry) => {
+          const hay = `${entry.fact} ${entry.source ?? ""}`.toLowerCase();
+          return hay.includes(about) || terms.some((term) => hay.includes(term));
+        })
+      : list;
+    return {
+      result: ok(
+        JSON.stringify({
+          character: key ?? name,
+          knows: matches.map((entry) => ({
+            id: entry.id,
+            fact: entry.fact,
+            ...(entry.source ? { source: entry.source } : {}),
+            ...(entry.wrong ? { wrong: true } : {}),
+            ...(entry.secret ? { secret: true } : {}),
+          })),
+          note:
+            about && !matches.length
+              ? `${key ?? name} knows nothing about that. They cannot react to it, mention it or act on it until they learn it.`
+              : undefined,
+        }),
+      ),
+      media: [],
+    };
+  }
+
+  async function forgetTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const name = requirePerson(args);
+    const id = str(args.id).trim();
+    const state = await loadSimulation();
+    const key = findKey(state.beliefs, name);
+    const index = key ? state.beliefs[key]!.findIndex((entry) => entry.id === id) : -1;
+    if (!key || index < 0) throw new Error(`No ledger entry ${id} for ${name}.`);
+    const [removed] = state.beliefs[key]!.splice(index, 1);
+    if (!state.beliefs[key]!.length) delete state.beliefs[key];
+    await saveSimulation(state);
+    return { result: ok(`${key} no longer knows: ${removed!.fact}`), media: [] };
+  }
+
+  async function setObjectiveTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const name = requirePerson(args);
+    const want = str(args.want).trim().slice(0, 200);
+    if (!want) throw new Error("want is required.");
+    const state = await loadSimulation();
+    const key = keyFor(state.objectives, name);
+    state.objectives[key] = {
+      want,
+      ...(str(args.obstacle).trim() ? { obstacle: str(args.obstacle).trim().slice(0, 200) } : {}),
+      ...(str(args.tactic).trim() ? { tactic: str(args.tactic).trim().slice(0, 200) } : {}),
+      ...((await sceneStamp()) ? { since: await sceneStamp() } : {}),
+    };
+    await saveSimulation(state);
+    return {
+      result: ok(
+        `${key} wants: ${want}${state.objectives[key]!.tactic ? ` (tactic: ${state.objectives[key]!.tactic})` : ""}`,
+      ),
+      media: [],
+    };
+  }
+
+  async function tacticResultTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const name = requirePerson(args);
+    const result = str(args.result).trim();
+    if (result !== "worked" && result !== "failed") throw new Error("result must be worked or failed.");
+    const state = await loadSimulation();
+    const key = findKey(state.objectives, name);
+    if (!key) throw new Error(`${name} has no objective; set_objective first.`);
+    const objective = state.objectives[key]!;
+    const next = str(args.next_tactic).trim().slice(0, 200);
+    if (result === "failed") {
+      if (objective.tactic) objective.tried = [...(objective.tried ?? []), objective.tactic].slice(-6);
+      if (next) objective.tactic = next;
+      else delete objective.tactic;
+    } else if (next) objective.tactic = next;
+    await saveSimulation(state);
+    return {
+      result: ok(
+        result === "failed"
+          ? `${key}'s tactic failed. ${next ? `Now: ${next}.` : "No plan for now; they improvise or stall."}`
+          : `${key}'s tactic worked${next ? `; next: ${next}` : ""}.`,
+      ),
+      media: [],
+    };
+  }
+
+  async function dropObjectiveTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const name = requirePerson(args);
+    const state = await loadSimulation();
+    const key = findKey(state.objectives, name);
+    if (!key) return { result: ok(`${name} had no objective.`), media: [] };
+    const was = state.objectives[key]!.want;
+    delete state.objectives[key];
+    await saveSimulation(state);
+    return {
+      result: ok(`${key} no longer wants: ${was}${str(args.why).trim() ? ` (${str(args.why).trim()})` : ""}`),
+      media: [],
+    };
+  }
+
+  async function setStandingTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const name = requirePerson(args);
+    const toward = personName(str(args.toward));
+    const level = str(args.level).trim();
+    if (!toward) throw new Error("toward is required.");
+    if (level !== "high" && level !== "low" && level !== "equal") throw new Error("level must be high, low or equal.");
+    const state = await loadSimulation();
+    const key = keyFor(state.status, name);
+    const list = (state.status[key] ?? []).filter((entry) => !sameName(entry.toward, toward));
+    list.push({ toward, level, ...(str(args.note).trim() ? { note: str(args.note).trim().slice(0, 160) } : {}) });
+    state.status[key] = list.slice(-8);
+    await saveSimulation(state);
+    return { result: ok(`${key} plays ${level} to ${toward}.`), media: [] };
+  }
+
+  // ── Affect ──
+
+  async function appraiseTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const name = requirePerson(args);
+    const event = str(args.event).trim().slice(0, 300);
+    if (!event) throw new Error("event is required.");
+    const agency = str(args.agency).trim();
+    if (agency !== "self" && agency !== "other" && agency !== "nobody")
+      throw new Error("agency must be self, other or nobody.");
+    const appraisal = appraiseEvent({
+      impact: num(args.impact, 0),
+      agency,
+      expected: args.expected === true,
+      control: num(args.control, 50),
+    });
+    const state = await loadSimulation();
+    const key = keyFor(state.moods, name);
+    const stamp = await sceneStamp();
+    state.moods[key] = {
+      ...appraisal,
+      cause: event,
+      atTick: state.tick,
+      ...(stamp ? { atTime: stamp } : {}),
+    };
+    await saveSimulation(state);
+    const row = findTrackerRow(name);
+    if (row && appraisal.intensity >= 25) {
+      const update = buildPresentCharacterUpdate(row.characterId, row.name, {
+        emotion: appraisal.emotion,
+        emotionCause: event,
+      });
+      if (update) deps.onStatusPatch(update);
+    }
+    return {
+      result: ok(
+        JSON.stringify({
+          character: key,
+          emotion: appraisal.emotion,
+          intensity: appraisal.intensity,
+          tendency: appraisal.tendency,
+          note: "This is what they feel, as it fell. It shows in behaviour and fades with the scene clock; it is never stated.",
+        }),
+      ),
+      media: [],
+    };
+  }
+
+  async function moodCheckTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const raw = str(args.character).trim();
+    const state = await loadSimulation();
+    const entries = Object.entries(state.moods)
+      .filter(([name]) => !raw || sameName(name, personName(raw)))
+      .map(([name, mood]) => {
+        const now = decayedReagentMood(mood, state.tick);
+        return {
+          character: name,
+          reads: moodWord(now),
+          emotion: now.emotion,
+          intensity: now.intensity,
+          tendency: now.tendency,
+          cause: now.cause,
+        };
+      });
+    return { result: ok(JSON.stringify({ moods: entries })), media: [] };
+  }
+
+  // ── Speech ──
+
+  async function setVoiceTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const name = requirePerson(args);
+    const state = await loadSimulation();
+    const key = keyFor(state.voices, name);
+    const voice: ReagentVoice = { ...(state.voices[key] ?? {}) };
+    for (const field of ["register", "sentences", "fillers", "avoids", "quirks"] as const) {
+      const value = str(args[field]).trim();
+      if (value) voice[field] = value.slice(0, 160);
+    }
+    if (typeof args.disfluency === "number" && Number.isFinite(args.disfluency))
+      voice.disfluency = Math.max(0, Math.min(1, args.disfluency));
+    if (!Object.keys(voice).length) throw new Error("Give at least one voice field.");
+    state.voices[key] = voice;
+    await saveSimulation(state);
+    return { result: ok(`${key}'s voice: ${voiceSummary(voice)}`), media: [] };
+  }
+
+  async function turnShapeTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const name = requirePerson(args);
+    const addressing = str(args.addressing).trim() ? personName(str(args.addressing)) : "";
+    const state = await loadSimulation();
+    const moodKey = findKey(state.moods, name);
+    const mood = moodKey ? decayedReagentMood(state.moods[moodKey]!, state.tick) : null;
+    const statusKey = findKey(state.status, name);
+    const status = statusKey
+      ? (state.status[statusKey]!.find((entry) => addressing && sameName(entry.toward, addressing))?.level ?? null)
+      : null;
+    const objectiveKey = findKey(state.objectives, name);
+    const tactic = objectiveKey ? state.objectives[objectiveKey]!.tactic : undefined;
+    const shape = drawTurnShape({ mood, status, hasTactic: !!tactic }, (max) => randomInt(0, max));
+    const voiceKey = findKey(state.voices, name);
+    return {
+      result: ok(
+        JSON.stringify({
+          character: name,
+          shape,
+          note: TURN_SHAPE_NOTES[shape],
+          ...(shape === "pursue tactic" && tactic ? { tactic } : {}),
+          ...(voiceKey ? { voice: voiceSummary(state.voices[voiceKey]!) } : {}),
+        }),
+      ),
+      media: [],
+    };
+  }
+
+  async function meanVsSayTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const name = requirePerson(args);
+    const means = str(args.means).trim().slice(0, 200);
+    const says = str(args.says).trim().slice(0, 300);
+    if (!means || !says) throw new Error("means and says are required.");
+    const state = await loadSimulation();
+    const key = keyFor(state.subtext, name);
+    const stamp = await sceneStamp();
+    state.subtext[key] = { means, says, ...(stamp ? { at: stamp } : {}) };
+    await saveSimulation(state);
+    return { result: ok(`Write only what ${key} says: ${says}`), media: [] };
+  }
+
+  // ── Ambient ──
+
+  async function scenePressureTool(): Promise<ReagentToolOutcome> {
+    const state = await loadSimulation();
+    const roll = randomInt(0, 100);
+    if (roll < 65) {
+      const habits: string[] = [];
+      for (const row of tracker) {
+        const content = await readFile(join(deps.workspaceDir, dossierRelPath(row.name)), "utf8").catch(() => "");
+        for (const line of content.split("\n")) {
+          const match = line.match(/\[habit\]\s*(.+)$/);
+          if (match) habits.push(`${row.name}: ${match[1]!.trim()}`);
+        }
+      }
+      const habit = habits.length ? habits[randomInt(0, habits.length)] : null;
+      return {
+        result: ok(
+          JSON.stringify({
+            draw: "nothing",
+            note: "Nothing happens. Maintenance, a wait, a chore; conversation only if someone has a reason.",
+            ...(habit ? { habit } : {}),
+          }),
+        ),
+        media: [],
+      };
+    }
+    if (roll < 85) {
+      const frictions = [
+        "a phone buzzes and is ignored or not",
+        "someone needs the bathroom, the kettle, a charger",
+        "the weather turns a notch",
+        "a small thing is missing: keys, a lighter, the remote",
+        "a neighbour, a delivery or a noise outside",
+        "someone is hungry and says nothing",
+        "a text arrives from someone off-screen",
+        "the time is later than anyone thought",
+      ];
+      return {
+        result: ok(
+          JSON.stringify({
+            draw: "friction",
+            what: frictions[randomInt(0, frictions.length)],
+            note: "Small and unresolved; it costs a minute, not a scene.",
+          }),
+        ),
+        media: [],
+      };
+    }
+    const sources: string[] = [];
+    for (const thread of state.threads)
+      sources.push(`thread comes due: ${thread.what}${thread.who ? ` (${thread.who})` : ""}`);
+    for (const [name, entry] of Object.entries(state.offscreen))
+      sources.push(`${name} turns up, calls or texts from ${entry.where}`);
+    if (!sources.length) sources.push("someone unexpected at the door or on the phone", "the weather closes in");
+    return {
+      result: ok(
+        JSON.stringify({
+          draw: "interruption",
+          what: sources[randomInt(0, sources.length)],
+          note: "It arrives with its own timing and wants; nobody is ready for it.",
+        }),
+      ),
+      media: [],
+    };
+  }
+
   const handlers: Record<string, (args: Record<string, unknown>) => Promise<ReagentToolOutcome>> = {
+    learn: learnTool,
+    knows: knowsTool,
+    forget: forgetTool,
+    set_objective: setObjectiveTool,
+    tactic_result: tacticResultTool,
+    drop_objective: dropObjectiveTool,
+    set_status: setStandingTool,
+    appraise: appraiseTool,
+    mood_check: moodCheckTool,
+    set_voice: setVoiceTool,
+    turn_shape: turnShapeTool,
+    mean_vs_say: meanVsSayTool,
+    scene_pressure: scenePressureTool,
     list_characters: listCharactersTool,
     add_character: addCharacterTool,
     remove_character: removeCharacterTool,
