@@ -8666,7 +8666,7 @@
   "ui.chat.reagent.shellPolicy.ask": "Ask me for unlisted commands",
   "ui.chat.reagent.shellPolicy.bypass": "Run everything not denied",
   "ui.chat.reagent.shellPolicyDescription": "Deny patterns always win. Patterns are regular expressions matched against the whole command line.",
-  "ui.chat.reagent.simulationHint": "The ledgers: scene clock, events, loose threads, off-screen people, what each person knows, wants, feels and how they talk. Edit anything here and it is true from the next reply; your edit is kept in transcript order like memory.md.",
+  "ui.chat.reagent.simulationHint": "The ledgers: loose threads, off-screen people, what each person knows, wants, feels and how they talk; the scene itself is in the World State tracker. Edit anything here and it is true from the next reply; your edit is kept in transcript order like memory.md.",
   "ui.chat.reagent.title": "REagent",
   "ui.chat.reagent.trace.arguments": "Arguments",
   "ui.chat.reagent.trace.media": "Shown to the model: {{names}}",

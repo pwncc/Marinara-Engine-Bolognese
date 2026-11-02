@@ -80,7 +80,7 @@ export const DEFAULT_REAGENT_SETTINGS: ReagentSettings = {
 };
 
 export const REAGENT_MEMORY_FILE = "memory.md";
-/** Workspace file holding the simulation ledger: the writer's own scene clock, recent events, loose threads and off-screen whereabouts. */
+/** Workspace file holding the simulation ledger: the scene tick, loose threads, off-screen whereabouts and the per-person ledgers. The scene itself is the World State tracker. */
 export const REAGENT_SIMULATION_FILE = "simulation.json";
 /** Workspace folder holding one development dossier per character (`<slug>.md`). */
 export const REAGENT_CHARACTER_NOTES_DIR = "characters";
@@ -112,15 +112,7 @@ export interface ReagentWhereabouts {
   updatedAt?: string;
 }
 
-/** The writer's own scene clock. It is not the World State tracker and never written there. */
-export interface ReagentSceneState {
-  date?: string;
-  time?: string;
-  location?: string;
-  weather?: string;
-  temperature?: string;
-}
-
+/** The World State tracker fields set_scene writes. */
 export const REAGENT_SCENE_FIELDS = ["date", "time", "location", "weather", "temperature"] as const;
 
 /** One thing a person knows, was told or wrongly concluded. Nobody acts on what is not in their ledger. */
@@ -188,11 +180,8 @@ export interface ReagentSubtext {
 
 /** The simulation ledger as stored in the workspace; every field is optional on disk. */
 export interface ReagentSimulationState {
-  scene: ReagentSceneState;
   /** Counts set_scene calls: the scene clock moods decay against. */
   tick: number;
-  /** Recent concrete happenings, oldest first. */
-  events: string[];
   threads: ReagentThread[];
   resolved: ReagentResolvedThread[];
   offscreen: Record<string, ReagentWhereabouts>;
@@ -205,9 +194,7 @@ export interface ReagentSimulationState {
 }
 
 export const EMPTY_REAGENT_SIMULATION: ReagentSimulationState = {
-  scene: {},
   tick: 0,
-  events: [],
   threads: [],
   resolved: [],
   offscreen: {},
@@ -226,9 +213,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Parse the simulation file leniently; anything malformed becomes the empty ledger. */
 export function parseReagentSimulation(raw: string | null | undefined): ReagentSimulationState {
   const empty = (): ReagentSimulationState => ({
-    scene: {},
     tick: 0,
-    events: [],
     threads: [],
     resolved: [],
     offscreen: {},
@@ -247,16 +232,6 @@ export function parseReagentSimulation(raw: string | null | undefined): ReagentS
     return empty();
   }
   if (!isRecord(parsed)) return empty();
-  const scene: ReagentSceneState = {};
-  if (isRecord(parsed.scene)) {
-    for (const key of REAGENT_SCENE_FIELDS) {
-      const value = parsed.scene[key];
-      if (typeof value === "string" && value.trim()) scene[key] = value;
-    }
-  }
-  const events = Array.isArray(parsed.events)
-    ? parsed.events.filter((entry): entry is string => typeof entry === "string")
-    : [];
   const threads = Array.isArray(parsed.threads)
     ? parsed.threads.filter(
         (entry): entry is ReagentThread =>
@@ -328,7 +303,7 @@ export function parseReagentSimulation(raw: string | null | undefined): ReagentS
     (entry): entry is ReagentSubtext =>
       isRecord(entry) && typeof entry.means === "string" && typeof entry.says === "string",
   );
-  return { scene, tick, events, threads, resolved, offscreen, beliefs, objectives, status, moods, voices, subtext };
+  return { tick, threads, resolved, offscreen, beliefs, objectives, status, moods, voices, subtext };
 }
 
 /** Half the intensity goes every two scene ticks; under 10 the feeling has settled into mood. */
