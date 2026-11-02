@@ -1,5 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
+import { useIsFetching, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api-client";
+import { chatKeys } from "./use-chats";
 
 export interface ReagentWorkspaceInfo {
   workspaceDir: string;
@@ -15,11 +17,23 @@ export const reagentKeys = {
 };
 
 export function useReagentWorkspace(chatId: string | null, enabled = true) {
+  const qc = useQueryClient();
+  // The workspace is a fold of the transcript, so it changes whenever the messages do: after a reply,
+  // a swipe, a delete, a restore. Re-read it each time the message list has been fetched again.
+  const fetchingMessages = useIsFetching({ queryKey: chatKeys.messages(chatId ?? "") });
+  const wasFetching = useRef(fetchingMessages);
+  useEffect(() => {
+    if (wasFetching.current > 0 && fetchingMessages === 0 && chatId) {
+      void qc.invalidateQueries({ queryKey: reagentKeys.workspace(chatId) });
+    }
+    wasFetching.current = fetchingMessages;
+  }, [chatId, fetchingMessages, qc]);
   return useQuery({
     queryKey: reagentKeys.workspace(chatId ?? ""),
     queryFn: () => api.get<ReagentWorkspaceInfo>(`/reagent/${chatId}/workspace`),
     enabled: !!chatId && enabled,
-    staleTime: 10_000,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 }
 
@@ -33,6 +47,11 @@ export function useUpdateReagentFile(chatId: string | null) {
       if (chatId) qc.invalidateQueries({ queryKey: reagentKeys.workspace(chatId) });
     },
   });
+}
+
+/** Answer a question the character asked while reasoning; null skips it. */
+export function respondToReagentQuestion(id: string, answer: string | null) {
+  return api.post<{ ok: boolean }>(`/reagent/questions/${id}`, { answer });
 }
 
 export function respondToReagentApproval(id: string, decision: "approved" | "denied") {

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Bot, FolderOpen, NotebookPen, Users } from "lucide-react";
+import { Bot, FolderOpen, MessageCircleQuestion, NotebookPen, Users } from "lucide-react";
 import { useTranslation as useUiTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
   REAGENT_MEMORY_FILE,
   REAGENT_SIMULATION_FILE,
   supportsNativeToolCalls,
+  type ReagentQuestionRecord,
   type ReagentSettings,
   type ReagentShellPolicy,
   type ReagentToolFamily,
@@ -63,6 +64,7 @@ const FAMILIES: Array<{ id: ReagentToolFamily; labelKey: string; descriptionKey:
     labelKey: "ui.chat.reagent.family.ambient",
     descriptionKey: "ui.chat.reagent.family.ambientDescription",
   },
+  { id: "ask", labelKey: "ui.chat.reagent.family.ask", descriptionKey: "ui.chat.reagent.family.askDescription" },
   {
     id: "lorebook",
     labelKey: "ui.chat.reagent.family.lorebook",
@@ -84,6 +86,8 @@ const BUTTON_CLASS =
 interface ReagentSectionProps {
   chatId: string;
   settings: ReagentSettings;
+  /** Questions the character asked in this chat, with the answers. */
+  questions?: ReagentQuestionRecord[];
   provider?: string;
   style?: React.CSSProperties;
   onChange: (next: ReagentSettings) => void;
@@ -96,7 +100,7 @@ function linesToList(value: string) {
     .filter(Boolean);
 }
 
-export function ReagentSection({ chatId, settings, provider, style, onChange }: ReagentSectionProps) {
+export function ReagentSection({ chatId, settings, questions, provider, style, onChange }: ReagentSectionProps) {
   const { t: localizeUi } = useUiTranslation();
   const [editing, setEditing] = useState<EditableFile | null>(null);
   const [allowDraft, setAllowDraft] = useState(settings.shellAllow.join("\n"));
@@ -222,6 +226,25 @@ export function ReagentSection({ chatId, settings, provider, style, onChange }: 
                       {localizeUi("ui.chat.reagent.dossiersNone")}
                     </p>
                   )}
+                </div>
+              )}
+              {settings.tools.ask && !!questions?.length && (
+                <div className="space-y-1">
+                  <span className="inline-flex items-center gap-1 text-[0.625rem] text-[var(--muted-foreground)]">
+                    <MessageCircleQuestion size="0.7rem" />
+                    {localizeUi("ui.chat.reagent.questionsAsked")}
+                  </span>
+                  <ul className="space-y-1 rounded-lg bg-[var(--background)]/45 p-2 ring-1 ring-[var(--border)]">
+                    {questions.slice(-10).map((entry) => (
+                      <li key={entry.id} className="text-[0.6875rem]">
+                        <span className="text-[var(--muted-foreground)]">{entry.question}</span>
+                        <br />
+                        <span className="text-[var(--foreground)]">
+                          {entry.answer ?? localizeUi("ui.chat.reagent.questionNoAnswer")}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
               <SettingsSwitch

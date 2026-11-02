@@ -73,6 +73,30 @@ async function readManifest(chatId: string): Promise<string[]> {
   }
 }
 
+// ── Holds ──
+// While a reply is being written its tools write files as they go, and the journal only lands on
+// the message afterwards. A materialize from a workspace read in that window would rewrite the
+// folder from the transcript and quietly undo the tool's writes, so reads wait it out instead.
+
+const holds = new Map<string, number>();
+
+/** Mark a chat's workspace as in use by a generation; call the result to release it. */
+export function holdReagentWorkspace(chatId: string): () => void {
+  holds.set(chatId, (holds.get(chatId) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const count = (holds.get(chatId) ?? 1) - 1;
+    if (count > 0) holds.set(chatId, count);
+    else holds.delete(chatId);
+  };
+}
+
+export function isReagentWorkspaceHeld(chatId: string): boolean {
+  return (holds.get(chatId) ?? 0) > 0;
+}
+
 /** A branch takes its source's workspace with it; the next materialize folds it to the copied transcript. */
 export async function copyReagentWorkspace(sourceChatId: string, targetChatId: string) {
   const sourceDir = reagentWorkspaceDir(sourceChatId);
@@ -259,7 +283,13 @@ async function writeWorkspaceFile(workspaceDir: string, relPath: string, content
 export async function materializeWorkspace(
   db: DB,
   chatId: string,
-  options: { beforeMessageId?: string | null; messages?: TranscriptRow[]; chatMetadata?: Record<string, unknown> } = {},
+  options: {
+    beforeMessageId?: string | null;
+    messages?: TranscriptRow[];
+    chatMetadata?: Record<string, unknown>;
+    /** Leave the folder alone while a generation holds it (the fold is still returned). */
+    unlessHeld?: boolean;
+  } = {},
 ) {
   const chats = createChatsStorage(db);
   const workspaceDir = await ensureWorkspaceDir(chatId);
@@ -267,6 +297,7 @@ export async function materializeWorkspace(
   const metadata = options.chatMetadata ?? parseExtra((await chats.getById(chatId))?.metadata);
   const userEdits: ReagentUserFileEdit[] = readReagentUserFileEdits(metadata);
   const state = foldWorkspaceState(messages, userEdits, { beforeMessageId: options.beforeMessageId });
+  if (options.unlessHeld && isReagentWorkspaceHeld(chatId)) return { workspaceDir, state, held: true as const };
   // A file the journal wrote earlier but the fold no longer has (first created by a swipe that is
   // not shown, or by the reply being regenerated) must go, or the old swipe's notes outlive it.
   // Files the journal never wrote (shell output) are left alone.
@@ -289,7 +320,7 @@ export async function materializeWorkspace(
       logger.warn(error, "[reagent] Could not record materialized files for chat %s", chatId),
     );
   }
-  return { workspaceDir, state };
+  return { workspaceDir, state, held: false as const };
 }
 
 /** A workspace text file, clipped to the text limit; missing files read as empty. */

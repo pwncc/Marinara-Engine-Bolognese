@@ -12,6 +12,8 @@ import { dirname, basename, join, resolve } from "node:path";
 import {
   REAGENT_CHARACTER_NOTES_DIR,
   REAGENT_MEMORY_FILE,
+  REAGENT_QUESTION_HISTORY,
+  REAGENT_QUESTIONS_METADATA_KEY,
   REAGENT_SCENE_FIELDS,
   REAGENT_SIMULATION_FILE,
   CHARACTER_STATUS_BAR_SPECS,
@@ -19,6 +21,7 @@ import {
   buildPresentCharacterUpdate,
   decayedReagentMood,
   parseReagentSimulation,
+  readReagentQuestions,
   type PresentCharacter,
   type PresentCharacterUpdate,
   type LLMToolCall,
@@ -26,6 +29,7 @@ import {
   type ReagentActivityEntry,
   type ReagentBelief,
   type ReagentMood,
+  type ReagentQuestionRecord,
   type ReagentSettings,
   type ReagentSimulationState,
   type ReagentToolFamily,
@@ -39,7 +43,7 @@ import { createLorebooksStorage } from "../storage/lorebooks.storage.js";
 import { optimizeNoodleVisionImage } from "../noodle/noodle-vision.js";
 import { stripHtml, decodeHtmlEntities } from "../professor-mari/fandom-mediawiki/html-text.js";
 import type { LorebookSearchFn, ToolExecutionResult } from "../tools/tool-executor.js";
-import { createApproval } from "./reagent-approvals.js";
+import { createApproval, createQuestion } from "./reagent-approvals.js";
 import { judgeCommand, runShellCommand } from "./reagent-shell.js";
 import {
   REAGENT_MAX_IMAGE_BYTES,
@@ -495,6 +499,19 @@ const AMBIENT_TOOLS: LLMToolDefinition[] = [
   ),
 ];
 
+const ASK_TOOLS: LLMToolDefinition[] = [
+  def(
+    "ask_user",
+    "Ask the user a question and wait for the answer before going on: what they meant, which reading of an earlier message is right, what they intend. Offer options when there are natural ones; they can always write their own. Ask while reasoning, as many times as needed, never inside the reply. The answer comes back as the result.",
+    {
+      question: { type: "string" },
+      options: { type: "array", items: { type: "string" }, description: "Two to six short answers to pick from." },
+      context: { type: "string", description: "The message or detail the question is about, quoted briefly." },
+    },
+    ["question"],
+  ),
+];
+
 const FAMILY_TOOLS: Record<ReagentToolFamily, LLMToolDefinition[]> = {
   files: FILE_TOOLS,
   memory: MEMORY_TOOLS,
@@ -507,6 +524,7 @@ const FAMILY_TOOLS: Record<ReagentToolFamily, LLMToolDefinition[]> = {
   affect: AFFECT_TOOLS,
   speech: SPEECH_TOOLS,
   ambient: AMBIENT_TOOLS,
+  ask: ASK_TOOLS,
   lorebook: LOREBOOK_TOOLS,
   web: WEB_TOOLS,
   shell: SHELL_TOOLS,
@@ -767,6 +785,8 @@ export function buildReagentPromptBlock(input: {
   /** Dossier file names under the notes folder. */
   characterNotes?: string[];
   trackerCharacters?: PresentCharacter[];
+  /** Questions already asked in this chat, newest last. */
+  questions?: ReagentQuestionRecord[];
 }): string {
   const lines: string[] = [];
   lines.push("## Your tools (REagent)");
@@ -827,6 +847,11 @@ export function buildReagentPromptBlock(input: {
       "Simulation stance: this is a lived-in world, not a story being told. Things happen because of causes, schedules, needs and chance, never because they would be dramatic or tidy. Keep time moving with set_scene. Let resolve_chance decide uncertain outcomes and accept what it says, including dull failures. People off-screen keep living (set_whereabouts) and may turn up, call or be busy. Open loose threads for anything that will come due and let them come due; promises, bills and unanswered messages do not evaporate. Most moments are ordinary and end without a point; do not resolve tension conveniently or tie things up. A reply stops mid-activity with wants unresolved unless a thread actually came due; it does not end on a beat change, a realisation or a line that sums things up.",
     );
   }
+  if (input.settings.tools.ask) {
+    lines.push(
+      "Asking: when the user's message, an earlier message or their intent could be read more than one way and the reply would differ, ask_user() while you reason and wait for the answer; offer options and they can pick one or write their own. Ask as often as it helps, never inside the reply. Their answers below are settled.",
+    );
+  }
   if (input.settings.tools.shell) {
     lines.push(
       `Shell policy: ${input.settings.shellPolicy}${
@@ -884,6 +909,13 @@ export function buildReagentPromptBlock(input: {
             .join("\n")
         : "(nobody tracked off-screen)",
     );
+  }
+  if (input.settings.tools.ask && input.questions?.length) {
+    lines.push("");
+    lines.push("### Questions you asked, and the answers");
+    for (const entry of input.questions.slice(-REAGENT_QUESTION_HISTORY)) {
+      lines.push(`- Q: ${entry.question}\n  A: ${entry.answer === null ? "(no answer)" : entry.answer}`);
+    }
   }
   if (input.settings.tools.memory) {
     lines.push("");
@@ -2042,7 +2074,59 @@ ${clip(content)}`),
     };
   }
 
+  // ── Ask the user ──
+
+  async function askUserTool(args: Record<string, unknown>): Promise<ReagentToolOutcome> {
+    const question = str(args.question).trim().slice(0, 600);
+    if (!question) throw new Error("question is required.");
+    const options = (Array.isArray(args.options) ? args.options : [])
+      .map((entry) => String(entry).trim().slice(0, 160))
+      .filter(Boolean)
+      .slice(0, 6);
+    const context = str(args.context).trim().slice(0, 800);
+    if (!deps.sendEvent) throw new Error("Nobody is there to answer in this run.");
+    const { request, outcome } = createQuestion(
+      { chatId: deps.chatId, question, options, ...(context ? { context } : {}) },
+      deps.signal,
+    );
+    deps.sendEvent({ type: "reagent_question", data: request });
+    const result = await outcome;
+    const record: ReagentQuestionRecord = {
+      id: request.id,
+      question,
+      options,
+      answer: result.status === "answered" ? result.answer : null,
+      at: new Date().toISOString(),
+    };
+    await chats
+      .patchMetadata(deps.chatId, (current) => ({
+        ...current,
+        [REAGENT_QUESTIONS_METADATA_KEY]: [...readReagentQuestions(current), record].slice(-REAGENT_QUESTION_HISTORY),
+      }))
+      .catch((error) => logger.warn(error, "[reagent] Could not keep the question history for chat %s", deps.chatId));
+    if (result.status !== "answered") {
+      return {
+        result: ok(
+          JSON.stringify({
+            answered: false,
+            status: result.status,
+            note: "No answer. Go on with your best reading of it and do not ask this again in this reply.",
+          }),
+        ),
+        media: [],
+      };
+    }
+    const picked = options.findIndex((option) => option === result.answer);
+    return {
+      result: ok(
+        JSON.stringify({ answered: true, answer: result.answer, ...(picked >= 0 ? { pickedOption: picked + 1 } : {}) }),
+      ),
+      media: [],
+    };
+  }
+
   const handlers: Record<string, (args: Record<string, unknown>) => Promise<ReagentToolOutcome>> = {
+    ask_user: askUserTool,
     learn: learnTool,
     knows: knowsTool,
     forget: forgetTool,

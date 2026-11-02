@@ -14,7 +14,12 @@ import {
   type ReagentUserFileEdit,
 } from "@marinara-engine/shared";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
-import { listPendingApprovals, resolveApproval } from "../services/reagent/reagent-approvals.js";
+import {
+  listPendingApprovals,
+  listPendingQuestions,
+  resolveApproval,
+  resolveQuestion,
+} from "../services/reagent/reagent-approvals.js";
 import {
   REAGENT_MAX_TEXT_FILE_BYTES,
   listDirectory,
@@ -31,6 +36,7 @@ const fileBodySchema = z.object({
   content: z.string().max(REAGENT_MAX_TEXT_FILE_BYTES).nullable(),
 });
 const decisionBodySchema = z.object({ decision: z.enum(["approved", "denied"]) });
+const answerBodySchema = z.object({ answer: z.string().max(4000).nullable() });
 
 function parseMetadata(value: unknown): Record<string, unknown> {
   if (!value) return {};
@@ -53,6 +59,7 @@ export async function reagentRoutes(app: FastifyInstance) {
     if (!chat) return reply.status(404).send({ error: "Chat not found" });
     const { workspaceDir } = await materializeWorkspace(app.db, chat.id, {
       chatMetadata: parseMetadata(chat.metadata),
+      unlessHeld: true,
     });
     const notesDir = join(workspaceDir, REAGENT_CHARACTER_NOTES_DIR);
     const dossiers = await Promise.all(
@@ -99,6 +106,7 @@ export async function reagentRoutes(app: FastifyInstance) {
     return materializeWorkspace(app.db, chat.id, {
       messages,
       chatMetadata: { ...metadata, reagentUserFileEdits: edits },
+      unlessHeld: true,
     });
   };
 
@@ -119,6 +127,16 @@ export async function reagentRoutes(app: FastifyInstance) {
   });
 
   app.get<{ Params: { chatId: string } }>("/:chatId/approvals", async (req) => listPendingApprovals(req.params.chatId));
+
+  app.get<{ Params: { chatId: string } }>("/:chatId/questions", async (req) => listPendingQuestions(req.params.chatId));
+
+  app.post<{ Params: { id: string } }>("/questions/:id", async (req, reply) => {
+    const parsed = answerBodySchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.flatten() });
+    if (!resolveQuestion(req.params.id, parsed.data.answer))
+      return reply.status(404).send({ error: "That question is no longer waiting." });
+    return { ok: true };
+  });
 
   app.post<{ Params: { id: string } }>("/approvals/:id", async (req, reply) => {
     const parsed = decisionBodySchema.safeParse(req.body);

@@ -2100,6 +2100,11 @@ export function useGenerate() {
               break;
             }
 
+            case "reagent_question": {
+              window.dispatchEvent(new CustomEvent("marinara:reagent-question", { detail: event.data }));
+              break;
+            }
+
             case "reagent_tool": {
               // The trace lives on the saved message; nothing to do while streaming.
               break;

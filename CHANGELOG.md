@@ -6,11 +6,18 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Added
 
+- The REagent can ask you questions while it reasons: what you meant, which reading of an earlier message is right, what you intend. A dialog offers its options and a free answer, generation waits for the answer (or a skip), the answer goes back into its reasoning rather than the reply, and the last ten questions with their answers stay in the chat's history, shown to the writer every reply and listed in Chat Settings.
+### Added
+
 - REagent gets four ledger families that move the writer from writing to simulating, all kept in its simulation ledger and editable by hand from Chat Settings. Minds: what each person knows (nobody reacts to what is not in their ledger; false and secret beliefs included), what they want with the obstacle and the tactic in play (a tactic runs until it visibly works or fails), and how they play status to whoever is in front of them. Feelings: events are appraised into an emotion by rule from goal impact, who caused it, expectedness and control, never chosen for the moment; the emotion fades with the scene clock and leaves a mood. Speech: a voice budget per person, a weighted draw of each turn's shape (answer, minimal, counter-question, deflect, silence, backchannel, interrupt), and the gap between what is meant and what is said. Pressure: a draw of whether anything happens in the next stretch at all, usually nothing. The prompt now shows every person as pressures on the next line instead of tracker numbers, says that nothing in it is to be stated, and ends with a checklist the writer applies to its own reply before sending it.
 ### Added
 
 - REagent gets three more tool families, on by default. Characters: list the tracker, add NPCs and passers-by to it, remove people who left, and update looks, outfits and private thoughts. Character notes: a dossier per person in the workspace where the writer records growth, relationship shifts, goals, secrets and promises and reads them back before scenes that matter. Simulation: move the writer's own scene clock and location (kept in its simulation ledger, never in the World State tracker), let chance decide uncertain outcomes, pick between plausible options at random, keep loose threads that come due, and track where off-screen people are; the open threads, whereabouts and scene are shown to the writer every reply, with a stance that favours a lived-in world over a told story. Dossiers and the simulation ledger are journaled like the memory file, so swipes revert them.
 
+### Fixed
+
+- A REagent tool's file writes could be undone mid-reply: opening the settings panel (or any workspace read) while a reply was being written rebuilt the workspace folder from the transcript, which does not yet hold that reply's writes, so a later tool in the same reply saved over them and they were lost. A generation now holds its workspace until the reply is saved, and reads during that window leave the folder alone.
+- The memory, dossier and simulation editors re-read the workspace whenever the message list changes (a reply, a swipe, a delete, a restore) instead of showing what they loaded up to ten seconds earlier, so edits before a regenerate start from the current state without a page refresh.
 ### Fixed
 
 - REagent memory follows a branched chat: hand-made memory edits are re-anchored to the copied messages (left on the source chat's ids they counted as orphans and were re-applied after every reply, undoing what the branch wrote), edits whose message is gone are placed by their time instead of last, and the workspace folder is copied with the branch.

@@ -99,7 +99,7 @@ import { PickerDropdown } from "../../features/chat-settings/PickerDropdown";
 import { PersonaHistoryReassignDropdown } from "../../features/chat-settings/sections/PersonaHistoryReassignDropdown";
 import { ChatSettingsSection as Section } from "../../features/chat-settings/ChatSettingsSection";
 import { ReagentSection } from "../../features/chat-settings/sections/ReagentSection";
-import { readReagentSettings } from "@marinara-engine/shared";
+import { readReagentQuestions, readReagentSettings } from "@marinara-engine/shared";
 import { ActiveChatBackgroundPicker } from "../panels/settings/BackgroundPicker";
 import { AdvancedParametersSection } from "../../features/chat-settings/sections/AdvancedParametersSection";
 import { ChatNameSection } from "../../features/chat-settings/sections/ChatNameSection";
@@ -10387,6 +10387,7 @@ export function ChatSettingsDrawer({
             <ReagentSection
               chatId={chat.id}
               settings={readReagentSettings(metadata)}
+              questions={readReagentQuestions(metadata)}
               provider={
                 (
                   chatGenerationConnectionsList as Array<{

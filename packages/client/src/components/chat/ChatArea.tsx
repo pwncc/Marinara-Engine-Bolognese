@@ -177,6 +177,7 @@ import {
   type ImagePromptReviewItem,
 } from "../ui/ImagePromptReviewModal";
 import { ReagentApprovalModal } from "./ReagentApprovalModal";
+import { ReagentQuestionModal } from "./ReagentQuestionModal";
 import { useTranslation as useUiTranslation } from "react-i18next";
 import { ChatResourceDropOverlay } from "./ChatResourceDropOverlay";
 import { ChatHelpOverlay } from "./ChatHelpOverlay";
@@ -1058,6 +1059,7 @@ const LocalChatArea = memo(function LocalChatArea({
   const illustratorPromptReviewModal = (
     <>
       <ReagentApprovalModal />
+      <ReagentQuestionModal />
       <ImagePromptReviewModal
         open={!!illustratorPromptReview}
         items={illustratorPromptReview ? [illustratorPromptReview.item] : []}

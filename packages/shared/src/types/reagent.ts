@@ -20,6 +20,7 @@ export const REAGENT_TOOL_FAMILIES = [
   "affect",
   "speech",
   "ambient",
+  "ask",
   "lorebook",
   "web",
   "shell",
@@ -64,6 +65,7 @@ export const DEFAULT_REAGENT_SETTINGS: ReagentSettings = {
     affect: true,
     speech: true,
     ambient: true,
+    ask: true,
     lorebook: true,
     web: true,
     shell: false,
@@ -413,6 +415,45 @@ export function readReagentUserFileEdits(
       typeof entry === "object" &&
       typeof (entry as ReagentUserFileEdit).path === "string" &&
       ((entry as ReagentUserFileEdit).content === null || typeof (entry as ReagentUserFileEdit).content === "string"),
+  );
+}
+
+/** A question the model asks the user while it reasons, as sent to the client. */
+export interface ReagentQuestionRequest {
+  id: string;
+  chatId: string;
+  question: string;
+  /** Offered answers; the user may always write their own. */
+  options: string[];
+  /** The message or intent the question is about, when the model quoted it. */
+  context?: string;
+}
+
+/** An asked question kept in the chat's history, with the answer given. */
+export interface ReagentQuestionRecord {
+  id: string;
+  question: string;
+  options: string[];
+  /** Null when the user skipped it or nobody answered in time. */
+  answer: string | null;
+  at: string;
+}
+
+export const REAGENT_QUESTIONS_METADATA_KEY = "reagentQuestions";
+/** How many answered questions a chat keeps. */
+export const REAGENT_QUESTION_HISTORY = 10;
+
+export function readReagentQuestions(
+  chatMetadata: Record<string, unknown> | null | undefined,
+): ReagentQuestionRecord[] {
+  const raw = chatMetadata?.[REAGENT_QUESTIONS_METADATA_KEY];
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (entry): entry is ReagentQuestionRecord =>
+      isRecord(entry) &&
+      typeof entry.id === "string" &&
+      typeof entry.question === "string" &&
+      (entry.answer === null || typeof entry.answer === "string"),
   );
 }
 

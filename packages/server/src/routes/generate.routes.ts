@@ -701,6 +701,7 @@ import { runTurnGameBotTurns } from "../services/turn-games/turn-game-bot-runner
 import { getTurnGameContextBuilder } from "../services/turn-games/turn-game-runner.service.js";
 import { buildRecentSocialMediaActivityBlock } from "../services/noodle/noodle-context.js";
 import {
+  readReagentQuestions,
   readReagentSettings,
   type ReagentActivityEntry,
   type ReagentFileVersions,
@@ -715,7 +716,11 @@ import {
   reagentToolDefinitions,
   type ReagentMedia,
 } from "../services/reagent/reagent-tools.js";
-import { materializeWorkspace, readReagentPromptState } from "../services/reagent/reagent-workspace.js";
+import {
+  holdReagentWorkspace,
+  materializeWorkspace,
+  readReagentPromptState,
+} from "../services/reagent/reagent-workspace.js";
 import { normalizeContextInjections } from "./generate/agent-normalizers.js";
 import {
   buildGenerationPromptPresetCandidates,
@@ -1388,7 +1393,11 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
       swipeIndex: null,
     };
     activeGenerations.set(input.chatId, activeGenerationRecord);
+    // The REagent workspace is held from its materialize until the reply is saved or the generation ends.
+    let releaseReagentWorkspace: (() => void) | null = null;
     const releaseActiveGeneration = () => {
+      releaseReagentWorkspace?.();
+      releaseReagentWorkspace = null;
       if (activeGenerations.get(input.chatId)?.abortController === abortController) {
         activeGenerations.delete(input.chatId);
       }
@@ -8762,6 +8771,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 beforeMessageId: input.regenerateMessageId ?? null,
                 chatMetadata: chatMeta,
               });
+              releaseReagentWorkspace ??= holdReagentWorkspace(input.chatId);
               const reagentTracker = parseJsonField<PresentCharacter[]>(baseGameStateSnapshot?.presentCharacters, []);
               reagentExecutor = createReagentExecutor({
                 db: app.db,
@@ -8798,6 +8808,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 ...(await readReagentPromptState(workspaceDir)),
                 toolNames: [...reagentNames],
                 trackerCharacters: reagentTracker,
+                questions: readReagentQuestions(chatMeta),
               });
               const firstTurnIdx = preparedMessagesForGen.findIndex((m) => m.role === "user" || m.role === "assistant");
               preparedMessagesForGen.splice(firstTurnIdx >= 0 ? firstTurnIdx : preparedMessagesForGen.length, 0, {
