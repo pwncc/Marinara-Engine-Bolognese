@@ -173,7 +173,12 @@ function normalizeExplicitImageSource(serviceHint: string): string {
   return EXPLICIT_IMAGE_SOURCES.has(normalized) ? normalized : "";
 }
 
-function resolveImageBackend(source: string, baseUrl: string, serviceHint: string, requestModel?: string): string {
+export function resolveImageBackend(
+  source: string,
+  baseUrl: string,
+  serviceHint: string,
+  requestModel?: string,
+): string {
   const inferredSource = inferImageSource(requestModel || source, baseUrl);
   const explicitSource = normalizeExplicitImageSource(serviceHint);
 
@@ -2506,7 +2511,7 @@ function isNovelAiV5Model(model: string): boolean {
   return /^nai-diffusion-5(?:-(?:curated|full))?$/i.test(model.trim());
 }
 
-function isNovelAiPreciseReferenceModel(model: string): boolean {
+export function isNovelAiPreciseReferenceModel(model: string): boolean {
   return /^nai-diffusion-(?:4-5)(?:-(?:curated|full))?$/i.test(model.trim());
 }
 
@@ -2571,6 +2576,27 @@ async function prepareNovelAiDirectorReferenceImages(referenceImages: string[]):
   );
 }
 
+/** The picture an image-to-image request starts from, as a PNG of exactly the requested canvas. */
+async function prepareNovelAiSourceImage(image: string, width: number, height: number): Promise<string> {
+  const sharpFn = await tryLoadSharp();
+  if (!sharpFn) {
+    throw new Error(
+      "NovelAI image-to-image needs server image preprocessing, but the optional sharp dependency is unavailable.",
+    );
+  }
+  try {
+    const buffer = Buffer.from(decodeReferenceImage(image).base64, "base64");
+    const resized = await sharpFn(buffer, { limitInputPixels: NOVELAI_REFERENCE_MAX_INPUT_PIXELS })
+      .resize(width, height, { fit: "cover" })
+      .png()
+      .toBuffer();
+    return resized.toString("base64");
+  } catch (err) {
+    const detail = err instanceof Error ? ` ${err.message}` : "";
+    throw new Error(`The NovelAI image-to-image source picture could not be prepared.${detail}`);
+  }
+}
+
 function novelAiReferenceCacheKey(referenceBase64: string): string {
   return createHmac("sha256", NOVELAI_REFERENCE_CACHE_HMAC_KEY).update(referenceBase64).digest("hex");
 }
@@ -2615,6 +2641,7 @@ function cloneNovelAiRequestForMetadata(body: Record<string, unknown>): Record<s
     if (Array.isArray(parameters.reference_image_multiple)) {
       parameters.reference_image_multiple = parameters.reference_image_multiple.map(() => "[omitted]");
     }
+    if (typeof parameters.image === "string") parameters.image = "[omitted]";
   }
   return metadataBody;
 }
@@ -2790,20 +2817,58 @@ async function generateNovelAI(baseUrl: string, apiKey: string, request: ImageGe
     model,
   );
   const seed = resolveSeed(request.imageDefaults);
+  // A request that names its references (kind and strengths per picture) replaces both the plain
+  // reference pictures and the connection's stored style reference.
+  const explicitReferences = (request.preciseReferences ?? []).slice(0, 16).map((reference) => ({
+    image: collectNovelAiReferenceImages({ ...request, referenceImage: reference.image, referenceImages: [] })[0]!,
+    caption: reference.kind,
+    strength: Math.max(
+      0,
+      Math.min(1, reference.strength ?? (reference.kind === "style" ? defaults.styleReferenceStrength : 1)),
+    ),
+    secondaryStrength:
+      reference.fidelity === undefined
+        ? reference.kind === "style"
+          ? resolveNovelAiStyleReferenceSecondaryStrength(defaults.styleReferenceFidelity)
+          : 0
+        : resolveNovelAiStyleReferenceSecondaryStrength(reference.fidelity),
+  }));
   const styleReferenceImage =
-    isNovelAiPreciseReferenceModel(model) && defaults.styleReferenceImage
+    explicitReferences.length === 0 && isNovelAiPreciseReferenceModel(model) && defaults.styleReferenceImage
       ? collectNovelAiReferenceImages({
           ...request,
           referenceImage: defaults.styleReferenceImage,
           referenceImages: [],
         })[0]
       : undefined;
-  const characterReferenceImages = collectNovelAiReferenceImages(request)
-    .filter((reference) => reference !== styleReferenceImage)
-    .slice(0, styleReferenceImage ? 15 : 16);
-  let referenceImages = styleReferenceImage
-    ? [styleReferenceImage, ...characterReferenceImages]
-    : characterReferenceImages;
+  const characterReferenceImages =
+    explicitReferences.length > 0
+      ? []
+      : collectNovelAiReferenceImages(request)
+          .filter((reference) => reference !== styleReferenceImage)
+          .slice(0, styleReferenceImage ? 15 : 16);
+  let referenceSpecs =
+    explicitReferences.length > 0
+      ? explicitReferences
+      : [
+          ...(styleReferenceImage
+            ? [
+                {
+                  image: styleReferenceImage,
+                  caption: "style",
+                  strength: defaults.styleReferenceStrength,
+                  secondaryStrength: resolveNovelAiStyleReferenceSecondaryStrength(defaults.styleReferenceFidelity),
+                },
+              ]
+            : []),
+          ...characterReferenceImages.map((image) => ({
+            image,
+            caption: "character&style",
+            strength: 1,
+            secondaryStrength: 0,
+          })),
+        ];
+  let referenceImages = referenceSpecs.map((reference) => reference.image);
   if (referenceImages.length > 0 && !isNovelAiPreciseReferenceModel(model)) {
     // NovelAI only ships Precise Reference on V4.5; V5 support is still pending upstream.
     // Render without the references rather than failing the whole illustration.
@@ -2813,6 +2878,7 @@ async function generateNovelAI(baseUrl: string, apiKey: string, request: ImageGe
       model,
     );
     referenceImages = [];
+    referenceSpecs = [];
   }
   const directorReferenceImages = await prepareNovelAiDirectorReferenceImages(referenceImages);
   const characterPromptPayload = buildNovelAiV4CharacterPromptPayload(request.characterPrompts, model);
@@ -2855,25 +2921,32 @@ async function generateNovelAI(baseUrl: string, apiKey: string, request: ImageGe
     parameters.reference_strength_multiple = [];
   }
   if (directorReferenceImages.length > 0) {
-    const styleReferenceOffset = styleReferenceImage ? 1 : 0;
     parameters.director_reference_images = directorReferenceImages;
-    parameters.director_reference_descriptions = directorReferenceImages.map((_, index) => ({
-      caption: { base_caption: index < styleReferenceOffset ? "style" : "character&style", char_captions: [] },
+    parameters.director_reference_descriptions = referenceSpecs.map((reference) => ({
+      caption: { base_caption: reference.caption, char_captions: [] },
       legacy_uc: false,
     }));
     parameters.director_reference_information_extracted = directorReferenceImages.map(() => 1);
-    parameters.director_reference_strength_values = directorReferenceImages.map((_, index) =>
-      index < styleReferenceOffset ? defaults.styleReferenceStrength : 1,
+    parameters.director_reference_strength_values = referenceSpecs.map((reference) => reference.strength);
+    parameters.director_reference_secondary_strength_values = referenceSpecs.map(
+      (reference) => reference.secondaryStrength,
     );
-    parameters.director_reference_secondary_strength_values = directorReferenceImages.map((_, index) =>
-      index < styleReferenceOffset ? resolveNovelAiStyleReferenceSecondaryStrength(defaults.styleReferenceFidelity) : 0,
-    );
+  }
+  // Image-to-image starts from the caller's picture, fitted to the requested canvas.
+  const sourceImage = request.sourceImage
+    ? await prepareNovelAiSourceImage(request.sourceImage.image, size.width, size.height)
+    : null;
+  if (sourceImage) {
+    parameters.image = sourceImage;
+    parameters.strength = Math.max(0.01, Math.min(0.99, request.sourceImage?.strength ?? 0.7));
+    parameters.noise = Math.max(0, Math.min(0.99, request.sourceImage?.noise ?? 0));
+    parameters.extra_noise_seed = seed;
   }
 
   const body = withImageCustomParameters(request, {
     input: prompt,
     model,
-    action: "generate",
+    action: sourceImage ? "img2img" : "generate",
     parameters,
     use_new_shared_trial: true,
   });

@@ -721,7 +721,13 @@ import {
   holdReagentWorkspace,
   materializeWorkspace,
   readReagentPromptState,
+  reagentWorkspaceDir,
 } from "../services/reagent/reagent-workspace.js";
+import {
+  createReagentImageTools,
+  persistReagentSentImages,
+  type ReagentImageDraft,
+} from "../services/reagent/reagent-images.js";
 import { normalizeContextInjections } from "./generate/agent-normalizers.js";
 import {
   buildGenerationPromptPresetCandidates,
@@ -8759,6 +8765,8 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
           const reagentScenePatch: ReagentScenePatch = {};
           let reagentExecutor: ReturnType<typeof createReagentExecutor> | null = null;
           const reagentMedia: ReagentMedia[] = [];
+          /** Drafts the writer chose with send_image; attached when the reply is saved. */
+          const reagentSentImages: ReagentImageDraft[] = [];
           if (
             reagentSettings.enabled &&
             !input.impersonate &&
@@ -8808,6 +8816,30 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 onStatusPatch: (update) => reagentStatusPatches.push(update),
                 onRosterRemove: (reference) => reagentRemovedCharacters.push(reference),
                 onScenePatch: (patch) => Object.assign(reagentScenePatch, patch),
+                images: effectiveReagentSettings.tools.images
+                  ? createReagentImageTools({
+                      db: app.db,
+                      chatId: input.chatId,
+                      chatMeta,
+                      workspaceDir,
+                      settings: effectiveReagentSettings,
+                      // Cards first, then tracked people who are not cards (NPCs with a portrait).
+                      people: [
+                        ...charInfo.map((character) => ({
+                          id: character.id,
+                          name: character.name,
+                          avatarPath: character.avatarPath,
+                        })),
+                        ...reagentTracker
+                          .filter((row) => !charInfo.some((character) => character.id === row.characterId))
+                          .map((row) => ({ name: row.name, avatarPath: row.avatarPath })),
+                      ],
+                      persona: persona ? { name: persona.name, avatarPath: persona.avatarPath } : null,
+                      signal: generationSignal,
+                      debugMode: requestDebug,
+                      onSend: (draft) => reagentSentImages.push(draft),
+                    })
+                  : undefined,
                 onFileVersion: (path, content) => {
                   reagentFileVersions[path] = content;
                 },
@@ -9303,7 +9335,7 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                   return [
                     {
                       role: "user" as const,
-                      content: `[Attached from your read_file calls: ${items.map((item) => item.name).join(", ")}. Look at them and continue; the reply still goes to the same person.]`,
+                      content: `[Attached for you to look at: ${items.map((item) => item.name).join(", ")}. Look at them and continue; the reply still goes to the same person.]`,
                       images: items.filter((item) => item.kind === "image").map((item) => item.dataUrl),
                       media: items
                         .filter((item) => item.kind === "video")
@@ -11269,6 +11301,22 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
               extraUpdate.advancedMemorySnapshot = advancedMemorySnapshot;
             const persistentAttachments = resolveUserRegenerationPersistentAttachments(regenMsg ?? {});
             if (persistentAttachments) extraUpdate.attachments = persistentAttachments;
+            // Pictures the writer sent: into the gallery now, onto the reply with the rest of its extras.
+            if (reagentSentImages.length > 0) {
+              const pictures = await persistReagentSentImages({
+                db: app.db,
+                chatId: input.chatId,
+                workspaceDir: reagentWorkspaceDir(input.chatId),
+                drafts: reagentSentImages.splice(0),
+                characterName: charInfo.find((character) => character.id === targetCharId)?.name ?? null,
+              });
+              if (pictures.length > 0) {
+                // The extras merge is shallow, so a continuation keeps the pictures it already had.
+                const kept =
+                  persistentAttachments ?? (input.continueMessageId ? parseExtra(savedMsg.extra).attachments : null);
+                extraUpdate.attachments = [...(Array.isArray(kept) ? kept : []), ...pictures];
+              }
+            }
             if (reagentActivity.length > 0) extraUpdate.reagentActivity = reagentActivity;
             if (Object.keys(reagentFileVersions).length > 0) extraUpdate.reagentFiles = reagentFileVersions;
             // While a rewrite agent holds the reply, each saved message shows its placeholder until its rewrite arrives.

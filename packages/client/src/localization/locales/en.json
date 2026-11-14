@@ -8617,6 +8617,8 @@
   "ui.chat.reagent.family.askDescription": "The character can ask you what you meant or intended while it reasons, with options or your own answer, and waits for it. The last ten stay in the chat's history.",
   "ui.chat.reagent.family.files": "Files",
   "ui.chat.reagent.family.filesDescription": "Read, write and edit files; images and videos are shown to the model as real inputs.",
+  "ui.chat.reagent.family.images": "Pictures",
+  "ui.chat.reagent.family.imagesDescription": "Draw with your image connection: it reads a guide for the model's prompt style, makes drafts only it sees (kept in the workspace's images folder), redraws until one fits, and attaches the one it sends. Each draft uses your image provider.",
   "ui.chat.reagent.family.lorebook": "Lorebook",
   "ui.chat.reagent.family.lorebookDescription": "Look up active lorebooks and write entries into this chat's own lorebook.",
   "ui.chat.reagent.family.memory": "Memory",

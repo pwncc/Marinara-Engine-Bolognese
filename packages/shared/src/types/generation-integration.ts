@@ -233,6 +233,18 @@ export type ConnectionAdmissionMode =
    */
   | { kind: "none" };
 
+/** One NovelAI Precise Reference picture with its own kind and strengths. */
+export interface ImagePreciseReference {
+  /** Base64 or data URL. */
+  image: string;
+  /** What the model takes from the picture. */
+  kind: "character" | "style" | "character&style";
+  /** 0-1, how strongly the picture is followed. */
+  strength?: number;
+  /** 0-1, how literally it is enforced; lower leaves the model more room. */
+  fidelity?: number;
+}
+
 export interface ImageGenRequest {
   prompt: string;
   /** OpenAI GPT Image generation quality. Ignored by unsupported services and models. */
@@ -258,6 +270,13 @@ export interface ImageGenRequest {
   /** The reference image already is the requested canvas (an in-place edit such as a blink picture), so
    *  providers must keep its framing rather than compose a new picture around it. */
   referenceIsCanvas?: boolean;
+  /**
+   * NovelAI Precise Reference pictures with an explicit kind and strengths each. When present they
+   * replace referenceImage(s) and the connection's stored style reference for this request.
+   */
+  preciseReferences?: ImagePreciseReference[];
+  /** NovelAI image-to-image: start from this picture. `strength` is how far it may change, `noise` adds detail. */
+  sourceImage?: { image: string; strength?: number; noise?: number };
   /** Optional structured per-character prompts. NovelAI V4/V4.5 maps these to native character captions. */
   characterPrompts?: SceneIllustrationCharacterPrompt[];
   /** Request a transparent image background when the provider/model supports it. */

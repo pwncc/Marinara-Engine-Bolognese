@@ -71,6 +71,11 @@ const FAMILIES: Array<{ id: ReagentToolFamily; labelKey: string; descriptionKey:
     descriptionKey: "ui.chat.reagent.family.lorebookDescription",
   },
   { id: "web", labelKey: "ui.chat.reagent.family.web", descriptionKey: "ui.chat.reagent.family.webDescription" },
+  {
+    id: "images",
+    labelKey: "ui.chat.reagent.family.images",
+    descriptionKey: "ui.chat.reagent.family.imagesDescription",
+  },
   { id: "shell", labelKey: "ui.chat.reagent.family.shell", descriptionKey: "ui.chat.reagent.family.shellDescription" },
 ];
 

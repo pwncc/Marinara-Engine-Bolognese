@@ -87,6 +87,12 @@ export interface ReagentScene {
 /** Scene fields the writer changed; `recentEvents` is the complete new list when present. */
 export type ReagentScenePatch = Partial<Omit<ReagentScene, "recentEvents">> & { recentEvents?: string[] };
 
+/** The image tools as the executor calls them; built per reply by `createReagentImageTools`. */
+export type ReagentImageTools = Record<
+  "guide" | "generate" | "view" | "list" | "send",
+  (args: Record<string, unknown>) => Promise<{ text: string; media?: ReagentMedia[] }>
+>;
+
 export interface ReagentExecutorDeps {
   db: DB;
   chatId: string;
@@ -107,6 +113,8 @@ export interface ReagentExecutorDeps {
   onStatusPatch: (update: PresentCharacterUpdate) => void;
   /** A tracker row (by characterId or name) the writer says left the scene. */
   onRosterRemove: (reference: string) => void;
+  /** Present when the images family is on and the chat can draw. */
+  images?: ReagentImageTools;
   /** set_scene fields, applied to the World State tracker once the reply is saved. */
   onScenePatch: (patch: ReagentScenePatch) => void;
   onFileVersion: (workspaceRelativePath: string, content: string | null) => void;
@@ -528,6 +536,94 @@ const ASK_TOOLS: LLMToolDefinition[] = [
   ),
 ];
 
+const IMAGE_SOURCE_HELP =
+  "`avatar:<name>` (a character's or tracked person's picture), `persona` (the user's), `gallery:<id>` (a picture in this chat), or the path of a draft or any image in the workspace";
+
+const IMAGES_TOOLS: LLMToolDefinition[] = [
+  def(
+    "image_guide",
+    "How to draw with the connected image model: which connections exist, the prompt vocabulary the model wants (Danbooru tags, e621 tags or plain prose), emphasis syntax, per-person prompts, reference pictures, sizes and sampler settings. Read it once before the first picture; `topic` returns one section.",
+    {
+      connection: { type: "string", description: "Image connection name; default is the chat's own." },
+      topic: { type: "string", enum: ["overview", "prompt", "characters", "references", "settings"] },
+    },
+  ),
+  def(
+    "generate_image",
+    "Draw a draft picture. Only you see it: it comes back attached so you can look at it, redraw until it matches the scene, and send_image the one that does. Write the prompt in the vocabulary image_guide gives for the connection.",
+    {
+      prompt: { type: "string", description: "The scene (with several people: count, place, light, framing, style)." },
+      negative_prompt: { type: "string", description: "What must not appear." },
+      connection: { type: "string", description: "Image connection name; default is the chat's own." },
+      aspect: { type: "string", enum: ["portrait", "landscape", "square"] },
+      width: { type: "integer" },
+      height: { type: "integer" },
+      characters: {
+        type: "array",
+        description: "One entry per person in the picture, each with their own prompt.",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            prompt: { type: "string", description: "This person only: looks, clothes, expression, pose, action." },
+            negative_prompt: { type: "string" },
+            position: { type: "string", description: "Grid cell A1-E5 (A-E left to right, 1-5 top to bottom)." },
+          },
+          required: ["prompt"],
+        },
+      },
+      references: {
+        type: "array",
+        description: "Pictures to keep a person's design or an art style from.",
+        items: {
+          type: "object",
+          properties: {
+            source: { type: "string", description: IMAGE_SOURCE_HELP },
+            kind: { type: "string", enum: ["character", "style", "character&style"] },
+            strength: { type: "number", description: "0-1, how hard the picture is followed." },
+            fidelity: { type: "number", description: "0-1, how literally it is enforced." },
+          },
+          required: ["source"],
+        },
+      },
+      base_image: {
+        type: "object",
+        description: "Start from an existing picture (image-to-image), such as a draft that is nearly right.",
+        properties: {
+          source: { type: "string", description: IMAGE_SOURCE_HELP },
+          strength: { type: "number", description: "0-1, how far it may change." },
+          noise: { type: "number", description: "0-1, extra detail (NovelAI)." },
+        },
+        required: ["source"],
+      },
+      seed: { type: "integer", description: "Reuse a draft's seed to repair a detail of the same picture." },
+      steps: { type: "integer" },
+      guidance: { type: "number", description: "Prompt guidance / CFG scale." },
+      guidance_rescale: { type: "number" },
+      sampler: { type: "string" },
+      scheduler: { type: "string", description: "Noise schedule." },
+    },
+    ["prompt"],
+  ),
+  def(
+    "view_image",
+    "Look at a picture before drawing from it: a character's avatar, the user's persona picture, a gallery picture or an image file. It is attached to this turn as an input.",
+    { source: { type: "string", description: IMAGE_SOURCE_HELP } },
+    ["source"],
+  ),
+  def(
+    "list_images",
+    "List the pictures you can use: your drafts with their prompts and seeds, this chat's gallery, and whose avatars exist.",
+    {},
+  ),
+  def(
+    "send_image",
+    "Attach one of your drafts to this reply. Nothing you draw reaches the user without it.",
+    { draft: { type: "string", description: "The draft path generate_image returned." } },
+    ["draft"],
+  ),
+];
+
 const FAMILY_TOOLS: Record<ReagentToolFamily, LLMToolDefinition[]> = {
   files: FILE_TOOLS,
   memory: MEMORY_TOOLS,
@@ -545,7 +641,7 @@ const FAMILY_TOOLS: Record<ReagentToolFamily, LLMToolDefinition[]> = {
   web: WEB_TOOLS,
   shell: SHELL_TOOLS,
   noodle: [],
-  images: [],
+  images: IMAGES_TOOLS,
 };
 
 export function reagentToolDefinitions(settings: ReagentSettings): LLMToolDefinition[] {
@@ -868,6 +964,11 @@ export function buildReagentPromptBlock(input: {
   if (input.settings.tools.ask) {
     lines.push(
       "Asking: when the user's message, an earlier message or their intent could be read more than one way and the reply would differ, ask_user() while you reason and wait for the answer; offer options and they can pick one or write their own. Ask as often as it helps, never inside the reply. Their answers below are settled.",
+    );
+  }
+  if (input.settings.tools.images) {
+    lines.push(
+      "Pictures: you can draw. Read image_guide() before the first picture; it names the image model and the vocabulary it wants. generate_image() makes a draft only you see: look at it, redraw when it does not match the scene, and send_image() the one that does. Draw when the user asks for a picture or the moment is one a person would show or keep; most replies have none, and the reply never mentions generating or sending a file.",
     );
   }
   if (input.settings.tools.shell) {
@@ -2144,7 +2245,20 @@ ${clip(content)}`),
     };
   }
 
+  const imageTool =
+    (name: keyof ReagentImageTools) =>
+    async (args: Record<string, unknown>): Promise<ReagentToolOutcome> => {
+      if (!deps.images) throw new Error("Pictures are not available in this chat.");
+      const outcome = await deps.images[name](args);
+      return { result: ok(outcome.text), media: outcome.media ?? [] };
+    };
+
   const handlers: Record<string, (args: Record<string, unknown>) => Promise<ReagentToolOutcome>> = {
+    image_guide: imageTool("guide"),
+    generate_image: imageTool("generate"),
+    view_image: imageTool("view"),
+    list_images: imageTool("list"),
+    send_image: imageTool("send"),
     ask_user: askUserTool,
     learn: learnTool,
     knows: knowsTool,
