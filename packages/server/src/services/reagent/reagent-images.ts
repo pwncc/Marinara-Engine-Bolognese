@@ -224,21 +224,147 @@ export function parseReagentImagePosition(value: unknown): { x: number; y: numbe
 
 // ── The guide ──
 
-const NOVELAI_QUALITY: Record<string, string> = {
-  "nai-diffusion-3": "best quality, amazing quality, very aesthetic, absurdres",
-  "nai-diffusion-4-curated-preview": "rating:general, amazing quality, very aesthetic, absurdres",
-  "nai-diffusion-4-full": "no text, best quality, very aesthetic, absurdres",
-  "nai-diffusion-4-5-curated": "location, masterpiece, no text, rating:general",
-  "nai-diffusion-4-5-full": "location, very aesthetic, masterpiece, no text",
-  "nai-diffusion-5-curated": "very aesthetic, masterpiece, no text",
-  "nai-diffusion-5-full": "very aesthetic, masterpiece, no text",
+// NovelAI's own interface adds these: Quality Tags after the prompt and an Undesired Content
+// preset before the negative prompt. The API applies neither, so they are added here.
+const UC_V3_HEAVY =
+  "lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract]";
+const UC_V4_FULL_HEAVY =
+  "blurry, lowres, error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, too many watermarks, white blank page, blank page";
+const UC_V45_FULL_HEAVY =
+  "lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page";
+const UC_V45_FULL: Record<string, string> = {
+  heavy: UC_V45_FULL_HEAVY,
+  light:
+    "lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page",
+  human: `${UC_V45_FULL_HEAVY}, @_@, mismatched pupils, glowing eyes, bad anatomy`,
+  furry:
+    "{worst quality}, distracting watermark, unfinished, bad quality, {widescreen}, upscale, {sequence}, {{grandfathered content}}, blurred foreground, chromatic aberration, sketch, everyone, [sketch background], simple, [flat colors], ych (character), outline, multiple scenes, [[horror (theme)]], comic",
 };
+
+export interface NovelAiPresetSet {
+  /** What the Quality Tags toggle appends to the prompt. */
+  quality: string;
+  /** Undesired Content presets by name. */
+  negative: Record<string, string>;
+}
+
+/** NovelAI's quality tags and Undesired Content presets for a model. */
+export function resolveNovelAiPresets(model: string): NovelAiPresetSet {
+  const name = model.trim().toLowerCase();
+  if (/nai-diffusion-5/.test(name)) {
+    // ponytail: V5 reuses the V4.5 Full lists; swap in NovelAI's own V5 presets when their text is known.
+    return { quality: "very aesthetic, masterpiece, no text", negative: UC_V45_FULL };
+  }
+  if (name === "nai-diffusion-4-5-curated") {
+    return {
+      quality: "location, masterpiece, no text, -0.8::feet::, rating:general",
+      negative: {
+        heavy:
+          "blurry, lowres, upscaled, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, halftone, multiple views, logo, too many watermarks, negative space, blank page",
+        light:
+          "blurry, lowres, upscaled, artistic error, scan artifacts, jpeg artifacts, logo, too many watermarks, negative space, blank page",
+        human:
+          "blurry, lowres, upscaled, artistic error, film grain, scan artifacts, bad anatomy, bad hands, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, halftone, multiple views, logo, too many watermarks, @_@, mismatched pupils, glowing eyes, negative space, blank page",
+      },
+    };
+  }
+  if (/nai-diffusion-4-5/.test(name)) {
+    return { quality: "location, very aesthetic, masterpiece, no text", negative: UC_V45_FULL };
+  }
+  if (name === "nai-diffusion-4-curated-preview") {
+    return {
+      quality: "rating:general, amazing quality, very aesthetic, absurdres",
+      negative: {
+        heavy:
+          "blurry, lowres, error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, logo, dated, signature, multiple views, gigantic breasts, white blank page, blank page",
+        light:
+          "blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, logo, dated, signature, white blank page, blank page",
+      },
+    };
+  }
+  if (/nai-diffusion-4/.test(name)) {
+    return {
+      quality: "no text, best quality, very aesthetic, absurdres",
+      negative: {
+        heavy: UC_V4_FULL_HEAVY,
+        light:
+          "blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, white blank page, blank page",
+      },
+    };
+  }
+  return {
+    quality: "best quality, amazing quality, very aesthetic, absurdres",
+    negative: {
+      heavy: UC_V3_HEAVY,
+      light: "lowres, jpeg artifacts, worst quality, watermark, blurry, very displeasing",
+      human: `${UC_V3_HEAVY}, bad anatomy, bad hands, @_@, mismatched pupils, heart-shaped pupils, glowing eyes`,
+    },
+  };
+}
+
+/** A tag without its emphasis brackets or weight, for telling whether it is already there. */
+const bareTag = (tag: string) =>
+  tag
+    .replace(/-?\d*\.?\d*::/g, "")
+    .replace(/[{}[\]]/g, "")
+    .trim()
+    .toLowerCase();
+
+const splitTags = (text: string) =>
+  text
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+
+/**
+ * The writer's prompts with the presets it asked for: quality tags after the prompt (before a
+ * trailing `Text:`, which must stay last), the Undesired Content list before its own negatives.
+ * Tags already written, or already in a connection prefix, are not repeated.
+ */
+export function applyNovelAiPresets(input: {
+  model: string;
+  prompt: string;
+  negativePrompt: string;
+  qualityTags: boolean;
+  negativePreset: string;
+  /** Connection prefixes, which the provider adds later; their tags count as present. */
+  promptPrefix?: string;
+  negativePromptPrefix?: string;
+}): { prompt: string; negativePrompt: string; negativePreset: string } {
+  const presets = resolveNovelAiPresets(input.model);
+  let prompt = input.prompt;
+  if (input.qualityTags) {
+    const textAt = prompt.search(/(^|[\s,])Text:/);
+    const body = textAt >= 0 ? prompt.slice(0, textAt) : prompt;
+    const tail = textAt >= 0 ? prompt.slice(textAt).replace(/^[\s,]+/, "") : "";
+    const present = new Set(splitTags(`${input.promptPrefix ?? ""},${body}`).map(bareTag));
+    const added = splitTags(presets.quality).filter(
+      // `no text` in the quality tags works against words the picture is meant to show.
+      (tag) => !present.has(bareTag(tag)) && !(tail && bareTag(tag) === "no text"),
+    );
+    const joined = [body.trim().replace(/,\s*$/, ""), ...added].filter(Boolean).join(", ");
+    prompt = tail ? `${joined}, ${tail}` : joined;
+  }
+  const wanted = input.negativePreset
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]*focus$/, "");
+  const negativePreset = wanted === "none" ? "none" : presets.negative[wanted] ? wanted : "heavy";
+  let negativePrompt = input.negativePrompt;
+  if (negativePreset !== "none") {
+    const present = new Set(splitTags(`${input.negativePromptPrefix ?? ""},${negativePrompt}`).map(bareTag));
+    const added = splitTags(presets.negative[negativePreset]!).filter((tag) => !present.has(bareTag(tag)));
+    negativePrompt = [...added, negativePrompt.trim()].filter(Boolean).join(", ");
+  }
+  return { prompt, negativePrompt, negativePreset };
+}
 
 function novelAiPromptGuide(connection: DescribedConnection): string[] {
   const v4 = connection.dialect !== "novelai-v3";
   const v5 = connection.dialect === "novelai-v5";
   const v45 = /nai-diffusion-(4-5|5)/.test(connection.model.toLowerCase());
-  const quality = NOVELAI_QUALITY[connection.model.toLowerCase()] ?? "very aesthetic, masterpiece, no text";
+  const presets = resolveNovelAiPresets(connection.model);
+  const presetNames = Object.keys(presets.negative);
   const lines = [
     `## Writing the prompt (NovelAI, ${connection.model})`,
     "- Vocabulary: Danbooru tags. Lower case, comma separated, spaces instead of underscores: `1girl, solo, long black hair, red scarf, looking at viewer, night, city street`.",
@@ -261,7 +387,14 @@ function novelAiPromptGuide(connection: DescribedConnection): string[] {
         : ""
     }${v45 ? " Negative numbers remove or invert a thing: `-1::hat ::`." : ""}`,
     "- `|` mixes prompts, so it never appears inside a tag. Renamed for that reason: `v` is `peace sign`, `double v` is `double peace`, `:|` is `neutral face`.",
-    `- Quality tags go at the end and nothing adds them for you: \`${quality}\`. Skip them when the connection's prefix below already has them.`,
+    `- Presets, the same ones NovelAI's own interface has, are added for you and stack with what you write. \`quality_tags\` (on unless you pass false) appends \`${presets.quality}\` to the prompt. \`negative_preset\` puts an Undesired Content list in front of your negative prompt: ${presetNames
+      .map((name) => `\`${name}\``)
+      .join(
+        ", ",
+      )} or \`none\` (default \`heavy\`).${presets.negative.human ? " `human` is heavy plus fixes for anatomy and eyes, for pictures of people." : ""}${
+      presets.negative.furry ? " `furry` goes with `fur dataset`." : ""
+    } Write only your own additions in prompt and negative_prompt and never retype the preset tags.`,
+    "- The presets pull toward a clean, finished look. For a picture that is meant to be rough, grainy, sketched, flat or printed (film grain, halftone, screentone, sketch), use `light` or `none`, and turn `quality_tags` off when the polish itself is wrong for it.",
     `- Other steering tags: \`year 2023\` for the look of an era, \`rating:general\` / \`rating:sensitive\` / \`rating:questionable\` / \`rating:explicit\`${
       v4 ? ", an artist as `artist:name`" : ", an artist by name"
     }.`,
@@ -270,7 +403,7 @@ function novelAiPromptGuide(connection: DescribedConnection): string[] {
           "- Words in the picture: add the tags `text, english text` and end the base prompt with `Text: the words`. Nothing may come after it. Keep it short.",
         ]
       : []),
-    "- negative_prompt: tags for what must not appear (`lowres, bad anatomy, extra fingers, extra limbs, watermark, signature`). Emphasis there means avoid it harder.",
+    "- negative_prompt: your additions on top of the preset, the things this particular picture must not have (`hat, glasses, extra people, closed eyes`). Emphasis there means avoid it harder.",
   ];
   return lines;
 }
@@ -347,13 +480,15 @@ function referencesGuide(connection: DescribedConnection, others: DescribedConne
   if (connection.backend === "novelai" && connection.nativeNovelAi) {
     if (isNovelAiPreciseReferenceModel(connection.model)) {
       lines.push(
-        "- `references: [{source, kind, strength, fidelity}]` (NovelAI Precise Reference).",
-        "- `kind`: `character` keeps that person's design and draws it in the prompt's style; `style` takes only the look of the art; `character&style` takes both.",
-        "- `strength` 0 to 1, how hard the picture is followed (default 1, for `style` the connection's value). High values also copy pose and expression; go down to 0.6-0.8 when the pose has to change.",
-        "- `fidelity` 0 to 1, how literally it is enforced; lower leaves the model room.",
-        "- Several character references blend into one person, they do not stay two people. With two different people in the picture, reference one and describe the other.",
+        "- `references` and `base_image` are two different things. A reference is never redrawn and never supplies the composition: the model reads who the person is or how the art looks from it, and then draws a completely new picture from your prompt. `base_image` is the opposite, that exact picture as the canvas.",
+        "- `references: [{source, kind, strength, fidelity}]` is NovelAI Precise Reference.",
+        "- `kind`: `character` takes the person (face, hair, body, the design of their outfit) and draws them in whatever style the prompt and model give; `style` takes only how the art looks (line, colour, shading, rendering) and nothing of what is in the picture; `character&style` takes both.",
+        "- Pose, framing, angle, action, expression, place and light all come from the prompt. Write them as fully as you would without a reference; a reference with a thin prompt gives a stiff copy of the reference's own pose.",
+        "- `strength` 0 to 1 is how much of the design or style carries over, not how much of the picture is kept (default 1, for `style` the connection's value). Lower it when the person should wear or look different from the reference, or when the style should only tint the picture.",
+        "- `fidelity` 0 to 1 is how literally small details are held (exact hair strands, outfit trim, accessories); lower lets the model adapt them to the new pose and scene.",
+        "- Several character references blend into one person, they do not stay two people. With two different people in the picture, reference one and describe the other in `characters`.",
+        "- A character reference and a style reference together are fine: the person from one picture in the look of another.",
         "- The best character reference is a full body in a neutral pose on a plain background with clean lines.",
-        "- Still write the person in the prompt: the reference carries the design, the prompt carries today's clothes, pose and action.",
         "- Each referenced picture costs extra Anlas.",
       );
       if (connection.defaults?.novelai?.styleReferenceImage) {
@@ -374,11 +509,11 @@ function referencesGuide(connection: DescribedConnection, others: DescribedConne
       );
     }
     lines.push(
-      "- `base_image: {source, strength, noise}` starts from an existing picture instead of from nothing. `strength` 0.3-0.5 keeps the composition and repairs details, 0.6-0.8 reinterprets it; `noise` 0-0.2 adds new detail. Use it on a draft that is nearly right.",
+      "- `base_image: {source, strength, noise}` is image-to-image: that very picture is the starting canvas and is drawn over. Here `strength` is how far it may move away from the original: 0.3-0.5 keeps the composition and repairs details, 0.6-0.8 reinterprets it. `noise` 0-0.2 adds new detail. Use it on a draft that is nearly right, not to carry a person into a new scene.",
     );
   } else if (takesReferences) {
     lines.push(
-      "- `references: [{source}]` passes pictures to the model as inputs; `kind`, `strength` and `fidelity` are not used here. Say in the prompt what each picture is for.",
+      "- `references: [{source}]` passes pictures to the model as inputs to take a person or a look from; `kind`, `strength` and `fidelity` are not used here. Say in the prompt what each picture is for. The composition still comes from the prompt.",
       imageSourceToDefaultsService(connection.backend)
         ? "- `base_image: {source, strength}` redraws an existing picture; `strength` is the denoise, 0.3-0.5 for small repairs, 0.6-0.8 for a new take."
         : "- `base_image: {source}` asks for an edit of that picture; describe the change in the prompt.",
@@ -457,8 +592,10 @@ export function buildReagentImageGuide(input: {
     "",
     "## How it goes",
     "- generate_image makes a draft that only you see; it comes back attached, so look at it.",
-    "- Judge it against the moment: the right people, their hair and eyes and clothes as they are now, the right number of hands and fingers, the place, the light, the mood. A picture that contradicts the scene is worse than none.",
-    `- Not right: change the prompt or a setting and draw again, up to ${REAGENT_MAX_DRAFTS_PER_REPLY} drafts in one reply. Change one thing at a time so you know what helped.`,
+    "- Draw the moment as it actually is, not an easier version of it: the real pose and action, everyone who is there, what the hands are doing, the angle it would be seen from, the whole place with its light and weather. Do not retreat to a plain portrait, a standing pose, a tighter crop or an empty background because they render more safely. Hard pictures are what the drafts are for.",
+    "- Draw at full size; small pictures lose faces and hands.",
+    "- Judge the draft against the moment: the right people as they are now, the action, the place, the light, the mood.",
+    `- A flaw is repaired, not avoided. A wrong hand, a stray limb, a wrong colour or a missing prop: keep the seed and correct the prompt, add the fault to negative_prompt, or run base_image on that draft at low strength. Up to ${REAGENT_MAX_DRAFTS_PER_REPLY} drafts in one reply; change one thing at a time so you know what helped. Only simplify the picture after the full version has failed more than once.`,
     `- send_image puts a draft into your reply, up to ${REAGENT_MAX_SENT_PER_REPLY}. Nothing else reaches the user. Drafts you do not send stay in \`${REAGENT_IMAGES_DIR}/\` in your workspace.`,
     "- The picture is something the person in the scene could show or that the moment shows; the reply text never describes having generated it.",
     ...(prefix?.promptPrefix?.trim()
@@ -894,9 +1031,30 @@ export function createReagentImageTools(context: ReagentImageContext) {
       explicitSize,
     });
 
-    const negativePrompt = str(args.negative_prompt).trim();
+    // NovelAI's presets stack under what the writer wrote; elsewhere there are none to add.
+    let finalPrompt = prompt;
+    let negativePrompt = str(args.negative_prompt).trim();
+    let presetsApplied: { quality_tags: boolean; negative_preset: string } | null = null;
+    if (novelai) {
+      const qualityTags = args.quality_tags !== false && args.quality_tags !== "false";
+      const applied = applyNovelAiPresets({
+        model: connection.model,
+        prompt,
+        negativePrompt,
+        qualityTags,
+        negativePreset: str(args.negative_preset) || "heavy",
+        promptPrefix: connection.defaults?.novelai?.promptPrefix,
+        negativePromptPrefix: connection.defaults?.novelai?.negativePromptPrefix,
+      });
+      finalPrompt = applied.prompt;
+      negativePrompt = applied.negativePrompt;
+      presetsApplied = { quality_tags: qualityTags, negative_preset: applied.negativePreset };
+    } else {
+      if (args.quality_tags !== undefined) ignored.push("quality_tags");
+      if (str(args.negative_preset)) ignored.push("negative_preset");
+    }
     const request: ImageGenRequest = {
-      prompt,
+      prompt: finalPrompt,
       negativePrompt: negativePrompt || undefined,
       model: connection.model,
       width: size.width,
@@ -922,7 +1080,14 @@ export function createReagentImageTools(context: ReagentImageContext) {
       "[reagent/images] generate_image on %s (%s): %s",
       connection.name,
       connection.model,
-      JSON.stringify({ prompt, negativePrompt, characterPrompts, size, seed, references: referenceLabels }),
+      JSON.stringify({
+        prompt: finalPrompt,
+        negativePrompt,
+        characterPrompts,
+        size,
+        seed,
+        references: referenceLabels,
+      }),
     );
     drawn += 1;
     const result = await draw(
@@ -939,7 +1104,7 @@ export function createReagentImageTools(context: ReagentImageContext) {
     const actual = pngSize(buffer) ?? size;
     const draft: ReagentImageDraft = {
       path,
-      prompt: result.effectivePrompt ?? prompt,
+      prompt: result.effectivePrompt ?? finalPrompt,
       negativePrompt: result.effectiveNegativePrompt ?? negativePrompt,
       connectionId: result.effectiveConnection?.connectionId ?? connection.row.id,
       connectionName: result.effectiveConnection?.connectionName ?? connection.name,
@@ -965,11 +1130,12 @@ export function createReagentImageTools(context: ReagentImageContext) {
         width: draft.width,
         height: draft.height,
         ...(seed !== null ? { seed } : {}),
+        ...(presetsApplied ? { presets: presetsApplied } : {}),
         ...(referenceLabels.length ? { references: referenceLabels } : {}),
         ...(ignored.length ? { ignored_settings: ignored } : {}),
         drafts_left: left,
-        note: `The draft is attached; look at it. Right for the moment: send_image("${path}"). Wrong: say to yourself what is wrong, then draw again${
-          seed !== null ? " (same seed to repair a detail, no seed for a new composition)" : ""
+        note: `The draft is attached; look at it. Right for the moment: send_image("${path}"). Wrong: say to yourself what is wrong, then repair it rather than drawing something simpler${
+          seed !== null ? " (same seed to fix a detail, no seed for a new composition)" : ""
         }${left === 0 ? "; this was the last draft for this reply" : ""}. The user sees nothing until you send.`,
       }),
       media: await asInput(buffer, path),

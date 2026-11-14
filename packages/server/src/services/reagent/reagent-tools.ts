@@ -552,8 +552,22 @@ const IMAGES_TOOLS: LLMToolDefinition[] = [
     "generate_image",
     "Draw a draft picture. Only you see it: it comes back attached so you can look at it, redraw until it matches the scene, and send_image the one that does. Write the prompt in the vocabulary image_guide gives for the connection.",
     {
-      prompt: { type: "string", description: "The scene (with several people: count, place, light, framing, style)." },
-      negative_prompt: { type: "string", description: "What must not appear." },
+      prompt: {
+        type: "string",
+        description:
+          "The whole picture as the moment has it: who, pose and action, framing and angle, place, light. With `characters`: count, place, light, framing, style. Your own tags only; presets are added for you.",
+      },
+      negative_prompt: { type: "string", description: "What this picture must not have, on top of the preset." },
+      quality_tags: {
+        type: "boolean",
+        description: "NovelAI: append the model's quality-tag preset to the prompt (default true).",
+      },
+      negative_preset: {
+        type: "string",
+        enum: ["heavy", "light", "human", "furry", "none"],
+        description:
+          "NovelAI: the Undesired Content preset placed before your negative prompt (default heavy; human for people, furry with fur dataset).",
+      },
       connection: { type: "string", description: "Image connection name; default is the chat's own." },
       aspect: { type: "string", enum: ["portrait", "landscape", "square"] },
       width: { type: "integer" },
@@ -574,24 +588,29 @@ const IMAGES_TOOLS: LLMToolDefinition[] = [
       },
       references: {
         type: "array",
-        description: "Pictures to keep a person's design or an art style from.",
+        description:
+          "Pictures to take a person's design or an art style from, for a completely new picture. Not image-to-image: nothing of the reference's composition or pose is kept; those come from the prompt.",
         items: {
           type: "object",
           properties: {
             source: { type: "string", description: IMAGE_SOURCE_HELP },
             kind: { type: "string", enum: ["character", "style", "character&style"] },
-            strength: { type: "number", description: "0-1, how hard the picture is followed." },
-            fidelity: { type: "number", description: "0-1, how literally it is enforced." },
+            strength: {
+              type: "number",
+              description: "0-1, how much of the design or style carries over (not how much of the picture is kept).",
+            },
+            fidelity: { type: "number", description: "0-1, how literally small details are held." },
           },
           required: ["source"],
         },
       },
       base_image: {
         type: "object",
-        description: "Start from an existing picture (image-to-image), such as a draft that is nearly right.",
+        description:
+          "Image-to-image: draw over this exact picture, such as a draft that is nearly right. Not for carrying a person into a new scene; that is `references`.",
         properties: {
           source: { type: "string", description: IMAGE_SOURCE_HELP },
-          strength: { type: "number", description: "0-1, how far it may change." },
+          strength: { type: "number", description: "0-1, how far it may move away from the original." },
           noise: { type: "number", description: "0-1, extra detail (NovelAI)." },
         },
         required: ["source"],
@@ -968,7 +987,7 @@ export function buildReagentPromptBlock(input: {
   }
   if (input.settings.tools.images) {
     lines.push(
-      "Pictures: you can draw. Read image_guide() before the first picture; it names the image model and the vocabulary it wants. generate_image() makes a draft only you see: look at it, redraw when it does not match the scene, and send_image() the one that does. Draw when the user asks for a picture or the moment is one a person would show or keep; most replies have none, and the reply never mentions generating or sending a file.",
+      "Pictures: you can draw. Read image_guide() before the first picture; it names the image model and the vocabulary it wants. generate_image() makes a draft only you see: draw the moment as it really is rather than an easier version, look at the draft, repair what is wrong, and send_image() the one that matches. Draw when the user asks for a picture or the moment is one a person would show or keep; most replies have none, and the reply never mentions generating or sending a file.",
     );
   }
   if (input.settings.tools.shell) {
