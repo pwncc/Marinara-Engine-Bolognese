@@ -10468,6 +10468,9 @@ export async function generateRoutes(app: FastifyInstance, options: GenerateRout
                 completionTokens: usage?.completionTokens ?? null,
                 completionReasoningTokens: usage?.completionReasoningTokens ?? null,
                 maxTokens: sentOutputBudget(effectiveMaxTokensForSend, conn.maxTokensOverride) ?? null,
+                // Which REagent tools ran before the reply came back empty: names only, no content.
+                reagentTools: reagentActivity.map((entry) => `${entry.tool}${entry.ok ? "" : "!"}`),
+                reagentSentImages: reagentSentImages.length,
               },
               "[generate] Empty response after post-processing",
             );

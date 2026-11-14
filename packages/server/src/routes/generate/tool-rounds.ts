@@ -102,6 +102,8 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
   let rollRequestAbort: AbortController | null = null;
   // Where each round's text begins in `text`, for spotting a round that writes an earlier one again.
   const roundStarts: number[] = [];
+  /** Set once the model has been asked for the reply it left out after its tool work. */
+  let askedForMissingReply = false;
   /**
    * A model that wrote reply text before calling a tool often writes that text again after the
    * results, once per round, so the reply holds its opening two or three times over. When this
@@ -261,7 +263,22 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
       };
     }
 
-    if (!result.toolCalls.length) break;
+    if (!result.toolCalls.length) {
+      // A model that worked through tools sometimes ends its turn there, with reasoning and no
+      // reply, and the whole turn is lost as an empty response. Ask once for the reply itself;
+      // the tools stay available in case it had stopped in the middle of its work.
+      if (round > 0 && round < maxToolRounds - 1 && !askedForMissingReply && !gameToolPlan && !text.trim()) {
+        askedForMissingReply = true;
+        logger.warn("[generate] Model ended its turn after tool calls without a reply; asking for it once");
+        loopMessages.push({
+          role: "user",
+          content:
+            "[The engine: your turn ended after the tool calls without any reply text, so nothing reached the other person. Write the reply now, as you normally would. Do not mention this note.]",
+        });
+        continue;
+      }
+      break;
+    }
 
     loopMessages.push({
       role: "assistant",
