@@ -41,6 +41,7 @@ import type {
 import { resolveBaseUrl as resolveSceneConnectionBaseUrl } from "./generate/generate-route-utils.js";
 import { assemblePrompt } from "../services/prompt/assembler.js";
 import { parsePromptPresetChoices } from "../services/generation/conversation-context-utils.js";
+import { returnSceneState, seedSceneState } from "../services/generation/scene-state-transfer.js";
 import { withDeadline } from "../services/capability-packages/capability-prompt-context.service.js";
 import {
   SCENE_ORIGIN_TIMEOUT_MS,
@@ -644,12 +645,22 @@ export async function sceneRoutes(app: FastifyInstance) {
         ? initiatorCharId
         : (finalParticipantIds[0] ?? null);
     const firstMsgParts = [plan.description, "", plan.firstMessage].filter(Boolean);
-    await chats.createMessage({
+    const openingMessage = await chats.createMessage({
       chatId: sceneChat.id,
       role: "assistant",
       characterId: firstMsgCharId,
       content: firstMsgParts.join("\n"),
     });
+
+    // 3. The scene tracks what the conversation tracks: its tracker, REagent files and settings.
+    if (origin.chat && openingMessage?.id) {
+      await seedSceneState({
+        db: app.db,
+        originChatId: origin.chat.id,
+        sceneChatId: sceneChat.id,
+        openingMessageId: openingMessage.id,
+      });
+    }
 
     return {
       chatId: sceneChat.id,
@@ -776,12 +787,26 @@ export async function sceneRoutes(app: FastifyInstance) {
           ? sceneMeta.sceneInitiatorCharId
           : null;
       const initiatorCharId = sceneInitiatorCharId ?? characterIds[0] ?? null;
-      await chats.createMessage({
+      const returnMessage = await chats.createMessage({
         chatId: originChatId,
         role: "narrator",
         characterId: null,
         content: `*${personaName} and ${await getCharacterName(chars, initiatorCharId ?? "")} returned from their scene...*\n\n${summary}`,
       });
+      // What the scene changed comes home with it: tracker rows, REagent files, questions asked.
+      const returned = await returnSceneState({
+        db: app.db,
+        sceneChatId,
+        originChatId,
+        returnMessageId: returnMessage?.id ?? null,
+      });
+      logger.info(
+        "[scene] Scene %s returned to %s: tracker %s, %d workspace file(s)",
+        sceneChatId,
+        originChatId,
+        returned.tracker ? "updated" : "unchanged",
+        returned.files.length,
+      );
     }
 
     // 2. Store as a permanent memory on each participating character
