@@ -183,7 +183,15 @@ export function resolveGenerationParameters(args: GenerationParameterArgs): Reso
   );
 
   if (args.isSceneChat) {
-    forceParameters("scene", { maxTokens: 8192, reasoningEffort: "maximum", verbosity: "high" });
+    // Scene values are defaults: a parameter set on the scene chat itself stays as the user set it.
+    // Forcing maximum effort over a chat set lower made tool-using replies end in reasoning alone.
+    const sceneDefaults = { maxTokens: 8192, reasoningEffort: "maximum", verbosity: "high" } as const;
+    forceParameters(
+      "scene",
+      Object.fromEntries(
+        Object.entries(sceneDefaults).filter(([key]) => chatParams?.[key as keyof typeof sceneDefaults] === undefined),
+      ),
+    );
   }
 
   if (args.chatMode === "game") {
