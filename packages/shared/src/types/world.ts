@@ -72,14 +72,7 @@ export const DEFAULT_WORLD_ENGINE_CONFIG: WorldEngineConfig = {
 };
 
 /** Relationship stage derived from the numeric score. */
-export type RelationshipStage =
-  | "strangers"
-  | "acquaintances"
-  | "friendly"
-  | "close"
-  | "devoted"
-  | "tense"
-  | "hostile";
+export type RelationshipStage = "strangers" | "acquaintances" | "friendly" | "close" | "devoted" | "tense" | "hostile";
 
 export function getRelationshipStage(score: number): RelationshipStage {
   if (score >= 75) return "devoted";

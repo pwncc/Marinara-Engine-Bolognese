@@ -188,7 +188,11 @@ try {
       assert.ok(!prompt.includes("__MARINARA_RUNTIME_AGENT_SECTION__"));
       if (wrapFormat !== "none") {
         const physicalState = wrapFormat === "xml" ? "<physical_state>" : "## Physical State";
-        assert.equal(prompt.split(physicalState).length - 1, 1, "Beholder retains its Physical State wrapper");
+        assert.equal(
+          prompt.split(physicalState).length - 1,
+          positions[6] === "absent" ? 0 : 1,
+          "Beholder retains its Physical State wrapper",
+        );
       }
       for (const [index, sentinel] of sentinels.entries()) {
         assert.equal(
@@ -277,7 +281,16 @@ try {
     );
     await chats.patchMetadata(chat.id, { enableAgents: false });
     const disabled = await preview();
-    for (const sentinel of [...sentinels, "PLAYER_NOTE_SENTINEL"]) assert.ok(!disabled.includes(sentinel));
+    // Switching off automatic agents keeps the fork's existing status ledger available, once.
+    verify(
+      disabled,
+      sentinels.map((_, i) => (i === 0 || i === 6 ? "absent" : "fallback")),
+    );
+    await chats.patchMetadata(chat.id, { activeAgentIds: [] });
+    verify(
+      await preview(),
+      sentinels.map((_, i) => (i === 1 ? "fallback" : "absent")),
+    );
   }
 } finally {
   provider.closeAllConnections();

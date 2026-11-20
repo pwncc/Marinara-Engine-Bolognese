@@ -188,7 +188,8 @@ export function buildCommittedTrackerContextBlock(args: {
   if (!args.activeAgentIds.some((id) => COMMITTED_TRACKER_AGENT_TYPES.has(id)) && !hasPresentRows) return null;
   for (const id of args.excludeAgentIds ?? []) active.delete(id);
   const hasWorldState = active.has("world-state");
-  const hasCharTracker = active.has("character-tracker") || hasPresentRows;
+  const hasCharTracker =
+    active.has("character-tracker") || (hasPresentRows && !args.excludeAgentIds?.has("character-tracker"));
   const hasPersonaStats = active.has("persona-stats");
   const hasQuest = active.has("quest");
   const hasCustomTracker = active.has("custom-tracker");
@@ -327,6 +328,8 @@ export function injectCommittedTrackerContext(args: {
       const sectionContent = buildCommittedTrackerContextBlock({
         ...args,
         activeAgentIds: [agentType],
+        // Each preset section owns only its tracker, including manually populated character state.
+        excludeAgentIds: new Set([...COMMITTED_TRACKER_AGENT_TYPES].filter((type) => type !== agentType)),
         // Player notes belong to the shared context, never to an individual tracker.
         chatMetadata: {},
       });

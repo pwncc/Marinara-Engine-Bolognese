@@ -1,6 +1,7 @@
 import type { AgentResult, DiceRollResult, RoleplayCommandActivity } from "@marinara-engine/shared";
 import { logger } from "../../lib/logger.js";
 import { parseRollDiceToolResult } from "../../services/game/dice.service.js";
+import { stripTrailingToolAnnouncement } from "../../services/game/gm-planning.js";
 import { appendRoundGeminiParts } from "../../services/generation/generation-parameters.js";
 import { getRequestInputTokens } from "../../services/generation/generation-text-utils.js";
 import { parseRoleplayCommands, RoleplayCommandStreamFilter } from "../../services/generation/roleplay-commands.js";
@@ -45,6 +46,8 @@ export interface ToolRoundsContext {
   maxToolRounds: number;
   initialMessages: ChatMessage[];
   assistantPrefillInjected: boolean;
+  /** The prompt ends on this prefill, sent as a user turn: tool results go before it. */
+  userPrefill?: string;
   tools: ChatOptions["tools"];
   toolChoice: (round: number) => ChatOptions["toolChoice"];
   debugMode: boolean;
@@ -60,6 +63,8 @@ export interface ToolRoundsContext {
   executeTools: (calls: LLMToolCall[]) => Promise<ToolExecutionResult[]>;
   /** Messages to add after a round's tool results, e.g. media a tool fetched, as a user turn. */
   afterToolResults?: () => ChatMessage[];
+  /** Upstream can recover this final request's misplaced reply without another provider call. */
+  canPromoteThinkingOnlyReply?: (finishReason: string) => boolean;
   /** Filled in place. */
   roleplayActivity: RoleplayCommandActivity[];
   roleplayInlinePrefixes: Map<RoleplayCommandActivity, string>;
@@ -92,7 +97,22 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
   let geminiResponseParts: unknown[] | null = null;
   let narratorMessages = ctx.initialMessages;
   const aborted = (): ToolRoundsOutcome => ({ aborted: true, fullResponse: text });
+  // Each round's text is appended to the last. After a native tool call the next round starts a new
+  // beat, so it starts a new paragraph instead of running on from the end of the text before the call.
+  // The break is read off the text itself whenever a round's first words are written, so a round that
+  // is taken back and written again earns it again. `roundTextStart` is where the round's own words
+  // begin, after any break this added.
+  let paragraphBreakAt = -1;
+  let roundStart = text.length;
+  let roundTextStart = text.length;
+  const separateRound = (chunk: string) => {
+    if (!chunk || text.length !== paragraphBreakAt || text.length !== roundStart) return chunk;
+    if (!/\S$/.test(text) || /^\s/.test(chunk)) return chunk;
+    roundTextStart = roundStart + 2;
+    return `\n\n${chunk}`;
+  };
   const write = async (chunk: string) => {
+    chunk = separateRound(chunk);
     text += chunk;
     await stream.write(chunk);
   };
@@ -111,15 +131,17 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
    * the reply, from what the model sees of itself next round, and from the client's view.
    * Returns the round's text without the repeat, or null when nothing repeated.
    */
-  const dropRepeatedRounds = (roundStart: number): string | null => {
-    const roundText = text.slice(roundStart);
+  const dropRepeatedRounds = (): string | null => {
+    const roundText = text.slice(roundTextStart);
     const roundKey = roundText.trimStart();
     for (const start of roundStarts) {
       if (start >= roundStart) break;
-      const earlier = text.slice(start, roundStart).trimEnd();
+      const earlier = text.slice(start, roundStart).trim();
       if (earlier.length < 40 || !roundKey.startsWith(earlier)) continue;
       const remainder = roundKey.slice(earlier.length);
-      text = text.slice(0, roundStart) + remainder;
+      text = text.slice(0, roundStart);
+      roundTextStart = roundStart;
+      text += separateRound(remainder);
       if (roleplayFiltered) stream.roleplayCommandFilter = new RoleplayCommandStreamFilter(roleplayRollEnabled);
       if (!stream.holdForTextRewrite)
         sendSseEvent(ctx.output, {
@@ -145,6 +167,7 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
     if (generationSignal.aborted) {
       return;
     }
+    chunk = separateRound(chunk);
     text += chunk;
     // A held stream still feeds the command filter, which spots a roll request.
     if (stream.holdForTextRewrite) stream.roleplayCommandFilter?.push(chunk);
@@ -153,8 +176,8 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
   };
 
   for (let round = 0; round < maxToolRounds; round++) {
-    const roundResponseStart = text.length;
-    roundStarts.push(roundResponseStart);
+    roundStart = roundTextStart = text.length;
+    roundStarts.push(roundStart);
     rollRequestAbort = roleplayRollEnabled ? new AbortController() : null;
     if (roleplayFiltered) stream.roleplayCommandFilter = new RoleplayCommandStreamFilter(roleplayRollEnabled);
     // Treat abort as a silent cancellation: stop the pipeline immediately.
@@ -193,7 +216,7 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
     } catch (err: any) {
       // If the error was caused by an abort, cancel silently and skip post-processing.
       if (!generationSignal.aborted && rollRequestAbort?.signal.aborted) {
-        result = { content: text.slice(roundResponseStart), toolCalls: [], finishReason: "stop" };
+        result = { content: text.slice(roundTextStart), toolCalls: [], finishReason: "stop" };
       } else if (generationSignal.aborted || (err && err.name === "AbortError")) {
         return aborted();
       } else throw err;
@@ -203,8 +226,7 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
     if (generationSignal.aborted) {
       return aborted();
     }
-    if (rollRequestAbort?.signal.aborted)
-      result = { ...result, content: text.slice(roundResponseStart), toolCalls: [] };
+    if (rollRequestAbort?.signal.aborted) result = { ...result, content: text.slice(roundTextStart), toolCalls: [] };
 
     // A tool call the model wrote as text was streamed before the provider recognised
     // it, and the provider leaves that text out of the result (only the prose around it
@@ -213,10 +235,11 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
     // view (#6951); the prose, if any, is written again just below.
     if (
       result.toolCalls.length &&
-      text.length > roundResponseStart &&
-      text.slice(roundResponseStart) !== (result.content ?? "")
+      text.length > roundTextStart &&
+      text.slice(roundTextStart) !== (result.content ?? "")
     ) {
-      text = text.slice(0, roundResponseStart);
+      text = text.slice(0, roundStart);
+      roundTextStart = roundStart;
       // The earlier rounds can hold roleplay commands the stream filter hid, and the filter
       // has already consumed this round's text: show the clean text and start it afresh.
       if (roleplayFiltered) stream.roleplayCommandFilter = new RoleplayCommandStreamFilter(roleplayRollEnabled);
@@ -231,7 +254,7 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
     if (result.content && !text.endsWith(result.content)) {
       await write(result.content);
     }
-    const unrepeated = dropRepeatedRounds(roundResponseStart);
+    const unrepeated = dropRepeatedRounds();
     if (unrepeated !== null) result = { ...result, content: unrepeated };
 
     // Gemini thought signatures reach this branch as providerMetadata rather than
@@ -254,7 +277,7 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
     const textualRoll =
       roleplayRollEnabled && !result.toolCalls.length ? textualRollToolCall(result.content ?? "", newId) : null;
     if (textualRoll) {
-      text = text.slice(0, roundResponseStart) + (result.content ?? "").slice(0, textualRoll.end);
+      text = text.slice(0, roundTextStart) + (result.content ?? "").slice(0, textualRoll.end);
       result = {
         ...result,
         content: textualRoll.promptContent,
@@ -267,7 +290,14 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
       // A model that worked through tools sometimes ends its turn there, with reasoning and no
       // reply, and the whole turn is lost as an empty response. Ask once for the reply itself;
       // the tools stay available in case it had stopped in the middle of its work.
-      if (round > 0 && round < maxToolRounds - 1 && !askedForMissingReply && !gameToolPlan && !text.trim()) {
+      if (
+        round > 0 &&
+        round < maxToolRounds - 1 &&
+        !askedForMissingReply &&
+        !gameToolPlan &&
+        !text.trim() &&
+        !ctx.canPromoteThinkingOnlyReply?.(result.finishReason)
+      ) {
         askedForMissingReply = true;
         logger.warn("[generate] Model ended its turn after tool calls without a reply; asking for it once");
         loopMessages.push({
@@ -278,6 +308,19 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
         continue;
       }
       break;
+    }
+
+    if (!textualRoll) {
+      // A Game Master's "let me get the number." before a call is not part of the scene.
+      if (ctx.chatMode === "game" && !ctx.impersonate) {
+        const announced = text.slice(roundTextStart);
+        const kept = stripTrailingToolAnnouncement(announced);
+        if (kept !== announced) {
+          text = kept ? text.slice(0, roundTextStart) + kept : text.slice(0, roundStart);
+          if (!stream.holdForTextRewrite) sendSseEvent(ctx.output, { type: "content_replace", data: text });
+        }
+      }
+      paragraphBreakAt = text.length;
     }
 
     loopMessages.push({
@@ -318,9 +361,7 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
           const activity = rollActivityFromToolResult(
             call,
             tr,
-            textualRoll
-              ? text.slice(roundResponseStart + textualRoll.start, roundResponseStart + textualRoll.end)
-              : undefined,
+            textualRoll ? text.slice(roundTextStart + textualRoll.start, roundTextStart + textualRoll.end) : undefined,
           );
           ctx.roleplayActivity.push(activity);
           ctx.roleplayInlinePrefixes.set(activity, parseRoleplayCommands(text).content);
@@ -361,10 +402,23 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
       // This list is already provider-formatted. Keep any assistant
       // prefill at the tail and do not apply message prefixes twice.
       const withToolResults = [...ctx.initialMessages];
-      const resultIndex =
-        ctx.assistantPrefillInjected && withToolResults.at(-1)?.role === "assistant"
-          ? withToolResults.length - 1
-          : withToolResults.length;
+      // The prompt's tail stays last: the results go before an assistant prefill or reasoning stub, and
+      // before a user-turn prefill that was merged into the last user message (split back out here).
+      const prefillTail: ChatMessage[] = [];
+      if (ctx.assistantPrefillInjected && withToolResults.at(-1)?.role === "assistant") {
+        prefillTail.unshift(withToolResults.pop()!);
+      }
+      const last = withToolResults.at(-1);
+      if (ctx.userPrefill && last?.role === "user" && last.content.endsWith(ctx.userPrefill)) {
+        const head = last.content.slice(0, -ctx.userPrefill.length).trimEnd();
+        withToolResults.pop();
+        if (head) withToolResults.push({ ...last, content: head });
+        // Attachments stay on one message: the head, or the tail when the head is empty.
+        prefillTail.unshift(
+          head ? { role: last.role, content: ctx.userPrefill } : { ...last, content: ctx.userPrefill },
+        );
+      }
+      const resultIndex = withToolResults.length;
       withToolResults.splice(resultIndex, 0, {
         role: "user",
         content:
@@ -372,6 +426,7 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
           toolResults.map(formatToolExecutionResultForModel).join("\n") +
           "\nWrite the narration using these results. Do not reroll these actions or claim a failed tool succeeded.",
       });
+      withToolResults.push(...prefillTail);
       narratorMessages = await ctx.fit(withToolResults, { tools: undefined });
       break;
     }
@@ -395,6 +450,7 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
     if (round === maxToolRounds - 1) {
       // Reset per-character accumulator for final round content
       const prevLen = text.length;
+      roundStart = roundTextStart = prevLen;
       // Sent without tools, so the exchange so far goes as text (toolRoundsAsText).
       loopMessages = await ctx.fit(toolRoundsAsText(loopMessages), { tools: undefined });
       ctx.rememberPromptPreview(loopMessages);
@@ -411,14 +467,15 @@ export async function runToolRounds(ctx: ToolRoundsContext, fullResponse: string
       if (contentBeforeRoll !== null) {
         finalResult.content = contentBeforeRoll;
         finalResult.providerMetadata = undefined;
-        text = text.slice(0, prevLen) + finalResult.content;
+        // Nothing streamed: the write below adds the round's words with their break.
+        if (text.length > prevLen) text = text.slice(0, roundTextStart) + finalResult.content;
         sendSseEvent(ctx.output, { type: "roleplay_command_error", data: { rollLimit: true } });
       }
       if (finalResult.content && text.length === prevLen) {
         await write(finalResult.content);
       }
       roundStarts.push(prevLen);
-      dropRepeatedRounds(prevLen);
+      dropRepeatedRounds();
       geminiResponseParts = appendRoundGeminiParts(geminiResponseParts, finalResult.providerMetadata);
       ctx.recordUsage(finalResult.usage, addedToLostPrompt());
       finishReason = finalResult.finishReason;

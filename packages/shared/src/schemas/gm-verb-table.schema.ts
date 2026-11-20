@@ -186,7 +186,9 @@ export const ENGINE_OWNED_METADATA_KEY_PREFIXES = Object.freeze([
   "card",
   "character",
   "chat",
+  "color",
   "context",
+  "convo",
   "conversation",
   "cross",
   "custom",
@@ -232,6 +234,7 @@ export const ENGINE_OWNED_METADATA_KEY_PREFIXES = Object.freeze([
   "professor",
   "prompt",
   "prose",
+  "reagent",
   "roleplay",
   "scenario",
   "scene",
@@ -252,6 +255,7 @@ export const ENGINE_OWNED_METADATA_KEY_PREFIXES = Object.freeze([
   "translation",
   "week",
   "window",
+  "world",
 ] as const);
 
 /** The package id as it appears at the head of a metadata key: `hierarchical-maps` →

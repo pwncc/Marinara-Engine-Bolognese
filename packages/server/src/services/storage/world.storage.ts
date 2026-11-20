@@ -232,9 +232,10 @@ export function createWorldStorage(db: DB) {
       return inputs.length;
     },
 
-    async listDueActions(nowIso: string, limit = 10): Promise<
-      Array<{ id: string; runAt: string; action: Record<string, unknown> }>
-    > {
+    async listDueActions(
+      nowIso: string,
+      limit = 10,
+    ): Promise<Array<{ id: string; runAt: string; action: Record<string, unknown> }>> {
       const rows = await db.select().from(worldActions).where(eq(worldActions.status, "pending"));
       return rows
         .map((row) => ({ id: String(row.id), runAt: String(row.runAt), action: parseJsonRecord(row.action) }))
@@ -300,9 +301,7 @@ export function createWorldStorage(db: DB) {
         placeId: patch.placeId !== undefined ? patch.placeId : (existing?.placeId ?? null),
         money: String(patch.money !== undefined ? patch.money : (existing?.money ?? 0)),
         job: (patch.job ?? existing?.job ?? "").slice(0, 160),
-        needs: JSON.stringify(
-          patch.needs ?? existing?.needs ?? { energy: 80, hunger: 20, social: 60 },
-        ),
+        needs: JSON.stringify(patch.needs ?? existing?.needs ?? { energy: 80, hunger: 20, social: 60 }),
         updatedAt: timestamp,
       };
       if (existing) {
@@ -382,20 +381,104 @@ export function createWorldStorage(db: DB) {
      */
     async seedDefaultPlaces(): Promise<number> {
       const seeds: Array<{ name: string; kind: string; description: string; interior: string; tags: string[] }> = [
-        { name: "Meridian General Hospital", kind: "hospital", description: "The city hospital — always lit, always busy.", interior: "Antiseptic corridors, a hushed waiting room, curtained bays and the far-off beep of monitors.", tags: ["work", "medical", "public"] },
-        { name: "Lincoln High School", kind: "school", description: "The local school, lockers and echoing halls.", interior: "Scuffed linoleum, rows of lockers, classrooms with the smell of chalk and old radiators.", tags: ["work", "public"] },
-        { name: "The Anchor", kind: "bar", description: "A dim neighborhood bar with a good jukebox.", interior: "Low amber light, worn stools, a scratched bar top and a jukebox in the corner.", tags: ["nightlife", "social", "public"] },
-        { name: "Rosa's Trattoria", kind: "restaurant", description: "A warm family-run Italian place.", interior: "Checkered tablecloths, candlelight, the smell of garlic and simmering sauce.", tags: ["food", "social", "public"] },
-        { name: "Daybreak Coffee", kind: "cafe", description: "A busy corner coffee shop.", interior: "Hiss of the espresso machine, mismatched chairs, laptops and low chatter.", tags: ["coffee", "social", "public"] },
-        { name: "Beacon Street Office", kind: "office", description: "A mid-rise where a lot of people work.", interior: "Grey carpet, glass meeting rooms, the hum of fluorescent lights and keyboards.", tags: ["work", "public"] },
-        { name: "Riverside Park", kind: "park", description: "Green space along the water.", interior: "Open lawns, a jogging path, benches under old trees and ducks on the pond.", tags: ["outdoors", "social", "public"] },
-        { name: "Iron & Oak Gym", kind: "gym", description: "The neighborhood gym.", interior: "Rubber floors, clanging weights, mirrors and the smell of chalk and sweat.", tags: ["fitness", "public"] },
-        { name: "Cornerstone Market", kind: "shop", description: "A well-stocked corner grocery.", interior: "Bright aisles, a produce cooler, a bell on the door and a bored cashier.", tags: ["errands", "public"] },
-        { name: "City Library", kind: "library", description: "The public library, quiet and grand.", interior: "High shelves, long reading tables, dust motes in slanting light and total hush.", tags: ["quiet", "public"] },
-        { name: "Northside Clinic", kind: "clinic", description: "A small walk-in clinic.", interior: "A cramped waiting room, dated magazines, a sliding reception window.", tags: ["medical", "public"] },
-        { name: "The Basement", kind: "club", description: "A late-night music club.", interior: "Dark, loud, sticky floors, a low stage and bodies moving under colored light.", tags: ["nightlife", "social", "public"] },
-        { name: "Union Diner", kind: "diner", description: "A 24-hour diner.", interior: "Vinyl booths, chrome trim, bottomless coffee and a griddle always going.", tags: ["food", "public"] },
-        { name: "Page & Bind Bookstore", kind: "shop", description: "A cozy independent bookstore.", interior: "Narrow aisles, creaking floorboards, a reading nook and a shop cat.", tags: ["quiet", "public"] },
+        {
+          name: "Meridian General Hospital",
+          kind: "hospital",
+          description: "The city hospital — always lit, always busy.",
+          interior: "Antiseptic corridors, a hushed waiting room, curtained bays and the far-off beep of monitors.",
+          tags: ["work", "medical", "public"],
+        },
+        {
+          name: "Lincoln High School",
+          kind: "school",
+          description: "The local school, lockers and echoing halls.",
+          interior: "Scuffed linoleum, rows of lockers, classrooms with the smell of chalk and old radiators.",
+          tags: ["work", "public"],
+        },
+        {
+          name: "The Anchor",
+          kind: "bar",
+          description: "A dim neighborhood bar with a good jukebox.",
+          interior: "Low amber light, worn stools, a scratched bar top and a jukebox in the corner.",
+          tags: ["nightlife", "social", "public"],
+        },
+        {
+          name: "Rosa's Trattoria",
+          kind: "restaurant",
+          description: "A warm family-run Italian place.",
+          interior: "Checkered tablecloths, candlelight, the smell of garlic and simmering sauce.",
+          tags: ["food", "social", "public"],
+        },
+        {
+          name: "Daybreak Coffee",
+          kind: "cafe",
+          description: "A busy corner coffee shop.",
+          interior: "Hiss of the espresso machine, mismatched chairs, laptops and low chatter.",
+          tags: ["coffee", "social", "public"],
+        },
+        {
+          name: "Beacon Street Office",
+          kind: "office",
+          description: "A mid-rise where a lot of people work.",
+          interior: "Grey carpet, glass meeting rooms, the hum of fluorescent lights and keyboards.",
+          tags: ["work", "public"],
+        },
+        {
+          name: "Riverside Park",
+          kind: "park",
+          description: "Green space along the water.",
+          interior: "Open lawns, a jogging path, benches under old trees and ducks on the pond.",
+          tags: ["outdoors", "social", "public"],
+        },
+        {
+          name: "Iron & Oak Gym",
+          kind: "gym",
+          description: "The neighborhood gym.",
+          interior: "Rubber floors, clanging weights, mirrors and the smell of chalk and sweat.",
+          tags: ["fitness", "public"],
+        },
+        {
+          name: "Cornerstone Market",
+          kind: "shop",
+          description: "A well-stocked corner grocery.",
+          interior: "Bright aisles, a produce cooler, a bell on the door and a bored cashier.",
+          tags: ["errands", "public"],
+        },
+        {
+          name: "City Library",
+          kind: "library",
+          description: "The public library, quiet and grand.",
+          interior: "High shelves, long reading tables, dust motes in slanting light and total hush.",
+          tags: ["quiet", "public"],
+        },
+        {
+          name: "Northside Clinic",
+          kind: "clinic",
+          description: "A small walk-in clinic.",
+          interior: "A cramped waiting room, dated magazines, a sliding reception window.",
+          tags: ["medical", "public"],
+        },
+        {
+          name: "The Basement",
+          kind: "club",
+          description: "A late-night music club.",
+          interior: "Dark, loud, sticky floors, a low stage and bodies moving under colored light.",
+          tags: ["nightlife", "social", "public"],
+        },
+        {
+          name: "Union Diner",
+          kind: "diner",
+          description: "A 24-hour diner.",
+          interior: "Vinyl booths, chrome trim, bottomless coffee and a griddle always going.",
+          tags: ["food", "public"],
+        },
+        {
+          name: "Page & Bind Bookstore",
+          kind: "shop",
+          description: "A cozy independent bookstore.",
+          interior: "Narrow aisles, creaking floorboards, a reading nook and a shop cat.",
+          tags: ["quiet", "public"],
+        },
       ];
       let created = 0;
       for (const seed of seeds) {
@@ -427,9 +510,7 @@ export function createWorldStorage(db: DB) {
       const interior = interiorAddition
         ? `${existing.interior}${existing.interior ? " " : ""}${interiorAddition}`.slice(0, 1600)
         : existing.interior;
-      const tags = input.tags?.length
-        ? [...new Set([...existing.tags, ...input.tags])].slice(0, 16)
-        : existing.tags;
+      const tags = input.tags?.length ? [...new Set([...existing.tags, ...input.tags])].slice(0, 16) : existing.tags;
       await db
         .update(worldPlaces)
         .set({
@@ -463,7 +544,10 @@ export function createWorldStorage(db: DB) {
       const existing = rows[0];
       if (!existing) return;
       const detail = { ...parseJsonRecord(existing.detail), ...patch };
-      await db.update(worldEvents).set({ detail: JSON.stringify(detail) }).where(eq(worldEvents.id, id));
+      await db
+        .update(worldEvents)
+        .set({ detail: JSON.stringify(detail) })
+        .where(eq(worldEvents.id, id));
     },
 
     async listEvents(
@@ -545,7 +629,11 @@ export function createWorldStorage(db: DB) {
       return rows[0] ? toRelationshipRecord(rows[0]) : null;
     },
 
-    async upsertRelationship(x: string, y: string, input: UpsertRelationshipInput): Promise<CharacterRelationshipRecord> {
+    async upsertRelationship(
+      x: string,
+      y: string,
+      input: UpsertRelationshipInput,
+    ): Promise<CharacterRelationshipRecord> {
       const [a, b] = orderPair(x, y);
       return chainRelationship(`${a}|${b}`, () => this.upsertRelationshipUnlocked(a, b, input));
     },
@@ -576,7 +664,11 @@ export function createWorldStorage(db: DB) {
         score: String(score),
         romance: String(input.romance ?? existing?.romance ?? false),
         label:
-          input.label === undefined ? (existing?.label ?? null) : input.label && input.label.trim() ? input.label.trim().slice(0, 60) : null,
+          input.label === undefined
+            ? (existing?.label ?? null)
+            : input.label && input.label.trim()
+              ? input.label.trim().slice(0, 60)
+              : null,
         summary: (input.summary?.trim() || existing?.summary || "").slice(0, 600),
         milestones: JSON.stringify(milestones.slice(-40)),
         updatedAt: timestamp,

@@ -114,9 +114,7 @@ export async function readNoodleVisionImage(imageUrl: string): Promise<string | 
 export async function prepareNoodleVisionAttachments(
   candidates: NoodlePromptImageCandidate[],
 ): Promise<NoodleVisionAttachment[]> {
-  const ordered = candidates
-    .slice()
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+  const ordered = candidates.slice().sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
   const attachments: NoodleVisionAttachment[] = [];
   const seenKeys = new Set<string>();
 
@@ -157,6 +155,8 @@ export function isUnsupportedNoodleVisionInputError(error: unknown): boolean {
       message,
     ) ||
     /no (?:available )?endpoints? found.{0,80}(?:image|vision|multimodal|image_url)/i.test(message) ||
-    /(?:expected|must be).{0,60}(?:content|message).{0,60}(?:string|text)|(?:expected|must be).{0,60}(?:string|text).{0,60}(?:content|message)|(?:content|message).{0,60}(?:expected|must be).{0,60}(?:string|text)/i.test(message)
+    /(?:expected|must be).{0,60}(?:content|message).{0,60}(?:string|text)|(?:expected|must be).{0,60}(?:string|text).{0,60}(?:content|message)|(?:content|message).{0,60}(?:expected|must be).{0,60}(?:string|text)/i.test(
+      message,
+    )
   );
 }

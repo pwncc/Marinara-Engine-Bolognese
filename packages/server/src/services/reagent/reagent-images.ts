@@ -11,6 +11,7 @@ import {
   buildChatImageGenerationRecord,
   createDefaultImageGenerationProfile,
   imageSourceToDefaultsService,
+  resolveImageBackend,
   NOVELAI_NOISE_SCHEDULE_OPTIONS,
   NOVELAI_SAMPLER_OPTIONS,
   type ImageGenRequest,
@@ -32,7 +33,6 @@ import {
   generateImage,
   imageConnectionTakesReferencePicture,
   isNovelAiPreciseReferenceModel,
-  resolveImageBackend,
   saveImageToDisk,
 } from "../image/image-generation.js";
 import { readPreferredCharacterReferenceImage } from "../image/illustrator-references.js";

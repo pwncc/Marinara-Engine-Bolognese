@@ -746,7 +746,11 @@ async function buildRefreshPrompt(input: {
   const enhancedTimelineWriting = input.settings.enableEnhancedTimelineWriting;
   const pastMemorySampleSize = enhancedTimelineWriting
     ? noodlePastMemorySampleSize()
-    : noodlePastMemorySampleSize(Math.random, NOODLE_LEGACY_PAST_MEMORY_INCLUSION_CHANCE, NOODLE_LEGACY_PAST_MEMORY_MAX_ITEMS);
+    : noodlePastMemorySampleSize(
+        Math.random,
+        NOODLE_LEGACY_PAST_MEMORY_INCLUSION_CHANCE,
+        NOODLE_LEGACY_PAST_MEMORY_MAX_ITEMS,
+      );
   const olderPosts =
     pastMemorySampleSize > 0
       ? (await input.noodle.listPostsBefore(noodlePastMemoryCutoff())).filter((post) => !recentPostById.has(post.id))
@@ -1997,15 +2001,12 @@ export async function noodleRoutes(app: FastifyInstance) {
           `Follow targets may additionally use these known handles: ${knownTargetHandles.join(", ")}.`,
           "Do not invent, rename, or omit an authorHandle, actorHandle, or targetHandle. Return JSON only.",
         ].join("\n");
-        result = await provider.chatComplete([...requestMessages, { role: "user", content: correction }], completionOptions);
-        content = result.content ?? "";
-        logDebugOverride(
-          debugMode,
-          "[debug/noodle] Raw model response (%s attempt %d):\n%s",
-          "correction",
-          2,
-          content,
+        result = await provider.chatComplete(
+          [...requestMessages, { role: "user", content: correction }],
+          completionOptions,
         );
+        content = result.content ?? "";
+        logDebugOverride(debugMode, "[debug/noodle] Raw model response (%s attempt %d):\n%s", "correction", 2, content);
         parsedGenerated = null;
         let correctedRetryReason: string | null = null;
         try {
@@ -2080,8 +2081,7 @@ export async function noodleRoutes(app: FastifyInstance) {
           logger.warn("[noodle] Ignoring generated post attributed to persona %s", account.entityId);
           continue;
         }
-        const imagePrompt =
-          remainingImagePrompts > 0 ? normalizeNoodleImagePrompt(generatedPost.imagePrompt) : null;
+        const imagePrompt = remainingImagePrompts > 0 ? normalizeNoodleImagePrompt(generatedPost.imagePrompt) : null;
         if (imagePrompt) remainingImagePrompts -= 1;
         let persistedImagePrompt = imagePrompt;
         let imageUrl: string | null = null;

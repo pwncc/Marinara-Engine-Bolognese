@@ -83,7 +83,7 @@ const useChatsSource = readFileSync(join(repositoryRoot, "packages/client/src/ho
 );
 assert.match(
   useChatsSource,
-  /api\.get<Chat>\(`\/chats\/\$\{id\}`, \{ signal: requestTimeoutSignal\(CHAT_OPEN_TIMEOUT_MS, signal\) \}\)/u,
+  /api\s*\.get<Chat>\(`\/chats\/\$\{id\}`, \{ signal: requestTimeoutSignal\(CHAT_OPEN_TIMEOUT_MS, signal\) \}\)/u,
   "the chat-open fetch must compose the deadline with React Query's cancellation (#5657)",
 );
 assert.match(

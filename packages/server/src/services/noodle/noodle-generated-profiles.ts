@@ -17,7 +17,8 @@ export function parseNoodleGeneratedProfiles(value: unknown): {
   profiles: NoodleGeneratedProfile[];
   rejected: RejectedNoodleGeneratedProfile[];
 } {
-  const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  const record =
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
   const rawProfiles = record?.profiles;
   if (!Array.isArray(rawProfiles)) {
     // Preserve the useful top-level validation error for a wholly malformed

@@ -4723,7 +4723,7 @@ export function NoodleView() {
               aria-modal="true"
               aria-label={localizeUi("ui.noodle.noodleshell.noodleAccountMenu")}
               className={cn(
-                "mari-chrome-token-scope flex h-full w-full flex-col overflow-y-auto bg-[var(--background)] px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-5 text-[var(--foreground)]",
+                "mari-chrome-token-scope flex h-full w-full flex-col overflow-y-auto bg-[var(--background)] px-5 pb-[max(1rem,var(--mari-safe-area-inset-bottom,env(safe-area-inset-bottom)))] pt-5 text-[var(--foreground)]",
                 NOODLE_ICON_SCOPE_CLASS,
               )}
               style={
@@ -5036,7 +5036,7 @@ export function NoodleView() {
           </aside>
 
           <main ref={timelineScrollRef} className="min-w-0 flex-1 overflow-y-auto lg:max-w-[640px]">
-            <div className="min-h-full w-full border-x border-[var(--noodle-divider)] bg-[var(--background)] pb-[calc(52px+env(safe-area-inset-bottom))] lg:pb-0">
+            <div className="min-h-full w-full border-x border-[var(--noodle-divider)] bg-[var(--background)] pb-[calc(52px+var(--mari-safe-area-inset-bottom,env(safe-area-inset-bottom)))] lg:pb-0">
               {activeNoodleView === "home" && (
                 <div
                   className="sticky top-0 z-30 grid h-14 grid-cols-[3rem_minmax(0,1fr)_3rem] items-center border-b border-[var(--noodle-divider)] bg-[var(--background)]/95 px-3 backdrop-blur lg:hidden"
@@ -5678,7 +5678,7 @@ export function NoodleView() {
       </div>
 
       <nav
-        className="absolute inset-x-0 bottom-0 z-50 border-t border-[var(--noodle-divider)] bg-[var(--background)]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
+        className="absolute inset-x-0 bottom-0 z-50 border-t border-[var(--noodle-divider)] bg-[var(--background)]/95 pb-[var(--mari-safe-area-inset-bottom,env(safe-area-inset-bottom))] backdrop-blur lg:hidden"
         aria-label={localizeUi("ui.noodle.noodleshell.noodleMobileNavigation")}
         data-component="NoodleView.MobileBottomNav"
       >

@@ -71,7 +71,7 @@ assert.match(
 );
 assert.match(
   generateRouteSource,
-  /const hasPostWork =\s*!recoveredAlreadyAppliedOwnerTurn\s*&&\s*\(hasPostProcessingAgents\s*\|\|\s*parallelResults\.length > 0\s*\|\|\s*holdForTextRewrite\s*\|\|\s*roleplayMediaRequests\.length > 0\);/u,
+  /const hasPostWork =\s*!recoveredAlreadyAppliedOwnerTurn\s*&&\s*\(hasPostProcessingAgents\s*\|\|\s*parallelResults\.length > 0\s*\|\|\s*holdForTextRewrite\s*\|\|\s*roleplayMediaRequests\.length > 0\s*\|\|\s*\/\/[^\n]*\n\s*reagentPendingStatusUpdates\.length > 0\s*\|\|\s*reagentPendingRemovals\.length > 0\s*\|\|\s*Object\.keys\(reagentPendingScene\)\.length > 0\);/u,
   "Held responses and explicit media commands must keep post-work reachable when every custom rewrite agent is inactive",
 );
 assert.match(

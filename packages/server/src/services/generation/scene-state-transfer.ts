@@ -3,7 +3,7 @@
 // conversation tracks goes with it and comes back when the scene concludes:
 // the tracker snapshot (people's status rows, world state, persona stats), the
 // REagent settings and workspace files (memory, dossiers, simulation ledger),
-// the questions it asked, and which agents run.
+// and the questions it asked. The scene's Roleplay profile chooses which agents run.
 // ──────────────────────────────────────────────
 
 import {
@@ -29,17 +29,8 @@ import { createGameStateStorage } from "../storage/game-state.storage.js";
 /** Marks a scene chat that started from its origin's state, so concluding it may write that state back. */
 export const SCENE_STATE_SEEDED_KEY = "sceneStateSeeded";
 
-/** Chat settings a scene keeps from the conversation so the same things keep being tracked. */
-const CARRIED_SETTING_KEYS = [
-  "reagent",
-  REAGENT_QUESTIONS_METADATA_KEY,
-  "enableAgents",
-  "activeAgentIds",
-  "agentOverrides",
-  "agentPromptTemplateIds",
-  "trackerFeaturedCharacterKeys",
-  "trackerStatIconOverrides",
-] as const;
+/** Custom settings inherited only when the scene's Roleplay profile did not choose its own. */
+const CARRIED_SETTING_KEYS = ["reagent", "trackerFeaturedCharacterKeys", "trackerStatIconOverrides"] as const;
 
 type SnapshotRow = NonNullable<Awaited<ReturnType<ReturnType<typeof createGameStateStorage>["getLatest"]>>>;
 
@@ -127,10 +118,16 @@ export async function seedSceneState(args: {
   const origin = await chats.getById(args.originChatId);
   if (!origin) return;
   const originMeta = parseMetadata(origin);
+  const sceneMeta = parseMetadata(await chats.getById(args.sceneChatId));
   const patch: Record<string, unknown> = { [SCENE_STATE_SEEDED_KEY]: true };
 
   for (const key of CARRIED_SETTING_KEYS) {
-    if (originMeta[key] !== undefined) patch[key] = structuredClone(originMeta[key]);
+    if (sceneMeta[key] === undefined && originMeta[key] !== undefined) {
+      patch[key] = structuredClone(originMeta[key]);
+    }
+  }
+  if (originMeta[REAGENT_QUESTIONS_METADATA_KEY] !== undefined) {
+    patch[REAGENT_QUESTIONS_METADATA_KEY] = structuredClone(originMeta[REAGENT_QUESTIONS_METADATA_KEY]);
   }
 
   try {

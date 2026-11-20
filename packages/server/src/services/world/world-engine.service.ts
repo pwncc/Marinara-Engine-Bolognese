@@ -198,9 +198,7 @@ export async function loadWorldEngineState(db: DB): Promise<WorldEngineState> {
     lastRunAt: typeof data.lastRunAt === "string" ? data.lastRunAt : null,
     dailyDate: typeof data.dailyDate === "string" ? data.dailyDate : todayKey(),
     dailyCount: Number.isFinite(data.dailyCount as number) ? (data.dailyCount as number) : 0,
-    consecutiveFailures: Number.isFinite(data.consecutiveFailures as number)
-      ? (data.consecutiveFailures as number)
-      : 0,
+    consecutiveFailures: Number.isFinite(data.consecutiveFailures as number) ? (data.consecutiveFailures as number) : 0,
     lastError: typeof data.lastError === "string" ? data.lastError : null,
     lastNarration: typeof data.lastNarration === "string" ? data.lastNarration : null,
   };
@@ -311,6 +309,7 @@ export async function resolveWorldProvider(
       conn.claudeFastMode === "true",
       conn.treatAsLocalEndpoint === "true",
       conn.defaultParameters,
+      conn.id,
     ),
     model: conn.model,
     label: `${conn.provider} · ${conn.model}`,
@@ -360,17 +359,58 @@ export async function buildNameMap(db: DB, config: WorldEngineConfig): Promise<M
 // the human AND for any character who walks in, at zero standing cost: staff
 // only exist inside whoever's generation references them.
 const STAFF_ROLES: Record<string, string[]> = {
-  bar: ["bartender"], cafe: ["barista"], coffee: ["barista"], restaurant: ["server", "cook"],
-  diner: ["waitress"], hospital: ["nurse", "doctor"], clinic: ["nurse"], school: ["teacher"],
-  library: ["librarian"], gym: ["trainer"], shop: ["cashier"], club: ["bouncer", "DJ"],
-  office: ["receptionist"], bookstore: ["clerk"], market: ["vendor"], hotel: ["concierge"],
+  bar: ["bartender"],
+  cafe: ["barista"],
+  coffee: ["barista"],
+  restaurant: ["server", "cook"],
+  diner: ["waitress"],
+  hospital: ["nurse", "doctor"],
+  clinic: ["nurse"],
+  school: ["teacher"],
+  library: ["librarian"],
+  gym: ["trainer"],
+  shop: ["cashier"],
+  club: ["bouncer", "DJ"],
+  office: ["receptionist"],
+  bookstore: ["clerk"],
+  market: ["vendor"],
+  hotel: ["concierge"],
 };
-const STAFF_NAMES = ["Marge", "Dee", "Sal", "Nia", "Otis", "Priya", "Walt", "Rosa", "Gus", "Ines", "Ken", "Tam", "Bea", "Cal", "Femi", "Lou"];
-const STAFF_QUIRKS = ["dry humor, remembers every regular", "hums while working", "chatty about the neighborhood", "quietly kind, few words", "always slightly rushed", "tells the same three stories", "sharp-eyed, misses nothing", "new here and a bit nervous"];
+const STAFF_NAMES = [
+  "Marge",
+  "Dee",
+  "Sal",
+  "Nia",
+  "Otis",
+  "Priya",
+  "Walt",
+  "Rosa",
+  "Gus",
+  "Ines",
+  "Ken",
+  "Tam",
+  "Bea",
+  "Cal",
+  "Femi",
+  "Lou",
+];
+const STAFF_QUIRKS = [
+  "dry humor, remembers every regular",
+  "hums while working",
+  "chatty about the neighborhood",
+  "quietly kind, few words",
+  "always slightly rushed",
+  "tells the same three stories",
+  "sharp-eyed, misses nothing",
+  "new here and a bit nervous",
+];
 export function staffForPlace(place: { id: string; kind: string }): string[] {
   const roles = STAFF_ROLES[place.kind?.toLowerCase?.() ?? ""] ?? [];
   let h = 2166136261;
-  for (let i = 0; i < place.id.length; i++) { h ^= place.id.charCodeAt(i); h = Math.imul(h, 16777619); }
+  for (let i = 0; i < place.id.length; i++) {
+    h ^= place.id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
   return roles.map((role, index) => {
     const n = STAFF_NAMES[Math.abs(h + index * 7) % STAFF_NAMES.length];
     const q = STAFF_QUIRKS[Math.abs(h + index * 13) % STAFF_QUIRKS.length];
@@ -399,8 +439,7 @@ export async function resolveWorldUser(db: DB): Promise<WorldUserIdentity> {
     // An explicitly chosen world persona wins; else the globally active one.
     const config = await loadWorldEngineConfig(db);
     const chosen = config.userPersonaId ? personas.find((p) => p.id === config.userPersonaId) : undefined;
-    const active =
-      chosen ?? personas.find((p) => p.isActive === "true" || p.isActive === true) ?? personas[0];
+    const active = chosen ?? personas.find((p) => p.isActive === "true" || p.isActive === true) ?? personas[0];
     if (active) {
       return {
         id: WORLD_USER_ID,
@@ -493,12 +532,12 @@ export async function buildWorldSnapshot(
     .filter((rel) => isWorldMember(config, rel.aCharacterId) && isWorldMember(config, rel.bCharacterId))
     .slice(0, 60)
     .map((rel) => {
-    const a = nameById.get(rel.aCharacterId) ?? rel.aCharacterId;
-    const b = nameById.get(rel.bCharacterId) ?? rel.bCharacterId;
-    const label = rel.label ?? rel.stage;
-    const romance = rel.romance ? ", romantic" : "";
-    return `${a} ↔ ${b}: ${label} (score ${rel.score}${romance})${rel.summary ? ` — ${rel.summary}` : ""}`;
-  });
+      const a = nameById.get(rel.aCharacterId) ?? rel.aCharacterId;
+      const b = nameById.get(rel.bCharacterId) ?? rel.bCharacterId;
+      const label = rel.label ?? rel.stage;
+      const romance = rel.romance ? ", romantic" : "";
+      return `${a} ↔ ${b}: ${label} (score ${rel.score}${romance})${rel.summary ? ` — ${rel.summary}` : ""}`;
+    });
 
   const recentEvents = (await world.listEvents({ limit: MAX_SNAPSHOT_EVENTS }))
     .map((event) => `[${event.createdAt.slice(0, 16)}] ${event.summary}`)
@@ -971,7 +1010,11 @@ export async function executeWorldAction(deps: ExecuteDeps, action: WorldAction)
       const aboutCharacterId = String(action.aboutCharacterId ?? "");
       const summary = shortText(action.summary, 400);
       // A character can remember another member OR the human.
-      if (!nameById.has(characterId) || !(nameById.has(aboutCharacterId) || aboutCharacterId === WORLD_USER_ID) || !summary)
+      if (
+        !nameById.has(characterId) ||
+        !(nameById.has(aboutCharacterId) || aboutCharacterId === WORLD_USER_ID) ||
+        !summary
+      )
         return null;
       const target = (await chars.getById(characterId)) as { id: string; data: unknown } | null;
       if (!target) return null;
@@ -1139,10 +1182,7 @@ export async function drainDueWorldActions(db: DB, options: { force?: boolean } 
       continue;
     }
     try {
-      const event = await executeWorldAction(
-        { db, world, nameById, config },
-        entry.action as WorldAction,
-      );
+      const event = await executeWorldAction({ db, world, nameById, config }, entry.action as WorldAction);
       if (event) {
         result.events.push(event);
         result.executed += 1;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Bot, FolderOpen, MessageCircleQuestion, NotebookPen, Users } from "lucide-react";
+import { FlaskConical, FolderOpen, MessageCircleQuestion, NotebookPen, Users } from "lucide-react";
 import { useTranslation as useUiTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -126,7 +126,7 @@ export function ReagentSection({ chatId, settings, questions, provider, style, o
     <ChatSettingsSection
       id="reagent"
       label={localizeUi("ui.chat.reagent.title")}
-      icon={<Bot size="0.875rem" />}
+      icon={<FlaskConical size="0.875rem" />}
       help={localizeUi("ui.chat.reagent.help")}
       style={style}
     >

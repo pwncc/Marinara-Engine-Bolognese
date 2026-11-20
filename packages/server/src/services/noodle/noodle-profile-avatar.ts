@@ -10,7 +10,7 @@ export function resolveNoodleAvatarCropAfterProfileUpdate(input: {
   if (input.nextAvatarUrl === undefined) {
     if (input.currentCrop) return undefined;
     return input.currentAvatarUrl && input.currentAvatarUrl === input.sourceAvatarUrl
-      ? input.sourceCrop ?? undefined
+      ? (input.sourceCrop ?? undefined)
       : undefined;
   }
   if (input.nextAvatarUrl !== input.currentAvatarUrl) return null;

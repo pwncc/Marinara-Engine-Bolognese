@@ -110,9 +110,8 @@ export async function worldRoutes(app: FastifyInstance) {
     // Provision immediately (mind rows + invited Noodle accounts) so newly
     // added members are findable on Noodle without waiting for a cycle.
     if (saved.mode === "minds") {
-      const { ensureMindsInitialized, invalidateMindsInit } = await import(
-        "../services/world/character-mind.service.js"
-      );
+      const { ensureMindsInitialized, invalidateMindsInit } =
+        await import("../services/world/character-mind.service.js");
       // A config change may add members or toggle noodle — force a full pass.
       invalidateMindsInit();
       await ensureMindsInitialized(app.db, saved).catch((error) =>
@@ -210,22 +209,22 @@ export async function worldRoutes(app: FastifyInstance) {
   );
 
   // ── Edit a place: rename, and/or add to its description/interior. ──
-  app.patch<{ Params: { id: string }; Body: { name?: string; kind?: string; description?: string; interior?: string } }>(
-    "/place/:id",
-    async (req, reply) => {
-      const place = await world.getPlace(req.params.id);
-      if (!place) return reply.code(404).send({ error: "place not found" });
-      const body = (req.body ?? {}) as Record<string, unknown>;
-      if (typeof body.name === "string" && body.name.trim()) {
-        await world.renameHomePlace(place.id, body.name.trim(), String(body.kind ?? place.kind));
-      }
-      await world.enrichPlace(place.id, {
-        addition: typeof body.description === "string" && body.description.trim() ? body.description.trim() : undefined,
-        interior: typeof body.interior === "string" && body.interior.trim() ? body.interior.trim() : undefined,
-      });
-      return { ok: true, place: await world.getPlace(place.id) };
-    },
-  );
+  app.patch<{
+    Params: { id: string };
+    Body: { name?: string; kind?: string; description?: string; interior?: string };
+  }>("/place/:id", async (req, reply) => {
+    const place = await world.getPlace(req.params.id);
+    if (!place) return reply.code(404).send({ error: "place not found" });
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (typeof body.name === "string" && body.name.trim()) {
+      await world.renameHomePlace(place.id, body.name.trim(), String(body.kind ?? place.kind));
+    }
+    await world.enrichPlace(place.id, {
+      addition: typeof body.description === "string" && body.description.trim() ? body.description.trim() : undefined,
+      interior: typeof body.interior === "string" && body.interior.trim() ? body.interior.trim() : undefined,
+    });
+    return { ok: true, place: await world.getPlace(place.id) };
+  });
 
   // ── Start a group you're in with the chosen world characters. ──
   app.post<{ Body: { characterIds?: string[]; name?: string } }>("/group", async (req, reply) => {
@@ -235,7 +234,11 @@ export async function worldRoutes(app: FastifyInstance) {
       : [];
     if (!characterIds.length) return reply.code(400).send({ error: "characterIds required" });
     const { ensureUserGroupChat } = await import("../services/world/character-mind.service.js");
-    const chatId = await ensureUserGroupChat(app.db, characterIds, typeof body.name === "string" ? body.name : undefined);
+    const chatId = await ensureUserGroupChat(
+      app.db,
+      characterIds,
+      typeof body.name === "string" ? body.name : undefined,
+    );
     if (!chatId) return reply.code(400).send({ error: "no valid world members" });
     return { ok: true, chatId };
   });

@@ -6,20 +6,18 @@ export const mcpToolConfigSchema = z.object({
   command: z.string().min(1),
   args: z.array(z.string()).optional(),
   cwd: z.string().optional(),
-  env: z.record(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
   toolName: z.string().optional(),
   timeoutMs: z.number().int().positive().max(120_000).optional(),
 });
 
-export const importMcpToolsSchema = mcpToolConfigSchema
-  .omit({ toolName: true })
-  .extend({
-    prefix: z
-      .string()
-      .regex(/^[a-z][a-z0-9_]*$/)
-      .optional(),
-    includeTools: z.array(z.string()).optional(),
-  });
+export const importMcpToolsSchema = mcpToolConfigSchema.omit({ toolName: true }).extend({
+  prefix: z
+    .string()
+    .regex(/^[a-z][a-z0-9_]*$/)
+    .optional(),
+  includeTools: z.array(z.string()).optional(),
+});
 
 export type McpToolConfig = z.infer<typeof mcpToolConfigSchema>;
 export type ImportMcpToolsInput = z.infer<typeof importMcpToolsSchema>;

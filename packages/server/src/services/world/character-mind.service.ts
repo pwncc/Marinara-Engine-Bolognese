@@ -88,7 +88,8 @@ function needEffectFor(actionType: string, activity: string): Partial<Record<"en
       return { hunger: -35 };
     if (/\b(gym|run|running|workout|exercise|jog)\b/.test(text)) return { energy: -8, hunger: +6 };
   }
-  if (actionType === "spend" && /\b(food|meal|dinner|lunch|coffee|snack|groceries)\b/.test(text)) return { hunger: -25 };
+  if (actionType === "spend" && /\b(food|meal|dinner|lunch|coffee|snack|groceries)\b/.test(text))
+    return { hunger: -25 };
   return {};
 }
 
@@ -655,12 +656,8 @@ async function buildMindContext(
   const aboutPresent = allMemories.filter(
     (m) => !hereMemories.includes(m) && typeof m.fromCharId === "string" && presentIds.has(m.fromCharId),
   );
-  const otherMemories = allMemories
-    .filter((m) => !hereMemories.includes(m) && !aboutPresent.includes(m))
-    .slice(-14);
-  const memories = [...hereMemories.slice(-8), ...aboutPresent.slice(-10), ...otherMemories]
-    .slice(-30)
-    .map(memoryLine);
+  const otherMemories = allMemories.filter((m) => !hereMemories.includes(m) && !aboutPresent.includes(m)).slice(-14);
+  const memories = [...hereMemories.slice(-8), ...aboutPresent.slice(-10), ...otherMemories].slice(-30).map(memoryLine);
 
   // Noodle: what's new in my feed + reactions to my posts.
   const feed: string[] = [];
@@ -771,9 +768,7 @@ async function buildMindContext(
       }
     }
     // Active conversations get a deeper tail so continuity stays accurate.
-    const hasNewProbe = messages
-      .slice(-8)
-      .some((msg) => msg.characterId !== characterId && msg.createdAt > seenDmsAt);
+    const hasNewProbe = messages.slice(-8).some((msg) => msg.characterId !== characterId && msg.createdAt > seenDmsAt);
     const tail = messages.slice(hasNewProbe ? -MAX_THREAD_TAIL : -12);
     const hasNew = tail.some((msg) => msg.characterId !== characterId && msg.createdAt > seenDmsAt);
     const otherNamesLabel = memberIds.map((id) => nameById.get(id) ?? "someone").join(", ") || "no one else yet";
@@ -812,7 +807,11 @@ async function buildMindContext(
         const fresh = msg.characterId !== characterId && msg.createdAt > seenDmsAt ? ", new" : "";
         const pics = msg.characterId !== characterId ? imageAttachmentsOf(msg.extra) : [];
         for (const url of pics) {
-          visionCandidates.push({ url, label: `sent by ${who} in your ${isGroup ? "group" : "DM"} thread`, createdAt: msg.createdAt });
+          visionCandidates.push({
+            url,
+            label: `sent by ${who} in your ${isGroup ? "group" : "DM"} thread`,
+            createdAt: msg.createdAt,
+          });
         }
         return `${who} (${ago(msg.createdAt)}${fresh}): ${shortText(msg.content, 400)}${pics.length ? " [sent an image — attached]" : ""}`;
       }),
@@ -896,19 +895,20 @@ async function buildMindContext(
       ? shortText(mind.cursors.weighing, 200)
       : null;
   const lastPostedAgo =
-    typeof mind.cursors.lastPostedAt === "string" && mind.cursors.lastPostedAt
-      ? ago(mind.cursors.lastPostedAt)
-      : null;
+    typeof mind.cursors.lastPostedAt === "string" && mind.cursors.lastPostedAt ? ago(mind.cursors.lastPostedAt) : null;
 
   // ── City: where they are, who else is here, and the places they know ──
   const currentPlace = mind.placeId ? (placeById.get(mind.placeId) ?? null) : null;
   const peopleHere = allMinds
-    .filter((other) => other.id !== characterId && other.placeId && other.placeId === mind.placeId && nameById.has(other.id))
+    .filter(
+      (other) => other.id !== characterId && other.placeId && other.placeId === mind.placeId && nameById.has(other.id),
+    )
     .map((other) => `${other.id} · ${nameById.get(other.id)}`);
   // The human can BE somewhere too — standing in the same place is meeting them.
   const userMindRow = mindByChar.get(WORLD_USER_ID);
   const userIsHere = !!userMindRow?.placeId && userMindRow.placeId === mind.placeId;
-  if (userIsHere) peopleHere.push(`${WORLD_USER_ID} · ${worldUser.name} (the human whose world this is — here, in person)`);
+  if (userIsHere)
+    peopleHere.push(`${WORLD_USER_ID} · ${worldUser.name} (the human whose world this is — here, in person)`);
   const placeStaff = currentPlace ? staffForPlace(currentPlace) : [];
   const hereLine = currentPlace
     ? `${currentPlace.name} (${currentPlace.kind})${currentPlace.description ? ` — ${shortText(currentPlace.description, 200)}` : ""}${currentPlace.interior ? ` [inside: ${shortText(currentPlace.interior, 220)}]` : ""}${placeStaff.length ? ` [staff, always the same: ${placeStaff.join("; ")} — order from them, chat with them, they're part of the scene]` : ""}`
@@ -922,9 +922,7 @@ async function buildMindContext(
 
   // Load the freshest few images they can see as real vision inputs.
   const visionImages: MindContext["visionImages"] = [];
-  for (const candidate of visionCandidates
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, 4)) {
+  for (const candidate of visionCandidates.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 4)) {
     try {
       const dataUrl = await readNoodleVisionImage(candidate.url);
       if (dataUrl) visionImages.push({ dataUrl, label: candidate.label });
@@ -1095,7 +1093,9 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
       ? [
           `SOMEONE YOU KNOW — ${userLabel}${ctx.user.blurb ? `, ${ctx.user.blurb}` : ""} (text them with id ${WORLD_USER_ID}):`,
           `A real person who lives in this world like you do. Where you stand with them: ${ctx.user.standing}.`,
-          ctx.user.lastSeen ? `You last heard from them ${ctx.user.lastSeen}.` : `You haven't heard from them in a while.`,
+          ctx.user.lastSeen
+            ? `You last heard from them ${ctx.user.lastSeen}.`
+            : `You haven't heard from them in a while.`,
           ctx.user.memories.length
             ? `What you carry about them:\n${ctx.user.memories.map((memory) => `- ${memory}`).join("\n")}`
             : ``,
@@ -1123,7 +1123,9 @@ function buildMindMessages(ctx: MindContext, config: WorldEngineConfig, now: Dat
     `WHERE YOU ARE: ${ctx.city.hereLine}`,
     ctx.city.peopleHere.length ? `HERE WITH YOU RIGHT NOW: ${ctx.city.peopleHere.join(", ")}` : `You're alone here.`,
     `YOUR WALLET: ${ctx.city.wallet}${ctx.city.job ? ` · JOB: ${ctx.city.job}` : " · (no job yet)"}`,
-    ctx.city.knownPlaces.length ? `PLACES IN THE CITY (id · name):\n${ctx.city.knownPlaces.join("\n")}` : `The city map is blank so far — anywhere you "go" puts a new place on it.`,
+    ctx.city.knownPlaces.length
+      ? `PLACES IN THE CITY (id · name):\n${ctx.city.knownPlaces.join("\n")}`
+      : `The city map is blank so far — anywhere you "go" puts a new place on it.`,
     ``,
     ctx.recentAboutMe.length ? `RECENTLY IN YOUR LIFE:\n${ctx.recentAboutMe.join("\n")}\n` : ``,
     ctx.visionImages.length
@@ -1229,7 +1231,12 @@ export function toEngineAction(selfId: string, action: WorldAction): WorldAction
         milestone: action.milestone,
       };
     case "remember":
-      return { type: "memory", characterId: selfId, aboutCharacterId: action.aboutCharacterId, summary: action.summary };
+      return {
+        type: "memory",
+        characterId: selfId,
+        aboutCharacterId: action.aboutCharacterId,
+        summary: action.summary,
+      };
     default:
       return null;
   }
@@ -1269,11 +1276,7 @@ async function executeDo(
 const HOME_ROOM_RE =
   /^(home|my (place|home|room|apartment|house|flat)|the )?(kitchen|bedroom|bathroom|living ?room|bed|couch|shower|hallway|closet)$/i;
 
-async function ensureHomePlace(
-  db: DB,
-  characterId: string,
-  name: string,
-): Promise<{ id: string; name: string }> {
+async function ensureHomePlace(db: DB, characterId: string, name: string): Promise<{ id: string; name: string }> {
   const world = createWorldStorage(db);
   const existing = await world.getHomePlace(characterId);
   if (existing) return { id: existing.id, name: existing.name };
@@ -1368,11 +1371,7 @@ export async function ensurePlaceSceneChat(
     const existing = allChats.find((chat) => parseJson(chat.metadata).worldPlaceId === place.id);
     if (existing) return existing.id;
     const world = createWorldStorage(db);
-    const members = new Set(
-      (await world.listMinds())
-        .filter((m) => m.placeId === place.id)
-        .map((m) => m.id),
-    );
+    const members = new Set((await world.listMinds()).filter((m) => m.placeId === place.id).map((m) => m.id));
     // A home always carries its owner — it's their space even while they're out.
     if (place.ownerId) members.add(place.ownerId);
     const created = await chats.create({
@@ -1461,7 +1460,11 @@ async function executeHostEvent(
   const title = shortText(action.title, 100);
   const placeName = shortText(action.place, 80);
   if (!title || !placeName) return null;
-  const { place } = await world.ensurePlace({ name: placeName, kind: shortText(action.kind, 40) || undefined, discoveredBy: selfId });
+  const { place } = await world.ensurePlace({
+    name: placeName,
+    kind: shortText(action.kind, 40) || undefined,
+    discoveredBy: selfId,
+  });
   // Coerce: models often emit numeric fields as strings ("2"), which
   // Number.isFinite alone would reject and silently default.
   const startInHoursRaw =
@@ -1473,7 +1476,14 @@ async function executeHostEvent(
     kind: "event",
     summary: `${selfName} is hosting "${title}" at ${place.name}`,
     characterIds: [selfId],
-    detail: { title, placeId: place.id, placeName: place.name, startsAt, text: shortText(action.detail, 300), hostId: selfId },
+    detail: {
+      title,
+      placeId: place.id,
+      placeName: place.name,
+      startsAt,
+      text: shortText(action.detail, 300),
+      hostId: selfId,
+    },
   });
 }
 
@@ -1665,7 +1675,8 @@ async function executeGroupAction(
         return existing.id;
       }
       const names = members.map((id) => nameById.get(id) ?? "?").join(", ");
-      const groupName = shortText(action.name, 60) || (isHangout ? `${names}${place ? ` @ ${place}` : " — hangout"}` : names);
+      const groupName =
+        shortText(action.name, 60) || (isHangout ? `${names}${place ? ` @ ${place}` : " — hangout"}` : names);
       const created = await chats.create({
         name: groupName,
         // Hangouts are in-person scenes (roleplay); text groups are chats (conversation).
@@ -1955,7 +1966,10 @@ export async function wakeCharacterMind(
         kind: "thought",
         summary: `${ctx.self.name}: "${shortText(output.thought, 140)}"`,
         characterIds: [characterId],
-        detail: { ...(savedThoughtId ? { chatId: ctx.spaceChatId, messageId: savedThoughtId } : {}), text: output.thought },
+        detail: {
+          ...(savedThoughtId ? { chatId: ctx.spaceChatId, messageId: savedThoughtId } : {}),
+          text: output.thought,
+        },
       });
       result.events.push(thoughtEvent);
     }
@@ -1972,7 +1986,11 @@ export async function wakeCharacterMind(
     const minutesSinceWake = ctx.mind.lastWakeAt
       ? Math.max(0, (nowDate.getTime() - new Date(ctx.mind.lastWakeAt).getTime()) / 60_000)
       : 0;
-    const workingNeeds = decayNeeds(ctx.mind.needs, minutesSinceWake, ctx.presence.status === "offline" ? "night" : "day");
+    const workingNeeds = decayNeeds(
+      ctx.mind.needs,
+      minutesSinceWake,
+      ctx.presence.status === "offline" ? "night" : "day",
+    );
     for (const rawAction of output.actions) {
       if (budgetLeft <= 0) break;
       try {
@@ -2231,13 +2249,11 @@ async function ensureMindsInitializedInner(db: DB, config: WorldEngineConfig): P
       await chats.remove(chat.id);
       continue;
     }
-    const isWorldChat =
-      meta.worldDmThread === true || meta.worldGroupThread === true || meta.worldPlaceScene === true;
+    const isWorldChat = meta.worldDmThread === true || meta.worldGroupThread === true || meta.worldPlaceScene === true;
     if (!isWorldChat) continue;
     // Hangouts and place scenes are roleplay (prose scenes); DMs and text
     // groups are conversation (people texting).
-    const wantMode =
-      meta.worldHangout === true || meta.worldPlaceScene === true ? "roleplay" : "conversation";
+    const wantMode = meta.worldHangout === true || meta.worldPlaceScene === true ? "roleplay" : "conversation";
     if (chat.mode !== wantMode) {
       await chats.update(chat.id, { mode: wantMode });
     }
@@ -2254,7 +2270,12 @@ async function ensureMindsInitializedInner(db: DB, config: WorldEngineConfig): P
       if (config.allowNoodle) {
         const account = await noodle.getAccountByEntity("character", characterId);
         if (!account) {
-          await noodle.upsertAccountFromProfile({ kind: "character", entityId: characterId, displayName: name, invited: true });
+          await noodle.upsertAccountFromProfile({
+            kind: "character",
+            entityId: characterId,
+            displayName: name,
+            invited: true,
+          });
         } else if (!account.invited) {
           await noodle.updateAccount(account.id, { invited: true });
         }
