@@ -32,6 +32,7 @@ import { loadImageGenerationUserSettings, resolveIllustratorImageSize } from "..
 import {
   generateImage,
   imageConnectionTakesReferencePicture,
+  isNovelAiOutfitReferenceModel,
   isNovelAiPreciseReferenceModel,
   saveImageToDisk,
 } from "../image/image-generation.js";
@@ -482,9 +483,20 @@ function referencesGuide(connection: DescribedConnection, others: DescribedConne
       lines.push(
         "- `references` and `base_image` are two different things. A reference is never redrawn and never supplies the composition: the model reads who the person is or how the art looks from it, and then draws a completely new picture from your prompt. `base_image` is the opposite, that exact picture as the canvas.",
         "- `references: [{source, kind, strength, fidelity}]` is NovelAI Precise Reference.",
-        "- `kind`: `character` takes the person (face, hair, body, the design of their outfit) and draws them in whatever style the prompt and model give; `style` takes only how the art looks (line, colour, shading, rendering) and nothing of what is in the picture; `character&style` takes both.",
+        "- `kind`: `character` takes the person (face, hair, body) and draws them in whatever style the prompt and model give; `style` takes only how the art looks (line, colour, shading, rendering) and nothing of what is in the picture; `character&style` takes both.",
+        ...(isNovelAiOutfitReferenceModel(connection.model)
+          ? [
+              '- `kind: "outfit"` takes only the clothes from the picture and puts them on whoever the prompt describes. Use it to dress someone in a specific outfit: reference a picture of the outfit, describe the person in the prompt, and leave the clothes out of the prompt.',
+              "- `same_outfit` on a `character` or `character&style` reference decides what they wear: true keeps the clothes the reference has on, false lets the prompt dress them. Unset, `character` leaves the clothes to the prompt and `character&style` keeps them. For someone in today's different clothes: `character` with the clothes written in the prompt, or `same_outfit: false`.",
+              "- A person and an outfit from two different pictures work together: one `character` reference for who it is and one `outfit` reference for what they wear.",
+            ]
+          : [
+              '- This model has no outfit reference; `kind: "outfit"` and `same_outfit` need a NovelAI V5 connection. Here, write the clothes in the prompt.',
+            ]),
         "- Pose, framing, angle, action, expression, place and light all come from the prompt. Write them as fully as you would without a reference; a reference with a thin prompt gives a stiff copy of the reference's own pose.",
-        "- `strength` 0 to 1 is how much of the design or style carries over, not how much of the picture is kept (default 1, for `style` the connection's value). Lower it when the person should wear or look different from the reference, or when the style should only tint the picture.",
+        connection.dialect === "novelai-v5"
+          ? "- `strength` is how much of the design, style or outfit carries over, not how much of the picture is kept. 1 is normal (for `style` the connection's value); below 1 loosens it, and this model accepts up to 5 when a reference is being ignored. Lower it when the result copies the reference too closely."
+          : "- `strength` 0 to 1 is how much of the design or style carries over, not how much of the picture is kept (default 1, for `style` the connection's value). Lower it when the person should wear or look different from the reference, or when the style should only tint the picture.",
         connection.dialect === "novelai-v5"
           ? "- This model has no `fidelity` setting: references are always held at full fidelity, and a `fidelity` you pass is ignored. Use `strength` to loosen a reference."
           : "- `fidelity` 0 to 1 is how literally small details are held (exact hair strands, outfit trim, accessories); lower lets the model adapt them to the new pose and scene.",
@@ -506,7 +518,7 @@ function referencesGuide(connection: DescribedConnection, others: DescribedConne
         `- This model takes no reference pictures.${
           capable.length
             ? ` For a character or style reference, draw with connection ${capable.map((other) => `"${other.name}"`).join(" or ")}.`
-            : " Precise Reference needs a NovelAI V4.5 or V5 Full connection."
+            : " Precise Reference needs a NovelAI V4.5 or V5 connection."
         }`,
       );
     }
@@ -961,10 +973,33 @@ export function createReagentImageTools(context: ReagentImageContext) {
         const fixedFidelity = connection.dialect === "novelai-v5";
         const fidelity = fixedFidelity ? null : finite(entry.fidelity);
         if (fixedFidelity && finite(entry.fidelity) !== null && !ignored.includes("fidelity")) ignored.push("fidelity");
+        const outfits = isNovelAiOutfitReferenceModel(connection.model);
+        const wantsOutfit = ["outfit", "costume", "clothes", "clothing"].includes(kind);
+        if (wantsOutfit && !outfits) {
+          const capable = (await loadConnections()).filter(
+            (other) => other.backend === "novelai" && other.nativeNovelAi && isNovelAiOutfitReferenceModel(other.model),
+          );
+          throw new Error(
+            `${connection.model} has no outfit reference. ${
+              capable.length
+                ? `Draw with connection ${capable.map((other) => `"${other.name}"`).join(" or ")} for it, or write the clothes in the prompt.`
+                : "Write the clothes in the prompt."
+            }`,
+          );
+        }
+        const sameOutfit = typeof entry.same_outfit === "boolean" ? entry.same_outfit : null;
+        if (sameOutfit !== null && !outfits && !ignored.includes("same_outfit")) ignored.push("same_outfit");
         preciseReferences.push({
           image: base64,
-          kind: kind === "style" ? "style" : kind === "character" ? "character" : "character&style",
-          ...(strength !== null ? { strength: clamp(strength, 0, 1) } : {}),
+          kind: wantsOutfit
+            ? "outfit"
+            : kind === "style"
+              ? "style"
+              : kind === "character"
+                ? "character"
+                : "character&style",
+          ...(sameOutfit !== null && outfits ? { sameOutfit } : {}),
+          ...(strength !== null ? { strength: clamp(strength, 0, outfits ? 5 : 1) } : {}),
           ...(fidelity !== null ? { fidelity: clamp(fidelity, 0, 1) } : {}),
         });
       } else {

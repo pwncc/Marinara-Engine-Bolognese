@@ -594,10 +594,21 @@ const IMAGES_TOOLS: LLMToolDefinition[] = [
           type: "object",
           properties: {
             source: { type: "string", description: IMAGE_SOURCE_HELP },
-            kind: { type: "string", enum: ["character", "style", "character&style"] },
+            kind: {
+              type: "string",
+              enum: ["character", "style", "character&style", "outfit"],
+              description:
+                "`outfit` takes only the clothes and puts them on whoever the prompt describes (NovelAI V5).",
+            },
+            same_outfit: {
+              type: "boolean",
+              description:
+                "NovelAI V5, character kinds: true keeps the clothes the reference wears, false lets the prompt dress them.",
+            },
             strength: {
               type: "number",
-              description: "0-1, how much of the design or style carries over (not how much of the picture is kept).",
+              description:
+                "How much of the design or style carries over (not how much of the picture is kept): 0-1, up to 5 on NovelAI V5.",
             },
             fidelity: { type: "number", description: "0-1, how literally small details are held." },
           },

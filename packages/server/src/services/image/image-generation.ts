@@ -145,7 +145,7 @@ function sanitizeErrorText(text: string): string {
     .slice(0, 300);
 }
 
-import type { ImageGenRequest, ImageGenResult } from "@marinara-engine/shared";
+import type { ImageGenRequest, ImageGenResult, ImagePreciseReference } from "@marinara-engine/shared";
 export type { ImageGenRequest, ImageGenResult } from "@marinara-engine/shared";
 
 type ReferencePictureTarget = { model: string; baseUrl: string; comfyWorkflow: string };
@@ -171,7 +171,7 @@ const REFERENCE_PICTURE_SUPPORT: Readonly<Record<string, boolean | ((target: Ref
   // The v1 API is text-to-image only.
   stability: ({ baseUrl }) => !isStabilityV1Base(baseUrl),
   togetherai: false,
-  // NovelAI's own host takes references on V4.5 and V5 Full; a proxy gets them through chat completions.
+  // NovelAI's own host takes references on V4.5 and V5; a proxy gets them through chat completions.
   novelai: ({ baseUrl, model }) =>
     !isNativeNovelAiHost(imageHostname(baseUrl)) || isNovelAiPreciseReferenceModel(model || "nai-diffusion-4-5-full"),
   horde: false,
@@ -2659,9 +2659,30 @@ function isNovelAiV5Model(model: string): boolean {
   return /^nai-diffusion-5(?:-(?:curated|full))?$/i.test(model.trim());
 }
 
-/** Models NovelAI serves Precise Reference on: V4.5 (Full and Curated) and V5 Full. */
+/** Models NovelAI serves Precise Reference on: V4.5 and V5, Full and Curated. */
 export function isNovelAiPreciseReferenceModel(model: string): boolean {
-  return /^nai-diffusion-(?:4-5(?:-(?:curated|full))?|5-full)$/i.test(model.trim());
+  return /^nai-diffusion-(?:4-5|5)(?:-(?:curated|full))?$/i.test(model.trim());
+}
+
+/** Outfit references and the "Prefer same outfit" switch are V5 features. */
+export function isNovelAiOutfitReferenceModel(model: string): boolean {
+  return isNovelAiV5Model(model);
+}
+
+/**
+ * The description string NovelAI's own client sends for a reference kind. V5 tells a character
+ * who keeps the reference's outfit apart from one who may wear anything; V4.5 knows only the
+ * three plain kinds and no outfit reference, for which this returns null.
+ */
+export function novelAiReferenceCaption(
+  reference: Pick<ImagePreciseReference, "kind" | "sameOutfit">,
+  model: string,
+): string | null {
+  const outfits = isNovelAiOutfitReferenceModel(model);
+  if (reference.kind === "outfit") return outfits ? "costume" : null;
+  if (!outfits || reference.kind === "style") return reference.kind;
+  if (reference.kind === "character") return reference.sameOutfit === true ? "character_mainoutfit" : "character";
+  return reference.sameOutfit === false ? "character&style_anyoutfit" : "character&style";
 }
 
 function collectNovelAiReferenceImages(request: ImageGenRequest): string[] {
@@ -2969,20 +2990,30 @@ async function generateNovelAI(baseUrl: string, apiKey: string, request: ImageGe
   const seed = resolveSeed(request.imageDefaults);
   // A request that names its references (kind and strengths per picture) replaces both the plain
   // reference pictures and the connection's stored style reference.
-  const explicitReferences = (request.preciseReferences ?? []).slice(0, 16).map((reference) => ({
-    image: collectNovelAiReferenceImages({ ...request, referenceImage: reference.image, referenceImages: [] })[0]!,
-    caption: reference.kind,
-    strength: Math.max(
-      0,
-      Math.min(1, reference.strength ?? (reference.kind === "style" ? defaults.styleReferenceStrength : 1)),
-    ),
-    secondaryStrength:
-      reference.fidelity === undefined
-        ? reference.kind === "style"
-          ? resolveNovelAiStyleReferenceSecondaryStrength(defaults.styleReferenceFidelity)
-          : 0
-        : resolveNovelAiStyleReferenceSecondaryStrength(reference.fidelity),
-  }));
+  // V5's strength runs to 5, V4.5's to 1, as in NovelAI's own client.
+  const maxReferenceStrength = isNovelAiV5Model(model) ? 5 : 1;
+  const explicitReferences = (request.preciseReferences ?? [])
+    .map((reference) => ({ reference, caption: novelAiReferenceCaption(reference, model) }))
+    // An outfit reference on a model without them is skipped, as NovelAI's client does.
+    .filter((entry): entry is { reference: ImagePreciseReference; caption: string } => entry.caption !== null)
+    .slice(0, 16)
+    .map(({ reference, caption }) => ({
+      image: collectNovelAiReferenceImages({ ...request, referenceImage: reference.image, referenceImages: [] })[0]!,
+      caption,
+      strength: Math.max(
+        0,
+        Math.min(
+          maxReferenceStrength,
+          reference.strength ?? (reference.kind === "style" ? defaults.styleReferenceStrength : 1),
+        ),
+      ),
+      secondaryStrength:
+        reference.fidelity === undefined
+          ? reference.kind === "style"
+            ? resolveNovelAiStyleReferenceSecondaryStrength(defaults.styleReferenceFidelity)
+            : 0
+          : resolveNovelAiStyleReferenceSecondaryStrength(reference.fidelity),
+    }));
   const styleReferenceImage =
     explicitReferences.length === 0 && isNovelAiPreciseReferenceModel(model) && defaults.styleReferenceImage
       ? collectNovelAiReferenceImages({
@@ -3024,10 +3055,10 @@ async function generateNovelAI(baseUrl: string, apiKey: string, request: ImageGe
   }
   let referenceImages = referenceSpecs.map((reference) => reference.image);
   if (referenceImages.length > 0 && !isNovelAiPreciseReferenceModel(model)) {
-    // NovelAI ships Precise Reference on V4.5 and V5 Full only.
+    // NovelAI ships Precise Reference on V4.5 and V5 only.
     // Render without the references rather than failing the whole illustration.
     logger.warn(
-      "[novelai] Dropping %d reference image(s): precise reference requires a V4.5 or V5 Full model, got %s",
+      "[novelai] Dropping %d reference image(s): precise reference requires a V4.5 or V5 model, got %s",
       referenceImages.length,
       model,
     );

@@ -261,11 +261,16 @@ export type ConnectionAdmissionMode =
 export interface ImagePreciseReference {
   /** Base64 or data URL. */
   image: string;
-  /** What the model takes from the picture. */
-  kind: "character" | "style" | "character&style";
-  /** 0-1, how strongly the picture is followed. */
+  /** What the model takes from the picture. `outfit` (the clothes alone) exists on V5 only. */
+  kind: "character" | "style" | "character&style" | "outfit";
+  /**
+   * V5 only, for the two character kinds: keep the outfit the reference wears (NovelAI's "Prefer
+   * same outfit"). Unset follows NovelAI's own defaults: off for `character`, on for `character&style`.
+   */
+  sameOutfit?: boolean;
+  /** How strongly the picture is followed: 0-1, or up to 5 on V5. */
   strength?: number;
-  /** 0-1, how literally it is enforced; lower leaves the model more room. */
+  /** 0-1, how literally it is enforced; lower leaves the model more room. V4.5 only: V5 is always 1. */
   fidelity?: number;
 }
 

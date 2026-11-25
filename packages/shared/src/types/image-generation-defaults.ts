@@ -42,7 +42,7 @@ export interface NovelAiDefaults {
   promptGuidanceRescale: number;
   undesiredContentPreset: number;
   dynamicResolutionBySubjectCount: boolean;
-  /** Persistent style-only director reference stored with this connection (V4.5 and V5 Full). */
+  /** Persistent style-only director reference stored with this connection (V4.5 and V5). */
   styleReferenceImage: string | null;
   styleReferenceStrength: number;
   styleReferenceFidelity: number;
