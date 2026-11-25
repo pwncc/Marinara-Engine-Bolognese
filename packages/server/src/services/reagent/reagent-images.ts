@@ -485,7 +485,9 @@ function referencesGuide(connection: DescribedConnection, others: DescribedConne
         "- `kind`: `character` takes the person (face, hair, body, the design of their outfit) and draws them in whatever style the prompt and model give; `style` takes only how the art looks (line, colour, shading, rendering) and nothing of what is in the picture; `character&style` takes both.",
         "- Pose, framing, angle, action, expression, place and light all come from the prompt. Write them as fully as you would without a reference; a reference with a thin prompt gives a stiff copy of the reference's own pose.",
         "- `strength` 0 to 1 is how much of the design or style carries over, not how much of the picture is kept (default 1, for `style` the connection's value). Lower it when the person should wear or look different from the reference, or when the style should only tint the picture.",
-        "- `fidelity` 0 to 1 is how literally small details are held (exact hair strands, outfit trim, accessories); lower lets the model adapt them to the new pose and scene.",
+        connection.dialect === "novelai-v5"
+          ? "- This model has no `fidelity` setting: references are always held at full fidelity, and a `fidelity` you pass is ignored. Use `strength` to loosen a reference."
+          : "- `fidelity` 0 to 1 is how literally small details are held (exact hair strands, outfit trim, accessories); lower lets the model adapt them to the new pose and scene.",
         "- Several character references blend into one person, they do not stay two people. With two different people in the picture, reference one and describe the other in `characters`.",
         "- A character reference and a style reference together are fine: the person from one picture in the look of another.",
         "- The best character reference is a full body in a neutral pose on a plain background with clean lines.",
@@ -504,7 +506,7 @@ function referencesGuide(connection: DescribedConnection, others: DescribedConne
         `- This model takes no reference pictures.${
           capable.length
             ? ` For a character or style reference, draw with connection ${capable.map((other) => `"${other.name}"`).join(" or ")}.`
-            : " Precise Reference needs a NovelAI V4.5 connection."
+            : " Precise Reference needs a NovelAI V4.5 or V5 Full connection."
         }`,
       );
     }
@@ -955,7 +957,10 @@ export function createReagentImageTools(context: ReagentImageContext) {
       if (novelai) {
         const kind = str(entry.kind).trim().toLowerCase();
         const strength = finite(entry.strength);
-        const fidelity = finite(entry.fidelity);
+        // V5 holds every reference at full fidelity; NovelAI rejects anything else there.
+        const fixedFidelity = connection.dialect === "novelai-v5";
+        const fidelity = fixedFidelity ? null : finite(entry.fidelity);
+        if (fixedFidelity && finite(entry.fidelity) !== null && !ignored.includes("fidelity")) ignored.push("fidelity");
         preciseReferences.push({
           image: base64,
           kind: kind === "style" ? "style" : kind === "character" ? "character" : "character&style",

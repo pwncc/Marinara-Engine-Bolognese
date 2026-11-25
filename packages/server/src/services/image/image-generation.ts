@@ -171,7 +171,7 @@ const REFERENCE_PICTURE_SUPPORT: Readonly<Record<string, boolean | ((target: Ref
   // The v1 API is text-to-image only.
   stability: ({ baseUrl }) => !isStabilityV1Base(baseUrl),
   togetherai: false,
-  // NovelAI's own host takes references on V4.5 only; a proxy gets them through chat completions.
+  // NovelAI's own host takes references on V4.5 and V5 Full; a proxy gets them through chat completions.
   novelai: ({ baseUrl, model }) =>
     !isNativeNovelAiHost(imageHostname(baseUrl)) || isNovelAiPreciseReferenceModel(model || "nai-diffusion-4-5-full"),
   horde: false,
@@ -2659,8 +2659,9 @@ function isNovelAiV5Model(model: string): boolean {
   return /^nai-diffusion-5(?:-(?:curated|full))?$/i.test(model.trim());
 }
 
+/** Models NovelAI serves Precise Reference on: V4.5 (Full and Curated) and V5 Full. */
 export function isNovelAiPreciseReferenceModel(model: string): boolean {
-  return /^nai-diffusion-(?:4-5)(?:-(?:curated|full))?$/i.test(model.trim());
+  return /^nai-diffusion-(?:4-5(?:-(?:curated|full))?|5-full)$/i.test(model.trim());
 }
 
 function collectNovelAiReferenceImages(request: ImageGenRequest): string[] {
@@ -3017,12 +3018,16 @@ async function generateNovelAI(baseUrl: string, apiKey: string, request: ImageGe
             secondaryStrength: 0,
           })),
         ];
+  // V5 only takes fidelity 1: NovelAI rejects the request when a secondary strength is anything but 0.
+  if (isNovelAiV5Model(model)) {
+    referenceSpecs = referenceSpecs.map((reference) => ({ ...reference, secondaryStrength: 0 }));
+  }
   let referenceImages = referenceSpecs.map((reference) => reference.image);
   if (referenceImages.length > 0 && !isNovelAiPreciseReferenceModel(model)) {
-    // NovelAI only ships Precise Reference on V4.5; V5 support is still pending upstream.
+    // NovelAI ships Precise Reference on V4.5 and V5 Full only.
     // Render without the references rather than failing the whole illustration.
     logger.warn(
-      "[novelai] Dropping %d reference image(s): precise reference requires a V4.5 model, got %s",
+      "[novelai] Dropping %d reference image(s): precise reference requires a V4.5 or V5 Full model, got %s",
       referenceImages.length,
       model,
     );

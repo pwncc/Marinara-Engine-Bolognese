@@ -95,9 +95,15 @@ assert.equal(
     ["novelai", "NovelAI's default model", true, takes("novelai", { baseUrl: "https://image.novelai.net" })],
     [
       "novelai",
-      "NovelAI V5 drops references",
-      false,
+      "NovelAI V5 Full precise reference",
+      true,
       takes("novelai", { baseUrl: "https://image.novelai.net", model: "nai-diffusion-5-full" }),
+    ],
+    [
+      "novelai",
+      "NovelAI V5 Curated drops references",
+      false,
+      takes("novelai", { baseUrl: "https://image.novelai.net", model: "nai-diffusion-5-curated" }),
     ],
     [
       "novelai",
