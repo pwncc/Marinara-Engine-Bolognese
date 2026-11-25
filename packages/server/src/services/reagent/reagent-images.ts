@@ -125,6 +125,21 @@ const finite = (value: unknown): number | null => {
 };
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+/**
+ * The connections the writer may draw with. A NovelAI Curated model is only offered where the
+ * user chose that connection themselves (for the chat, or as the Images default); the writer
+ * cannot switch to one on its own. When Curated is all there is, it stays.
+ */
+export function offeredImageConnections<Row extends { id: string; model?: string | null }>(
+  rows: Row[],
+  chosenIds: string[],
+): Row[] {
+  const offered = rows.filter(
+    (row) => chosenIds.includes(row.id) || !/^nai-diffusion-.*curated/i.test((row.model ?? "").trim()),
+  );
+  return offered.length ? offered : rows;
+}
+
 // ── What each connection speaks ──
 
 export function resolveReagentImageDialect(
@@ -768,10 +783,13 @@ export function createReagentImageTools(context: ReagentImageContext) {
     };
   };
 
-  /** Every image connection, the chat's own choice first. */
+  /** Every image connection the writer may draw with, the chat's own choice first. */
   const loadConnections = async (): Promise<DescribedConnection[]> => {
     if (described) return described;
-    if (context.connectionRows) return (described = context.connectionRows.map(describe));
+    if (context.connectionRows) {
+      const [first] = context.connectionRows;
+      return (described = offeredImageConnections(context.connectionRows, first ? [first.id] : []).map(describe));
+    }
     const listed = (await connectionsStore.list()).filter((row) => row.provider === "image_generation");
     const preferredIds = [
       str(context.chatMeta.illustratorImageConnectionId),
@@ -783,7 +801,7 @@ export function createReagentImageTools(context: ReagentImageContext) {
       return rank(a.id) - rank(b.id);
     });
     const rows: ConnectionRow[] = [];
-    for (const row of ordered) {
+    for (const row of offeredImageConnections(ordered, preferredIds)) {
       const full = await connectionsStore.getWithKey(row.id);
       if (full) rows.push(full);
     }
