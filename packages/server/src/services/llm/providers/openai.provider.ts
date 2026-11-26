@@ -17,7 +17,7 @@ import {
   type LLMToolDefinition,
   type LLMUsage,
 } from "../base-provider.js";
-import { parseTextualToolCalls, stripTextualToolCalls } from "../textual-tool-call-parser.js";
+import { holdBackTextualCalls, parseTextualToolCalls, stripTextualToolCalls } from "../textual-tool-call-parser.js";
 import {
   FEATHERLESS_ATTRIBUTION_HEADERS,
   featherlessFittingMaxTokens,
@@ -952,14 +952,17 @@ export class OpenAIProvider extends BaseLLMProvider {
     return this.providerKind === "featherless" || isFeatherlessBaseUrl(this.baseUrl);
   }
 
-  /** Featherless request rules, applied after Custom Parameters. */
-  private normalizeFeatherlessRequest(body: Record<string, unknown>, options: ChatOptions): void {
-    if (!this.isFeatherlessEndpoint()) return;
+  /**
+   * Featherless request rules, applied after Custom Parameters. True when the tools went into the prompt, so the
+   * calls come back as reply text.
+   */
+  private normalizeFeatherlessRequest(body: Record<string, unknown>, options: ChatOptions): boolean {
+    if (!this.isFeatherlessEndpoint()) return false;
     const changes = normalizeFeatherlessRequest(body);
-    if (changes.droppedImages) {
-      logger.warn(
-        "[OpenAI] Featherless returns no tool calls for a request with pictures; left %d picture(s) out of this request for %s",
-        changes.droppedImages,
+    if (changes.textualTools) {
+      logger.debug(
+        "[OpenAI] Featherless serves a request with pictures without its tools; wrote %d tool(s) into the prompt for %s",
+        options.tools?.length ?? 0,
         options.model,
       );
     }
@@ -969,6 +972,7 @@ export class OpenAIProvider extends BaseLLMProvider {
         options.model,
       );
     }
+    return changes.textualTools;
   }
 
   protected override embeddingHeaders(): Record<string, string> {
@@ -2509,7 +2513,10 @@ ${content}`
     this.normalizeStrictClaudeRequest(body, options);
     this.normalizeMistralRequest(body);
     this.normalizeGeminiRequest(body, options.model);
-    this.normalizeFeatherlessRequest(body, options);
+    // Tools written into the prompt come back as reply text: keep the call text out of the live stream.
+    const heldCalls =
+      this.normalizeFeatherlessRequest(body, options) && options.onToken ? holdBackTextualCalls(options.onToken) : null;
+    if (heldCalls) options = { ...options, onToken: heldCalls.onToken };
 
     logger.debug(
       "[OpenAI chatComplete()] stream=%s model=%s reasoning=%s enableThinking=%s verbosity=%s onToken=%s",
@@ -2575,6 +2582,7 @@ ${content}`
       if (useStream) {
         options.signal?.throwIfAborted();
         if (resolvedContent && options.onToken) await options.onToken(resolvedContent);
+        if (toolCalls.length === 0) await heldCalls?.flush();
         options.signal?.throwIfAborted();
       }
       return {
@@ -2799,6 +2807,7 @@ ${content}`
       toolCalls = parseTextualToolCalls(content, options.tools);
       if (toolCalls.length > 0) content = stripTextualToolCalls(content, options.tools);
     }
+    if (toolCalls.length === 0) await heldCalls?.flush();
 
     this.emitChatCompletionsReasoning(options, reasoningMetadata);
 

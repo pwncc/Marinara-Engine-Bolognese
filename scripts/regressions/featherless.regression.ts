@@ -1,10 +1,11 @@
 // Guards the Featherless request rules and account reads.
 //
 // Featherless serves a plain text request through the model's own chat template, which carries the
-// tool-call instructions. A request with a picture, or with a thinking switch in
+// tool definitions and call format. A request with a picture, or with a thinking switch in
 // `chat_template_kwargs`, goes another way that returns no tool calls at all: the reported failure
 // was a roleplay with REagent on, where an attached picture left the model inventing tool names in
-// plain text. Its model list also gives most models a max output equal to their whole context,
+// plain text. A picture request therefore carries its tools in the prompt and the calls are read from
+// the reply. Its model list also gives most models a max output equal to their whole context,
 // which, saved as the Connection's max output, left long chats 128 tokens for the reply.
 // All of it was observed against api.featherless.ai on 2026-11-26; none of it is documented there.
 import assert from "node:assert/strict";
@@ -15,6 +16,10 @@ import {
   isFeatherlessBaseUrl,
   normalizeFeatherlessRequest,
 } from "../../packages/server/src/services/llm/providers/featherless-request-compat.js";
+import {
+  holdBackTextualCalls,
+  parseTextualToolCalls,
+} from "../../packages/server/src/services/llm/textual-tool-call-parser.js";
 import {
   describeFeatherlessTest,
   shapeFeatherlessModel,
@@ -39,27 +44,82 @@ const tools = [{ type: "function", function: { name: "roll_dice", parameters: { 
 const picture = { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } };
 type Body = Record<string, any>;
 
-// ── tools and a picture: the picture goes, the text stays a plain string ──
+// ── tools and a picture: the picture stays, the tools go into the prompt, tool turns become text ──
 let body: Body = {
   tools,
+  tool_choice: "auto",
+  reasoning_effort: "none",
   messages: [
     { role: "system", content: "S" },
-    { role: "user", content: [{ type: "text", text: "old" }, picture] },
-    { role: "assistant", content: "A" },
-    { role: "user", content: [{ type: "text", text: "new" }, picture, picture] },
+    { role: "user", content: [{ type: "text", text: "look" }, picture] },
+    {
+      role: "assistant",
+      content: "Rolling.",
+      tool_calls: [
+        { id: "1", type: "function", function: { name: "roll_dice", arguments: '{"sides":6}' } },
+        { id: "2", type: "function", function: { name: "roll_dice", arguments: '{"sides":20}' } },
+      ],
+    },
+    { role: "tool", tool_call_id: "1", content: '{"total":4}' },
+    { role: "tool", tool_call_id: "2", content: '{"total":17}' },
   ],
 };
 let changes = normalizeFeatherlessRequest(body);
-assert.equal(changes.droppedImages, 3);
-assert.deepEqual(
-  body.messages.map((message: Body) => message.content),
-  ["S", "old", "A", "new"],
+assert.equal(changes.textualTools, true);
+assert.equal("tools" in body, false, "a picture request is sent without protocol tools");
+assert.equal("tool_choice" in body, false);
+assert.equal(body.messages.length, 4, "the two results share one turn");
+assert.match(body.messages[0].content, /^# Tools\n[\s\S]*"name":"roll_dice"[\s\S]*<tool_call>[\s\S]*\n\nS$/);
+assert.equal(body.messages[1].content[1], picture, "the picture is still sent");
+assert.equal(
+  body.messages[2].content,
+  'Rolling.\n<tool_call>\n{"name":"roll_dice","arguments":{"sides":6}}\n</tool_call>\n<tool_call>\n{"name":"roll_dice","arguments":{"sides":20}}\n</tool_call>',
 );
+assert.equal("tool_calls" in body.messages[2], false);
+assert.deepEqual(body.messages[3], {
+  role: "user",
+  content: '<tool_response>\n{"total":4}\n</tool_response>\n<tool_response>\n{"total":17}\n</tool_response>',
+});
+assert.equal("reasoning_effort" in body, false, "thinking is switched off the way a picture request takes it");
+assert.deepEqual(body.chat_template_kwargs, { enable_thinking: false });
+// a forced call is asked for in words, and a prompt without a system message gets one
+body = { tools, tool_choice: "required", messages: [{ role: "user", content: [picture] }] };
+normalizeFeatherlessRequest(body);
+assert.equal(body.messages[0].role, "system");
+assert.match(body.messages[0].content, /You must call at least one function in this reply\.$/);
+// the calls written that way are the ones the reply parser reads back
+assert.deepEqual(
+  parseTextualToolCalls(
+    'Rolling.\n<tool_call>\n{"name": "roll_dice", "arguments": {"sides": 6}}\n</tool_call>',
+    tools as never,
+  ).map((call) => [call.function.name, call.function.arguments]),
+  [["roll_dice", '{"sides":6}']],
+);
+
+// ── call text is held back from the live stream; text that was no call after all is released ──
+let streamed = "";
+let held = holdBackTextualCalls((chunk) => void (streamed += chunk));
+for (const chunk of ["The door ", "opens. <", "tool_call>\n{", '"name": "roll_dice"}\n</tool_call>']) {
+  await held.onToken(chunk);
+}
+assert.equal(streamed, "The door opens. ");
+streamed = "";
+held = holdBackTextualCalls((chunk) => void (streamed += chunk));
+for (const chunk of ["2 <", " 3, and it ends with <"]) await held.onToken(chunk);
+assert.equal(streamed, "2 < 3, and it ends with ");
+await held.flush();
+assert.equal(streamed, "2 < 3, and it ends with <");
+
+// ── tools without a picture stay protocol tools ──
+body = { tools, messages: [{ role: "user", content: "x" }] };
+changes = normalizeFeatherlessRequest(body);
+assert.equal(changes.textualTools, false);
+assert.equal(body.tools, tools);
 
 // ── no tools: pictures are kept ──
 body = { messages: [{ role: "user", content: [{ type: "text", text: "look" }, picture] }] };
 changes = normalizeFeatherlessRequest(body);
-assert.equal(changes.droppedImages, 0);
+assert.equal(changes.textualTools, false);
 assert.equal(body.messages[0].content.length, 2);
 
 // ── tools and a thinking switch: the switch becomes an effort, other template options stay ──

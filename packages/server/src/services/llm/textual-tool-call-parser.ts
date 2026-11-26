@@ -251,6 +251,29 @@ export function textualCallMarkerIndex(text: string): number {
   return at;
 }
 
+/**
+ * Wrap a token callback so streamed reply text stops reaching it at the first textual tool-call opener.
+ * `flush` sends what was held back, for a reply whose opener turned out not to be a call.
+ */
+export function holdBackTextualCalls(onToken: (chunk: string) => void | Promise<void>) {
+  let seen = "";
+  let sent = 0;
+  const sendUpTo = async (end: number) => {
+    if (end <= sent) return;
+    const text = seen.slice(sent, end);
+    sent = end;
+    await onToken(text);
+  };
+  return {
+    onToken: (chunk: string) => {
+      seen += chunk;
+      const marker = textualCallMarkerIndex(seen);
+      return sendUpTo(marker < 0 ? seen.length : marker);
+    },
+    flush: () => sendUpTo(seen.length),
+  };
+}
+
 type MarkupCall = { raw: unknown; range?: [number, number]; strict?: boolean };
 
 function jsonOrString(raw: string): unknown {

@@ -2,11 +2,13 @@
 // Featherless request rules
 // ──────────────────────────────────────────────
 // Featherless serves a request two ways. A plain text request goes through the model's own chat
-// template, which carries the tool-call instructions and parses the calls back out. A request
-// with a picture in it, or with a thinking switch in `chat_template_kwargs`, goes another way that
-// leaves those instructions out and returns no tool calls: the model then invents tool names or
-// writes the result itself. Each rule below was observed against api.featherless.ai on
-// 2026-11-26 with Qwen3.8-class models; none of it is in Featherless's documentation.
+// template, which carries the tool definitions and call format and parses the calls back out. A
+// request with a picture in it, or with a thinking switch in `chat_template_kwargs`, goes another
+// way that leaves all of that out and returns no tool calls: the model then invents tool names or
+// writes the result itself. The model can still do both at once, so on a picture request the tools
+// are written into the prompt here and the calls are read back from the reply text. Each rule below
+// was observed against api.featherless.ai on 2026-11-26 with Qwen3.8-class models; none of it is in
+// Featherless's documentation.
 
 /** Whether a base URL is Featherless's own API. */
 export function isFeatherlessBaseUrl(baseUrl: string): boolean {
@@ -43,25 +45,106 @@ export function featherlessReasoningEffort(effort: string | null | undefined): s
   return ["none", "low", "medium", "high", "xhigh"].includes(effort) ? effort : undefined;
 }
 
-/** Take the pictures out of a message; a text-only result goes back to a plain string. */
-function withoutImages(message: WireMessage): { message: WireMessage; removed: number } {
-  if (!Array.isArray(message.content)) return { message, removed: 0 };
-  const kept = message.content.filter((part) => !(isRecord(part) && part.type === "image_url"));
-  const removed = message.content.length - kept.length;
-  if (!removed) return { message, removed: 0 };
-  const textOnly = kept.every((part) => isRecord(part) && part.type === "text" && typeof part.text === "string");
-  return {
-    message: {
-      ...message,
-      content: textOnly ? kept.map((part) => (part as { text: string }).text).join("\n") : kept,
-    },
-    removed,
-  };
+function hasPicture(message: WireMessage): boolean {
+  return Array.isArray(message.content) && message.content.some((part) => isRecord(part) && part.type === "image_url");
+}
+
+/** Add text to a message's content, whether that is a string, a list of parts, or nothing yet. */
+function withText(content: unknown, text: string, where: "before" | "after"): unknown {
+  if (Array.isArray(content)) {
+    const part = { type: "text", text };
+    return where === "before" ? [part, ...content] : [...content, part];
+  }
+  const own = typeof content === "string" ? content : "";
+  if (!own.trim()) return text;
+  return where === "before" ? `${text}\n\n${own}` : `${own}\n${text}`;
+}
+
+/** One call as reply text, in the format the tool block below asks for. */
+function textualCall(call: unknown): string {
+  const fn = isRecord(call) && isRecord(call.function) ? call.function : {};
+  let args: unknown = fn.arguments;
+  if (typeof args === "string") {
+    try {
+      args = JSON.parse(args);
+    } catch {
+      // Arguments that never were JSON go back as the model wrote them.
+    }
+  }
+  return `<tool_call>\n${JSON.stringify({ name: fn.name, arguments: args ?? {} })}\n</tool_call>`;
+}
+
+/** The tool definitions and call format as prompt text: the Hermes block most tool-trained open models know. */
+function textualToolBlock(tools: unknown[], toolChoice: unknown): string {
+  const named = isRecord(toolChoice) && isRecord(toolChoice.function) ? toolChoice.function.name : null;
+  const must =
+    typeof named === "string"
+      ? `\n\nYou must call the function ${named} in this reply.`
+      : toolChoice === "required"
+        ? "\n\nYou must call at least one function in this reply."
+        : "";
+  return `# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+${tools.map((tool) => JSON.stringify(tool)).join("\n")}
+</tools>
+
+For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{"name": <function-name>, "arguments": <args-json-object>}
+</tool_call>
+
+Write any words before the calls, never after them. Each result comes back in the next message inside <tool_response></tool_response> tags; never write one yourself.${must}`;
+}
+
+/**
+ * Move a request's tools out of the protocol and into the prompt: the definitions go on top of the system
+ * prompt, earlier calls become reply text, and their results become a user turn. Mutates `body`.
+ */
+function moveToolsIntoPrompt(body: Record<string, unknown>, messages: WireMessage[]): void {
+  const block = textualToolBlock(body.tools as unknown[], body.tool_choice);
+  const moved: WireMessage[] = [];
+  const resultTurns = new Set<WireMessage>();
+  for (const message of messages) {
+    if (message.role === "tool") {
+      const result = Array.isArray(message.content)
+        ? [{ type: "text", text: "<tool_response>" }, ...message.content, { type: "text", text: "</tool_response>" }]
+        : `<tool_response>\n${typeof message.content === "string" ? message.content : ""}\n</tool_response>`;
+      const previous = moved.at(-1);
+      // Results of one round share a user turn, as the model's own template writes them.
+      if (previous && resultTurns.has(previous) && typeof previous.content === "string" && typeof result === "string") {
+        previous.content = `${previous.content}\n${result}`;
+      } else {
+        moved.push({ role: "user", content: result });
+        resultTurns.add(moved.at(-1)!);
+      }
+      continue;
+    }
+    if (message.role === "assistant" && Array.isArray(message.tool_calls) && message.tool_calls.length) {
+      const { tool_calls: calls, ...rest } = message;
+      moved.push({
+        ...rest,
+        content: withText(rest.content, (calls as unknown[]).map(textualCall).join("\n"), "after"),
+      });
+      continue;
+    }
+    moved.push(message);
+  }
+  const systemAt = moved.findIndex((message) => message.role === "system");
+  if (systemAt < 0) moved.unshift({ role: "system", content: block });
+  else moved[systemAt] = { ...moved[systemAt], content: withText(moved[systemAt]!.content, block, "before") };
+  body.messages = moved;
+  delete body.tools;
+  delete body.tool_choice;
+  delete body.parallel_tool_calls;
 }
 
 export interface FeatherlessRequestChanges {
-  /** Pictures left out so the tools keep working. */
-  droppedImages: number;
+  /** The tools went into the prompt because the request carries pictures; the calls come back as reply text. */
+  textualTools: boolean;
   /** A thinking switch in `chat_template_kwargs` was replaced by `reasoning_effort`. */
   movedThinkingSwitch: boolean;
 }
@@ -69,25 +152,27 @@ export interface FeatherlessRequestChanges {
 /**
  * Shape a Chat Completions body for Featherless, after Custom Parameters. Mutates `body`.
  *
- * - With tools, pictures and `chat_template_kwargs` thinking switches are taken out, because either one
- *   silently costs the request its tools. A switch that turned thinking off becomes `reasoning_effort: "none"`,
- *   which does the same without that cost.
- * - Without tools, a picture request refuses the efforts `none`, `minimal` and `max`; there the template
- *   switch is what turns thinking off.
+ * - Tools and pictures together: the tools are written into the prompt, since a picture request is served
+ *   without them. The caller reads the calls back from the reply text.
+ * - Tools without pictures: `chat_template_kwargs` thinking switches are taken out, because one silently costs
+ *   the request its tools. A switch that turned thinking off becomes `reasoning_effort: "none"`, which does the
+ *   same without that cost.
+ * - A picture request refuses the efforts `none`, `minimal` and `max`; there the template switch is what
+ *   turns thinking off.
  * - A final assistant message is continued instead of answered.
  */
 export function normalizeFeatherlessRequest(body: Record<string, unknown>): FeatherlessRequestChanges {
-  const changes: FeatherlessRequestChanges = { droppedImages: 0, movedThinkingSwitch: false };
+  const changes: FeatherlessRequestChanges = { textualTools: false, movedThinkingSwitch: false };
   const messages = Array.isArray(body.messages) ? (body.messages as WireMessage[]) : [];
-  const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+  const hasPictures = messages.some(hasPicture);
   const kwargs = isRecord(body.chat_template_kwargs) ? { ...body.chat_template_kwargs } : null;
 
-  if (hasTools) {
-    body.messages = messages.map((message) => {
-      const stripped = withoutImages(message);
-      changes.droppedImages += stripped.removed;
-      return stripped.message;
-    });
+  if (hasPictures && Array.isArray(body.tools) && body.tools.length > 0) {
+    moveToolsIntoPrompt(body, messages);
+    changes.textualTools = true;
+  }
+
+  if (Array.isArray(body.tools) && body.tools.length > 0) {
     if (kwargs) {
       let thinkingOff = false;
       for (const key of [...THINKING_SWITCH_KEYS, "thinking_budget"]) {
@@ -99,7 +184,7 @@ export function normalizeFeatherlessRequest(body: Record<string, unknown>): Feat
       // Off wins over any effort, as it does when Featherless reads conflicting switches.
       if (thinkingOff) body.reasoning_effort = "none";
     }
-  } else if (messages.some((message) => withoutImages(message).removed > 0)) {
+  } else if (hasPictures) {
     const effort = body.reasoning_effort;
     if (effort === "none") {
       delete body.reasoning_effort;
