@@ -27,6 +27,7 @@ export const apiProviderSchema = z.enum([
   "nanogpt",
   "xai",
   "arli",
+  "featherless",
   "zai",
   "deepseek",
   "custom",

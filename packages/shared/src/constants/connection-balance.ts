@@ -3,7 +3,8 @@
 // ──────────────────────────────────────────────
 
 /** The services with a balance endpoint. Other Connections show no balance. */
-export type ConnectionBalanceSource = "linkapi" | "openrouter" | "deepseek" | "moonshot" | "nanogpt" | "bifrost";
+export type ConnectionBalanceSource =
+  "linkapi" | "openrouter" | "deepseek" | "moonshot" | "nanogpt" | "featherless" | "bifrost";
 
 const hostOf = (url: string | null | undefined) => {
   try {
@@ -27,11 +28,13 @@ export function connectionBalanceSource(row: {
   if (row.provider === "openrouter") return "openrouter";
   if (row.provider === "nanogpt") return "nanogpt";
   if (row.provider === "deepseek") return "deepseek";
+  if (row.provider === "featherless") return "featherless";
   if (row.provider !== "custom") return null;
   const host = hostOf(row.baseUrl);
   if (onHost(host, "linkapi.ai")) return "linkapi";
   if (onHost(host, "moonshot.ai") || onHost(host, "moonshot.cn")) return "moonshot";
   if (onHost(host, "deepseek.com")) return "deepseek";
+  if (onHost(host, "featherless.ai")) return "featherless";
   return null;
 }
 

@@ -7,12 +7,14 @@
 //   DeepSeek    API key        GET https://api.deepseek.com/user/balance
 //   Moonshot    API key        GET https://api.moonshot.{ai,cn}/v1/users/me/balance
 //   NanoGPT     API key        POST https://nano-gpt.com/api/check-balance   (`x-api-key`)
+//   Featherless API key        GET https://api.featherless.ai/v1/plan        (prepaid credit; a flat plan has none)
 //   Bifrost     virtual key    GET <proxy origin>/api/governance/virtual-keys/quota   (the key's own budget)
 // A "via X" upstream behind a proxy is read with its own key from the upstream's fixed address
 // (`UPSTREAM_BALANCE_TARGETS`), never from the proxy's. Every read waits for the user's yes (`OUTSIDE_READS_SETTINGS_KEY`).
 // Reads are kept 5 minutes per Connection; Refresh asks again. Nothing here is ever sent to the client except the
 // numbers.
 import {
+  APP_VERSION,
   connectionBalanceSource,
   UPSTREAM_BALANCE_TARGETS,
   type ConnectionBalance,
@@ -164,6 +166,14 @@ export function parseNanoGptBalance(json: unknown): ConnectionBalance {
   return { source: "nanogpt", scope: "account", unit: "USD", left: round(left), checkedAt: checkedAt() };
 }
 
+/** Featherless `/v1/plan`: `credits` is the prepaid USD on Pay-As-You-Go and null on a flat monthly plan. */
+export function parseFeatherlessPlan(json: unknown): ConnectionBalance | null {
+  if (!isRecord(json)) throw new BalanceError("Featherless did not report a plan");
+  const left = amount(json.credits);
+  if (left === undefined) return null;
+  return { source: "featherless", scope: "account", unit: "USD", left: round(left), checkedAt: checkedAt() };
+}
+
 /** Bifrost `/api/governance/virtual-keys/quota`: the key's first budget (`max_limit`, `current_usage`); null without one. */
 export function parseBifrostQuota(json: unknown): ConnectionBalance | null {
   if (!isRecord(json)) throw new BalanceError("Bifrost did not report this key's budget");
@@ -298,6 +308,12 @@ export async function fetchConnectionBalance(
         },
       );
       return { balance: parseNanoGptBalance(json) };
+    }
+    case "featherless": {
+      const origin = originOf(creds.baseUrl, "https://api.featherless.ai");
+      // Featherless answers 404 to Node's default User-Agent.
+      const headers = { ...bearer(creds.apiKey), "User-Agent": `MarinaraEngine/${APP_VERSION}` };
+      return { balance: parseFeatherlessPlan(await getJson(fetchImpl, `${origin}/v1/plan`, headers, "Featherless")) };
     }
     case "bifrost": {
       // The proxy's own address: the virtual key already goes there with every chat. It may be on the local network.

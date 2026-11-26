@@ -248,6 +248,8 @@ const CONTEXT_SAFETY_MARGIN_RATIO = 0.02;
 const MIN_INPUT_BUDGET_TOKENS = 128;
 const MIN_OUTPUT_BUDGET_TOKENS = 128;
 const OUTPUT_BUDGET_REDUCTION_HEADROOM_TOKENS = 64;
+/** The share of the usable window kept for the reply when the requested reply budget is the whole window. */
+const REPLY_SHARE_WHEN_OUTPUT_FILLS_WINDOW = 0.25;
 const TRUNCATION_MARKER = "\n\n[Truncated to fit context window]";
 
 function normalizePositiveInteger(value: unknown): number | undefined {
@@ -500,7 +502,13 @@ export function fitMessagesToContext(
     maxTokens !== undefined &&
     (inputBudget <= reservedInputFloor || !hasRemovableHistory)
   ) {
-    const minimumOutputBudget = Math.min(MIN_OUTPUT_BUDGET_TOKENS, Math.max(1, usableWindow - 1));
+    // A reply budget as large as the window itself (a provider that lists a model's max output as its whole
+    // context) cannot be honoured, but with old turns to drop it must not fall to the floor either: a reasoning
+    // model spends 128 tokens before it writes a word or closes a tool call. Keep a share of the window for the
+    // reply and let the passes below drop history to fit.
+    const minimumOutputBudget = hasRemovableHistory
+      ? Math.max(1, Math.min(maxTokens, Math.floor(usableWindow * REPLY_SHARE_WHEN_OUTPUT_FILLS_WINDOW)))
+      : Math.min(MIN_OUTPUT_BUDGET_TOKENS, Math.max(1, usableWindow - 1));
     const headroom = Math.min(OUTPUT_BUDGET_REDUCTION_HEADROOM_TOKENS, Math.max(0, usableWindow - 1));
     const maxTokensThatFitPrompt = Math.max(1, usableWindow - estimatedTokensBefore - headroom);
     const reducedMaxTokens = Math.max(minimumOutputBudget, Math.min(maxTokens, maxTokensThatFitPrompt));

@@ -17,6 +17,7 @@ export type APIProvider =
   | "nanogpt"
   | "xai"
   | "arli"
+  | "featherless"
   | "zai"
   | "deepseek"
   | "custom"

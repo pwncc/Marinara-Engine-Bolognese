@@ -115,7 +115,17 @@ export const GENERATION_PARAMETER_KEYS: readonly GenerationParameterKey[] = ALL;
 const SAMPLING: GenerationParameterKey[] = ["temperature", "topP", "topK", "frequencyPenalty", "presencePenalty"];
 
 /** Ids sent through OpenAIProvider under their own provider kind (provider-registry.ts). */
-const OPENAI_COMPATIBLE = new Set(["openai", "openrouter", "nanogpt", "xai", "mistral", "cohere", "arli", "deepseek"]);
+const OPENAI_COMPATIBLE = new Set([
+  "openai",
+  "openrouter",
+  "nanogpt",
+  "xai",
+  "mistral",
+  "cohere",
+  "arli",
+  "featherless",
+  "deepseek",
+]);
 const KNOWN_PROVIDERS = new Set([
   ...OPENAI_COMPATIBLE,
   "custom",
@@ -182,6 +192,8 @@ const NEVER_SENT: Record<string, GenerationParameterKey[]> = {
   mistral: ["topK", "serviceTier", "assistantReasoningPrefill"],
   cohere: ["topK", "serviceTier"],
   arli: ["topK", "serviceTier"],
+  // Featherless takes top_k and min_p. It has no service tiers, and a prefilled reasoning block is not sent there.
+  featherless: ["serviceTier", "assistantReasoningPrefill"],
   // DeepSeek documents no verbosity and no top_k/min_p, and marks both penalties
   // deprecated ("will not take effect"). Temperature is listed, but has no effect
   // in thinking mode, which is why it is hidden while an effort level is active.

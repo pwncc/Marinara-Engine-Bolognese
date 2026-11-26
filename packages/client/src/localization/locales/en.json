@@ -1914,6 +1914,7 @@
   "connections.balance.scope.month": "This API key's use this month, from {{source}}",
   "connections.balance.source.bifrost": "Bifrost",
   "connections.balance.source.deepseek": "DeepSeek",
+  "connections.balance.source.featherless": "Featherless",
   "connections.balance.source.linkapi": "LinkAPI",
   "connections.balance.source.moonshot": "Moonshot",
   "connections.balance.source.nanogpt": "NanoGPT",

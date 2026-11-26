@@ -183,7 +183,7 @@ export const SERVICE_GROUPS: ServiceGroupDefinition[] = [
     id: "all",
     sorted: true,
     services: [
-      ...(["xai", "mistral", "cohere", "deepseek", "zai", "arli"] as const),
+      ...(["xai", "mistral", "cohere", "deepseek", "zai", "arli", "featherless"] as const),
       "google_vertex",
       ...MEDIA_BACKENDS.filter((backend) => !SELF_HOSTED.has(backend.source)).map((backend) => backend.id),
       "tts",
@@ -250,7 +250,7 @@ export const LOGIN_COMMANDS: Partial<Record<APIProvider, string>> = {
 };
 
 /** Gateways have no fixed model list worth recommending; vendors and plans do. */
-export const NO_RECOMMENDED = new Set<APIProvider>(["openrouter", "nanogpt", "custom", "arli"]);
+export const NO_RECOMMENDED = new Set<APIProvider>(["openrouter", "nanogpt", "custom", "arli", "featherless"]);
 
 /** `autoName`: the name the server chose, when the user typed none. */
 export type Target = {

@@ -94,6 +94,16 @@ export function createLLMProvider(
         "custom",
       );
       break;
+    case "featherless":
+      resolved = new OpenAIProvider(
+        baseUrl,
+        apiKey,
+        normalizedMaxContext,
+        openrouterProvider,
+        normalizedMaxTokensOverride,
+        "featherless",
+      );
+      break;
     case "openai_chatgpt":
       resolved = new OpenAIChatGPTProvider(
         baseUrl,

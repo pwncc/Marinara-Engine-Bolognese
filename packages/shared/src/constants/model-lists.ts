@@ -1419,6 +1419,7 @@ export const MODEL_LISTS: Record<APIProvider, KnownModel[]> = {
   nanogpt: [], // NanoGPT aggregator — models fetched dynamically via API
   xai: XAI_MODELS,
   arli: [], // Arli AI — models fetched dynamically via the /models endpoint
+  featherless: [], // Featherless — thousands of models, fetched from its /models endpoint
   zai: ZAI_MODELS,
   deepseek: DEEPSEEK_MODELS,
   // Seed OAI-compatible endpoints with the OpenAI catalog; remote /models still merge on top.

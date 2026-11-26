@@ -82,6 +82,13 @@ import {
 import { withCatalogPrices } from "../services/connections/price-catalog.js";
 import { cachedLinkApiGroup } from "../services/connections/balance.js";
 import {
+  describeFeatherlessTest,
+  listFeatherlessModels,
+  readFeatherlessModelStatus,
+  readFeatherlessPlan,
+} from "../services/connections/featherless.js";
+import { isFeatherlessBaseUrl } from "../services/llm/providers/featherless-request-compat.js";
+import {
   allowsDefaultChatModel,
   canRefreshLocalContext,
   fetchLocalContextLimit,
@@ -277,9 +284,19 @@ function formatProviderErrorBody(body: string): string {
 }
 
 function isOpenAICompatibleProvider(provider: string): boolean {
-  return ["openai", "openrouter", "nanogpt", "xai", "mistral", "custom", "cohere", "arli", "zai", "deepseek"].includes(
-    provider,
-  );
+  return [
+    "openai",
+    "openrouter",
+    "nanogpt",
+    "xai",
+    "mistral",
+    "custom",
+    "cohere",
+    "arli",
+    "featherless",
+    "zai",
+    "deepseek",
+  ].includes(provider);
 }
 
 function usesResponsesEndpointForTestMessage(provider: string, model: string): boolean {
@@ -1078,6 +1095,22 @@ export async function connectionsRoutes(app: FastifyInstance) {
         });
         const latencyMs = Date.now() - start;
 
+        if (res.ok && isOpenAICompatibleProvider(conn.provider) && isFeatherlessBaseUrl(baseUrl)) {
+          // The key works. Say what the chosen model can do, and what would go wrong as the Connection stands.
+          const featherlessHeaders = requestHeadersWithDefaultUserAgent(testHeaders);
+          const plainHeaders = Object.fromEntries(featherlessHeaders.entries());
+          const plan = await readFeatherlessPlan(baseUrl, plainHeaders);
+          const status = conn.model
+            ? await readFeatherlessModelStatus(baseUrl, conn.model, plainHeaders, plan?.maxContextLength ?? null)
+            : null;
+          const described = describeFeatherlessTest(conn.model ?? "", status, plan, conn.maxContext ?? null);
+          return {
+            success: described.ok,
+            message: described.message,
+            latencyMs: Date.now() - start,
+            modelName: described.ok ? conn.model : null,
+          };
+        }
         if (res.ok) {
           return { success: true, message: "Connection successful", latencyMs, modelName: conn.model };
         } else {
@@ -1680,6 +1713,16 @@ export async function connectionsRoutes(app: FastifyInstance) {
           });
         }
         return { models: normalizeModelsResponse("google", { models: collected }) };
+      }
+
+      // Featherless answers a plain /models with 50 models out of thousands and lists most models' max output as
+      // their whole context: read the models this plan can use, with the limits a request really gets.
+      if (isOpenAICompatibleProvider(conn.provider) && isFeatherlessBaseUrl(baseUrl)) {
+        const listed = await listFeatherlessModels(
+          baseUrl,
+          Object.fromEntries(requestHeadersWithDefaultUserAgent(headers).entries()),
+        );
+        if (listed) return { models: normalizeModelsResponse("featherless", { data: listed }) };
       }
 
       const modelsUrl =

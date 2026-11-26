@@ -19,6 +19,13 @@ import {
 } from "../base-provider.js";
 import { parseTextualToolCalls, stripTextualToolCalls } from "../textual-tool-call-parser.js";
 import {
+  FEATHERLESS_ATTRIBUTION_HEADERS,
+  featherlessFittingMaxTokens,
+  featherlessReasoningEffort,
+  isFeatherlessBaseUrl,
+  normalizeFeatherlessRequest,
+} from "./featherless-request-compat.js";
+import {
   capabilityModelId,
   impliesProxyThinking,
   isClaudeAdaptiveOnlyNoSamplingModel,
@@ -427,6 +434,7 @@ type OpenAIProviderKind =
   | "arli"
   | "zai"
   | "deepseek"
+  | "featherless"
   | "custom"
   | "openai-chatgpt"
   | "local-sidecar";
@@ -660,7 +668,8 @@ export class OpenAIProvider extends BaseLLMProvider {
   private static extractContentBlocks = extractOpenAICompatibleContentBlocks;
 
   private shouldSendTopK(): boolean {
-    return this.apiKey === "local-sidecar" || this.isGenericCustomProvider();
+    // Featherless documents top_k and min_p for every model it serves.
+    return this.apiKey === "local-sidecar" || this.isGenericCustomProvider() || this.providerKind === "featherless";
   }
 
   /**
@@ -932,9 +941,34 @@ export class OpenAIProvider extends BaseLLMProvider {
       // failure, a whitespace-only key, or an intentionally keyless local
       // endpoint) is worse than none.
       ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      ...(this.isFeatherlessEndpoint() ? FEATHERLESS_ATTRIBUTION_HEADERS : {}),
       ...(this.extraHeaders ?? {}),
     };
     return h;
+  }
+
+  /** Featherless's own API, as a Featherless connection or as a Custom one pointed at it. */
+  private isFeatherlessEndpoint(): boolean {
+    return this.providerKind === "featherless" || isFeatherlessBaseUrl(this.baseUrl);
+  }
+
+  /** Featherless request rules, applied after Custom Parameters. */
+  private normalizeFeatherlessRequest(body: Record<string, unknown>, options: ChatOptions): void {
+    if (!this.isFeatherlessEndpoint()) return;
+    const changes = normalizeFeatherlessRequest(body);
+    if (changes.droppedImages) {
+      logger.warn(
+        "[OpenAI] Featherless returns no tool calls for a request with pictures; left %d picture(s) out of this request for %s",
+        changes.droppedImages,
+        options.model,
+      );
+    }
+    if (changes.movedThinkingSwitch) {
+      logger.warn(
+        "[OpenAI] Featherless drops the tools when chat_template_kwargs switches thinking; sent reasoning_effort for %s instead",
+        options.model,
+      );
+    }
   }
 
   protected override embeddingHeaders(): Record<string, string> {
@@ -990,6 +1024,8 @@ export class OpenAIProvider extends BaseLLMProvider {
         return "Z.AI API";
       case "deepseek":
         return "DeepSeek API";
+      case "featherless":
+        return "Featherless API";
       case "local-sidecar":
         return "Local sidecar OpenAI-compatible endpoint";
       case "openai-chatgpt":
@@ -1062,6 +1098,23 @@ export class OpenAIProvider extends BaseLLMProvider {
     let response = await send();
     if (response.ok) return response;
     let errorText = await response.text();
+    if (response.status === 400 && this.isFeatherlessEndpoint() && typeof body.max_tokens === "number") {
+      // Featherless refuses a prompt plus max_tokens over the model's context instead of lowering max_tokens, and
+      // counts the prompt with the model's own tokenizer. Its error gives the real size: retry once with what is left.
+      const fitting = featherlessFittingMaxTokens(errorText);
+      if (fitting !== null && fitting < body.max_tokens) {
+        logger.warn(
+          "[OpenAI] Featherless refused max_tokens=%d for %s as over its context; retrying once with %d",
+          body.max_tokens,
+          options.model,
+          fitting,
+        );
+        body.max_tokens = fitting;
+        response = await send();
+        if (response.ok) return response;
+        errorText = await response.text();
+      }
+    }
     if (ROLE_ALTERNATION_ERROR.test(errorText) && Array.isArray(body.messages)) {
       const messages = alternateWireMessageRoles(body.messages);
       if (JSON.stringify(messages) !== JSON.stringify(body.messages)) {
@@ -1473,6 +1526,11 @@ export class OpenAIProvider extends BaseLLMProvider {
   }
 
   private applyChatCompletionsReasoning(body: Record<string, unknown>, options: ChatOptions): void {
+    if (this.isFeatherlessEndpoint()) {
+      const effort = featherlessReasoningEffort(options.reasoningEffort);
+      if (effort) body.reasoning_effort = effort;
+      return;
+    }
     if (this.providerKind === "deepseek") {
       // DeepSeek carries the effort in reasoning_effort itself: "none" turns thinking off, and low/high/max set the
       // level. It also accepts a thinking {type} object, but sending both would duplicate the same decision.
@@ -2131,6 +2189,7 @@ ${content}`
     this.normalizeStrictClaudeRequest(body, options);
     this.normalizeMistralRequest(body);
     this.normalizeGeminiRequest(body, options.model);
+    this.normalizeFeatherlessRequest(body, options);
 
     logger.debug(
       "[OpenAI chat()] stream=%s model=%s reasoning=%s enableThinking=%s verbosity=%s max_completion_tokens=%s max_tokens=%s temperature=%s top_p=%s tools=%s",
@@ -2450,6 +2509,7 @@ ${content}`
     this.normalizeStrictClaudeRequest(body, options);
     this.normalizeMistralRequest(body);
     this.normalizeGeminiRequest(body, options.model);
+    this.normalizeFeatherlessRequest(body, options);
 
     logger.debug(
       "[OpenAI chatComplete()] stream=%s model=%s reasoning=%s enableThinking=%s verbosity=%s onToken=%s",

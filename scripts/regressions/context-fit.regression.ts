@@ -67,6 +67,38 @@ const floored = fitMessagesToContext([{ role: "system", content: filler(8000) }]
 assert.equal(floored.maxTokens, 128, `reply budget should rest on the floor, got ${floored.maxTokens}`);
 assert.equal(floored.requestedMaxTokens, 1000, "the floor must still report what was asked for");
 
+// A reply budget as large as the window itself, on a long chat: a provider that lists a model's max
+// output as its whole context (Featherless: 32768 of 32768) used to leave the reply 128 tokens,
+// which a reasoning model spends before it answers or closes a tool call. The reply keeps a share
+// of the window and old turns go instead.
+const longChat: ChatMessage[] = [
+  { role: "system", content: filler(1000) },
+  ...Array.from({ length: 40 }, (_, index): ChatMessage[] => [
+    { role: "user", content: `turn ${index} ${filler(300)}`, contextKind: "history" },
+    { role: "assistant", content: `reply ${index} ${filler(600)}`, contextKind: "history" },
+  ]).flat(),
+  { role: "user", content: `latest ${filler(100)}` },
+];
+const wholeWindow = fitMessagesToContext(longChat, { maxContext: 32768, maxTokens: 32768 });
+assert.ok(
+  wholeWindow.maxTokens !== undefined && wholeWindow.maxTokens >= 8000,
+  `a long chat must leave room for the reply, got ${wholeWindow.maxTokens}`,
+);
+assert.ok(wholeWindow.trimmed, "old turns make the room");
+assert.match(wholeWindow.messages.at(-1)!.content ?? "", /^latest /, "the newest turn stays");
+assert.equal(wholeWindow.messages[0]!.role, "system", "the system prompt stays");
+assert.ok(
+  wholeWindow.estimatedTokensAfter + wholeWindow.maxTokens! <= 32768,
+  "prompt and reply still fit the window together",
+);
+// A short chat under the same settings loses nothing and keeps the rest of the window for the reply.
+const shortChat = fitMessagesToContext(longChat.slice(0, 5).concat(longChat.at(-1)!), {
+  maxContext: 32768,
+  maxTokens: 32768,
+});
+assert.equal(shortChat.trimmed, false);
+assert.ok(shortChat.maxTokens! > 25000, `a short chat keeps the window for the reply, got ${shortChat.maxTokens}`);
+
 // With no context window configured nothing is touched at all.
 const unbounded = fitMessagesToContext(singleShotPrompt, { maxTokens: 32768 });
 assert.equal(unbounded.trimmed, false);

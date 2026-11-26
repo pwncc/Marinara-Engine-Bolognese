@@ -253,6 +253,20 @@ export const PROVIDERS: Record<APIProvider, ProviderDefinition> = {
     // Flat monthly plans: every model is in the plan, the tier limits size and speed.
     billing: "plan",
   },
+  featherless: {
+    id: "featherless",
+    protocol: "openai_chat",
+    name: "Featherless",
+    defaultBaseUrl: "https://api.featherless.ai/v1",
+    modelsEndpoint: "/models",
+    supportsStreaming: true,
+    usesAuthHeader: true,
+    apiKeyHeader: null,
+    keyUrl: "https://featherless.ai/account/api-keys",
+    // Prepaid credits on Pay-As-You-Go, which is what its API reports prices and a balance for. A flat monthly
+    // plan uses the same key and endpoint; there the listed prices are not charged.
+    billing: "pay_per_use",
+  },
   zai: {
     id: "zai",
     protocol: "openai_chat",

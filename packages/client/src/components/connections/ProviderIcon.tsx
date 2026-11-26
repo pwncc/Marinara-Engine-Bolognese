@@ -74,6 +74,7 @@ const BRANDS: Record<string, string> = {
   zai: "zai",
   deepseek: "deepseek",
   arli: "arliai",
+  featherless: "featherless",
   // Media services
   comfyui: "comfyui",
   runpod_comfyui: "comfyui",

@@ -44,7 +44,7 @@ export function balanceWord(balance: ConnectionBalance | null | undefined, t: TF
 }
 
 /** Own sources that name a service, not a proxy: their model-id prefixes are model makers, not upstreams. */
-const SERVICE_SOURCES = new Set(["linkapi", "openrouter", "deepseek", "moonshot", "nanogpt"]);
+const SERVICE_SOURCES = new Set(["linkapi", "openrouter", "deepseek", "moonshot", "nanogpt", "featherless"]);
 
 /** The "via X" upstreams the Connection routes to, as its model wells show them. */
 export function usageUpstreams(account: ConnectionAccountListItem, models: ReadonlyArray<{ model?: string | null }>) {

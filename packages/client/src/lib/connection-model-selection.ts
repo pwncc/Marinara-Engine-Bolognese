@@ -58,6 +58,9 @@ export function normalizeGrokCliEditorModel(provider: APIProvider | string, mode
  * The connection fields a model pick sets: the model, its context window when known, and the provider's
  * output limit when the provider's own list reports one. Every other field, such as the vision, image or
  * embedding model, is left alone.
+ *
+ * A "max output" as large as the context window is no output limit (some hosts list every model that way), so
+ * it is not saved: as the Connection's max output it would ask for the whole window on every reply.
  */
 export function connectionFieldsForModelPick(
   provider: APIProvider | string,
@@ -66,7 +69,9 @@ export function connectionFieldsForModelPick(
   return {
     model: normalizeGrokCliEditorModel(provider, model.id),
     ...(model.context ? { maxContext: Number(model.context) } : {}),
-    ...(model.isRemote && model.maxOutput ? { maxTokensOverride: Number(model.maxOutput) } : {}),
+    ...(model.isRemote && model.maxOutput && !(model.context && Number(model.maxOutput) >= Number(model.context))
+      ? { maxTokensOverride: Number(model.maxOutput) }
+      : {}),
   };
 }
 
